@@ -97,24 +97,24 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
     },
     defaultModels: {
       claude: {
-        model: "red-v1flash",
-        haikuModel: "red-v1flash",
-        sonnetModel: "red-v1flash",
-        opusModel: "red-v1flash",
+        model: "claude-sonnet-4-6",       // cc-switch 用这个名转发到我们的服务器
+        haikuModel: "claude-haiku-4-5-20251001",
+        sonnetModel: "claude-sonnet-4-6",
+        opusModel: "claude-opus-4-7",
       },
       codex: {
-        model: "red-v1flash",
+        model: "gpt-4o-mini",             // OpenAI 兼容，ss-switch 转发到我们服务器
         reasoningEffort: "low",
       },
       gemini: {
-        model: "red-v1flash",
+        model: "claude-sonnet-4-6",
       },
     },
     websiteUrl: "https://github.com/zhuguang-ZFG/QWEN3.0",
     icon: "openai",
     iconColor: "#FF4444",
-    description: "red V1-Flash 智能路由编排器 | 22后端自动调度 | 免费优先+付费兜底 | localhost:8080/v1",
-    isCustomTemplate: false,
+    description: "red V1-Flash 智能路由编排器 | 22后端自动调度 | 免费优先+付费兜底",
+    isCustomTemplate: true,
   },
 
   // Additional providers for our API endpoints
