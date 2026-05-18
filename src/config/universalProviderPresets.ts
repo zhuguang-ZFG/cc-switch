@@ -87,6 +87,124 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
     description: "自定义配置的 API 网关",
     isCustomTemplate: true,
   },
+  {
+    name: "red V1-Flash",
+    providerType: "newapi",
+    defaultApps: {
+      claude: true,
+      codex: true,
+      gemini: false,
+    },
+    defaultModels: {
+      claude: {
+        model: "red-v1flash",
+        haikuModel: "red-v1flash",
+        sonnetModel: "red-v1flash",
+        opusModel: "red-v1flash",
+      },
+      codex: {
+        model: "red-v1flash",
+        reasoningEffort: "low",
+      },
+      gemini: {
+        model: "red-v1flash",
+      },
+    },
+    websiteUrl: "https://github.com/zhuguang-ZFG/QWEN3.0",
+    icon: "openai",
+    iconColor: "#FF4444",
+    description: "red V1-Flash 智能路由编排器 | 22后端自动调度 | 免费优先+付费兜底 | localhost:8080/v1",
+    isCustomTemplate: false,
+  },
+
+  // Additional providers for our API endpoints
+  {
+    name: "Claude API (right.codes)",
+    providerType: "newapi",
+    defaultApps: {
+      claude: true,
+      codex: false,
+      gemini: false,
+    },
+    defaultModels: {
+      claude: {
+        model: "claude-sonnet-4-6",
+        haikuModel: "claude-haiku-4-5-20251001",
+        sonnetModel: "claude-sonnet-4-6",
+        opusModel: "claude-opus-4-7",
+      },
+      codex: {
+        model: "gpt-4o-mini",
+        reasoningEffort: "low",
+      },
+      gemini: {
+        model: "gemini-2.0-flash",
+      },
+    },
+    websiteUrl: "https://www.right.codes",
+    icon: "anthropic",
+    iconColor: "#D97706",
+    description: "Claude API via right.codes | Opus 4.7 / Sonnet 4.6 | 用于高质量推理兜底",
+    isCustomTemplate: true,
+  },
+  {
+    name: "DeepSeek V4 1M",
+    providerType: "newapi",
+    defaultApps: {
+      claude: false,
+      codex: true,
+      gemini: false,
+    },
+    defaultModels: {
+      claude: {
+        model: "claude-sonnet-4-6",
+        haikuModel: "claude-haiku-4-5-20251001",
+        sonnetModel: "claude-sonnet-4-6",
+        opusModel: "claude-opus-4-7",
+      },
+      codex: {
+        model: "deepseek-chat",
+        reasoningEffort: "medium",
+      },
+      gemini: {
+        model: "gemini-2.0-flash",
+      },
+    },
+    websiteUrl: "https://api.deepseek.com",
+    icon: "openai",
+    iconColor: "#10A37F",
+    description: "DeepSeek V4 1M上下文 | 用于超长代码文件分析",
+    isCustomTemplate: true,
+  },
+  {
+    name: "GPT 5.5 (right.codes)",
+    providerType: "newapi",
+    defaultApps: {
+      claude: false,
+      codex: true,
+      gemini: false,
+    },
+    defaultModels: {
+      claude: {
+        model: "claude-sonnet-4-6",
+        haikuModel: "claude-haiku-4-5-20251001",
+        sonnetModel: "claude-sonnet-4-6",
+        opusModel: "claude-opus-4-7",
+      },
+      codex: {
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+      },
+      gemini: {
+        model: "gemini-2.0-flash",
+      },
+    },
+    websiteUrl: "https://www.right.codes/codex",
+    icon: "openai",
+    iconColor: "#10A37F",
+    description: "GPT 5.5 via right.codes | 快速蒸馏和批量处理",
+    isCustomTemplate: true,
+  },
 ];
 
 /**
