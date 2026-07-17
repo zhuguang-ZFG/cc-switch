@@ -23,6 +23,7 @@ const ALL_APPS: AppId[] = [
   "claude-desktop",
   "codex",
   "gemini",
+  "grokbuild",
   "opencode",
   "openclaw",
   "hermes",
@@ -46,6 +47,7 @@ export function AppSwitcher({
     "claude-desktop": "claude",
     codex: "openai",
     gemini: "gemini",
+    grokbuild: "grok",
     opencode: "opencode",
     openclaw: "openclaw",
     hermes: "hermes",
@@ -55,6 +57,7 @@ export function AppSwitcher({
     "claude-desktop": "Claude Desktop",
     codex: "Codex",
     gemini: "Gemini",
+    grokbuild: "Grok Build",
     opencode: "OpenCode",
     openclaw: "OpenClaw",
     hermes: "Hermes",
@@ -117,7 +120,7 @@ export function AppSwitcher({
                 "transition-all duration-200 whitespace-nowrap overflow-hidden",
                 compact
                   ? "max-w-0 opacity-0 ml-0"
-                  : "max-w-[90px] opacity-100 ml-2",
+                  : "max-w-[120px] opacity-100 ml-2",
               )}
             >
               {appDisplayName[app]}
