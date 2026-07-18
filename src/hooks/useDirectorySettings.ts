@@ -9,22 +9,20 @@ export type DirectoryAppId = Exclude<AppId, "claude-desktop">;
 type AppDirectoryKey =
   | "claude"
   | "codex"
-  | "gemini"
   | "grokbuild"
   | "opencode"
   | "openclaw"
-  | "hermes";
+  | "kimicode";
 type DirectoryKey = "appConfig" | AppDirectoryKey;
 
 export interface ResolvedDirectories {
   appConfig: string;
   claude: string;
   codex: string;
-  gemini: string;
   grokbuild: string;
   opencode: string;
   openclaw: string;
-  hermes: string;
+  kimicode: string;
 }
 
 // Single source of truth for per-app directory metadata.
@@ -34,11 +32,10 @@ const APP_DIRECTORY_META: Record<
 > = {
   claude: { key: "claude", defaultFolder: ".claude" },
   codex: { key: "codex", defaultFolder: ".codex" },
-  gemini: { key: "gemini", defaultFolder: ".gemini" },
   grokbuild: { key: "grokbuild", defaultFolder: ".grok" },
   opencode: { key: "opencode", defaultFolder: ".config/opencode" },
   openclaw: { key: "openclaw", defaultFolder: ".openclaw" },
-  hermes: { key: "hermes", defaultFolder: ".hermes" },
+  kimicode: { key: "kimicode", defaultFolder: ".kimi-code" },
 };
 
 const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
@@ -47,11 +44,10 @@ const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
 > = {
   claude: "claudeConfigDir",
   codex: "codexConfigDir",
-  gemini: "geminiConfigDir",
   grokbuild: "grokConfigDir",
   opencode: "opencodeConfigDir",
   openclaw: "openclawConfigDir",
-  hermes: "hermesConfigDir",
+  kimicode: "kimiConfigDir",
 };
 
 const sanitizeDir = (value?: string | null): string | undefined => {
@@ -133,11 +129,10 @@ export function useDirectorySettings({
     appConfig: "",
     claude: "",
     codex: "",
-    gemini: "",
     grokbuild: "",
     opencode: "",
     openclaw: "",
-    hermes: "",
+    kimicode: "",
   });
   const [isLoading, setIsLoading] = useState(true);
 
@@ -145,11 +140,10 @@ export function useDirectorySettings({
     appConfig: "",
     claude: "",
     codex: "",
-    gemini: "",
     grokbuild: "",
     opencode: "",
     openclaw: "",
-    hermes: "",
+    kimicode: "",
   });
   const initialAppConfigDirRef = useRef<string | undefined>(undefined);
 
@@ -164,36 +158,32 @@ export function useDirectorySettings({
           overrideRaw,
           claudeDir,
           codexDir,
-          geminiDir,
           grokDir,
           opencodeDir,
           openclawDir,
-          hermesDir,
+          kimiDir,
           defaultAppConfig,
           defaultClaudeDir,
           defaultCodexDir,
-          defaultGeminiDir,
           defaultGrokDir,
           defaultOpencodeDir,
           defaultOpenclawDir,
-          defaultHermesDir,
+          defaultKimiDir,
         ] = await Promise.all([
           settingsApi.getAppConfigDirOverride(),
           settingsApi.getConfigDir("claude"),
           settingsApi.getConfigDir("codex"),
-          settingsApi.getConfigDir("gemini"),
           settingsApi.getConfigDir("grokbuild"),
           settingsApi.getConfigDir("opencode"),
           settingsApi.getConfigDir("openclaw"),
-          settingsApi.getConfigDir("hermes"),
+          settingsApi.getConfigDir("kimicode"),
           computeDefaultAppConfigDir(),
           computeDefaultConfigDir("claude"),
           computeDefaultConfigDir("codex"),
-          computeDefaultConfigDir("gemini"),
           computeDefaultConfigDir("grokbuild"),
           computeDefaultConfigDir("opencode"),
           computeDefaultConfigDir("openclaw"),
-          computeDefaultConfigDir("hermes"),
+          computeDefaultConfigDir("kimicode"),
         ]);
 
         if (!active) return;
@@ -204,11 +194,10 @@ export function useDirectorySettings({
           appConfig: defaultAppConfig ?? "",
           claude: defaultClaudeDir ?? "",
           codex: defaultCodexDir ?? "",
-          gemini: defaultGeminiDir ?? "",
           grokbuild: defaultGrokDir ?? "",
           opencode: defaultOpencodeDir ?? "",
           openclaw: defaultOpenclawDir ?? "",
-          hermes: defaultHermesDir ?? "",
+          kimicode: defaultKimiDir ?? "",
         };
 
         setAppConfigDir(normalizedOverride);
@@ -218,11 +207,10 @@ export function useDirectorySettings({
           appConfig: normalizedOverride ?? defaultsRef.current.appConfig,
           claude: claudeDir || defaultsRef.current.claude,
           codex: codexDir || defaultsRef.current.codex,
-          gemini: geminiDir || defaultsRef.current.gemini,
           grokbuild: grokDir || defaultsRef.current.grokbuild,
           opencode: opencodeDir || defaultsRef.current.opencode,
           openclaw: openclawDir || defaultsRef.current.openclaw,
-          hermes: hermesDir || defaultsRef.current.hermes,
+          kimicode: kimiDir || defaultsRef.current.kimicode,
         });
       } catch (error) {
         console.error(
@@ -360,11 +348,10 @@ export function useDirectorySettings({
           initialAppConfigDirRef.current ?? defaultsRef.current.appConfig,
         claude: overrides?.claude ?? defaultsRef.current.claude,
         codex: overrides?.codex ?? defaultsRef.current.codex,
-        gemini: overrides?.gemini ?? defaultsRef.current.gemini,
         grokbuild: overrides?.grokbuild ?? defaultsRef.current.grokbuild,
         opencode: overrides?.opencode ?? defaultsRef.current.opencode,
         openclaw: overrides?.openclaw ?? defaultsRef.current.openclaw,
-        hermes: overrides?.hermes ?? defaultsRef.current.hermes,
+        kimicode: overrides?.kimicode ?? defaultsRef.current.kimicode,
       });
     },
     [],

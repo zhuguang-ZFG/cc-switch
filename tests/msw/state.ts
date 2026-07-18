@@ -12,7 +12,7 @@ type ProvidersByApp = Record<AppId, Record<string, Provider>>;
 type CurrentProviderState = Record<AppId, string>;
 type McpConfigState = Record<AppId, Record<string, McpServer>>;
 type LiveProviderIdsByApp = Record<
-  "opencode" | "openclaw" | "hermes",
+  "opencode" | "openclaw" | "kimicode",
   string[]
 >;
 
@@ -54,7 +54,7 @@ const createDefaultProviders = (): ProvidersByApp => ({
       createdAt: Date.now() + 1,
     },
   },
-  gemini: {
+  kimicode: {
     "gemini-1": {
       id: "gemini-1",
       name: "Gemini Default",
@@ -72,18 +72,16 @@ const createDefaultProviders = (): ProvidersByApp => ({
   grokbuild: {},
   opencode: {},
   openclaw: {},
-  hermes: {},
 });
 
 const createDefaultCurrent = (): CurrentProviderState => ({
   claude: "claude-1",
   "claude-desktop": "",
   codex: "codex-1",
-  gemini: "gemini-1",
+  kimicode: "gemini-1",
   grokbuild: "",
   opencode: "",
   openclaw: "",
-  hermes: "",
 });
 
 let providers = createDefaultProviders();
@@ -91,7 +89,7 @@ let current = createDefaultCurrent();
 let liveProviderIds: LiveProviderIdsByApp = {
   opencode: [],
   openclaw: [],
-  hermes: [],
+  kimicode: [],
 };
 let settingsState: Settings = {
   showInTray: true,
@@ -161,10 +159,9 @@ let mcpConfigs: McpConfigState = {
       apps: {
         claude: true,
         codex: false,
-        gemini: false,
+        kimicode: false,
         opencode: false,
         openclaw: false,
-        hermes: false,
       },
       server: {
         type: "stdio",
@@ -181,10 +178,9 @@ let mcpConfigs: McpConfigState = {
       apps: {
         claude: false,
         codex: true,
-        gemini: false,
+        kimicode: false,
         opencode: false,
         openclaw: false,
-        hermes: false,
       },
       server: {
         type: "http",
@@ -192,11 +188,10 @@ let mcpConfigs: McpConfigState = {
       },
     },
   },
-  gemini: {},
+  kimicode: {},
   grokbuild: {},
   opencode: {},
   openclaw: {},
-  hermes: {},
 };
 
 const cloneProviders = (value: ProvidersByApp) =>
@@ -208,7 +203,7 @@ export const resetProviderState = () => {
   liveProviderIds = {
     opencode: [],
     openclaw: [],
-    hermes: [],
+    kimicode: [],
   };
   sessionsState = createDefaultSessions();
   sessionMessagesState = createDefaultSessionMessages();
@@ -230,10 +225,9 @@ export const resetProviderState = () => {
         apps: {
           claude: true,
           codex: false,
-          gemini: false,
+          kimicode: false,
           opencode: false,
           openclaw: false,
-          hermes: false,
         },
         server: {
           type: "stdio",
@@ -250,10 +244,9 @@ export const resetProviderState = () => {
         apps: {
           claude: false,
           codex: true,
-          gemini: false,
+          kimicode: false,
           opencode: false,
           openclaw: false,
-          hermes: false,
         },
         server: {
           type: "http",
@@ -261,11 +254,10 @@ export const resetProviderState = () => {
         },
       },
     },
-    gemini: {},
+    kimicode: {},
     grokbuild: {},
     opencode: {},
     openclaw: {},
-    hermes: {},
   };
 };
 
@@ -275,11 +267,11 @@ export const getProviders = (appType: AppId) =>
 export const getCurrentProviderId = (appType: AppId) => current[appType] ?? "";
 
 export const getLiveProviderIds = (
-  appType: "opencode" | "openclaw" | "hermes",
+  appType: "opencode" | "openclaw" | "kimicode",
 ) => [...liveProviderIds[appType]];
 
 export const setLiveProviderIds = (
-  appType: "opencode" | "openclaw" | "hermes",
+  appType: "opencode" | "openclaw" | "kimicode",
   ids: string[],
 ) => {
   liveProviderIds[appType] = [...ids];

@@ -91,13 +91,19 @@ function isOfficialProvider(provider: Provider, appId: AppId): boolean {
       (!apiKey || (typeof apiKey === "string" && apiKey.trim() === ""))
     );
   }
-  if (appId === "gemini") {
+  if ((appId as string) === "gemini") {
     // 无 GEMINI_API_KEY 且无 GOOGLE_GEMINI_BASE_URL → Google OAuth 官方模式
     const apiKey = config?.env?.GEMINI_API_KEY;
     const baseUrl = config?.env?.GOOGLE_GEMINI_BASE_URL;
     return (
       (!apiKey || (typeof apiKey === "string" && apiKey.trim() === "")) &&
       (!baseUrl || (typeof baseUrl === "string" && baseUrl.trim() === ""))
+    );
+  }
+  if (appId === "kimicode") {
+    return (
+      provider.id.startsWith("managed:") ||
+      isHermesReadOnlyProvider(provider.settingsConfig)
     );
   }
   return false;
@@ -193,15 +199,21 @@ export function ProviderCard({
     return true;
   }, [provider.notes, displayUrl, fallbackUrlText]);
 
+  const isHermesReadOnly =
+    appId === "kimicode" &&
+    (provider.id.startsWith("managed:") ||
+      isHermesReadOnlyProvider(provider.settingsConfig));
+  const isKimiManaged = appId === "kimicode" && isHermesReadOnly;
   const usageEnabled = provider.meta?.usage_script?.enabled ?? false;
   const isOfficial = isOfficialProvider(provider, appId);
   const supportsOfficialSubscription =
-    isOfficial && ["claude", "codex", "gemini"].includes(appId);
+    isOfficial && ["claude", "codex", "gemini", "kimicode"].includes(appId);
   const isOfficialSubscriptionUsage =
     provider.meta?.usage_script?.templateType ===
     TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION;
   const officialSubscriptionEnabled =
-    supportsOfficialSubscription && usageEnabled && isOfficialSubscriptionUsage;
+    supportsOfficialSubscription &&
+    (isKimiManaged || (usageEnabled && isOfficialSubscriptionUsage));
   // 官方判定只认显式 category === "official"（SSOT），不回退 isOfficial 的空字段启发式。
   // 理由（此判定曾在「纯 category ↔ category+isOfficial 回退」间反复，结论钉死于此）：
   //  1) 封号保护是高代价决策，不该建立在「base_url/key 缺失」这种脆弱信号上——它无法区分
@@ -223,8 +235,6 @@ export function ProviderCard({
     provider.meta?.usage_script?.templateType === "github_copilot";
   // Hermes v12+ overlay entries live under the `providers:` dict and are
   // read-only here — writes have to go through Hermes Web UI.
-  const isHermesReadOnly =
-    appId === "hermes" && isHermesReadOnlyProvider(provider.settingsConfig);
   const isCodexOauth =
     provider.meta?.providerType === PROVIDER_TYPES.CODEX_OAUTH;
   const codexNeedsRouting = useMemo(() => {
@@ -249,7 +259,7 @@ export function ProviderCard({
   // 获取用量数据以判断是否有多套餐
   // 累加模式应用（OpenCode/OpenClaw/Hermes）：使用 isInConfig 代替 isCurrent
   const shouldAutoQuery =
-    appId === "opencode" || appId === "openclaw" || appId === "hermes"
+    appId === "opencode" || appId === "openclaw" || appId === "kimicode"
       ? isInConfig
       : isCurrent;
   const autoQueryInterval = shouldAutoQuery
@@ -467,12 +477,12 @@ export function ProviderCard({
               {isHermesReadOnly && (
                 <span
                   className="inline-flex items-center rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-700/60 dark:text-slate-200"
-                  title={t("provider.managedByHermesHint", {
-                    defaultValue: "由 Hermes 管理，请在 Hermes Web UI 中编辑",
+                  title={t("provider.managedByKimiHint", {
+                    defaultValue: "Managed by Kimi official login",
                   })}
                 >
-                  {t("provider.managedByHermes", {
-                    defaultValue: "Hermes Managed",
+                  {t("provider.managedByKimi", {
+                    defaultValue: "Kimi Managed",
                   })}
                 </span>
               )}

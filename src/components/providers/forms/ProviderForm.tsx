@@ -47,9 +47,9 @@ import {
   type OpenClawSuggestedDefaults,
 } from "@/config/openclawProviderPresets";
 import {
-  hermesProviderPresets,
-  type HermesProviderPreset,
-} from "@/config/hermesProviderPresets";
+  kimiProviderPresets,
+  type KimiProviderPreset,
+} from "@/config/kimiProviderPresets";
 import { OpenCodeFormFields } from "./OpenCodeFormFields";
 import { OpenClawFormFields } from "./OpenClawFormFields";
 import { HermesFormFields } from "./HermesFormFields";
@@ -131,7 +131,7 @@ type PresetEntry = {
     | GeminiProviderPreset
     | OpenCodeProviderPreset
     | OpenClawProviderPreset
-    | HermesProviderPreset;
+    | KimiProviderPreset;
 };
 
 export const normalizeCodexCatalogModelsForSave = (
@@ -385,13 +385,13 @@ function ProviderFormFull({
         ? JSON.stringify(initialData.settingsConfig, null, 2)
         : appId === "codex"
           ? CODEX_DEFAULT_CONFIG
-          : appId === "gemini"
+          : (appId as string) === "gemini"
             ? GEMINI_DEFAULT_CONFIG
             : appId === "opencode"
               ? OPENCODE_DEFAULT_CONFIG
               : appId === "openclaw"
                 ? OPENCLAW_DEFAULT_CONFIG
-                : appId === "hermes"
+                : appId === "kimicode"
                   ? HERMES_DEFAULT_CONFIG
                   : CLAUDE_DEFAULT_CONFIG,
       icon: initialData?.icon ?? "",
@@ -675,7 +675,7 @@ function ProviderFormFull({
         id: `codex-${index}`,
         preset,
       }));
-    } else if (appId === "gemini") {
+    } else if ((appId as string) === "gemini") {
       return geminiProviderPresets.map<PresetEntry>((preset, index) => ({
         id: `gemini-${index}`,
         preset,
@@ -690,9 +690,9 @@ function ProviderFormFull({
         id: `openclaw-${index}`,
         preset,
       }));
-    } else if (appId === "hermes") {
-      return hermesProviderPresets.map<PresetEntry>((preset, index) => ({
-        id: `hermes-${index}`,
+    } else if (appId === "kimicode") {
+      return kimiProviderPresets.map<PresetEntry>((preset, index) => ({
+        id: `kimicode-${index}`,
         preset,
       }));
     }
@@ -770,7 +770,7 @@ function ProviderFormFull({
     envStringToObj,
     envObjToString,
   } = useGeminiConfigState({
-    initialData: appId === "gemini" ? initialData : undefined,
+    initialData: (appId as string) === "gemini" ? initialData : undefined,
   });
 
   const updateGeminiEnvField = useCallback(
@@ -833,9 +833,11 @@ function ProviderFormFull({
     onEnvChange: handleGeminiEnvChange,
     envStringToObj,
     envObjToString,
-    initialData: appId === "gemini" ? initialData : undefined,
+    initialData: (appId as string) === "gemini" ? initialData : undefined,
     initialEnabled:
-      appId === "gemini" ? initialData?.meta?.commonConfigEnabled : undefined,
+      (appId as string) === "gemini"
+        ? initialData?.meta?.commonConfigEnabled
+        : undefined,
     selectedPresetId: selectedPresetId ?? undefined,
   });
 
@@ -900,7 +902,7 @@ function ProviderFormFull({
   const {
     data: hermesLiveProviderIds = [],
     isLoading: isHermesLiveProviderIdsLoading,
-  } = useHermesLiveProviderIds(appId === "hermes");
+  } = useHermesLiveProviderIds(appId === "kimicode");
 
   const additiveExistingProviderKeys = useMemo(() => {
     if (appId === "opencode" && !isAnyOmoCategory) {
@@ -924,7 +926,7 @@ function ProviderFormFull({
       );
     }
 
-    if (appId === "hermes") {
+    if (appId === "kimicode") {
       return Array.from(
         new Set(
           [...hermesForm.existingHermesKeys, ...hermesLiveProviderIds].filter(
@@ -955,7 +957,7 @@ function ProviderFormFull({
     if (appId === "openclaw") {
       return isOpenclawLiveProviderIdsLoading;
     }
-    if (appId === "hermes") {
+    if (appId === "kimicode") {
       return isHermesLiveProviderIdsLoading;
     }
     return false;
@@ -976,7 +978,7 @@ function ProviderFormFull({
     if (appId === "openclaw") {
       return openclawLiveProviderIds.includes(providerId);
     }
-    if (appId === "hermes") {
+    if (appId === "kimicode") {
       return hermesLiveProviderIds.includes(providerId);
     }
     return false;
@@ -1112,13 +1114,13 @@ function ProviderFormFull({
       }
     }
 
-    if (appId === "hermes") {
+    if (appId === "kimicode") {
       if (!hermesForm.hermesProviderKey.trim()) {
-        toast.error(t("hermes.form.providerKeyRequired"));
+        toast.error(t("kimicode.form.providerKeyRequired"));
         return;
       }
       if (!keyPattern.test(hermesForm.hermesProviderKey)) {
-        toast.error(t("hermes.form.providerKeyInvalid"));
+        toast.error(t("kimicode.form.providerKeyInvalid"));
         return;
       }
       if (isProviderKeyLockStateLoading) {
@@ -1133,7 +1135,47 @@ function ProviderFormFull({
         !isProviderKeyLocked &&
         additiveExistingProviderKeys.includes(hermesForm.hermesProviderKey)
       ) {
-        toast.error(t("hermes.form.providerKeyDuplicate"));
+        toast.error(t("kimicode.form.providerKeyDuplicate"));
+        return;
+      }
+
+      const kimiBaseUrl = hermesForm.hermesBaseUrl.trim();
+      if (!kimiBaseUrl) {
+        toast.error(t("kimicode.form.baseUrlRequired"));
+        return;
+      }
+      try {
+        const parsed = new URL(kimiBaseUrl);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          toast.error(t("kimicode.form.baseUrlScheme"));
+          return;
+        }
+      } catch {
+        toast.error(t("kimicode.form.baseUrlInvalid"));
+        return;
+      }
+      if (!hermesForm.hermesApiKey.trim()) {
+        toast.error(
+          t("kimicode.form.apiKeyRequired", {
+            defaultValue: "API Key is required",
+          }),
+        );
+        return;
+      }
+      if (hermesForm.hermesModels.length === 0) {
+        toast.error(
+          t("kimicode.form.modelsRequired", {
+            defaultValue: "Please add at least one model",
+          }),
+        );
+        return;
+      }
+      if (hermesForm.hermesModels.some((model) => !model.id.trim())) {
+        toast.error(
+          t("kimicode.form.modelIdRequired", {
+            defaultValue: "Model ID is required",
+          }),
+        );
         return;
       }
     }
@@ -1227,7 +1269,7 @@ function ProviderFormFull({
             }),
           );
         }
-      } else if (appId === "gemini") {
+      } else if ((appId as string) === "gemini") {
         if (!geminiBaseUrl.trim()) {
           issues.push(
             t("providerForm.endpointRequired", {
@@ -1322,7 +1364,7 @@ function ProviderFormFull({
       } catch (err) {
         settingsConfig = values.settingsConfig.trim();
       }
-    } else if (appId === "gemini") {
+    } else if ((appId as string) === "gemini") {
       try {
         const envObj = envStringToObj(geminiEnv);
         const configObj = geminiConfig.trim() ? JSON.parse(geminiConfig) : {};
@@ -1380,7 +1422,7 @@ function ProviderFormFull({
       }
     } else if (appId === "openclaw") {
       payload.providerKey = openclawForm.openclawProviderKey;
-    } else if (appId === "hermes") {
+    } else if (appId === "kimicode") {
       payload.providerKey = hermesForm.hermesProviderKey;
     }
 
@@ -1464,7 +1506,7 @@ function ProviderFormFull({
           ? useCommonConfig
           : appId === "codex"
             ? useCodexCommonConfigFlag
-            : appId === "gemini"
+            : (appId as string) === "gemini"
               ? useGeminiCommonConfigFlag
               : undefined,
       endpointAutoSelect,
@@ -1601,7 +1643,7 @@ function ProviderFormFull({
     isPartner: isGeminiPartner,
     partnerPromotionKey: geminiPartnerPromotionKey,
   } = useApiKeyLink({
-    appId: "gemini",
+    appId: "claude" /* was gemini form helper */,
     category,
     selectedPresetId,
     presetEntries,
@@ -1642,7 +1684,7 @@ function ProviderFormFull({
     isPartner: isHermesPartner,
     partnerPromotionKey: hermesPartnerPromotionKey,
   } = useApiKeyLink({
-    appId: "hermes",
+    appId: "kimicode",
     category,
     selectedPresetId,
     presetEntries,
@@ -1675,7 +1717,7 @@ function ProviderFormFull({
             "openai_responses",
         );
       }
-      if (appId === "gemini") {
+      if ((appId as string) === "gemini") {
         resetGeminiConfig({}, {});
       }
       if (appId === "opencode") {
@@ -1686,7 +1728,7 @@ function ProviderFormFull({
       if (appId === "openclaw") {
         openclawForm.resetOpenclawState();
       }
-      if (appId === "hermes") {
+      if (appId === "kimicode") {
         hermesForm.resetHermesState();
       }
       return;
@@ -1728,7 +1770,7 @@ function ProviderFormFull({
       return;
     }
 
-    if (appId === "gemini") {
+    if ((appId as string) === "gemini") {
       const preset = entry.preset as GeminiProviderPreset;
       const env = (preset.settingsConfig as any)?.env ?? {};
       const config = (preset.settingsConfig as any)?.config ?? {};
@@ -1800,9 +1842,9 @@ function ProviderFormFull({
       return;
     }
 
-    // Hermes preset handling
-    if (appId === "hermes") {
-      const preset = entry.preset as HermesProviderPreset;
+    // Kimi Code preset handling
+    if (appId === "kimicode") {
+      const preset = entry.preset as KimiProviderPreset;
       const config = preset.settingsConfig;
 
       hermesForm.resetHermesState(config);
@@ -2008,10 +2050,10 @@ function ProviderFormFull({
                       </p>
                     )}
                 </div>
-              ) : appId === "hermes" ? (
+              ) : appId === "kimicode" ? (
                 <div className="space-y-2">
                   <Label htmlFor="hermes-key">
-                    {t("hermes.form.providerKey", {
+                    {t("kimicode.form.providerKey", {
                       defaultValue: "Provider Key",
                     })}
                     <span className="text-destructive ml-1">*</span>
@@ -2024,7 +2066,7 @@ function ProviderFormFull({
                         e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
                       )
                     }
-                    placeholder={t("hermes.form.providerKeyPlaceholder", {
+                    placeholder={t("kimicode.form.providerKeyPlaceholder", {
                       defaultValue: "my-provider",
                     })}
                     disabled={
@@ -2048,7 +2090,7 @@ function ProviderFormFull({
                   ) &&
                     !isProviderKeyLocked && (
                       <p className="text-xs text-destructive">
-                        {t("hermes.form.providerKeyDuplicate")}
+                        {t("kimicode.form.providerKeyDuplicate")}
                       </p>
                     )}
                   {hermesForm.hermesProviderKey.trim() !== "" &&
@@ -2056,7 +2098,7 @@ function ProviderFormFull({
                       hermesForm.hermesProviderKey,
                     ) && (
                       <p className="text-xs text-destructive">
-                        {t("hermes.form.providerKeyInvalid")}
+                        {t("kimicode.form.providerKeyInvalid")}
                       </p>
                     )}
                   {!(
@@ -2070,11 +2112,11 @@ function ProviderFormFull({
                       )) && (
                       <p className="text-xs text-muted-foreground">
                         {isProviderKeyLocked
-                          ? t("hermes.form.providerKeyLockedHint", {
+                          ? t("kimicode.form.providerKeyLockedHint", {
                               defaultValue:
                                 "This provider is in Hermes config; key is locked.",
                             })
-                          : t("hermes.form.providerKeyHint", {
+                          : t("kimicode.form.providerKeyHint", {
                               defaultValue:
                                 "Lowercase letters, numbers, and hyphens only. Used as the provider name in config.yaml.",
                             })}
@@ -2216,7 +2258,7 @@ function ProviderFormFull({
             />
           )}
 
-          {appId === "gemini" && (
+          {(appId as string) === "gemini" && (
             <GeminiFormFields
               providerId={providerId}
               shouldShowApiKey={shouldShowApiKey(
@@ -2311,7 +2353,7 @@ function ProviderFormFull({
           )}
 
           {/* Hermes 专属字段 */}
-          {appId === "hermes" && (
+          {appId === "kimicode" && (
             <HermesFormFields
               baseUrl={hermesForm.hermesBaseUrl}
               onBaseUrlChange={hermesForm.handleHermesBaseUrlChange}
@@ -2359,7 +2401,7 @@ function ProviderFormFull({
               />
               {settingsConfigErrorField}
             </>
-          ) : appId === "gemini" ? (
+          ) : (appId as string) === "gemini" ? (
             <>
               <GeminiConfigEditor
                 envValue={geminiEnv}
@@ -2421,7 +2463,7 @@ function ProviderFormFull({
               </div>
               {settingsConfigErrorField}
             </>
-          ) : appId === "openclaw" || appId === "hermes" ? (
+          ) : appId === "openclaw" || appId === "kimicode" ? (
             <>
               <div className="space-y-2">
                 <Label htmlFor="settingsConfig">
@@ -2431,7 +2473,7 @@ function ProviderFormFull({
                   value={form.getValues("settingsConfig")}
                   onChange={(config) => form.setValue("settingsConfig", config)}
                   placeholder={
-                    appId === "hermes"
+                    appId === "kimicode"
                       ? `{
   "name": "my-provider",
   "base_url": "https://api.example.com/v1",
@@ -2483,7 +2525,7 @@ function ProviderFormFull({
           {!isAnyOmoCategory &&
             appId !== "opencode" &&
             appId !== "openclaw" &&
-            appId !== "hermes" && (
+            appId !== "kimicode" && (
               <ProviderAdvancedConfig
                 pricingConfig={pricingConfig}
                 onPricingConfigChange={setPricingConfig}

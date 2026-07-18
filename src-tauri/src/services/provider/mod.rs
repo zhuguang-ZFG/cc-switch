@@ -22,10 +22,10 @@ use crate::store::AppState;
 
 // Re-export sub-module functions for external access
 pub use live::{
-    import_default_config, import_hermes_providers_from_live, import_openclaw_providers_from_live,
-    import_opencode_providers_from_live, read_live_settings,
-    should_import_default_config_on_startup, sync_current_to_live,
-    update_toml_common_config_snippet,
+    import_default_config, import_kimicode_providers_from_live,
+    import_openclaw_providers_from_live, import_opencode_providers_from_live, read_live_settings,
+    remove_kimicode_provider_from_live, should_import_default_config_on_startup,
+    sync_current_to_live, update_toml_common_config_snippet,
 };
 
 // Internal re-exports (pub(crate))
@@ -38,9 +38,9 @@ pub(crate) use live::{
 
 // Internal re-exports
 use live::{
-    remove_hermes_provider_from_live, remove_openclaw_provider_from_live,
-    remove_opencode_provider_from_live, write_gemini_live,
+    remove_openclaw_provider_from_live, remove_opencode_provider_from_live, write_gemini_live,
 };
+// remove_kimicode_provider_from_live is pub-reexported above for commands
 use usage::validate_usage_script;
 
 /// The built-in Codex official provider is safe to select during takeover:
@@ -333,19 +333,20 @@ mod tests {
         }
     }
 
-    fn hermes_provider(id: &str) -> Provider {
+    fn kimi_provider(id: &str) -> Provider {
         Provider {
             id: id.to_string(),
             name: format!("Provider {id}"),
             settings_config: json!({
-                "api": "openai-chat",
+                "name": id,
+                "type": "openai",
                 "base_url": "https://api.example.com/v1",
                 "api_key": "test-key",
-                "models": {
-                    "gpt-4o": {
-                        "name": "GPT-4o"
-                    }
-                }
+                "models": [{
+                    "id": "gpt-4o",
+                    "alias": format!("{id}/gpt-4o"),
+                    "max_context_size": 128000
+                }]
             }),
             website_url: None,
             category: Some("custom".to_string()),
@@ -700,6 +701,48 @@ mod tests {
             err.to_string().contains("auth"),
             "expected auth error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn validate_kimicode_provider_requires_complete_connection_and_model() {
+        let valid = json!({
+            "type": "openai",
+            "base_url": "https://api.example.com/v1",
+            "api_key": "secret",
+            "models": [{ "id": "model-1" }]
+        });
+        let provider = Provider::with_id("kimi".into(), "Kimi".into(), valid.clone(), None);
+        ProviderService::validate_provider_settings(&AppType::KimiCode, &provider)
+            .expect("complete Kimi provider should pass validation");
+
+        for (field, invalid) in [
+            (
+                "type",
+                json!({ "type": "unknown", "base_url": "https://api.example.com/v1", "api_key": "secret", "models": [{ "id": "model-1" }] }),
+            ),
+            (
+                "base_url",
+                json!({ "type": "openai", "base_url": "", "api_key": "secret", "models": [{ "id": "model-1" }] }),
+            ),
+            (
+                "api_key",
+                json!({ "type": "openai", "base_url": "https://api.example.com/v1", "api_key": "", "models": [{ "id": "model-1" }] }),
+            ),
+            (
+                "models",
+                json!({ "type": "openai", "base_url": "https://api.example.com/v1", "api_key": "secret", "models": [] }),
+            ),
+            (
+                "model ID",
+                json!({ "type": "openai", "base_url": "https://api.example.com/v1", "api_key": "secret", "models": [{ "id": "" }] }),
+            ),
+        ] {
+            let provider = Provider::with_id("kimi".into(), "Kimi".into(), invalid, None);
+            assert!(
+                ProviderService::validate_provider_settings(&AppType::KimiCode, &provider).is_err(),
+                "invalid Kimi {field} should be rejected"
+            );
+        }
     }
 
     #[test]
@@ -1116,7 +1159,6 @@ command = "legacy-cmd"
 
         let db = Arc::new(Database::memory().expect("init db"));
         let state = AppState::new(db.clone());
-
         let mut original = Provider::with_id(
             "p1".into(),
             "Codex A".into(),
@@ -1246,6 +1288,12 @@ requires_openai_auth = true
 
         let db = Arc::new(Database::memory().expect("init db"));
         let state = AppState::new(db.clone());
+        db.update_proxy_config(ProxyConfig {
+            listen_port: 0,
+            ..Default::default()
+        })
+        .await
+        .expect("use ephemeral proxy port");
 
         let mut original = Provider::with_id(
             "p1".into(),
@@ -1294,7 +1342,7 @@ requires_openai_auth = true
                 .expect("update app proxy config");
         }
 
-        state
+        let proxy_info = state
             .proxy_service
             .start()
             .await
@@ -1342,7 +1390,10 @@ requires_openai_auth = true
         let profile: Value = read_json_file(&profile_path).expect("read desktop profile");
         assert_eq!(
             profile["inferenceGatewayBaseUrl"],
-            json!("http://127.0.0.1:15721/claude-desktop"),
+            json!(format!(
+                "http://127.0.0.1:{}/claude-desktop",
+                proxy_info.port
+            )),
             "desktop profile should stay pointed at the local gateway during takeover"
         );
         assert_eq!(profile["inferenceGatewayAuthScheme"], json!("bearer"));
@@ -1696,39 +1747,37 @@ requires_openai_auth = true
 
     #[test]
     #[serial]
-    fn import_hermes_providers_from_live_updates_existing_provider_from_live() {
+    fn import_kimicode_providers_from_live_updates_existing_provider_from_live() {
         with_test_home(|state, _| {
-            let provider = hermes_provider("existing-hermes");
+            let provider = kimi_provider("existing-kimi");
             state
                 .db
-                .save_provider(AppType::Hermes.as_str(), &provider)
-                .expect("seed existing hermes provider");
+                .save_provider(AppType::KimiCode.as_str(), &provider)
+                .expect("seed existing Kimi Code provider");
 
             let mut live_settings = provider.settings_config.clone();
-            live_settings["base_url"] = Value::String("https://api.hermes.example/v1".to_string());
-            live_settings["models"]["gpt-4o"]["name"] = Value::String("GPT-4o Updated".to_string());
-            crate::hermes_config::set_provider(&provider.id, live_settings)
-                .expect("seed edited live hermes provider");
+            live_settings["base_url"] = Value::String("https://api.kimi.example/v1".to_string());
+            live_settings["models"][0]["max_context_size"] = json!(262144);
+            crate::kimi_config::set_provider(&provider.id, live_settings)
+                .expect("seed edited live Kimi Code provider");
 
-            let updated = import_hermes_providers_from_live(state)
-                .expect("import hermes providers from live");
+            let updated = import_kimicode_providers_from_live(state)
+                .expect("import Kimi Code providers from live");
             assert_eq!(updated, 1);
 
             let saved = state
                 .db
-                .get_provider_by_id(&provider.id, AppType::Hermes.as_str())
-                .expect("query updated hermes provider")
-                .expect("hermes provider should exist");
+                .get_provider_by_id(&provider.id, AppType::KimiCode.as_str())
+                .expect("query updated Kimi Code provider")
+                .expect("Kimi Code provider should exist");
             assert_eq!(saved.name, provider.name);
             assert_eq!(
                 saved.settings_config["base_url"],
-                json!("https://api.hermes.example/v1")
+                json!("https://api.kimi.example/v1")
             );
-            // models are denormalized from YAML dict to UI-friendly array by
-            // get_providers(), so access by index rather than dict key
             assert_eq!(
-                saved.settings_config["models"][0]["name"],
-                json!("GPT-4o Updated")
+                saved.settings_config["models"][0]["max_context_size"],
+                json!(262144)
             );
             assert_eq!(saved.settings_config["models"][0]["id"], json!("gpt-4o"));
         });
@@ -1957,6 +2006,36 @@ requires_openai_auth = true
 }
 
 impl ProviderService {
+    fn is_managed_kimi_provider(provider: &Provider) -> bool {
+        provider.id.starts_with("managed:")
+            || provider
+                .settings_config
+                .get("_cc_managed")
+                .and_then(Value::as_bool)
+                == Some(true)
+            || provider.settings_config.get("oauth").is_some()
+    }
+
+    fn ensure_kimi_provider_mutable(
+        app_type: &AppType,
+        provider: &Provider,
+    ) -> Result<(), AppError> {
+        if matches!(app_type, AppType::KimiCode) && Self::is_managed_kimi_provider(provider) {
+            return Err(AppError::localized(
+                "provider.kimicode.managed.read_only",
+                format!(
+                    "Kimi Code 托管供应商 '{}' 只能通过官方登录管理",
+                    provider.id
+                ),
+                format!(
+                    "Kimi Code managed provider '{}' can only be changed through official login",
+                    provider.id
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn normalize_provider_if_claude(app_type: &AppType, provider: &mut Provider) {
         if matches!(app_type, AppType::Claude) {
             let mut v = provider.settings_config.clone();
@@ -2092,6 +2171,7 @@ impl ProviderService {
         add_to_live: bool,
     ) -> Result<bool, AppError> {
         let mut provider = provider;
+        Self::ensure_kimi_provider_mutable(&app_type, &provider)?;
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
         Self::validate_provider_settings(&app_type, &provider)?;
@@ -2147,6 +2227,10 @@ impl ProviderService {
         let existing_provider = state
             .db
             .get_provider_by_id(&original_id, app_type.as_str())?;
+        if let Some(existing) = existing_provider.as_ref() {
+            Self::ensure_kimi_provider_mutable(&app_type, existing)?;
+        }
+        Self::ensure_kimi_provider_mutable(&app_type, &provider)?;
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
         Self::validate_provider_settings(&app_type, &provider)?;
@@ -2370,6 +2454,9 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             // Single DB read shared across all additive-mode sub-paths below.
             let existing = state.db.get_provider_by_id(id, app_type.as_str())?;
+            if let Some(provider) = existing.as_ref() {
+                Self::ensure_kimi_provider_mutable(&app_type, provider)?;
+            }
 
             if matches!(app_type, AppType::OpenCode) {
                 let provider_category = existing.as_ref().and_then(|p| p.category.clone());
@@ -2406,7 +2493,7 @@ impl ProviderService {
                 match app_type {
                     AppType::OpenCode => remove_opencode_provider_from_live(id)?,
                     AppType::OpenClaw => remove_openclaw_provider_from_live(id)?,
-                    AppType::Hermes => remove_hermes_provider_from_live(id)?,
+                    AppType::KimiCode => remove_kimicode_provider_from_live(id)?,
                     _ => {}
                 }
             }
@@ -2437,6 +2524,15 @@ impl ProviderService {
         app_type: AppType,
         id: &str,
     ) -> Result<(), AppError> {
+        if let Some(provider) = state.db.get_provider_by_id(id, app_type.as_str())? {
+            Self::ensure_kimi_provider_mutable(&app_type, &provider)?;
+        } else if matches!(app_type, AppType::KimiCode) && id.starts_with("managed:") {
+            return Err(AppError::localized(
+                "provider.kimicode.managed.read_only",
+                "Kimi Code 托管供应商只能通过官方登录管理",
+                "Kimi Code managed providers can only be changed through official login",
+            ));
+        }
         match app_type {
             AppType::OpenCode => {
                 let provider_category = state
@@ -2469,8 +2565,8 @@ impl ProviderService {
             AppType::OpenClaw => {
                 remove_openclaw_provider_from_live(id)?;
             }
-            AppType::Hermes => {
-                remove_hermes_provider_from_live(id)?;
+            AppType::KimiCode => {
+                remove_kimicode_provider_from_live(id)?;
             }
             _ => {
                 return Err(AppError::Message(format!(
@@ -2507,6 +2603,37 @@ impl ProviderService {
             .get(id)
             .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
 
+        // Kimi Code's official provider is owned by OAuth provisioning and must
+        // never pass through the generic live writer. Custom providers are still
+        // written by apply_switch_defaults; managed providers only change the
+        // top-level default model alias.
+        if matches!(app_type, AppType::KimiCode) {
+            let target_is_managed = crate::kimi_config::is_managed_provider(&_provider.id)?;
+            crate::kimi_config::apply_switch_defaults(&_provider.id, &_provider.settings_config)?;
+
+            if !target_is_managed && Self::provider_live_config_managed(_provider) != Some(true) {
+                let mut updated = _provider.clone();
+                Self::set_provider_live_config_managed(&mut updated, true);
+                if let Err(err) = state.db.save_provider(app_type.as_str(), &updated) {
+                    return match remove_kimicode_provider_from_live(&_provider.id) {
+                        Ok(()) => Err(AppError::Message(format!(
+                            "Failed to persist live_config_managed for '{}' after switching Kimi Code; live changes were rolled back: {err}",
+                            _provider.id
+                        ))),
+                        Err(rollback_err) => Err(AppError::Message(format!(
+                            "Failed to persist live_config_managed for '{}' after switching Kimi Code: {err}; additionally failed to roll back live config: {rollback_err}",
+                            _provider.id
+                        ))),
+                    };
+                }
+            }
+
+            if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
+                log::warn!("Kimi Code MCP projection failed after provider switch: {err}");
+            }
+            return Ok(SwitchResult::default());
+        }
+
         // OMO providers are switched through their own exclusive path.
         if matches!(app_type, AppType::OpenCode) && _provider.category.as_deref() == Some("omo") {
             return Self::switch_normal(state, app_type, id, &providers);
@@ -2529,7 +2656,7 @@ impl ProviderService {
         // normal live write.
         let _switch_guard = if matches!(
             app_type,
-            AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild
+            AppType::Claude | AppType::Codex | AppType::GrokBuild
         ) {
             Some(futures::executor::block_on(
                 state.proxy_service.lock_switch_for_app(app_type.as_str()),
@@ -2679,25 +2806,6 @@ impl ProviderService {
         // Sync to live (write_gemini_live handles security flag internally for Gemini)
         write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
 
-        // Hermes is additive, so "switching" doesn't overwrite a live config file
-        // — we instead update the top-level `model:` section to point at this
-        // provider's first declared model. Without this, clicking "switch" would
-        // only shuffle entries in custom_providers[] while Hermes keeps using
-        // whatever `model.provider` was set before.
-        if matches!(app_type, AppType::Hermes) {
-            if let Err(e) =
-                crate::hermes_config::apply_switch_defaults(&provider.id, &provider.settings_config)
-            {
-                log::warn!(
-                    "Failed to update Hermes model defaults after switching to '{}': {e}",
-                    provider.id
-                );
-                result
-                    .warnings
-                    .push(format!("hermes_model_defaults_failed:{}", provider.id));
-            }
-        }
-
         // For additive-mode providers that were DB-only (live_config_managed == Some(false)),
         // flip the flag to true now that the provider has been successfully written to the live
         // file. This ensures sync_all_providers_to_live() will include it on future syncs.
@@ -2712,7 +2820,7 @@ impl ProviderService {
                 let rollback_result = match app_type {
                     AppType::OpenCode => remove_opencode_provider_from_live(&provider.id),
                     AppType::OpenClaw => remove_openclaw_provider_from_live(&provider.id),
-                    AppType::Hermes => remove_hermes_provider_from_live(&provider.id),
+                    AppType::KimiCode => remove_kimicode_provider_from_live(&provider.id),
                     _ => Ok(()),
                 };
 
@@ -2994,11 +3102,10 @@ impl ProviderService {
             AppType::Claude => Self::extract_claude_common_config(&provider.settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
             AppType::Codex => Self::extract_codex_common_config(&provider.settings_config),
-            AppType::Gemini => Self::extract_gemini_common_config(&provider.settings_config),
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
-            AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
+            AppType::KimiCode => Ok(String::new()), // Kimi Code doesn't use common config snippets
         }
     }
 
@@ -3011,11 +3118,10 @@ impl ProviderService {
             AppType::Claude => Self::extract_claude_common_config(settings_config),
             AppType::ClaudeDesktop => Ok(String::new()),
             AppType::Codex => Self::extract_codex_common_config(settings_config),
-            AppType::Gemini => Self::extract_gemini_common_config(settings_config),
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
-            AppType::Hermes => Ok(String::new()), // Hermes doesn't use common config snippets
+            AppType::KimiCode => Ok(String::new()), // Kimi Code doesn't use common config snippets
         }
     }
 
@@ -3479,10 +3585,6 @@ impl ProviderService {
                     }
                 }
             }
-            AppType::Gemini => {
-                use crate::gemini_config::validate_gemini_settings;
-                validate_gemini_settings(&provider.settings_config)?
-            }
             AppType::GrokBuild => {
                 let settings = provider.settings_config.as_object().ok_or_else(|| {
                     AppError::localized(
@@ -3525,13 +3627,99 @@ impl ProviderService {
                     ));
                 }
             }
-            AppType::Hermes => {
-                // Hermes: accept any JSON object for now
-                if !provider.settings_config.is_object() {
+            AppType::KimiCode => {
+                let settings = provider.settings_config.as_object().ok_or_else(|| {
+                    AppError::localized(
+                        "provider.kimicode.settings.not_object",
+                        "Kimi Code 配置必须是 JSON 对象",
+                        "Kimi Code configuration must be a JSON object",
+                    )
+                })?;
+                let provider_type = settings
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| {
+                        matches!(
+                            *value,
+                            "kimi"
+                                | "anthropic"
+                                | "openai"
+                                | "openai_responses"
+                                | "google-genai"
+                                | "vertexai"
+                        )
+                    })
+                    .ok_or_else(|| {
+                        AppError::localized(
+                            "provider.kimicode.type.invalid",
+                            "Kimi Code 供应商类型无效",
+                            "Kimi Code provider type is invalid",
+                        )
+                    })?;
+                let _ = provider_type;
+
+                let base_url = settings
+                    .get("base_url")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        AppError::localized(
+                            "provider.kimicode.base_url.missing",
+                            "Kimi Code API 端点不能为空",
+                            "Kimi Code API endpoint is required",
+                        )
+                    })?;
+                let parsed_url = reqwest::Url::parse(base_url).map_err(|_| {
+                    AppError::localized(
+                        "provider.kimicode.base_url.invalid",
+                        "Kimi Code API 端点必须是有效的 HTTP(S) URL",
+                        "Kimi Code API endpoint must be a valid HTTP(S) URL",
+                    )
+                })?;
+                if !matches!(parsed_url.scheme(), "http" | "https") {
                     return Err(AppError::localized(
-                        "provider.hermes.settings.not_object",
-                        "Hermes 配置必须是 JSON 对象",
-                        "Hermes configuration must be a JSON object",
+                        "provider.kimicode.base_url.invalid",
+                        "Kimi Code API 端点必须是有效的 HTTP(S) URL",
+                        "Kimi Code API endpoint must be a valid HTTP(S) URL",
+                    ));
+                }
+
+                settings
+                    .get("api_key")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        AppError::localized(
+                            "provider.kimicode.api_key.missing",
+                            "Kimi Code API Key 不能为空",
+                            "Kimi Code API key is required",
+                        )
+                    })?;
+
+                let models = settings
+                    .get("models")
+                    .and_then(Value::as_array)
+                    .filter(|models| !models.is_empty())
+                    .ok_or_else(|| {
+                        AppError::localized(
+                            "provider.kimicode.models.missing",
+                            "Kimi Code 至少需要一个模型",
+                            "Kimi Code requires at least one model",
+                        )
+                    })?;
+                if models.iter().any(|model| {
+                    model
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| id.trim().is_empty())
+                }) {
+                    return Err(AppError::localized(
+                        "provider.kimicode.model_id.missing",
+                        "Kimi Code 模型 ID 不能为空",
+                        "Kimi Code model ID is required",
                     ));
                 }
             }
@@ -3685,26 +3873,6 @@ impl ProviderService {
 
                 Ok((api_key, base_url))
             }
-            AppType::Gemini => {
-                use crate::gemini_config::json_to_env;
-
-                let env_map = json_to_env(&provider.settings_config)?;
-
-                let api_key = env_map.get("GEMINI_API_KEY").cloned().ok_or_else(|| {
-                    AppError::localized(
-                        "gemini.missing_api_key",
-                        "缺少 GEMINI_API_KEY",
-                        "Missing GEMINI_API_KEY",
-                    )
-                })?;
-
-                let base_url = env_map
-                    .get("GOOGLE_GEMINI_BASE_URL")
-                    .cloned()
-                    .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
-
-                Ok((api_key, base_url))
-            }
             AppType::OpenCode => {
                 // OpenCode uses options.apiKey and options.baseURL
                 let options = provider
@@ -3739,7 +3907,7 @@ impl ProviderService {
 
                 Ok((api_key, base_url))
             }
-            AppType::OpenClaw | AppType::Hermes => {
+            AppType::OpenClaw | AppType::KimiCode => {
                 // OpenClaw/Hermes use apiKey and baseUrl directly on the object
                 let api_key = provider
                     .settings_config

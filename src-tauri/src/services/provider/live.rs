@@ -184,8 +184,9 @@ pub(crate) fn provider_exists_in_live_config(
             .map(|providers| providers.contains_key(provider_id)),
         AppType::OpenClaw => crate::openclaw_config::get_providers()
             .map(|providers| providers.contains_key(provider_id)),
-        AppType::Hermes => crate::hermes_config::get_providers()
-            .map(|providers| providers.contains_key(provider_id)),
+        AppType::KimiCode => {
+            crate::kimi_config::get_providers().map(|providers| providers.contains_key(provider_id))
+        }
         _ => Ok(false),
     }
 }
@@ -510,23 +511,10 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
 
             toml_item_is_subset(target_doc.as_item(), source_doc.as_item())
         }
-        AppType::Gemini => match serde_json::from_str::<Value>(trimmed) {
-            Ok(Value::Object(source_map)) => {
-                let Some(target_map) = settings.get("env").and_then(Value::as_object) else {
-                    return false;
-                };
-                source_map.iter().all(|(key, source_value)| {
-                    target_map
-                        .get(key)
-                        .is_some_and(|target_value| json_is_subset(target_value, source_value))
-                })
-            }
-            _ => false,
-        },
         AppType::GrokBuild
         | AppType::OpenCode
         | AppType::OpenClaw
-        | AppType::Hermes
+        | AppType::KimiCode
         | AppType::ClaudeDesktop => false,
     }
 }
@@ -588,19 +576,10 @@ pub(crate) fn remove_common_config_from_settings(
             }
             Ok(result)
         }
-        AppType::Gemini => {
-            let source = serde_json::from_str::<Value>(trimmed)
-                .map_err(|e| AppError::Message(format!("Invalid Gemini common config: {e}")))?;
-            let mut result = settings.clone();
-            if let Some(env) = result.get_mut("env") {
-                json_deep_remove(env, &source);
-            }
-            Ok(result)
-        }
         AppType::GrokBuild
         | AppType::OpenCode
         | AppType::OpenClaw
-        | AppType::Hermes
+        | AppType::KimiCode
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
@@ -645,21 +624,10 @@ fn apply_common_config_to_settings(
             }
             Ok(result)
         }
-        AppType::Gemini => {
-            let source = serde_json::from_str::<Value>(trimmed)
-                .map_err(|e| AppError::Message(format!("Invalid Gemini common config: {e}")))?;
-            let mut result = settings.clone();
-            if let Some(env) = result.get_mut("env") {
-                json_deep_merge(env, &source);
-            } else if let Some(obj) = result.as_object_mut() {
-                obj.insert("env".to_string(), source);
-            }
-            Ok(result)
-        }
         AppType::GrokBuild
         | AppType::OpenCode
         | AppType::OpenClaw
-        | AppType::Hermes
+        | AppType::KimiCode
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
@@ -1051,10 +1019,6 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
                 profile,
             )?;
         }
-        AppType::Gemini => {
-            // Delegate to write_gemini_live which handles env file writing correctly
-            write_gemini_live(provider)?;
-        }
         AppType::GrokBuild => {
             crate::grok_config::write_grok_provider_live(provider)?;
         }
@@ -1158,9 +1122,12 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
                 }
             }
         }
-        AppType::Hermes => {
-            crate::hermes_config::set_provider(&provider.id, provider.settings_config.clone())?;
-            log::debug!("Hermes provider '{}' written to live config", provider.id);
+        AppType::KimiCode => {
+            crate::kimi_config::set_provider(&provider.id, provider.settings_config.clone())?;
+            log::debug!(
+                "Kimi Code provider '{}' written to live config",
+                provider.id
+            );
         }
     }
     Ok(())
@@ -1182,6 +1149,22 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
             == Some(false)
         {
             continue;
+        }
+
+        // Official Kimi OAuth providers are provisioned in config.toml and are
+        // intentionally absent from the editable database projection.
+        if matches!(app_type, AppType::KimiCode) {
+            match crate::kimi_config::is_managed_provider(&provider.id) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(err) => {
+                    log::warn!(
+                        "Failed to inspect managed Kimi provider '{}'; skipping live sync: {err}",
+                        provider.id
+                    );
+                    continue;
+                }
+            }
         }
 
         if let Err(e) = write_live_with_common_config(state.db.as_ref(), app_type, provider) {
@@ -1340,39 +1323,6 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             "Claude Desktop 3P 配置不支持作为通用 live 配置导入，请使用“从 Claude 导入兼容供应商”。",
             "Claude Desktop 3P configuration cannot be imported as a generic live config. Use 'Import compatible providers from Claude' instead.",
         )),
-        AppType::Gemini => {
-            use crate::gemini_config::{
-                env_to_json, get_gemini_env_path, get_gemini_settings_path, read_gemini_env,
-            };
-
-            // Read .env file (environment variables)
-            let env_path = get_gemini_env_path();
-            if !env_path.exists() {
-                return Err(AppError::localized(
-                    "gemini.env.missing",
-                    "Gemini .env 文件不存在",
-                    "Gemini .env file not found",
-                ));
-            }
-
-            let env_map = read_gemini_env()?;
-            let env_json = env_to_json(&env_map);
-            let env_obj = env_json.get("env").cloned().unwrap_or_else(|| json!({}));
-
-            // Read settings.json file (MCP config etc.)
-            let settings_path = get_gemini_settings_path();
-            let config_obj = if settings_path.exists() {
-                read_json_file(&settings_path)?
-            } else {
-                json!({})
-            };
-
-            // Return complete structure: { "env": {...}, "config": {...} }
-            Ok(json!({
-                "env": env_obj,
-                "config": config_obj
-            }))
-        }
         AppType::OpenCode => {
             use crate::opencode_config::{get_opencode_config_path, read_opencode_config};
 
@@ -1404,18 +1354,18 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
             let config = read_openclaw_config()?;
             Ok(config)
         }
-        AppType::Hermes => {
-            let config_path = crate::hermes_config::get_hermes_config_path();
+        AppType::KimiCode => {
+            let config_path = crate::kimi_config::get_kimi_config_path();
             if !config_path.exists() {
                 return Err(AppError::localized(
-                    "hermes.config.missing",
-                    "Hermes 配置文件不存在",
-                    "Hermes configuration file not found",
+                    "kimicode.config.missing",
+                    "Kimi Code 配置文件不存在",
+                    "Kimi Code configuration file not found",
                 ));
             }
-            let yaml_config = crate::hermes_config::read_hermes_config()?;
-            let config = crate::hermes_config::yaml_to_json(&yaml_config)?;
-            Ok(config)
+            let text = std::fs::read_to_string(&config_path)
+                .map_err(|e| AppError::io(&config_path, e))?;
+            Ok(serde_json::json!({ "config": text }))
         }
     }
 }
@@ -1482,41 +1432,8 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
                 "Claude Desktop 3P config cannot be imported through the generic import flow. Use 'Import compatible providers from Claude' instead.",
             ));
         }
-        AppType::Gemini => {
-            use crate::gemini_config::{
-                env_to_json, get_gemini_env_path, get_gemini_settings_path, read_gemini_env,
-            };
-
-            // Read .env file (environment variables)
-            let env_path = get_gemini_env_path();
-            if !env_path.exists() {
-                return Err(AppError::localized(
-                    "gemini.live.missing",
-                    "Gemini 配置文件不存在",
-                    "Gemini configuration file is missing",
-                ));
-            }
-
-            let env_map = read_gemini_env()?;
-            let env_json = env_to_json(&env_map);
-            let env_obj = env_json.get("env").cloned().unwrap_or_else(|| json!({}));
-
-            // Read settings.json file (MCP config etc.)
-            let settings_path = get_gemini_settings_path();
-            let config_obj = if settings_path.exists() {
-                read_json_file(&settings_path)?
-            } else {
-                json!({})
-            };
-
-            // Return complete structure: { "env": {...}, "config": {...} }
-            json!({
-                "env": env_obj,
-                "config": config_obj
-            })
-        }
         // OpenCode, OpenClaw and Hermes use additive mode and are handled by early return above
-        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => {
+        AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode => {
             unreachable!("additive mode apps are handled by early return")
         }
     };
@@ -1843,89 +1760,120 @@ pub fn import_openclaw_providers_from_live(state: &AppState) -> Result<usize, Ap
     Ok(imported + updated)
 }
 
-/// Import all providers from Hermes live config to database
+/// Import all providers from Kimi Code live config to database
 ///
-/// This imports existing providers from ~/.hermes/config.yaml
+/// This imports existing providers from ~/.kimi-code/config.toml
 /// into the CC Switch database. Each provider found will be added to the
 /// database with is_current set to false.
-pub fn import_hermes_providers_from_live(state: &AppState) -> Result<usize, AppError> {
-    use crate::hermes_config;
+pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, AppError> {
+    use crate::kimi_config;
 
-    let providers = hermes_config::get_providers()?;
+    let providers = kimi_config::get_providers()?;
     if providers.is_empty() {
         return Ok(0);
     }
 
     let mut imported = 0;
     let mut updated = 0;
-    let existing_ids = state.db.get_provider_ids("hermes")?;
+    let existing_ids = state.db.get_provider_ids("kimicode")?;
 
     for (name, config) in providers {
         // Validate: skip entries with empty name
         if name.trim().is_empty() {
-            log::warn!("Skipping Hermes provider with empty name");
+            log::warn!("Skipping Kimi Code provider with empty name");
             continue;
         }
 
+        let is_managed = name == kimi_config::MANAGED_KIMI_PROVIDER;
         if existing_ids.contains(&name) {
-            match state.db.get_provider_by_id(&name, "hermes") {
+            match state.db.get_provider_by_id(&name, "kimicode") {
                 Ok(Some(existing)) => {
-                    if existing.settings_config != config {
-                        let mut provider = existing;
+                    let mut provider = existing;
+                    let mut changed = provider.settings_config != config;
+                    if changed {
                         provider.settings_config = config;
-                        if let Err(e) = state.db.save_provider("hermes", &provider) {
+                    }
+                    if is_managed {
+                        if provider.name != "Kimi For Coding" {
+                            provider.name = "Kimi For Coding".to_string();
+                            changed = true;
+                        }
+                        if provider.category.as_deref() != Some("official") {
+                            provider.category = Some("official".to_string());
+                            changed = true;
+                        }
+                        let meta = provider.meta.get_or_insert_with(Default::default);
+                        if meta.live_config_managed != Some(true) {
+                            meta.live_config_managed = Some(true);
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        if let Err(e) = state.db.save_provider("kimicode", &provider) {
                             log::warn!(
-                                "Failed to update Hermes provider '{name}' from live config: {e}"
+                                "Failed to update Kimi Code provider '{name}' from live config: {e}"
                             );
                         } else {
                             updated += 1;
-                            log::info!("Updated Hermes provider '{name}' from live config");
+                            log::info!("Updated Kimi Code provider '{name}' from live config");
                         }
                     }
                 }
                 Ok(None) => {
-                    log::warn!("Hermes provider '{name}' disappeared while importing live config")
+                    log::warn!(
+                        "Kimi Code provider '{name}' disappeared while importing live config"
+                    )
                 }
-                Err(e) => log::warn!("Failed to look up Hermes provider '{name}': {e}"),
+                Err(e) => log::warn!("Failed to look up Kimi Code provider '{name}': {e}"),
             }
             continue;
         }
 
         // Create provider
-        let mut provider = Provider::with_id(name.clone(), name.clone(), config, None);
+        let display_name = if is_managed {
+            "Kimi For Coding".to_string()
+        } else {
+            name.clone()
+        };
+        let mut provider = Provider::with_id(name.clone(), display_name, config, None);
+        if is_managed {
+            provider.category = Some("official".to_string());
+        }
         provider.meta = Some(crate::provider::ProviderMeta {
             live_config_managed: Some(true),
             ..Default::default()
         });
 
         // Save to database
-        if let Err(e) = state.db.save_provider("hermes", &provider) {
-            log::warn!("Failed to import Hermes provider '{name}': {e}");
+        if let Err(e) = state.db.save_provider("kimicode", &provider) {
+            log::warn!("Failed to import Kimi Code provider '{name}': {e}");
             continue;
         }
 
         imported += 1;
-        log::info!("Imported Hermes provider '{name}' from live config");
+        log::info!("Imported Kimi Code provider '{name}' from live config");
     }
 
     Ok(imported + updated)
 }
 
-/// Remove a Hermes provider from live config
+/// Remove a Kimi Code provider from live config
 ///
-/// This removes a specific provider from ~/.hermes/config.yaml
+/// This removes a specific provider from ~/.kimi-code/config.toml
 /// without affecting other providers in the file.
-pub fn remove_hermes_provider_from_live(provider_id: &str) -> Result<(), AppError> {
-    use crate::hermes_config;
+pub fn remove_kimicode_provider_from_live(provider_id: &str) -> Result<(), AppError> {
+    use crate::kimi_config;
 
-    // Check if Hermes config directory exists
-    if !hermes_config::get_hermes_dir().exists() {
-        log::debug!("Hermes config directory doesn't exist, skipping removal of '{provider_id}'");
+    // Check if Kimi Code config directory exists
+    if !kimi_config::get_kimi_dir().exists() {
+        log::debug!(
+            "Kimi Code config directory doesn't exist, skipping removal of '{provider_id}'"
+        );
         return Ok(());
     }
 
-    hermes_config::remove_provider(provider_id)?;
-    log::info!("Hermes provider '{provider_id}' removed from live config");
+    kimi_config::remove_provider(provider_id)?;
+    log::info!("Kimi Code provider '{provider_id}' removed from live config");
 
     Ok(())
 }

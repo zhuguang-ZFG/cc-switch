@@ -87,8 +87,8 @@ impl ConfigService {
     pub fn sync_current_providers_to_live(config: &mut MultiAppConfig) -> Result<(), AppError> {
         Self::sync_current_provider_for_app(config, &AppType::Claude)?;
         Self::sync_current_provider_for_app(config, &AppType::Codex)?;
-        Self::sync_current_provider_for_app(config, &AppType::Gemini)?;
         Self::sync_current_provider_for_app(config, &AppType::GrokBuild)?;
+        Self::sync_current_provider_for_app(config, &AppType::KimiCode)?;
         Ok(())
     }
 
@@ -125,7 +125,6 @@ impl ConfigService {
             AppType::ClaudeDesktop => {
                 // Claude Desktop 3P profiles are managed by claude_desktop_config.
             }
-            AppType::Gemini => Self::sync_gemini_live(config, &current_id, &provider)?,
             AppType::GrokBuild => crate::grok_config::write_grok_provider_live(&provider)?,
             AppType::OpenCode => {
                 // OpenCode uses additive mode, no live sync needed
@@ -135,8 +134,8 @@ impl ConfigService {
                 // OpenClaw uses additive mode, no live sync needed
                 // OpenClaw providers are managed directly in the config file
             }
-            AppType::Hermes => {
-                // Hermes uses additive mode, no live sync needed
+            AppType::KimiCode => {
+                crate::kimi_config::apply_switch_defaults(&current_id, &provider.settings_config)?;
             }
         }
 
@@ -256,7 +255,7 @@ impl ConfigService {
             obj.insert("config".to_string(), live_after_config);
         }
 
-        if let Some(manager) = config.get_manager_mut(&AppType::Gemini) {
+        if let Some(manager) = config.get_manager_mut(&AppType::GrokBuild) {
             if let Some(target) = manager.providers.get_mut(provider_id) {
                 target.settings_config = live_after;
             }

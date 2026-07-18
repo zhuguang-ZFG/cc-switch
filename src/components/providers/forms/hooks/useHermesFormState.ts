@@ -2,11 +2,12 @@ import { useState, useCallback, useMemo } from "react";
 import type { AppId } from "@/lib/api";
 import { useProvidersQuery } from "@/lib/query/queries";
 import {
-  HERMES_DEFAULT_API_MODE,
-  type HermesApiMode,
-  type HermesModel,
-  type HermesProviderSettingsConfig,
-} from "@/config/hermesProviderPresets";
+  type KimiModel,
+  type KimiProviderSettingsConfig,
+  type KimiProviderType,
+} from "@/config/kimiProviderPresets";
+
+export const KIMI_DEFAULT_PROVIDER_TYPE: KimiProviderType = "openai";
 
 interface UseHermesFormStateParams {
   initialData?: {
@@ -20,6 +21,7 @@ interface UseHermesFormStateParams {
 
 const HERMES_DEFAULT_CONFIG_OBJ = {
   name: "",
+  type: KIMI_DEFAULT_PROVIDER_TYPE,
   base_url: "",
   api_key: "",
 } as const;
@@ -35,16 +37,16 @@ export interface HermesFormState {
   setHermesProviderKey: (key: string) => void;
   hermesBaseUrl: string;
   hermesApiKey: string;
-  hermesApiMode: HermesApiMode;
-  hermesModels: HermesModel[];
+  hermesApiMode: KimiProviderType;
+  hermesModels: KimiModel[];
   hermesRateLimitDelay: number | undefined;
   existingHermesKeys: string[];
   handleHermesBaseUrlChange: (baseUrl: string) => void;
   handleHermesApiKeyChange: (apiKey: string) => void;
-  handleHermesApiModeChange: (mode: HermesApiMode) => void;
-  handleHermesModelsChange: (models: HermesModel[]) => void;
+  handleHermesApiModeChange: (mode: KimiProviderType) => void;
+  handleHermesModelsChange: (models: KimiModel[]) => void;
   handleHermesRateLimitDelayChange: (delay: number | undefined) => void;
-  resetHermesState: (config?: Partial<HermesProviderSettingsConfig>) => void;
+  resetHermesState: (config?: Partial<KimiProviderSettingsConfig>) => void;
 }
 
 function parseHermesField<T>(
@@ -78,7 +80,7 @@ export function useHermesFormState({
   onSettingsConfigChange,
   getSettingsConfig,
 }: UseHermesFormStateParams): HermesFormState {
-  const { data: hermesProvidersData } = useProvidersQuery("hermes");
+  const { data: hermesProvidersData } = useProvidersQuery("kimicode");
   const existingHermesKeys = useMemo(() => {
     if (!hermesProvidersData?.providers) return [];
     return Object.keys(hermesProvidersData.providers).filter(
@@ -87,39 +89,39 @@ export function useHermesFormState({
   }, [hermesProvidersData?.providers, providerId]);
 
   const [hermesProviderKey, setHermesProviderKey] = useState<string>(() => {
-    if (appId !== "hermes") return "";
+    if (appId !== "kimicode") return "";
     return providerId || "";
   });
 
   const [hermesBaseUrl, setHermesBaseUrl] = useState<string>(() => {
-    if (appId !== "hermes") return "";
+    if (appId !== "kimicode") return "";
     return parseHermesField(initialData, "base_url", "");
   });
 
   const [hermesApiKey, setHermesApiKey] = useState<string>(() => {
-    if (appId !== "hermes") return "";
+    if (appId !== "kimicode") return "";
     return parseHermesField(initialData, "api_key", "");
   });
 
-  const [hermesApiMode, setHermesApiMode] = useState<HermesApiMode>(() => {
-    if (appId !== "hermes") return HERMES_DEFAULT_API_MODE;
-    const stored = parseHermesField<HermesApiMode | "">(
+  const [hermesApiMode, setHermesApiMode] = useState<KimiProviderType>(() => {
+    if (appId !== "kimicode") return KIMI_DEFAULT_PROVIDER_TYPE;
+    const stored = parseHermesField<KimiProviderType | "">(
       initialData,
-      "api_mode",
+      "type",
       "",
     );
-    return stored || HERMES_DEFAULT_API_MODE;
+    return stored || KIMI_DEFAULT_PROVIDER_TYPE;
   });
 
-  const [hermesModels, setHermesModels] = useState<HermesModel[]>(() => {
-    if (appId !== "hermes") return [];
-    return parseHermesField<HermesModel[]>(initialData, "models", []);
+  const [hermesModels, setHermesModels] = useState<KimiModel[]>(() => {
+    if (appId !== "kimicode") return [];
+    return parseHermesField<KimiModel[]>(initialData, "models", []);
   });
 
   const [hermesRateLimitDelay, setHermesRateLimitDelay] = useState<
     number | undefined
   >(() => {
-    if (appId !== "hermes") return undefined;
+    if (appId !== "kimicode") return undefined;
     return parseRateLimitDelay(initialData?.settingsConfig?.rate_limit_delay);
   });
 
@@ -157,17 +159,18 @@ export function useHermesFormState({
   );
 
   const handleHermesApiModeChange = useCallback(
-    (mode: HermesApiMode) => {
+    (mode: KimiProviderType) => {
       setHermesApiMode(mode);
       updateHermesConfig((config) => {
-        config.api_mode = mode;
+        config.type = mode;
+        delete config.api_mode;
       });
     },
     [updateHermesConfig],
   );
 
   const handleHermesModelsChange = useCallback(
-    (models: HermesModel[]) => {
+    (models: KimiModel[]) => {
       setHermesModels(models);
       updateHermesConfig((config) => {
         if (models.length === 0) {
@@ -195,11 +198,11 @@ export function useHermesFormState({
   );
 
   const resetHermesState = useCallback(
-    (config?: Partial<HermesProviderSettingsConfig>) => {
+    (config?: Partial<KimiProviderSettingsConfig>) => {
       setHermesProviderKey("");
       setHermesBaseUrl(config?.base_url || "");
       setHermesApiKey(config?.api_key || "");
-      setHermesApiMode(config?.api_mode ?? HERMES_DEFAULT_API_MODE);
+      setHermesApiMode(config?.type ?? KIMI_DEFAULT_PROVIDER_TYPE);
       setHermesModels(config?.models ?? []);
       setHermesRateLimitDelay(parseRateLimitDelay(config?.rate_limit_delay));
     },

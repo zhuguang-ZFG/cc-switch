@@ -244,7 +244,6 @@ describe("McpFormModal", () => {
       apps: {
         claude: true,
         codex: true,
-        gemini: true,
         grokbuild: true,
       },
     });
@@ -390,8 +389,8 @@ type = "stdio"
     expect(entry.apps).toEqual({
       claude: true,
       codex: false,
-      gemini: false,
       grokbuild: false,
+      opencode: false,
     });
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith();
@@ -419,12 +418,6 @@ type = "stdio"
     expect(codexCheckbox.checked).toBe(true);
     fireEvent.click(codexCheckbox);
 
-    const geminiCheckbox = screen.getByLabelText(
-      "mcp.unifiedPanel.apps.gemini",
-    ) as HTMLInputElement;
-    expect(geminiCheckbox.checked).toBe(true);
-    fireEvent.click(geminiCheckbox);
-
     const grokbuildCheckbox = screen.getByLabelText(
       "mcp.unifiedPanel.apps.grokbuild",
     ) as HTMLInputElement;
@@ -439,11 +432,8 @@ type = "stdio"
     expect(entry.apps).toEqual({
       claude: false,
       codex: false,
-      gemini: false,
       grokbuild: false,
       opencode: false,
-      openclaw: false,
-      hermes: false,
     });
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(toastErrorMock).not.toHaveBeenCalled();

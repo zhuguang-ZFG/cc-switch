@@ -61,7 +61,7 @@ pub(crate) const OFFICIAL_SEEDS: &[OfficialProviderSeed] = &[
     },
     OfficialProviderSeed {
         id: "gemini-official",
-        app_type: AppType::Gemini,
+        app_type: AppType::GrokBuild,
         name: "Google Official",
         website_url: "https://ai.google.dev/",
         icon: "gemini",

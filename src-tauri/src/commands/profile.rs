@@ -46,6 +46,7 @@ pub struct CurrentProfileIds {
     pub claude: Option<String>,
     pub claude_desktop: Option<String>,
     pub codex: Option<String>,
+    pub kimicode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,7 +70,7 @@ pub fn emit_profile_apply_events(
     for app_type in scope.apps().iter() {
         let app_str = app_type.as_str();
         let (proxy_enabled, auto_failover_enabled) = state.db.get_proxy_flags_sync(app_str);
-        let provider_id = crate::settings::get_effective_current_provider(&state.db, app_type)
+        let provider_id = ProfileService::current_provider_id(state, app_type)
             .ok()
             .flatten()
             .unwrap_or_default();
@@ -107,6 +108,10 @@ pub fn list_profiles(state: State<'_, AppState>) -> Result<ProfilesResponse, Str
         codex: state
             .db
             .get_current_profile_id(ProfileScope::Codex.as_str())
+            .map_err(|e| e.to_string())?,
+        kimicode: state
+            .db
+            .get_current_profile_id(ProfileScope::KimiCode.as_str())
             .map_err(|e| e.to_string())?,
     };
     Ok(ProfilesResponse {

@@ -279,11 +279,15 @@ export interface VisibleApps {
   claude: boolean;
   "claude-desktop": boolean;
   codex: boolean;
-  gemini: boolean;
+  /** @deprecated Gemini CLI app removed */
+  gemini?: boolean;
   grokbuild: boolean;
   opencode: boolean;
   openclaw: boolean;
-  hermes: boolean;
+  /** Kimi Code (replaces Hermes) */
+  kimicode?: boolean;
+  /** @deprecated use kimicode */
+  hermes?: boolean;
 }
 
 // WebDAV 同步状态
@@ -393,7 +397,7 @@ export interface Settings {
   claudeConfigDir?: string;
   // 覆盖 Codex 配置目录（可选）
   codexConfigDir?: string;
-  // 覆盖 Gemini 配置目录（可选）
+  // 覆盖 Gemini 配置目录（可选，已废弃）
   geminiConfigDir?: string;
   // 覆盖 Grok Build 配置目录（可选）
   grokConfigDir?: string;
@@ -401,7 +405,9 @@ export interface Settings {
   opencodeConfigDir?: string;
   // 覆盖 OpenClaw 配置目录（可选）
   openclawConfigDir?: string;
-  // 覆盖 Hermes 配置目录（可选）
+  // 覆盖 Kimi Code 配置目录（可选）
+  kimiConfigDir?: string;
+  // 覆盖 Hermes 配置目录（可选，已废弃，读兼容）
   hermesConfigDir?: string;
 
   // ===== 当前供应商 ID（设备级）=====
@@ -490,11 +496,15 @@ export interface McpApps {
   claude: boolean;
   "claude-desktop"?: boolean;
   codex: boolean;
-  gemini: boolean;
+  /** @deprecated Gemini CLI app removed */
+  gemini?: boolean;
   grokbuild?: boolean;
   opencode: boolean;
-  openclaw: boolean;
-  hermes: boolean;
+  openclaw?: boolean;
+  /** @deprecated use kimicode */
+  hermes?: boolean;
+  /** Kimi Code MCP */
+  kimicode?: boolean;
 }
 
 // MCP 服务器条目（v3.7.0 统一结构）
@@ -537,7 +547,8 @@ export interface McpConfigResponse {
 export interface UniversalProviderApps {
   claude: boolean;
   codex: boolean;
-  gemini: boolean;
+  /** @deprecated Gemini CLI app removed from managed apps */
+  gemini?: boolean;
 }
 
 // Claude 模型配置

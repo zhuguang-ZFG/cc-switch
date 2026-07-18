@@ -158,19 +158,13 @@ impl Provider {
                 (base_url, api_key)
             }
             // Gemini uses Google-specific env keys (with a legacy GOOGLE_API_KEY fallback).
-            AppType::Gemini => {
-                let env = settings.get("env");
-                let base_url = str_at(env.and_then(|e| e.get("GOOGLE_GEMINI_BASE_URL")));
-                let api_key = first_non_empty(env, &["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
-                (base_url, api_key)
-            }
             AppType::GrokBuild => settings
                 .get("config")
                 .and_then(Value::as_str)
                 .and_then(crate::grok_config::extract_credentials)
                 .unwrap_or_default(),
             // Hermes (config.yaml) flattens credentials at the top level, snake_case.
-            AppType::Hermes => (
+            AppType::KimiCode => (
                 str_at(settings.get("base_url")),
                 str_at(settings.get("api_key")),
             ),
@@ -1429,16 +1423,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_credentials_gemini_env_with_google_fallback() {
+    fn resolve_credentials_grok_config() {
         let p = provider_with(json!({
-            "env": {
-                "GOOGLE_GEMINI_BASE_URL": "https://generativelanguage.googleapis.com",
-                "GOOGLE_API_KEY": "g-legacy",
-            }
+            "config": "[models]\ndefault = \"grok\"\n\n[model.grok]\nmodel = \"grok-4.5\"\nbase_url = \"https://api.x.ai/v1\"\nname = \"Grok\"\napi_key = \"xai-key\"\napi_backend = \"responses\"\ncontext_window = 500000\n"
         }));
-        let (base_url, api_key) = p.resolve_usage_credentials(&AppType::Gemini);
-        assert_eq!(base_url, "https://generativelanguage.googleapis.com");
-        assert_eq!(api_key, "g-legacy");
+        let (base_url, api_key) = p.resolve_usage_credentials(&AppType::GrokBuild);
+        assert_eq!(base_url, "https://api.x.ai/v1");
+        assert_eq!(api_key, "xai-key");
     }
 
     #[test]
@@ -1459,29 +1450,25 @@ mod tests {
     }
 
     #[test]
-    fn resolve_credentials_gemini_skips_empty_primary_key() {
-        let p = provider_with(json!({
-            "env": {
-                "GOOGLE_GEMINI_BASE_URL": "https://generativelanguage.googleapis.com",
-                "GEMINI_API_KEY": "",
-                "GOOGLE_API_KEY": "g-real",
-            }
-        }));
-        let (_, api_key) = p.resolve_usage_credentials(&AppType::Gemini);
-        assert_eq!(api_key, "g-real");
+    fn resolve_credentials_grok_missing_config_is_empty() {
+        let p = provider_with(json!({}));
+        assert_eq!(
+            p.resolve_usage_credentials(&AppType::GrokBuild),
+            (String::new(), String::new())
+        );
     }
 
     #[test]
-    fn resolve_credentials_hermes_snake_case() {
+    fn resolve_credentials_kimicode_snake_case() {
         let p = provider_with(json!({
             "base_url": "https://api.deepseek.com",
-            "api_key": "sk-hermes",
+            "api_key": "sk-kimi",
         }));
         assert_eq!(
-            p.resolve_usage_credentials(&AppType::Hermes),
+            p.resolve_usage_credentials(&AppType::KimiCode),
             (
                 "https://api.deepseek.com".to_string(),
-                "sk-hermes".to_string()
+                "sk-kimi".to_string()
             )
         );
     }

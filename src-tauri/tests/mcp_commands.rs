@@ -624,58 +624,6 @@ fn import_mcp_from_gemini_sse_url_only_is_valid() {
 }
 
 #[test]
-fn enabling_gemini_mcp_skips_when_gemini_dir_missing() {
-    use support::create_test_state;
-
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
-    let home = ensure_test_home();
-
-    // 确认 Gemini 配置目录不存在（模拟“未安装/未运行过 Gemini CLI”）
-    assert!(
-        !home.join(".gemini").exists(),
-        "~/.gemini should not exist in fresh test environment"
-    );
-
-    let state = create_test_state().expect("create test state");
-
-    // 先插入一个未启用 Gemini 的 MCP 服务器（避免 upsert 触发同步）
-    McpService::upsert_server(
-        &state,
-        McpServer {
-            id: "gemini-server".to_string(),
-            name: "Gemini Server".to_string(),
-            server: json!({
-                "type": "sse",
-                "url": "https://example.com/sse"
-            }),
-            apps: McpApps {
-                claude: false,
-                codex: false,
-                gemini: false,
-                grokbuild: false,
-                opencode: false,
-                hermes: false,
-            },
-            description: None,
-            homepage: None,
-            docs: None,
-            tags: Vec::new(),
-        },
-    )
-    .expect("insert server without syncing");
-
-    // 启用 Gemini：目录缺失时应跳过写入（不创建 ~/.gemini/settings.json）
-    McpService::toggle_app(&state, "gemini-server", AppType::Gemini, true)
-        .expect("toggle gemini should succeed even when ~/.gemini is missing");
-
-    assert!(
-        !home.join(".gemini").exists(),
-        "~/.gemini should still not exist after skipped sync"
-    );
-}
-
-#[test]
 fn enabling_claude_mcp_skips_when_claude_config_absent() {
     use support::create_test_state;
 

@@ -144,11 +144,10 @@ pub(crate) fn build_provider_from_request(
     let settings_config = match app_type {
         AppType::Claude | AppType::ClaudeDesktop => build_claude_settings(request),
         AppType::Codex => build_codex_settings(request),
-        AppType::Gemini => build_gemini_settings(request),
         AppType::GrokBuild => build_grokbuild_settings(request),
         AppType::OpenCode => build_opencode_settings(request),
         AppType::OpenClaw => build_additive_app_settings(request),
-        AppType::Hermes => build_hermes_settings(request),
+        AppType::KimiCode => build_kimi_settings(request),
     };
 
     // Build usage script configuration if provided
@@ -529,19 +528,8 @@ fn build_additive_app_settings(request: &DeepLinkImportRequest) -> serde_json::V
     json!(config)
 }
 
-/// Build Hermes provider settings (snake_case YAML-native fields).
-///
-/// Hermes' `custom_providers:` entries use `base_url` / `api_key` / `api_mode`
-/// (see `_VALID_CUSTOM_PROVIDER_FIELDS` in upstream `hermes_cli/config.py`).
-/// Emitting camelCase here — as the OpenClaw path does — would poison the
-/// YAML with unknown root fields the Hermes runtime ignores.
-///
-/// `api_mode` is always written explicitly. Deeplinks have no field to carry
-/// it, so we default to `chat_completions` (the most widely compatible
-/// protocol) and let the user adjust via the UI after import. We never rely
-/// on Hermes' built-in URL heuristics, which only recognize a handful of
-/// official endpoints.
-fn build_hermes_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
+/// Build Kimi Code's native provider/model projection for `config.toml`.
+fn build_kimi_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
     let endpoint = get_primary_endpoint(request);
 
     let mut config = serde_json::Map::new();
@@ -558,13 +546,10 @@ fn build_hermes_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
         config.insert("api_key".to_string(), json!(api_key));
     }
 
-    config.insert("api_mode".to_string(), json!("chat_completions"));
+    config.insert("type".to_string(), json!("openai"));
 
     if let Some(model) = &request.model {
-        config.insert(
-            "models".to_string(),
-            json!([{ "id": model, "name": model }]),
-        );
+        config.insert("models".to_string(), json!([{ "id": model }]));
     }
 
     json!(config)
@@ -633,7 +618,7 @@ pub fn parse_and_merge_config(
         "gemini" => merge_gemini_config(&mut merged, &config_value)?,
         "grokbuild" => merge_grokbuild_config(&mut merged, &config_value)?,
         // Additive mode apps use JSON config directly; pass through as-is
-        "openclaw" | "opencode" | "hermes" => {
+        "openclaw" | "opencode" | "hermes" | "kimicode" | "kimi-code" | "kimi" => {
             merge_additive_config(&mut merged, &config_value)?;
         }
         "" => {
@@ -856,7 +841,7 @@ fn merge_grokbuild_config(
     Ok(())
 }
 
-/// Merge configuration for additive mode apps (OpenClaw, OpenCode)
+/// Merge configuration for additive mode apps (OpenClaw, OpenCode, Kimi Code)
 ///
 /// These apps use JSON config directly, so we only extract common fields
 /// (api_key, endpoint, model) from the config if not already set in URL params.
@@ -887,6 +872,22 @@ fn merge_additive_config(
         }
     }
 
+    if request.model.is_none() {
+        request.model = config.get("models").and_then(|models| {
+            if let Some(first) = models.as_array().and_then(|items| items.first()) {
+                return first
+                    .get("id")
+                    .or_else(|| first.get("model"))
+                    .or_else(|| first.get("name"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+            }
+            models
+                .as_object()
+                .and_then(|items| items.keys().next().cloned())
+        });
+    }
+
     // Auto-fill homepage from endpoint
     if request.homepage.as_ref().is_none_or(|s| s.is_empty()) {
         if let Some(endpoint) = request.endpoint.as_ref().filter(|s| !s.is_empty()) {
@@ -913,12 +914,13 @@ fn extract_codex_base_url(toml_value: &toml::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::prelude::*;
 
-    fn hermes_request() -> DeepLinkImportRequest {
+    fn kimi_request() -> DeepLinkImportRequest {
         DeepLinkImportRequest {
             resource: "provider".to_string(),
-            app: Some("hermes".to_string()),
-            name: Some("MyHermes".to_string()),
+            app: Some("kimicode".to_string()),
+            name: Some("MyKimi".to_string()),
             endpoint: Some("https://api.example.com/v1".to_string()),
             api_key: Some("sk-test".to_string()),
             model: Some("anthropic/claude-opus-4-8".to_string()),
@@ -927,18 +929,21 @@ mod tests {
     }
 
     #[test]
-    fn build_hermes_settings_emits_snake_case() {
-        let settings = build_hermes_settings(&hermes_request());
+    fn build_kimi_settings_emits_native_toml_projection() {
+        let settings = build_kimi_settings(&kimi_request());
         let obj = settings.as_object().expect("settings must be object");
 
-        assert_eq!(obj.get("name").unwrap(), "MyHermes");
+        assert_eq!(obj.get("name").unwrap(), "MyKimi");
         assert_eq!(obj.get("base_url").unwrap(), "https://api.example.com/v1");
         assert_eq!(obj.get("api_key").unwrap(), "sk-test");
 
-        // camelCase and legacy fields must NOT be present
+        assert_eq!(obj.get("type").unwrap(), "openai");
+
+        // camelCase and legacy Hermes fields must NOT be present
         assert!(obj.get("baseUrl").is_none(), "no camelCase baseUrl");
         assert!(obj.get("apiKey").is_none(), "no camelCase apiKey");
         assert!(obj.get("api").is_none(), "no legacy 'api' field");
+        assert!(obj.get("api_mode").is_none(), "no legacy 'api_mode' field");
 
         // models array with the deeplink model id
         let models = obj.get("models").unwrap().as_array().unwrap();
@@ -947,34 +952,55 @@ mod tests {
     }
 
     #[test]
-    fn build_hermes_settings_writes_default_api_mode() {
-        let settings = build_hermes_settings(&hermes_request());
-        assert_eq!(
-            settings.as_object().unwrap().get("api_mode").unwrap(),
-            "chat_completions",
-            "api_mode must be written explicitly so Hermes never falls back to URL auto-detection"
-        );
+    fn build_kimi_settings_writes_default_openai_type() {
+        let settings = build_kimi_settings(&kimi_request());
+        assert_eq!(settings.as_object().unwrap().get("type").unwrap(), "openai");
     }
 
     #[test]
-    fn build_hermes_settings_skips_missing_optional_fields() {
+    fn build_kimi_settings_skips_missing_optional_fields() {
         let request = DeepLinkImportRequest {
             resource: "provider".to_string(),
-            app: Some("hermes".to_string()),
+            app: Some("kimicode".to_string()),
             name: Some("Minimal".to_string()),
             endpoint: None,
             api_key: None,
             model: None,
             ..Default::default()
         };
-        let settings = build_hermes_settings(&request);
+        let settings = build_kimi_settings(&request);
         let obj = settings.as_object().unwrap();
 
         assert_eq!(obj.get("name").unwrap(), "Minimal");
         assert!(obj.get("base_url").is_none());
         assert!(obj.get("api_key").is_none());
         assert!(obj.get("models").is_none());
-        assert_eq!(obj.get("api_mode").unwrap(), "chat_completions");
+        assert_eq!(obj.get("type").unwrap(), "openai");
+    }
+
+    #[test]
+    fn merge_inline_kimi_config_extracts_native_fields() {
+        let inline = json!({
+            "type": "openai",
+            "base_url": "https://inline.example.com/v1",
+            "api_key": "inline-key",
+            "models": [{ "id": "gpt-4.1" }]
+        });
+        let request = DeepLinkImportRequest {
+            resource: "provider".to_string(),
+            app: Some("kimicode".to_string()),
+            name: Some("Inline Kimi".to_string()),
+            config: Some(BASE64_STANDARD.encode(inline.to_string())),
+            ..Default::default()
+        };
+
+        let merged = parse_and_merge_config(&request).expect("merge Kimi config");
+        assert_eq!(
+            merged.endpoint.as_deref(),
+            Some("https://inline.example.com/v1")
+        );
+        assert_eq!(merged.api_key.as_deref(), Some("inline-key"));
+        assert_eq!(merged.model.as_deref(), Some("gpt-4.1"));
     }
 
     #[test]

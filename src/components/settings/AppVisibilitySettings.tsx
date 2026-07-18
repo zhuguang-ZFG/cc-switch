@@ -17,20 +17,54 @@ const APP_CONFIG: Array<{
   id: AppId;
   icon: string;
   nameKey: string;
+  defaultName: string;
 }> = [
-  { id: "claude", icon: "claude", nameKey: "apps.claudeCode" },
+  {
+    id: "claude",
+    icon: "claude",
+    nameKey: "apps.claudeCode",
+    defaultName: "Claude Code",
+  },
   {
     id: "claude-desktop",
     icon: "claude",
     nameKey: "apps.claudeDesktop",
+    defaultName: "Claude Desktop",
   },
-  { id: "codex", icon: "openai", nameKey: "apps.codex" },
-  { id: "gemini", icon: "gemini", nameKey: "apps.gemini" },
-  { id: "grokbuild", icon: "grok", nameKey: "apps.grokbuild" },
-  { id: "opencode", icon: "opencode", nameKey: "apps.opencode" },
-  { id: "openclaw", icon: "openclaw", nameKey: "apps.openclaw" },
-  { id: "hermes", icon: "hermes", nameKey: "apps.hermes" },
+  { id: "codex", icon: "openai", nameKey: "apps.codex", defaultName: "Codex" },
+  {
+    id: "grokbuild",
+    icon: "grok",
+    nameKey: "apps.grokbuild",
+    defaultName: "Grok Build",
+  },
+  {
+    id: "opencode",
+    icon: "opencode",
+    nameKey: "apps.opencode",
+    defaultName: "OpenCode",
+  },
+  {
+    id: "openclaw",
+    icon: "openclaw",
+    nameKey: "apps.openclaw",
+    defaultName: "OpenClaw",
+  },
+  {
+    id: "kimicode",
+    icon: "kimi",
+    nameKey: "apps.kimicode",
+    defaultName: "Kimi Code",
+  },
 ];
+
+function isAppVisible(visibleApps: VisibleApps, appId: AppId): boolean {
+  if (appId === "kimicode") {
+    return visibleApps.kimicode ?? visibleApps.hermes ?? true;
+  }
+  const value = visibleApps[appId as keyof VisibleApps];
+  return value !== false;
+}
 
 export function AppVisibilitySettings({
   settings,
@@ -42,25 +76,25 @@ export function AppVisibilitySettings({
     claude: true,
     "claude-desktop": true,
     codex: true,
-    gemini: true,
     grokbuild: true,
     opencode: true,
     openclaw: true,
-    hermes: true,
+    kimicode: true,
   };
 
-  // Count how many apps are currently visible
-  const visibleCount = Object.values(visibleApps).filter(Boolean).length;
+  const visibleCount = APP_CONFIG.filter((app) =>
+    isAppVisible(visibleApps, app.id),
+  ).length;
 
   const handleToggle = (appId: AppId) => {
-    const isCurrentlyVisible = visibleApps[appId];
-    // Prevent disabling the last visible app
-    if (isCurrentlyVisible && visibleCount <= 1) return;
+    const currentlyVisible = isAppVisible(visibleApps, appId);
+    if (currentlyVisible && visibleCount <= 1) return;
 
     onChange({
       visibleApps: {
         ...visibleApps,
-        [appId]: !isCurrentlyVisible,
+        [appId]: !currentlyVisible,
+        ...(appId === "kimicode" ? { hermes: !currentlyVisible } : {}),
       },
     });
   };
@@ -77,20 +111,20 @@ export function AppVisibilitySettings({
       </header>
       <div className="flex flex-wrap gap-1 rounded-md border border-border-default bg-background p-1">
         {APP_CONFIG.map((app) => {
-          const isVisible = visibleApps[app.id];
-          // Disable button if this is the last visible app
-          const isDisabled = isVisible && visibleCount <= 1;
+          const visible = isAppVisible(visibleApps, app.id);
+          const isDisabled = visible && visibleCount <= 1;
+          const label = t(app.nameKey, { defaultValue: app.defaultName });
 
           return (
             <AppButton
               key={app.id}
-              active={isVisible}
+              active={visible}
               disabled={isDisabled}
               onClick={() => handleToggle(app.id)}
               icon={app.icon}
-              name={t(app.nameKey)}
+              name={label}
             >
-              {t(app.nameKey)}
+              {label}
             </AppButton>
           );
         })}

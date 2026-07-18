@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use serde_json::Value;
 
-use crate::hermes_config::get_hermes_dir;
+use crate::kimi_config::get_kimi_dir;
 use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{
@@ -15,11 +15,11 @@ use super::utils::{
 const PROVIDER_ID: &str = "hermes";
 
 fn get_hermes_db_path() -> PathBuf {
-    get_hermes_dir().join("state.db")
+    get_kimi_dir().join("state.db")
 }
 
 fn get_hermes_sessions_dir() -> PathBuf {
-    get_hermes_dir().join("sessions")
+    get_kimi_dir().join("sessions")
 }
 
 /// Scan sessions from both SQLite database and JSONL transcript files,

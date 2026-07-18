@@ -5,19 +5,24 @@ use std::str::FromStr;
 use crate::services::skill::SkillStore;
 
 /// MCP 服务器应用状态（标记应用到哪些客户端）
+///
+/// Note: Gemini CLI app support was removed (Grok Build remains).
+/// Kimi Code uses a separate `mcp.json`; the adapter projects this flag there.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct McpApps {
     #[serde(default)]
     pub claude: bool,
     #[serde(default)]
     pub codex: bool,
-    #[serde(default)]
+    /// Legacy field kept for deserializing old configs; ignored at runtime.
+    #[serde(default, skip_serializing)]
     pub gemini: bool,
     #[serde(default)]
     pub grokbuild: bool,
     #[serde(default)]
     pub opencode: bool,
-    #[serde(default)]
+    /// Kimi Code flag; the legacy database column is still named Hermes.
+    #[serde(default, rename = "kimicode", alias = "hermes")]
     pub hermes: bool,
 }
 
@@ -27,11 +32,10 @@ impl McpApps {
         match app {
             AppType::Claude => self.claude,
             AppType::Codex => self.codex,
-            AppType::Gemini => self.gemini,
             AppType::GrokBuild => self.grokbuild,
             AppType::OpenCode => self.opencode,
             AppType::OpenClaw => false, // OpenClaw doesn't support MCP
-            AppType::Hermes => self.hermes,
+            AppType::KimiCode => self.hermes,
             AppType::ClaudeDesktop => false,
         }
     }
@@ -41,11 +45,10 @@ impl McpApps {
         match app {
             AppType::Claude => self.claude = enabled,
             AppType::Codex => self.codex = enabled,
-            AppType::Gemini => self.gemini = enabled,
             AppType::GrokBuild => self.grokbuild = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::OpenClaw => {} // OpenClaw doesn't support MCP, ignore
-            AppType::Hermes => self.hermes = enabled,
+            AppType::KimiCode => self.hermes = enabled,
             AppType::ClaudeDesktop => {} // Claude Desktop 3P provider config doesn't support MCP here
         }
     }
@@ -59,9 +62,6 @@ impl McpApps {
         if self.codex {
             apps.push(AppType::Codex);
         }
-        if self.gemini {
-            apps.push(AppType::Gemini);
-        }
         if self.grokbuild {
             apps.push(AppType::GrokBuild);
         }
@@ -69,19 +69,14 @@ impl McpApps {
             apps.push(AppType::OpenCode);
         }
         if self.hermes {
-            apps.push(AppType::Hermes);
+            apps.push(AppType::KimiCode);
         }
         apps
     }
 
     /// 检查是否所有应用都未启用
     pub fn is_empty(&self) -> bool {
-        !self.claude
-            && !self.codex
-            && !self.gemini
-            && !self.grokbuild
-            && !self.opencode
-            && !self.hermes
+        !self.claude && !self.codex && !self.grokbuild && !self.opencode && !self.hermes
     }
 }
 
@@ -92,13 +87,15 @@ pub struct SkillApps {
     pub claude: bool,
     #[serde(default)]
     pub codex: bool,
-    #[serde(default)]
+    /// Legacy field kept for deserializing old configs; ignored at runtime.
+    #[serde(default, skip_serializing)]
     pub gemini: bool,
     #[serde(default)]
     pub grokbuild: bool,
     #[serde(default)]
     pub opencode: bool,
-    #[serde(default)]
+    /// Kimi Code flag; the legacy database column is still named Hermes.
+    #[serde(default, rename = "kimicode", alias = "hermes")]
     pub hermes: bool,
 }
 
@@ -108,10 +105,9 @@ impl SkillApps {
         match app {
             AppType::Claude => self.claude,
             AppType::Codex => self.codex,
-            AppType::Gemini => self.gemini,
             AppType::GrokBuild => self.grokbuild,
             AppType::OpenCode => self.opencode,
-            AppType::Hermes => self.hermes,
+            AppType::KimiCode => self.hermes,
             AppType::OpenClaw => false, // OpenClaw doesn't support Skills
             AppType::ClaudeDesktop => false,
         }
@@ -122,10 +118,9 @@ impl SkillApps {
         match app {
             AppType::Claude => self.claude = enabled,
             AppType::Codex => self.codex = enabled,
-            AppType::Gemini => self.gemini = enabled,
             AppType::GrokBuild => self.grokbuild = enabled,
             AppType::OpenCode => self.opencode = enabled,
-            AppType::Hermes => self.hermes = enabled,
+            AppType::KimiCode => self.hermes = enabled,
             AppType::OpenClaw => {} // OpenClaw doesn't support Skills, ignore
             AppType::ClaudeDesktop => {} // Claude Desktop 3P profiles don't use CC Switch skill sync
         }
@@ -140,9 +135,6 @@ impl SkillApps {
         if self.codex {
             apps.push(AppType::Codex);
         }
-        if self.gemini {
-            apps.push(AppType::Gemini);
-        }
         if self.grokbuild {
             apps.push(AppType::GrokBuild);
         }
@@ -150,19 +142,14 @@ impl SkillApps {
             apps.push(AppType::OpenCode);
         }
         if self.hermes {
-            apps.push(AppType::Hermes);
+            apps.push(AppType::KimiCode);
         }
         apps
     }
 
     /// 检查是否所有应用都未启用
     pub fn is_empty(&self) -> bool {
-        !self.claude
-            && !self.codex
-            && !self.gemini
-            && !self.grokbuild
-            && !self.opencode
-            && !self.hermes
+        !self.claude && !self.codex && !self.grokbuild && !self.opencode && !self.hermes
     }
 
     /// 仅启用指定应用（其他应用设为禁用）
@@ -293,6 +280,7 @@ pub struct McpRoot {
     pub claude_desktop: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub codex: McpConfig,
+    /// Legacy Gemini CLI MCP store (deserialize only; app removed).
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub gemini: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
@@ -303,8 +291,13 @@ pub struct McpRoot {
     /// OpenClaw MCP 配置（v4.1.0+，实际使用 openclaw.json）
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub openclaw: McpConfig,
-    /// Hermes MCP 配置（实际使用 config.yaml）
-    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
+    /// Storage field keeps the legacy name; serde exposes it as Kimi Code.
+    #[serde(
+        default,
+        skip_serializing_if = "McpConfig::is_empty",
+        rename = "kimicode",
+        alias = "hermes"
+    )]
     pub hermes: McpConfig,
 }
 
@@ -347,7 +340,8 @@ pub struct PromptRoot {
     pub claude_desktop: PromptConfig,
     #[serde(default)]
     pub codex: PromptConfig,
-    #[serde(default)]
+    /// Legacy Gemini prompts (deserialize only).
+    #[serde(default, skip_serializing_if = "PromptConfig::is_empty_prompts")]
     pub gemini: PromptConfig,
     #[serde(default)]
     pub grokbuild: PromptConfig,
@@ -355,8 +349,20 @@ pub struct PromptRoot {
     pub opencode: PromptConfig,
     #[serde(default)]
     pub openclaw: PromptConfig,
-    #[serde(default)]
-    pub hermes: PromptConfig,
+    #[serde(
+        default,
+        rename = "kimicode",
+        alias = "hermes",
+        alias = "kimi-code",
+        alias = "kimi_code"
+    )]
+    pub kimicode: PromptConfig,
+}
+
+impl PromptConfig {
+    fn is_empty_prompts(&self) -> bool {
+        self.prompts.is_empty()
+    }
 }
 
 use crate::config::{copy_file, get_app_config_dir, get_app_config_path, write_json_file};
@@ -376,11 +382,18 @@ pub enum AppType {
     )]
     ClaudeDesktop,
     Codex,
-    Gemini,
     GrokBuild,
     OpenCode,
     OpenClaw,
-    Hermes,
+    /// Kimi Code CLI (replaces Hermes Agent in this fork).
+    #[serde(
+        rename = "kimicode",
+        alias = "kimi-code",
+        alias = "kimi_code",
+        alias = "kimi",
+        alias = "hermes"
+    )]
+    KimiCode,
 }
 
 impl AppType {
@@ -389,22 +402,21 @@ impl AppType {
             AppType::Claude => "claude",
             AppType::ClaudeDesktop => "claude-desktop",
             AppType::Codex => "codex",
-            AppType::Gemini => "gemini",
             AppType::GrokBuild => "grokbuild",
             AppType::OpenCode => "opencode",
             AppType::OpenClaw => "openclaw",
-            AppType::Hermes => "hermes",
+            AppType::KimiCode => "kimicode",
         }
     }
 
     /// Check if this app uses additive mode
     ///
-    /// - Switch mode (false): Only the current provider is written to live config (Claude, Codex, Gemini)
-    /// - Additive mode (true): All providers are written to live config (OpenCode, OpenClaw, Hermes)
+    /// - Switch mode (false): Only the current provider is written to live config
+    /// - Additive mode (true): All providers are written to live config
     pub fn is_additive_mode(&self) -> bool {
         matches!(
             self,
-            AppType::OpenCode | AppType::OpenClaw | AppType::Hermes
+            AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode
         )
     }
 
@@ -414,11 +426,10 @@ impl AppType {
             AppType::Claude,
             AppType::ClaudeDesktop,
             AppType::Codex,
-            AppType::Gemini,
             AppType::GrokBuild,
             AppType::OpenCode,
             AppType::OpenClaw,
-            AppType::Hermes,
+            AppType::KimiCode,
         ]
         .into_iter()
     }
@@ -433,15 +444,20 @@ impl FromStr for AppType {
             "claude" => Ok(AppType::Claude),
             "claude-desktop" | "claude_desktop" | "claudedesktop" => Ok(AppType::ClaudeDesktop),
             "codex" => Ok(AppType::Codex),
-            "gemini" => Ok(AppType::Gemini),
             "grokbuild" | "grok-build" | "grok_build" | "grok" => Ok(AppType::GrokBuild),
             "opencode" => Ok(AppType::OpenCode),
             "openclaw" => Ok(AppType::OpenClaw),
-            "hermes" => Ok(AppType::Hermes),
+            "kimicode" | "kimi-code" | "kimi_code" | "kimi" | "hermes" => Ok(AppType::KimiCode),
+            // Gemini CLI app support was removed; reject explicitly with guidance.
+            "gemini" => Err(AppError::localized(
+                "unsupported_app_gemini_removed",
+                "Gemini CLI 应用支持已移除，请使用 Grok Build。",
+                "Gemini CLI app support was removed; use Grok Build instead.",
+            )),
             other => Err(AppError::localized(
                 "unsupported_app",
-                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, gemini, grokbuild, opencode, openclaw, hermes。"),
-                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, gemini, grokbuild, opencode, openclaw, hermes."),
+                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode。"),
+                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode."),
             )),
         }
     }
@@ -456,6 +472,7 @@ pub struct CommonConfigSnippets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex: Option<String>,
 
+    /// Legacy Gemini common-config (ignored).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini: Option<String>,
 
@@ -465,8 +482,13 @@ pub struct CommonConfigSnippets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openclaw: Option<String>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hermes: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "kimicode",
+        alias = "hermes"
+    )]
+    pub kimicode: Option<String>,
 }
 
 impl CommonConfigSnippets {
@@ -476,11 +498,10 @@ impl CommonConfigSnippets {
             AppType::Claude => self.claude.as_ref(),
             AppType::ClaudeDesktop => None,
             AppType::Codex => self.codex.as_ref(),
-            AppType::Gemini => self.gemini.as_ref(),
             AppType::GrokBuild => None,
             AppType::OpenCode => self.opencode.as_ref(),
             AppType::OpenClaw => self.openclaw.as_ref(),
-            AppType::Hermes => self.hermes.as_ref(),
+            AppType::KimiCode => self.kimicode.as_ref(),
         }
     }
 
@@ -490,11 +511,10 @@ impl CommonConfigSnippets {
             AppType::Claude => self.claude = snippet,
             AppType::ClaudeDesktop => {}
             AppType::Codex => self.codex = snippet,
-            AppType::Gemini => self.gemini = snippet,
             AppType::GrokBuild => {}
             AppType::OpenCode => self.opencode = snippet,
             AppType::OpenClaw => self.openclaw = snippet,
-            AppType::Hermes => self.hermes = snippet,
+            AppType::KimiCode => self.kimicode = snippet,
         }
     }
 }
@@ -534,11 +554,10 @@ impl Default for MultiAppConfig {
         apps.insert("claude".to_string(), ProviderManager::default());
         apps.insert("claude-desktop".to_string(), ProviderManager::default());
         apps.insert("codex".to_string(), ProviderManager::default());
-        apps.insert("gemini".to_string(), ProviderManager::default());
         apps.insert("grokbuild".to_string(), ProviderManager::default());
         apps.insert("opencode".to_string(), ProviderManager::default());
         apps.insert("openclaw".to_string(), ProviderManager::default());
-        apps.insert("hermes".to_string(), ProviderManager::default());
+        apps.insert("kimicode".to_string(), ProviderManager::default());
 
         Self {
             version: 2,
@@ -619,11 +638,29 @@ impl MultiAppConfig {
             }
         }
 
-        // 确保 gemini 应用存在（兼容旧配置文件）
-        if !config.apps.contains_key("gemini") {
+        // Drop legacy Gemini app managers (app removed in favor of Grok Build).
+        if config.apps.remove("gemini").is_some() {
+            updated = true;
+            log::info!("已移除旧版 Gemini 应用供应商配置");
+        }
+        // Migrate Hermes → Kimi Code app key.
+        if let Some(hermes_mgr) = config.apps.remove("hermes") {
+            if !config.apps.contains_key("kimicode") {
+                config.apps.insert("kimicode".to_string(), hermes_mgr);
+            }
+            updated = true;
+            log::info!("已将 Hermes 应用供应商迁移为 Kimi Code (kimicode)");
+        }
+        if !config.apps.contains_key("kimicode") {
             config
                 .apps
-                .insert("gemini".to_string(), ProviderManager::default());
+                .insert("kimicode".to_string(), ProviderManager::default());
+            updated = true;
+        }
+        if !config.apps.contains_key("grokbuild") {
+            config
+                .apps
+                .insert("grokbuild".to_string(), ProviderManager::default());
             updated = true;
         }
 
@@ -697,11 +734,11 @@ impl MultiAppConfig {
             AppType::Claude => &self.mcp.claude,
             AppType::ClaudeDesktop => &self.mcp.claude_desktop,
             AppType::Codex => &self.mcp.codex,
-            AppType::Gemini => &self.mcp.gemini,
             AppType::GrokBuild => &self.mcp.grokbuild,
             AppType::OpenCode => &self.mcp.opencode,
             AppType::OpenClaw => &self.mcp.openclaw,
-            AppType::Hermes => &self.mcp.hermes,
+            // The storage field keeps its legacy name for database compatibility.
+            AppType::KimiCode => &self.mcp.hermes,
         }
     }
 
@@ -711,11 +748,10 @@ impl MultiAppConfig {
             AppType::Claude => &mut self.mcp.claude,
             AppType::ClaudeDesktop => &mut self.mcp.claude_desktop,
             AppType::Codex => &mut self.mcp.codex,
-            AppType::Gemini => &mut self.mcp.gemini,
             AppType::GrokBuild => &mut self.mcp.grokbuild,
             AppType::OpenCode => &mut self.mcp.opencode,
             AppType::OpenClaw => &mut self.mcp.openclaw,
-            AppType::Hermes => &mut self.mcp.hermes,
+            AppType::KimiCode => &mut self.mcp.hermes,
         }
     }
 
@@ -728,11 +764,10 @@ impl MultiAppConfig {
         // 为每个应用尝试自动导入提示词
         Self::auto_import_prompt_if_exists(&mut config, AppType::Claude)?;
         Self::auto_import_prompt_if_exists(&mut config, AppType::Codex)?;
-        Self::auto_import_prompt_if_exists(&mut config, AppType::Gemini)?;
         Self::auto_import_prompt_if_exists(&mut config, AppType::GrokBuild)?;
         Self::auto_import_prompt_if_exists(&mut config, AppType::OpenCode)?;
         Self::auto_import_prompt_if_exists(&mut config, AppType::OpenClaw)?;
-        Self::auto_import_prompt_if_exists(&mut config, AppType::Hermes)?;
+        Self::auto_import_prompt_if_exists(&mut config, AppType::KimiCode)?;
 
         Ok(config)
     }
@@ -752,11 +787,10 @@ impl MultiAppConfig {
         if !self.prompts.claude.prompts.is_empty()
             || !self.prompts.claude_desktop.prompts.is_empty()
             || !self.prompts.codex.prompts.is_empty()
-            || !self.prompts.gemini.prompts.is_empty()
             || !self.prompts.grokbuild.prompts.is_empty()
             || !self.prompts.opencode.prompts.is_empty()
             || !self.prompts.openclaw.prompts.is_empty()
-            || !self.prompts.hermes.prompts.is_empty()
+            || !self.prompts.kimicode.prompts.is_empty()
         {
             return Ok(false);
         }
@@ -767,11 +801,10 @@ impl MultiAppConfig {
         for app in [
             AppType::Claude,
             AppType::Codex,
-            AppType::Gemini,
             AppType::GrokBuild,
             AppType::OpenCode,
             AppType::OpenClaw,
-            AppType::Hermes,
+            AppType::KimiCode,
         ] {
             // 复用已有的单应用导入逻辑
             if Self::auto_import_prompt_if_exists(self, app)? {
@@ -841,11 +874,10 @@ impl MultiAppConfig {
             AppType::Claude => &mut config.prompts.claude.prompts,
             AppType::ClaudeDesktop => &mut config.prompts.claude_desktop.prompts,
             AppType::Codex => &mut config.prompts.codex.prompts,
-            AppType::Gemini => &mut config.prompts.gemini.prompts,
             AppType::GrokBuild => &mut config.prompts.grokbuild.prompts,
             AppType::OpenCode => &mut config.prompts.opencode.prompts,
             AppType::OpenClaw => &mut config.prompts.openclaw.prompts,
-            AppType::Hermes => &mut config.prompts.hermes.prompts,
+            AppType::KimiCode => &mut config.prompts.kimicode.prompts,
         };
 
         prompts.insert(id, prompt);
@@ -877,18 +909,17 @@ impl MultiAppConfig {
         for app in [
             AppType::Claude,
             AppType::Codex,
-            AppType::Gemini,
             AppType::OpenCode,
+            AppType::KimiCode,
         ] {
             let old_servers = match app {
                 AppType::Claude => &self.mcp.claude.servers,
                 AppType::ClaudeDesktop => continue, // Claude Desktop 3P profiles don't use MCP here
                 AppType::Codex => &self.mcp.codex.servers,
-                AppType::Gemini => &self.mcp.gemini.servers,
                 AppType::GrokBuild => continue,
                 AppType::OpenCode => &self.mcp.opencode.servers,
                 AppType::OpenClaw => continue, // OpenClaw MCP is still in development, skip
-                AppType::Hermes => continue,   // Hermes didn't exist in v3.6.x, skip
+                AppType::KimiCode => &self.mcp.hermes.servers,
             };
 
             for (id, entry) in old_servers {
@@ -991,6 +1022,7 @@ impl MultiAppConfig {
         self.mcp.claude = McpConfig::default();
         self.mcp.codex = McpConfig::default();
         self.mcp.gemini = McpConfig::default();
+        self.mcp.hermes = McpConfig::default();
 
         Ok(true)
     }
@@ -1154,22 +1186,22 @@ mod tests {
 
     #[test]
     #[serial]
-    fn auto_imports_gemini_prompt_on_first_launch() {
+    fn auto_imports_kimicode_prompt_on_first_launch() {
         let _home = TempHome::new();
-        write_prompt_file(AppType::Gemini, "# Gemini Prompt\n\nTest content");
+        write_prompt_file(AppType::KimiCode, "# Kimi Code Prompt\n\nTest content");
 
         let config = MultiAppConfig::load().expect("load config");
 
-        assert_eq!(config.prompts.gemini.prompts.len(), 1);
+        assert_eq!(config.prompts.kimicode.prompts.len(), 1);
         let prompt = config
             .prompts
-            .gemini
+            .kimicode
             .prompts
             .values()
             .next()
-            .expect("gemini prompt exists");
-        assert!(prompt.enabled, "gemini prompt should be enabled");
-        assert_eq!(prompt.content, "# Gemini Prompt\n\nTest content");
+            .expect("kimicode prompt exists");
+        assert!(prompt.enabled, "kimicode prompt should be enabled");
+        assert_eq!(prompt.content, "# Kimi Code Prompt\n\nTest content");
         assert_eq!(
             prompt.description,
             Some("Automatically imported on first launch".to_string())
@@ -1206,14 +1238,14 @@ mod tests {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "# Claude prompt");
         write_prompt_file(AppType::Codex, "# Codex prompt");
-        write_prompt_file(AppType::Gemini, "# Gemini prompt");
+        write_prompt_file(AppType::KimiCode, "# Kimi Code prompt");
 
         let config = MultiAppConfig::load().expect("load config");
 
         // 验证所有三个应用的提示词都被导入
         assert_eq!(config.prompts.claude.prompts.len(), 1);
         assert_eq!(config.prompts.codex.prompts.len(), 1);
-        assert_eq!(config.prompts.gemini.prompts.len(), 1);
+        assert_eq!(config.prompts.kimicode.prompts.len(), 1);
 
         // 验证所有提示词都被启用
         assert!(
@@ -1239,12 +1271,71 @@ mod tests {
         assert!(
             config
                 .prompts
-                .gemini
+                .kimicode
                 .prompts
                 .values()
                 .next()
                 .unwrap()
                 .enabled
         );
+    }
+
+    #[test]
+    fn kimi_only_skill_apps_is_not_empty() {
+        let apps = SkillApps::only(&AppType::KimiCode);
+
+        assert!(apps.hermes);
+        assert!(!apps.is_empty());
+        assert_eq!(apps.enabled_apps(), vec![AppType::KimiCode]);
+    }
+
+    #[test]
+    fn mcp_root_serializes_kimicode_and_accepts_legacy_hermes() {
+        let mut root = McpRoot {
+            servers: None,
+            ..McpRoot::default()
+        };
+        root.hermes
+            .servers
+            .insert("kimi-server".into(), serde_json::json!({}));
+
+        let serialized = serde_json::to_value(&root).expect("serialize MCP root");
+        assert!(serialized.get("kimicode").is_some());
+        assert!(serialized.get("hermes").is_none());
+
+        let legacy = serde_json::json!({
+            "hermes": {
+                "servers": {
+                    "legacy-server": {}
+                }
+            }
+        });
+        let parsed: McpRoot = serde_json::from_value(legacy).expect("deserialize legacy MCP root");
+        assert!(parsed.hermes.servers.contains_key("legacy-server"));
+    }
+
+    #[test]
+    fn migrating_legacy_kimicode_mcp_clears_the_legacy_slot() {
+        let mut config = MultiAppConfig::default();
+        config.mcp.servers = None;
+        config.mcp.hermes.servers.insert(
+            "kimi-server".into(),
+            serde_json::json!({
+                "name": "Kimi server",
+                "enabled": true,
+                "server": { "command": "kimi-mcp" }
+            }),
+        );
+
+        assert!(config.migrate_mcp_to_unified().expect("migrate MCP"));
+        assert!(config.mcp.hermes.servers.is_empty());
+
+        let migrated = config
+            .mcp
+            .servers
+            .as_ref()
+            .and_then(|servers| servers.get("kimi-server"))
+            .expect("migrated Kimi MCP server");
+        assert!(migrated.apps.is_enabled_for(&AppType::KimiCode));
     }
 }

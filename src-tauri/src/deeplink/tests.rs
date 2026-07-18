@@ -121,6 +121,27 @@ fn test_parse_grokbuild_provider() {
 }
 
 #[test]
+fn test_parse_kimicode_aliases_through_full_deeplink_parser() {
+    for alias in ["kimicode", "kimi-code", "kimi", "hermes"] {
+        let provider = format!(
+            "ccswitch://v1/import?resource=provider&app={alias}&name=Kimi&endpoint=https%3A%2F%2Fapi.kimi.com%2Fcoding%2Fv1&apiKey=test"
+        );
+        let request = parse_deeplink_url(&provider).expect("parse Kimi provider deeplink");
+        assert_eq!(request.app.as_deref(), Some(alias));
+
+        let prompt =
+            format!("ccswitch://v1/import?resource=prompt&app={alias}&name=Kimi&content=test");
+        let request = parse_deeplink_url(&prompt).expect("parse Kimi prompt deeplink");
+        assert_eq!(request.app.as_deref(), Some(alias));
+
+        let mcp =
+            format!("ccswitch://v1/import?resource=mcp&apps={alias}&config=%7B%7D&enabled=true");
+        let request = parse_deeplink_url(&mcp).expect("parse Kimi MCP deeplink");
+        assert_eq!(request.apps.as_deref(), Some(alias));
+    }
+}
+
+#[test]
 fn test_parse_invalid_scheme() {
     let url = "https://v1/import?resource=provider&app=claude&name=Test";
 
@@ -193,105 +214,6 @@ fn test_infer_homepage() {
 // =============================================================================
 // Provider Tests
 // =============================================================================
-
-#[test]
-fn test_build_gemini_provider_with_model() {
-    use super::provider::build_provider_from_request;
-
-    let request = DeepLinkImportRequest {
-        version: "v1".to_string(),
-        resource: "provider".to_string(),
-        app: Some("gemini".to_string()),
-        name: Some("Test Gemini".to_string()),
-        homepage: Some("https://example.com".to_string()),
-        endpoint: Some("https://api.example.com".to_string()),
-        api_key: Some("test-api-key".to_string()),
-        icon: None,
-        model: Some("gemini-2.0-flash".to_string()),
-        notes: None,
-        haiku_model: None,
-        sonnet_model: None,
-        opus_model: None,
-        config: None,
-        config_format: None,
-        config_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
-        content: None,
-        description: None,
-        enabled: None,
-        usage_enabled: None,
-        usage_script: None,
-        usage_api_key: None,
-        usage_base_url: None,
-        usage_access_token: None,
-        usage_user_id: None,
-        usage_auto_interval: None,
-    };
-
-    let provider = build_provider_from_request(&AppType::Gemini, &request).unwrap();
-
-    // Verify provider basic info
-    assert_eq!(provider.name, "Test Gemini");
-    assert_eq!(
-        provider.website_url,
-        Some("https://example.com".to_string())
-    );
-
-    // Verify settings_config structure
-    let env = provider.settings_config["env"].as_object().unwrap();
-    assert_eq!(env["GEMINI_API_KEY"], "test-api-key");
-    assert_eq!(env["GOOGLE_GEMINI_BASE_URL"], "https://api.example.com");
-    assert_eq!(env["GEMINI_MODEL"], "gemini-2.0-flash");
-}
-
-#[test]
-fn test_build_gemini_provider_without_model() {
-    use super::provider::build_provider_from_request;
-
-    let request = DeepLinkImportRequest {
-        version: "v1".to_string(),
-        resource: "provider".to_string(),
-        app: Some("gemini".to_string()),
-        name: Some("Test Gemini".to_string()),
-        homepage: Some("https://example.com".to_string()),
-        endpoint: Some("https://api.example.com".to_string()),
-        api_key: Some("test-api-key".to_string()),
-        icon: None,
-        model: None,
-        notes: None,
-        haiku_model: None,
-        sonnet_model: None,
-        opus_model: None,
-        config: None,
-        config_format: None,
-        config_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
-        content: None,
-        description: None,
-        enabled: None,
-        usage_enabled: None,
-        usage_script: None,
-        usage_api_key: None,
-        usage_base_url: None,
-        usage_access_token: None,
-        usage_user_id: None,
-        usage_auto_interval: None,
-    };
-
-    let provider = build_provider_from_request(&AppType::Gemini, &request).unwrap();
-
-    let env = provider.settings_config["env"].as_object().unwrap();
-    assert_eq!(env["GEMINI_API_KEY"], "test-api-key");
-    assert_eq!(env["GOOGLE_GEMINI_BASE_URL"], "https://api.example.com");
-    // Model should not be present
-    assert!(env.get("GEMINI_MODEL").is_none());
-}
 
 #[test]
 fn test_deeplink_usage_script_does_not_copy_provider_credentials() {
@@ -769,15 +691,17 @@ fn test_parse_mcp_apps() {
     assert!(apps.codex);
     assert!(!apps.gemini);
 
-    let apps = parse_mcp_apps("gemini").unwrap();
-    assert!(!apps.claude);
-    assert!(!apps.codex);
-    assert!(apps.gemini);
-
-    let apps = parse_mcp_apps("grokbuild,opencode,hermes").unwrap();
+    let apps = parse_mcp_apps("grokbuild,opencode").unwrap();
     assert!(apps.grokbuild);
     assert!(apps.opencode);
-    assert!(apps.hermes);
+
+    for kimi_alias in ["hermes", "kimicode", "kimi-code", "kimi"] {
+        let apps = parse_mcp_apps(kimi_alias).unwrap();
+        assert!(apps.hermes);
+    }
+
+    let err = parse_mcp_apps("gemini").unwrap_err();
+    assert!(err.to_string().contains("MCP sync is not supported"));
 
     let err = parse_mcp_apps("invalid").unwrap_err();
     assert!(err.to_string().contains("Invalid app"));

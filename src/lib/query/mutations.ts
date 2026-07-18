@@ -55,7 +55,11 @@ export const useAddProviderMutation = (appId: AppId) => {
 
       let id: string;
 
-      if (appId === "opencode" || appId === "openclaw" || appId === "hermes") {
+      if (
+        appId === "opencode" ||
+        appId === "openclaw" ||
+        appId === "kimicode"
+      ) {
         if (
           providerInput.category === "omo" ||
           providerInput.category === "omo-slim"
@@ -106,7 +110,7 @@ export const useAddProviderMutation = (appId: AppId) => {
         });
       }
 
-      if (appId === "hermes") {
+      if (appId === "kimicode") {
         await invalidateHermesProviderCaches(queryClient);
       }
 
@@ -170,7 +174,7 @@ export const useUpdateProviderMutation = (appId: AppId) => {
           queryKey: openclawKeys.health,
         });
       }
-      if (appId === "hermes") {
+      if (appId === "kimicode") {
         await invalidateHermesProviderCaches(queryClient);
       }
       toast.success(
@@ -226,7 +230,7 @@ export const useDeleteProviderMutation = (appId: AppId) => {
         });
       }
 
-      if (appId === "hermes") {
+      if (appId === "kimicode") {
         await invalidateHermesProviderCaches(queryClient);
       }
 
@@ -300,7 +304,7 @@ export const useSwitchProviderMutation = (appId: AppId) => {
           queryKey: openclawKeys.health,
         });
       }
-      if (appId === "hermes") {
+      if (appId === "kimicode") {
         await invalidateHermesProviderCaches(queryClient);
       }
 

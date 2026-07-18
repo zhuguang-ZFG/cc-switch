@@ -88,7 +88,7 @@ export function ProviderActions({
   const isAdditiveMode =
     (appId === "opencode" && !isOmo) ||
     appId === "openclaw" ||
-    appId === "hermes";
+    appId === "kimicode";
 
   // 故障转移模式下的按钮逻辑（累加模式和 OMO 应用不支持故障转移）
   const isFailoverMode =
@@ -144,7 +144,7 @@ export function ProviderActions({
     if (isAdditiveMode) {
       if (isInConfig) {
         return {
-          disabled: isDefaultModel === true,
+          disabled: isDefaultModel === true || isReadOnly,
           variant: "secondary" as const,
           className: cn(
             "bg-orange-100 text-orange-600 hover:bg-orange-200 dark:bg-orange-900/50 dark:text-orange-400 dark:hover:bg-orange-900/70",
@@ -222,22 +222,22 @@ export function ProviderActions({
 
   const canDelete =
     !isReadOnly && (isOmo || isAdditiveMode ? true : !isCurrent);
-  const readOnlyHint = t("provider.managedByHermesHint", {
-    defaultValue: "由 Hermes 管理，请在 Hermes Web UI 中编辑",
+  const readOnlyHint = t("provider.managedByKimiHint", {
+    defaultValue: "Managed by Kimi official login",
   });
 
   return (
     <div className="flex items-center gap-1.5">
-      {(appId === "openclaw" || appId === "hermes") &&
+      {(appId === "openclaw" || appId === "kimicode") &&
         isInConfig &&
         onSetAsDefault &&
         (() => {
           const activeLabel =
-            appId === "hermes"
+            appId === "kimicode"
               ? t("provider.inUse", { defaultValue: "已在用" })
               : t("provider.isDefault", { defaultValue: "当前默认" });
           const inactiveLabel =
-            appId === "hermes"
+            appId === "kimicode"
               ? t("provider.enable", { defaultValue: "启用" })
               : t("provider.setAsDefault", { defaultValue: "设为默认" });
           return (
@@ -298,9 +298,13 @@ export function ProviderActions({
         <Button
           size="icon"
           variant="ghost"
-          onClick={onDuplicate}
-          title={t("provider.duplicate")}
-          className={iconButtonClass}
+          onClick={isReadOnly ? undefined : onDuplicate}
+          disabled={isReadOnly}
+          title={isReadOnly ? readOnlyHint : t("provider.duplicate")}
+          className={cn(
+            iconButtonClass,
+            isReadOnly && "opacity-40 cursor-not-allowed text-muted-foreground",
+          )}
         >
           <Copy className="h-4 w-4" />
         </Button>

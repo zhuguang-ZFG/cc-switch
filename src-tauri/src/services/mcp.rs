@@ -34,9 +34,7 @@ impl McpService {
         if prev_apps.codex && !server.apps.codex {
             Self::remove_server_from_app(state, &server.id, &AppType::Codex)?;
         }
-        if prev_apps.gemini && !server.apps.gemini {
-            Self::remove_server_from_app(state, &server.id, &AppType::Gemini)?;
-        }
+        // The legacy `hermes` storage field now represents Kimi Code.
         if prev_apps.grokbuild && !server.apps.grokbuild {
             Self::remove_server_from_app(state, &server.id, &AppType::GrokBuild)?;
         }
@@ -44,7 +42,7 @@ impl McpService {
             Self::remove_server_from_app(state, &server.id, &AppType::OpenCode)?;
         }
         if prev_apps.hermes && !server.apps.hermes {
-            Self::remove_server_from_app(state, &server.id, &AppType::Hermes)?;
+            Self::remove_server_from_app(state, &server.id, &AppType::KimiCode)?;
         }
 
         // 同步到各个启用的应用
@@ -122,9 +120,6 @@ impl McpService {
                 // Codex uses TOML format, must use the correct function
                 mcp::sync_single_server_to_codex(&Default::default(), &server.id, &server.server)?;
             }
-            AppType::Gemini => {
-                mcp::sync_single_server_to_gemini(&Default::default(), &server.id, &server.server)?;
-            }
             AppType::GrokBuild => {
                 mcp::sync_single_server_to_grokbuild(
                     &Default::default(),
@@ -144,8 +139,8 @@ impl McpService {
                 // Skip for now
                 log::debug!("OpenClaw MCP support is still in development, skipping sync");
             }
-            AppType::Hermes => {
-                mcp::sync_single_server_to_hermes(&Default::default(), &server.id, &server.server)?;
+            AppType::KimiCode => {
+                mcp::sync_single_server_to_kimi(&Default::default(), &server.id, &server.server)?;
             }
         }
         Ok(())
@@ -171,7 +166,6 @@ impl McpService {
                 log::debug!("Claude Desktop 3P profiles do not use CC Switch MCP sync, skipping");
             }
             AppType::Codex => mcp::remove_server_from_codex(id)?,
-            AppType::Gemini => mcp::remove_server_from_gemini(id)?,
             AppType::GrokBuild => mcp::remove_server_from_grokbuild(id)?,
             AppType::OpenCode => {
                 mcp::remove_server_from_opencode(id)?;
@@ -180,8 +174,8 @@ impl McpService {
                 // OpenClaw MCP support is still in development
                 log::debug!("OpenClaw MCP support is still in development, skipping remove");
             }
-            AppType::Hermes => {
-                mcp::remove_server_from_hermes(id)?;
+            AppType::KimiCode => {
+                mcp::remove_server_from_kimi(id)?;
             }
         }
         Ok(())
@@ -468,41 +462,27 @@ impl McpService {
         Ok(new_count)
     }
 
-    /// 从 Hermes 导入 MCP
-    pub fn import_from_hermes(state: &AppState) -> Result<usize, AppError> {
-        // 创建临时 MultiAppConfig 用于导入
+    pub fn import_from_kimi(state: &AppState) -> Result<usize, AppError> {
         let mut temp_config = crate::app_config::MultiAppConfig::default();
-
-        // 调用导入逻辑（从 mcp/hermes.rs）
-        let count = crate::mcp::import_from_hermes(&mut temp_config)?;
-
+        let count = crate::mcp::import_from_kimi(&mut temp_config)?;
         let mut new_count = 0;
-
-        // 如果有导入的服务器，保存到数据库
         if count > 0 {
             if let Some(servers) = &temp_config.mcp.servers {
                 let mut existing = state.db.get_all_mcp_servers()?;
                 for server in servers.values() {
-                    // 已存在：仅启用 Hermes，不覆盖其他字段（与导入模块语义保持一致）
                     let to_save = if let Some(existing_server) = existing.get(&server.id) {
                         let mut merged = existing_server.clone();
                         merged.apps.hermes = true;
                         merged
                     } else {
-                        // 真正的新服务器
                         new_count += 1;
                         server.clone()
                     };
-
                     state.db.save_mcp_server(&to_save)?;
-                    existing.insert(to_save.id.clone(), to_save.clone());
-
-                    // 导入是读取已有配置，不应反向写回任何应用的 live 配置。
-                    // 显式编辑、启用/禁用或手动同步时再执行写回。
+                    existing.insert(to_save.id.clone(), to_save);
                 }
             }
         }
-
         Ok(new_count)
     }
 
@@ -512,17 +492,18 @@ impl McpService {
     /// 全部跑完后若有失败，聚合成一个错误上报——历史实现逐应用
     /// `unwrap_or(0)` 吞错，坏文件只会表现为"导入成功 0 个"，用户
     /// 无从得知哪个应用出了问题。
+    ///
+    /// Gemini CLI was removed; Kimi Code imports its separate `mcp.json`.
     pub fn import_from_all_apps(state: &AppState) -> Result<usize, AppError> {
         let mut total = 0;
         let mut failures: Vec<String> = Vec::new();
 
-        let results: [(&str, Result<usize, AppError>); 6] = [
+        let results: [(&str, Result<usize, AppError>); 5] = [
             ("claude", Self::import_from_claude(state)),
             ("codex", Self::import_from_codex(state)),
-            ("gemini", Self::import_from_gemini(state)),
             ("grokbuild", Self::import_from_grokbuild(state)),
             ("opencode", Self::import_from_opencode(state)),
-            ("hermes", Self::import_from_hermes(state)),
+            ("kimicode", Self::import_from_kimi(state)),
         ];
         for (app, result) in results {
             match result {

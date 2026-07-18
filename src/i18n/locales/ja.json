@@ -1,7 +1,7 @@
 {
   "app": {
     "title": "CC Switch",
-    "description": "Claude Code・Codex・Gemini CLI のためのオールインワンアシスタント"
+    "description": "Claude Code・Codex・Grok Build・Kimi Code のためのオールインワンアシスタント"
   },
   "common": {
     "add": "追加",
@@ -44,7 +44,7 @@
   },
   "firstRunNotice": {
     "title": "CC Switch へようこそ",
-    "bodyDefault": "CC Switch は Claude Code / Codex / Gemini CLI の複数プロバイダーをワンクリックで切り替えられるツールです。すでにこれらのツールを設定済みの場合、CC Switch は現在の設定を「default」という名前のプロバイダーとして自動的に保存するので、既存の設定が失われることはありません。",
+    "bodyDefault": "CC Switch は Claude Code / Codex / Grok Build / Kimi Code の複数プロバイダーをワンクリックで切り替えられるツールです。すでにこれらのツールを設定済みの場合、CC Switch は現在の設定を「default」という名前のプロバイダーとして自動的に保存するので、既存の設定が失われることはありません。",
     "bodyOfficial": "リストには「Official（公式）」プリセットも用意されており、公式バージョンに戻したくなったらクリックするだけで切り替えられます。切り替える前に現在の設定は自動で default にバックアップされるので、自由に行き来できます。これが CC Switch の仕組みです 😊",
     "confirm": "了解しました"
   },
@@ -331,7 +331,7 @@
     "advanced": {
       "configDir": {
         "title": "設定ディレクトリ",
-        "description": "Claude、Codex、Gemini の設定保存パスを管理"
+        "description": "Claude、Codex、Grok Build、Kimi Code の設定保存パスを管理"
       },
       "proxy": {
         "title": "ローカルルーティング",
@@ -792,7 +792,7 @@
     "officialWebsite": "公式サイト",
     "github": "GitHub",
     "manualInstallCommands": "手動インストールコマンド",
-    "oneClickInstallHint": "Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes をインストールまたは更新",
+    "oneClickInstallHint": "Claude Code / Codex / Grok Build / OpenCode / OpenClaw / Kimi Code をインストールまたは更新",
     "localEnvCheck": "ローカル環境チェック",
     "updateAllTools": "すべて更新（{{count}}）",
     "currentVersion": "現在のバージョン",
@@ -870,7 +870,9 @@
       "defaultCostMultiplierRequired": "デフォルト倍率は必須です",
       "defaultCostMultiplierInvalid": "デフォルト倍率の形式が正しくありません"
     },
-    "saveFailedGeneric": "保存に失敗しました。もう一度お試しください"
+    "saveFailedGeneric": "保存に失敗しました。もう一度お試しください",
+    "kimiConfigDir": "Kimi Code 設定ディレクトリ",
+    "browsePlaceholderKimi": "Kimi Code 設定ディレクトリを選択 (~/.kimi-code)"
   },
   "apps": {
     "claude": "Claude",
@@ -882,6 +884,7 @@
     "grokbuild": "Grok Build",
     "opencode": "OpenCode",
     "openclaw": "OpenClaw",
+    "kimicode": "Kimi Code",
     "hermes": "Hermes"
   },
   "grokBuild": {
@@ -894,7 +897,7 @@
   },
   "sessionManager": {
     "title": "セッション管理",
-    "subtitle": "Claude Code / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes のセッションを管理",
+    "subtitle": "Claude Code / Codex / Grok Build / OpenCode / OpenClaw のセッションを管理",
     "searchPlaceholder": "内容・ディレクトリ・ID で検索",
     "searchSessions": "セッションを検索",
     "providerFilterAll": "すべて",
@@ -1735,7 +1738,7 @@
         "grokbuild": "Grok Build",
         "opencode": "OpenCode",
         "openclaw": "OpenClaw",
-        "hermes": "Hermes"
+        "kimicode": "Kimi Code"
       }
     },
     "userLevelPath": "ユーザーレベルの MCP パス",
@@ -1912,7 +1915,8 @@
     "switcherTooltip": {
       "claude": "プロジェクト：Claude Code のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
       "claude-desktop": "プロジェクト：Claude Desktop のプロバイダーをワンクリックで切り替え",
-      "codex": "プロジェクト：Codex のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え"
+      "codex": "プロジェクト：Codex のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
+      "kimicode": "プロジェクト：Kimi Code のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え"
     },
     "none": "プロジェクトを使用しない",
     "searchPlaceholder": "プロジェクトを検索",
@@ -1921,7 +1925,8 @@
     "createDescription": {
       "claude": "Claude Code の現在のプロバイダー、MCP、Skills、メモリファイルをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
       "claude-desktop": "Claude Desktop の現在のプロバイダーをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
-      "codex": "Codex の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。"
+      "codex": "Codex の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。",
+      "kimicode": "Kimi Code の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。"
     },
     "manage": "プロジェクトを管理…",
     "manageTitle": "プロジェクト管理",
@@ -2090,18 +2095,25 @@
     "primaryModel": "プライマリモデル",
     "fallbackModel": "フォールバックモデル"
   },
-  "hermes": {
+  "kimicode": {
     "form": {
       "baseUrl": "API エンドポイント",
       "baseUrlHint": "プロバイダーの API エンドポイント URL。",
       "providerKey": "プロバイダーキー",
       "providerKeyPlaceholder": "my-provider",
-      "providerKeyHint": "小文字、数字、ハイフンのみ。config.yaml のプロバイダー名として使用されます。",
-      "providerKeyLockedHint": "このプロバイダーは Hermes 設定に追加済みのため、キーは変更できません。",
+      "providerKeyHint": "小文字、数字、ハイフンのみ。config.toml のプロバイダー名として使用されます。",
+      "providerKeyLockedHint": "このプロバイダーは Kimi Code 設定に追加済みのため、キーは変更できません。",
       "providerKeyRequired": "プロバイダーキーは必須です",
       "providerKeyInvalid": "プロバイダーキーは小文字、数字、ハイフンのみ使用できます",
       "providerKeyDuplicate": "このプロバイダーキーは既に存在します",
       "apiMode": "API モード",
+      "typeOpenai": "OpenAI Chat Completions",
+      "typeOpenaiResponses": "OpenAI Responses",
+      "typeAnthropic": "Anthropic Messages",
+      "typeKimi": "Kimi ネイティブ",
+      "typeGoogleGenai": "Google GenAI",
+      "typeVertexai": "Vertex AI",
+      "modelAlias": "モデルエイリアス",
       "apiModeHint": "プロバイダーの API プロトコル。エンドポイントに合わせて正しい形式を選択してください。",
       "apiModeChatCompletions": "OpenAI Chat Completions",
       "apiModeAnthropicMessages": "Anthropic Messages",
@@ -2119,7 +2131,7 @@
       "modelNamePlaceholder": "Claude Opus 4.8",
       "contextLength": "コンテキスト長",
       "advancedOptions": "詳細オプション",
-      "modelsHint": "切り替え時、最初のモデルが model.default に書き込まれます。",
+      "modelsHint": "切り替え時、最初のモデルエイリアスが default_model に書き込まれます。",
       "primaryModel": "デフォルト",
       "fallbackModel": "予備",
       "providerAdvanced": "プロバイダー詳細オプション",

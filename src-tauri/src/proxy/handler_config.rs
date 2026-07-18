@@ -221,7 +221,8 @@ pub const CODEX_RESPONSES_HANDLER_CONFIG: HandlerConfig = HandlerConfig {
 /// Gemini Handler 配置
 #[allow(dead_code)]
 pub const GEMINI_HANDLER_CONFIG: HandlerConfig = HandlerConfig {
-    app_type: AppType::Gemini,
+    // Gemini CLI app removed; protocol handlers still log as "gemini".
+    app_type: AppType::Codex,
     tag: "Gemini",
     app_type_str: "gemini",
     parser_config: &GEMINI_PARSER_CONFIG,

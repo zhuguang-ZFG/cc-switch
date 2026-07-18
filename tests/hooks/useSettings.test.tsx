@@ -458,10 +458,10 @@ describe("useSettings hook", () => {
     expect(directorySettingsMock.resetAllDirectories).toHaveBeenCalledWith({
       claude: "/server/claude",
       codex: undefined,
-      gemini: "/server/gemini",
+      grokbuild: undefined,
       opencode: "/server/opencode",
       openclaw: "/server/openclaw",
-      hermes: undefined,
+      kimicode: undefined,
     });
     expect(metadataMock.setRequiresRestart).toHaveBeenCalledWith(false);
   });

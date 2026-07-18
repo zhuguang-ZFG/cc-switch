@@ -14,6 +14,10 @@ export interface CheckOptions {
   channel?: UpdateChannel;
 }
 
+// The fork does not publish signed updater artifacts yet. Keep update checks
+// dormant until its own signing key and latest.json pipeline are configured.
+const SIGNED_UPDATES_ENABLED = false;
+
 export async function getCurrentVersion(): Promise<string> {
   try {
     return await getVersion();
@@ -27,6 +31,10 @@ export async function checkForUpdate(
 ): Promise<
   { status: "up-to-date" } | { status: "available"; info: UpdateInfo }
 > {
+  if (!SIGNED_UPDATES_ENABLED) {
+    return { status: "up-to-date" };
+  }
+
   // 动态引入，避免在未安装插件时导致打包期问题
   const { check } = await import("@tauri-apps/plugin-updater");
 

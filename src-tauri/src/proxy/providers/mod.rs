@@ -176,24 +176,10 @@ impl ProviderType {
                 ProviderType::Claude
             }
             AppType::Codex => ProviderType::Codex,
-            AppType::Gemini => {
-                // 检测是否为 CLI 模式（OAuth）
-                let adapter = GeminiAdapter::new();
-                if let Some(auth) = adapter.extract_auth(provider) {
-                    let key = &auth.api_key;
-                    // OAuth access_token 以 ya29. 开头
-                    if key.starts_with("ya29.") {
-                        return ProviderType::GeminiCli;
-                    }
-                    // JSON 格式的 OAuth 凭证
-                    if key.starts_with('{') {
-                        return ProviderType::GeminiCli;
-                    }
-                }
-                ProviderType::Gemini
-            }
+            // Gemini CLI app removed; Gemini protocol still selected via settings
+            // when a Gemini-shaped provider is used under other apps.
             AppType::GrokBuild => ProviderType::Codex,
-            AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => ProviderType::Codex,
+            AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode => ProviderType::Codex,
         }
     }
 
@@ -243,9 +229,8 @@ pub fn get_adapter(app_type: &AppType) -> Box<dyn ProviderAdapter> {
     match app_type {
         AppType::Claude | AppType::ClaudeDesktop => Box::new(ClaudeAdapter::new()),
         AppType::Codex => Box::new(CodexAdapter::new()),
-        AppType::Gemini => Box::new(GeminiAdapter::new()),
         AppType::GrokBuild => Box::new(CodexAdapter::new()),
-        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Box::new(CodexAdapter::new()),
+        AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode => Box::new(CodexAdapter::new()),
     }
 }
 
@@ -457,42 +442,6 @@ mod tests {
 
         let provider_type = ProviderType::from_app_type_and_config(&AppType::Codex, &provider);
         assert_eq!(provider_type, ProviderType::Codex);
-    }
-
-    #[test]
-    fn test_from_app_type_gemini_api_key() {
-        let provider = create_provider(json!({
-            "env": {
-                "GEMINI_API_KEY": "AIza-test-key"
-            }
-        }));
-
-        let provider_type = ProviderType::from_app_type_and_config(&AppType::Gemini, &provider);
-        assert_eq!(provider_type, ProviderType::Gemini);
-    }
-
-    #[test]
-    fn test_from_app_type_gemini_cli_oauth() {
-        let provider = create_provider(json!({
-            "env": {
-                "GEMINI_API_KEY": "ya29.test-access-token"
-            }
-        }));
-
-        let provider_type = ProviderType::from_app_type_and_config(&AppType::Gemini, &provider);
-        assert_eq!(provider_type, ProviderType::GeminiCli);
-    }
-
-    #[test]
-    fn test_from_app_type_gemini_cli_json() {
-        let provider = create_provider(json!({
-            "env": {
-                "GEMINI_API_KEY": "{\"access_token\":\"ya29.test\",\"refresh_token\":\"1//test\"}"
-            }
-        }));
-
-        let provider_type = ProviderType::from_app_type_and_config(&AppType::Gemini, &provider);
-        assert_eq!(provider_type, ProviderType::GeminiCli);
     }
 
     #[test]

@@ -121,10 +121,10 @@ export function useSettingsForm(): UseSettingsFormResult {
       unifyCodexSessionHistory: data.unifyCodexSessionHistory ?? false,
       claudeConfigDir: sanitizeDir(data.claudeConfigDir),
       codexConfigDir: sanitizeDir(data.codexConfigDir),
-      geminiConfigDir: sanitizeDir(data.geminiConfigDir),
       grokConfigDir: sanitizeDir(data.grokConfigDir),
       opencodeConfigDir: sanitizeDir(data.opencodeConfigDir),
       openclawConfigDir: sanitizeDir(data.openclawConfigDir),
+      kimiConfigDir: sanitizeDir(data.kimiConfigDir ?? data.hermesConfigDir),
       language: normalizedLanguage,
     };
 
@@ -188,10 +188,12 @@ export function useSettingsForm(): UseSettingsFormResult {
         unifyCodexSessionHistory: serverData.unifyCodexSessionHistory ?? false,
         claudeConfigDir: sanitizeDir(serverData.claudeConfigDir),
         codexConfigDir: sanitizeDir(serverData.codexConfigDir),
-        geminiConfigDir: sanitizeDir(serverData.geminiConfigDir),
         grokConfigDir: sanitizeDir(serverData.grokConfigDir),
         opencodeConfigDir: sanitizeDir(serverData.opencodeConfigDir),
         openclawConfigDir: sanitizeDir(serverData.openclawConfigDir),
+        kimiConfigDir: sanitizeDir(
+          serverData.kimiConfigDir ?? serverData.hermesConfigDir,
+        ),
         language: normalizedLanguage,
       };
 

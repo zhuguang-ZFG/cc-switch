@@ -16,11 +16,10 @@ interface DirectorySettingsProps {
   onResetAppConfig: () => Promise<void>;
   claudeDir?: string;
   codexDir?: string;
-  geminiDir?: string;
   grokDir?: string;
   opencodeDir?: string;
   openclawDir?: string;
-  hermesDir?: string;
+  kimiDir?: string;
   onDirectoryChange: (app: DirectoryAppId, value?: string) => void;
   onBrowseDirectory: (app: DirectoryAppId) => Promise<void>;
   onResetDirectory: (app: DirectoryAppId) => Promise<void>;
@@ -34,11 +33,10 @@ export function DirectorySettings({
   onResetAppConfig,
   claudeDir,
   codexDir,
-  geminiDir,
   grokDir,
   opencodeDir,
   openclawDir,
-  hermesDir,
+  kimiDir,
   onDirectoryChange,
   onBrowseDirectory,
   onResetDirectory,
@@ -118,17 +116,6 @@ export function DirectorySettings({
         />
 
         <DirectoryInput
-          label={t("settings.geminiConfigDir")}
-          description={undefined}
-          value={geminiDir}
-          resolvedValue={resolvedDirs.gemini}
-          placeholder={t("settings.browsePlaceholderGemini")}
-          onChange={(val) => onDirectoryChange("gemini", val)}
-          onBrowse={() => onBrowseDirectory("gemini")}
-          onReset={() => onResetDirectory("gemini")}
-        />
-
-        <DirectoryInput
           label={t("settings.grokConfigDir")}
           description={undefined}
           value={grokDir}
@@ -162,14 +149,18 @@ export function DirectorySettings({
         />
 
         <DirectoryInput
-          label={t("settings.hermesConfigDir")}
+          label={t("settings.kimiConfigDir", {
+            defaultValue: "Kimi Code 配置目录",
+          })}
           description={undefined}
-          value={hermesDir}
-          resolvedValue={resolvedDirs.hermes}
-          placeholder={t("settings.browsePlaceholderHermes")}
-          onChange={(val) => onDirectoryChange("hermes", val)}
-          onBrowse={() => onBrowseDirectory("hermes")}
-          onReset={() => onResetDirectory("hermes")}
+          value={kimiDir}
+          resolvedValue={resolvedDirs.kimicode}
+          placeholder={t("settings.browsePlaceholderKimi", {
+            defaultValue: "选择 Kimi Code 配置目录 (~/.kimi-code)",
+          })}
+          onChange={(val) => onDirectoryChange("kimicode", val)}
+          onBrowse={() => onBrowseDirectory("kimicode")}
+          onReset={() => onResetDirectory("kimicode")}
         />
       </section>
     </div>

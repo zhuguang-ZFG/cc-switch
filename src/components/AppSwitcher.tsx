@@ -22,13 +22,21 @@ const ALL_APPS: AppId[] = [
   "claude",
   "claude-desktop",
   "codex",
-  "gemini",
   "grokbuild",
   "opencode",
   "openclaw",
-  "hermes",
+  "kimicode",
 ];
 const STORAGE_KEY = "cc-switch-last-app";
+
+function isAppVisible(app: AppId, visibleApps?: VisibleApps): boolean {
+  if (!visibleApps) return true;
+  if (app === "kimicode") {
+    return visibleApps.kimicode ?? visibleApps.hermes ?? true;
+  }
+  const value = visibleApps[app as keyof VisibleApps];
+  return value !== false;
+}
 
 export function AppSwitcher({
   activeApp,
@@ -46,28 +54,22 @@ export function AppSwitcher({
     claude: "claude",
     "claude-desktop": "claude",
     codex: "openai",
-    gemini: "gemini",
     grokbuild: "grok",
     opencode: "opencode",
     openclaw: "openclaw",
-    hermes: "hermes",
+    kimicode: "kimi",
   };
   const appDisplayName: Record<AppId, string> = {
     claude: "Claude Code",
     "claude-desktop": "Claude Desktop",
     codex: "Codex",
-    gemini: "Gemini",
     grokbuild: "Grok Build",
     opencode: "OpenCode",
     openclaw: "OpenClaw",
-    hermes: "Hermes",
+    kimicode: "Kimi Code",
   };
 
-  // Filter apps based on visibility settings (default all visible)
-  const appsToShow = ALL_APPS.filter((app) => {
-    if (!visibleApps) return true;
-    return visibleApps[app];
-  });
+  const appsToShow = ALL_APPS.filter((app) => isAppVisible(app, visibleApps));
 
   return (
     <div className="inline-flex bg-muted rounded-xl p-1 gap-1">
@@ -85,6 +87,7 @@ export function AppSwitcher({
               isActive
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground hover:bg-background/50",
+              compact && "px-2",
             )}
           >
             <span className="relative inline-flex shrink-0">
@@ -99,32 +102,23 @@ export function AppSwitcher({
                     "absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-[3px] border h-[11px] w-[11px]",
                     isActive
                       ? "bg-background border-border text-foreground"
-                      : "bg-muted border-background text-muted-foreground group-hover:bg-background group-hover:text-foreground",
+                      : "bg-muted border-border text-muted-foreground",
                   )}
-                  aria-hidden="true"
+                  style={
+                    badgeConfig?.offsetY
+                      ? { transform: `translateY(${badgeConfig.offsetY}px)` }
+                      : undefined
+                  }
                 >
-                  <BadgeIcon
-                    className="h-[8px] w-[8px]"
-                    strokeWidth={2.5}
-                    style={
-                      badgeConfig?.offsetY
-                        ? { transform: `translateY(${badgeConfig.offsetY}px)` }
-                        : undefined
-                    }
-                  />
+                  <BadgeIcon size={8} strokeWidth={2.5} />
                 </span>
               )}
             </span>
-            <span
-              className={cn(
-                "transition-all duration-200 whitespace-nowrap overflow-hidden",
-                compact
-                  ? "max-w-0 opacity-0 ml-0"
-                  : "max-w-[120px] opacity-100 ml-2",
-              )}
-            >
-              {appDisplayName[app]}
-            </span>
+            {!compact && (
+              <span className="ml-2 hidden sm:inline">
+                {appDisplayName[app]}
+              </span>
+            )}
           </button>
         );
       })}

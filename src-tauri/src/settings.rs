@@ -36,7 +36,8 @@ pub struct VisibleApps {
     pub claude_desktop: bool,
     #[serde(default = "default_true")]
     pub codex: bool,
-    #[serde(default = "default_true")]
+    /// Legacy Gemini visibility (ignored; app removed).
+    #[serde(default, skip_serializing)]
     pub gemini: bool,
     #[serde(default = "default_true")]
     pub grokbuild: bool,
@@ -44,8 +45,13 @@ pub struct VisibleApps {
     pub opencode: bool,
     #[serde(default = "default_true")]
     pub openclaw: bool,
-    #[serde(default)]
-    pub hermes: bool,
+    #[serde(
+        default = "default_true",
+        alias = "hermes",
+        alias = "kimi-code",
+        alias = "kimi_code"
+    )]
+    pub kimicode: bool,
 }
 
 impl Default for VisibleApps {
@@ -54,11 +60,11 @@ impl Default for VisibleApps {
             claude: true,
             claude_desktop: true,
             codex: true,
-            gemini: true,
+            gemini: false,
             grokbuild: true,
             opencode: true,
             openclaw: true,
-            hermes: false, // 默认不显示，需用户手动启用
+            kimicode: true,
         }
     }
 }
@@ -70,11 +76,10 @@ impl VisibleApps {
             AppType::Claude => self.claude,
             AppType::ClaudeDesktop => self.claude_desktop,
             AppType::Codex => self.codex,
-            AppType::Gemini => self.gemini,
             AppType::GrokBuild => self.grokbuild,
             AppType::OpenCode => self.opencode,
             AppType::OpenClaw => self.openclaw,
-            AppType::Hermes => self.hermes,
+            AppType::KimiCode => self.kimicode,
         }
     }
 }
@@ -412,6 +417,7 @@ pub struct AppSettings {
     pub claude_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_config_dir: Option<String>,
+    /// Legacy Gemini config dir override (ignored).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -420,8 +426,16 @@ pub struct AppSettings {
     pub opencode_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openclaw_config_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hermes_config_dir: Option<String>,
+    /// Frontend key: `kimiConfigDir` (camelCase via rename_all).
+    /// Accept legacy `hermesConfigDir` / snake_case aliases when reading.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "hermesConfigDir",
+        alias = "hermes_config_dir",
+        alias = "kimi_config_dir"
+    )]
+    pub kimi_config_dir: Option<String>,
 
     // ===== 当前供应商 ID（设备级）=====
     /// 当前 Claude 供应商 ID（本地存储，优先于数据库 is_current）
@@ -433,7 +447,7 @@ pub struct AppSettings {
     /// 当前 Codex 供应商 ID（本地存储，优先于数据库 is_current）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_codex: Option<String>,
-    /// 当前 Gemini 供应商 ID（本地存储，优先于数据库 is_current）
+    /// Legacy Gemini current provider (ignored).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_gemini: Option<String>,
     /// 当前 Grok Build 供应商 ID（本地存储，优先于数据库 is_current）
@@ -445,9 +459,16 @@ pub struct AppSettings {
     /// 当前 OpenClaw 供应商 ID（本地存储，对 OpenClaw 可能无意义，但保持结构一致）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_openclaw: Option<String>,
-    /// 当前 Hermes 供应商 ID（本地存储，保持结构一致）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_provider_hermes: Option<String>,
+    /// 当前 Kimi Code 供应商 ID（本地存储，保持结构一致）
+    /// Frontend key: `currentProviderKimicode`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "currentProviderHermes",
+        alias = "current_provider_hermes",
+        alias = "current_provider_kimicode"
+    )]
+    pub current_provider_kimicode: Option<String>,
 
     // ===== Skill 同步设置 =====
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
@@ -532,7 +553,7 @@ impl Default for AppSettings {
             grok_config_dir: None,
             opencode_config_dir: None,
             openclaw_config_dir: None,
-            hermes_config_dir: None,
+            kimi_config_dir: None,
             current_provider_claude: None,
             current_provider_claude_desktop: None,
             current_provider_codex: None,
@@ -540,7 +561,7 @@ impl Default for AppSettings {
             current_provider_grokbuild: None,
             current_provider_opencode: None,
             current_provider_openclaw: None,
-            current_provider_hermes: None,
+            current_provider_kimicode: None,
             skill_sync_method: SyncMethod::default(),
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
@@ -607,8 +628,8 @@ impl AppSettings {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
-        self.hermes_config_dir = self
-            .hermes_config_dir
+        self.kimi_config_dir = self
+            .kimi_config_dir
             .as_ref()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -893,18 +914,20 @@ pub fn get_codex_override_dir() -> Option<PathBuf> {
         .map(|p| resolve_override_path(p))
 }
 
-pub fn get_gemini_override_dir() -> Option<PathBuf> {
-    let settings = settings_store().read().ok()?;
-    settings
-        .gemini_config_dir
-        .as_ref()
-        .map(|p| resolve_override_path(p))
-}
-
 pub fn get_grok_override_dir() -> Option<PathBuf> {
     let settings = settings_store().read().ok()?;
     settings
         .grok_config_dir
+        .as_ref()
+        .map(|p| resolve_override_path(p))
+}
+
+/// Legacy Gemini config-dir override (Gemini CLI app removed).
+/// Kept so remaining gemini_config helpers still compile for protocol/proxy code.
+pub fn get_gemini_override_dir() -> Option<PathBuf> {
+    let settings = settings_store().read().ok()?;
+    settings
+        .gemini_config_dir
         .as_ref()
         .map(|p| resolve_override_path(p))
 }
@@ -925,10 +948,10 @@ pub fn get_openclaw_override_dir() -> Option<PathBuf> {
         .map(|p| resolve_override_path(p))
 }
 
-pub fn get_hermes_override_dir() -> Option<PathBuf> {
+pub fn get_kimi_override_dir() -> Option<PathBuf> {
     let settings = settings_store().read().ok()?;
     settings
-        .hermes_config_dir
+        .kimi_config_dir
         .as_ref()
         .map(|p| resolve_override_path(p))
 }
@@ -965,11 +988,10 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
         AppType::Claude => settings.current_provider_claude.clone(),
         AppType::ClaudeDesktop => settings.current_provider_claude_desktop.clone(),
         AppType::Codex => settings.current_provider_codex.clone(),
-        AppType::Gemini => settings.current_provider_gemini.clone(),
         AppType::GrokBuild => settings.current_provider_grokbuild.clone(),
         AppType::OpenCode => settings.current_provider_opencode.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
-        AppType::Hermes => settings.current_provider_hermes.clone(),
+        AppType::KimiCode => settings.current_provider_kimicode.clone(),
     }
 }
 
@@ -983,11 +1005,10 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::Claude => settings.current_provider_claude = id_owned.clone(),
         AppType::ClaudeDesktop => settings.current_provider_claude_desktop = id_owned.clone(),
         AppType::Codex => settings.current_provider_codex = id_owned.clone(),
-        AppType::Gemini => settings.current_provider_gemini = id_owned.clone(),
         AppType::GrokBuild => settings.current_provider_grokbuild = id_owned.clone(),
         AppType::OpenCode => settings.current_provider_opencode = id_owned.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw = id_owned.clone(),
-        AppType::Hermes => settings.current_provider_hermes = id_owned.clone(),
+        AppType::KimiCode => settings.current_provider_kimicode = id_owned.clone(),
     })
 }
 
@@ -1153,14 +1174,14 @@ mod tests {
         let visible: VisibleApps = serde_json::from_value(serde_json::json!({
             "claude": true,
             "codex": true,
-            "gemini": true,
             "opencode": true,
             "openclaw": true,
-            "hermes": true
+            "kimicode": true
         }))
         .expect("visible apps");
 
         assert!(visible.is_visible(&AppType::ClaudeDesktop));
+        assert!(visible.is_visible(&AppType::KimiCode));
     }
 
     #[test]
@@ -1169,7 +1190,6 @@ mod tests {
             "claude": true,
             "claudeDesktop": false,
             "codex": true,
-            "gemini": true,
             "opencode": true,
             "openclaw": true,
             "hermes": true
@@ -1177,5 +1197,7 @@ mod tests {
         .expect("visible apps");
 
         assert!(!visible.is_visible(&AppType::ClaudeDesktop));
+        // legacy "hermes" key maps to kimicode visibility
+        assert!(visible.is_visible(&AppType::KimiCode));
     }
 }

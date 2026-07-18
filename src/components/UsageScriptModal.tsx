@@ -179,7 +179,7 @@ function isOfficialSubscriptionProvider(provider: Provider, appId: AppId) {
       (!apiKey || (typeof apiKey === "string" && apiKey.trim() === ""))
     );
   }
-  if (appId === "gemini") {
+  if ((appId as string) === "gemini") {
     const env = config?.env || {};
     const apiKey = env.GEMINI_API_KEY;
     const baseUrl = env.GOOGLE_GEMINI_BASE_URL;
@@ -255,7 +255,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             apiKey,
             baseUrl: extractCodexBaseUrl(configToml),
           };
-        } else if (appId === "gemini") {
+        } else if ((appId as string) === "gemini") {
           // Gemini: { env: { GEMINI_API_KEY, GOOGLE_GEMINI_BASE_URL } }
           // Key fallback mirrors the backend resolver (Provider::resolve_usage_credentials).
           const env = (config as any).env || {};
@@ -272,7 +272,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             apiKey: grokConfig.apiKey,
             baseUrl: grokConfig.baseUrl,
           };
-        } else if (appId === "hermes") {
+        } else if (appId === "kimicode") {
           // Hermes: settingsConfig 顶层扁平（snake_case，对应 config.yaml）
           return {
             apiKey: (config as any).api_key,

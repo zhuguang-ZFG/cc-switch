@@ -180,7 +180,7 @@ impl StreamCheckService {
                 Self::resolve_opencode_base_url(provider, npm.as_deref())
             }
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
-            AppType::Hermes => Self::extract_hermes_base_url(provider),
+            AppType::KimiCode => Self::extract_hermes_base_url(provider),
             AppType::ClaudeDesktop => ClaudeAdapter::new()
                 .extract_base_url(provider)
                 .map_err(|e| AppError::Message(format!("Failed to extract base_url: {e}"))),

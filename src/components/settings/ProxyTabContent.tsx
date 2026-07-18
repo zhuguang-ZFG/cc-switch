@@ -175,9 +175,9 @@ export function ProxyTabContent({
                 <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="claude">Claude</TabsTrigger>
                   <TabsTrigger value="codex">Codex</TabsTrigger>
-                  <TabsTrigger value="gemini">Gemini</TabsTrigger>
+                  <TabsTrigger value="grokbuild">Grok Build</TabsTrigger>
                 </TabsList>
-                {(["claude", "codex", "gemini"] as const).map((appType) => {
+                {(["claude", "codex", "grokbuild"] as const).map((appType) => {
                   const failoverDisabled =
                     !isRunning || !(takeoverStatus?.[appType] ?? false);
                   return (

@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
  * 项目实体全应用共享，但快照/应用/当前指针按组进行；Claude Code 与
  * Claude Desktop 的供应商独立切换，因此各自有独立分组。
  */
-export type ProfileScope = "claude" | "claude-desktop" | "codex";
+export type ProfileScope = "claude" | "claude-desktop" | "codex" | "kimicode";
 
 /**
  * 按 app 分槽的载荷容器（与后端 services/profile.rs 的 PerApp<T> 严格对应）
@@ -15,6 +15,7 @@ export interface PerApp<T> {
   claude: T;
   "claude-desktop": T;
   codex: T;
+  kimicode: T;
 }
 
 /**
@@ -47,6 +48,7 @@ export interface CurrentProfileIds {
   claude: string | null;
   claudeDesktop: string | null;
   codex: string | null;
+  kimicode: string | null;
 }
 
 export interface ProfilesResponse {

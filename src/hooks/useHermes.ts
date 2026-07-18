@@ -24,11 +24,11 @@ export const HERMES_WEB_OFFLINE_ERROR = "hermes_web_offline";
  * Import this from any file that needs to invalidate Hermes caches.
  */
 export const hermesKeys = {
-  all: ["hermes"] as const,
-  liveProviderIds: ["hermes", "liveProviderIds"] as const,
-  modelConfig: ["hermes", "modelConfig"] as const,
-  memory: (kind: HermesMemoryKind) => ["hermes", "memory", kind] as const,
-  memoryLimits: ["hermes", "memoryLimits"] as const,
+  all: ["kimicode"] as const,
+  liveProviderIds: ["kimicode", "liveProviderIds"] as const,
+  modelConfig: ["kimicode", "modelConfig"] as const,
+  memory: (kind: HermesMemoryKind) => ["kimicode", "memory", kind] as const,
+  memoryLimits: ["kimicode", "memoryLimits"] as const,
 };
 
 /**

@@ -1744,7 +1744,7 @@ pub async fn handle_gemini(
     };
 
     // Gemini 的模型名称在 URI 中
-    let mut ctx = RequestContext::new(&state, &body, &headers, AppType::Gemini, "Gemini", "gemini")
+    let mut ctx = RequestContext::new(&state, &body, &headers, AppType::Codex, "Gemini", "gemini")
         .await?
         .with_model_from_uri(&uri);
 
@@ -1762,7 +1762,7 @@ pub async fn handle_gemini(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &AppType::Gemini,
+            &AppType::Codex, // protocol path; app_type_str is "gemini"
             method,
             endpoint,
             body,

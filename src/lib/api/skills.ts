@@ -6,22 +6,25 @@ export type AppType =
   | "claude"
   | "claude-desktop"
   | "codex"
-  | "gemini"
   | "grokbuild"
   | "opencode"
   | "openclaw"
-  | "hermes";
+  | "kimicode";
 
 /** Skill 应用启用状态 */
 export interface SkillApps {
   claude: boolean;
   "claude-desktop"?: boolean;
   codex: boolean;
-  gemini: boolean;
+  /** @deprecated Gemini CLI app removed */
+  gemini?: boolean;
   grokbuild?: boolean;
   opencode: boolean;
-  openclaw: boolean;
-  hermes: boolean;
+  openclaw?: boolean;
+  /** @deprecated Hermes replaced by Kimi Code */
+  hermes?: boolean;
+  /** Kimi Code skills */
+  kimicode?: boolean;
 }
 
 /** 已安装的 Skill（v3.10.0+ 统一结构） */

@@ -169,18 +169,18 @@ pub const TRAY_SECTIONS: [TrayAppSection; 4] = [
         log_name: "Codex",
     },
     TrayAppSection {
-        app_type: AppType::Gemini,
-        prefix: "gemini_",
-        empty_id: "gemini_empty",
-        header_label: "Gemini",
-        log_name: "Gemini",
-    },
-    TrayAppSection {
         app_type: AppType::GrokBuild,
         prefix: "grokbuild_",
         empty_id: "grokbuild_empty",
         header_label: "Grok Build",
         log_name: "Grok Build",
+    },
+    TrayAppSection {
+        app_type: AppType::KimiCode,
+        prefix: "kimicode_",
+        empty_id: "kimicode_empty",
+        header_label: "Kimi Code",
+        log_name: "Kimi Code",
     },
 ];
 
@@ -792,6 +792,7 @@ pub fn create_tray_menu(
                 ProfileScope::Claude => "Claude Code",
                 ProfileScope::ClaudeDesktop => "Claude Desktop",
                 ProfileScope::Codex => "Codex",
+                ProfileScope::KimiCode => "Kimi Code",
             };
             let mut scope_builder = SubmenuBuilder::with_id(
                 app,

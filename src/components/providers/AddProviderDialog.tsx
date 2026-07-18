@@ -16,8 +16,8 @@ import { UniversalProviderFormModal } from "@/components/universal/UniversalProv
 import { UniversalProviderPanel } from "@/components/universal";
 import { providerPresets } from "@/config/claudeProviderPresets";
 import { codexProviderPresets } from "@/config/codexProviderPresets";
-import { geminiProviderPresets } from "@/config/geminiProviderPresets";
 import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
+import { kimiProviderPresets } from "@/config/kimiProviderPresets";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 import { extractGrokBuildBaseUrl } from "@/utils/grokBuildConfig";
 import type { OpenClawSuggestedDefaults } from "@/config/openclawProviderPresets";
@@ -48,7 +48,7 @@ export function AddProviderDialog({
   const showUniversalTab =
     appId !== "opencode" &&
     appId !== "openclaw" &&
-    appId !== "hermes" &&
+    appId !== "kimicode" &&
     appId !== "grokbuild" &&
     appId !== "claude-desktop";
   const [activeTab, setActiveTab] = useState<"app-specific" | "universal">(
@@ -151,7 +151,9 @@ export function AddProviderDialog({
 
       // OpenCode/OpenClaw: pass providerKey for ID generation
       if (
-        (appId === "opencode" || appId === "openclaw" || appId === "hermes") &&
+        (appId === "opencode" ||
+          appId === "openclaw" ||
+          appId === "kimicode") &&
         values.providerKey
       ) {
         providerData.providerKey = values.providerKey;
@@ -200,10 +202,10 @@ export function AddProviderDialog({
                 preset.endpointCandidates.forEach(addUrl);
               }
             }
-          } else if (appId === "gemini") {
-            const presets = geminiProviderPresets;
+          } else if (appId === "kimicode") {
+            const presets = kimiProviderPresets;
             const presetIndex = parseInt(
-              values.presetId.replace("gemini-", ""),
+              values.presetId.replace("kimicode-", ""),
             );
             if (
               !isNaN(presetIndex) &&
@@ -211,8 +213,8 @@ export function AddProviderDialog({
               presetIndex < presets.length
             ) {
               const preset = presets[presetIndex];
-              if (Array.isArray(preset.endpointCandidates)) {
-                preset.endpointCandidates.forEach(addUrl);
+              if (preset.settingsConfig.base_url) {
+                addUrl(preset.settingsConfig.base_url);
               }
             }
           } else if (appId === "claude-desktop") {
@@ -252,11 +254,6 @@ export function AddProviderDialog({
               addUrl(extractedBaseUrl);
             }
           }
-        } else if (appId === "gemini") {
-          const env = parsedConfig.env as Record<string, any> | undefined;
-          if (env?.GOOGLE_GEMINI_BASE_URL) {
-            addUrl(env.GOOGLE_GEMINI_BASE_URL);
-          }
         } else if (appId === "grokbuild") {
           const config = parsedConfig.config as string | undefined;
           if (config) {
@@ -274,7 +271,7 @@ export function AddProviderDialog({
           if (parsedConfig.baseUrl) {
             addUrl(parsedConfig.baseUrl as string);
           }
-        } else if (appId === "hermes") {
+        } else if (appId === "kimicode") {
           if (parsedConfig.base_url) {
             addUrl(parsedConfig.base_url as string);
           }

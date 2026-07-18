@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { profilesApi, providersApi } from "@/lib/api";
 import type { ProfileScope } from "@/lib/api/profiles";
+import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
 const updateTrayMenuSafely = async () => {
@@ -127,6 +128,10 @@ export const useApplyProfileMutation = () => {
         queryKey: ["providers", "claude-desktop"],
       });
       await queryClient.invalidateQueries({ queryKey: ["providers", "codex"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["providers", "kimicode"],
+      });
+      await invalidateHermesProviderCaches(queryClient);
       await queryClient.invalidateQueries({ queryKey: ["mcp", "all"] });
       await queryClient.invalidateQueries({ queryKey: ["skills"] });
       await updateTrayMenuSafely();

@@ -4,7 +4,7 @@ pub mod terminal;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use providers::{claude, codex, gemini, grokbuild, hermes, openclaw, opencode};
+use providers::{claude, codex, grokbuild, kimi, openclaw, opencode};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,14 +56,14 @@ pub struct DeleteSessionOutcome {
 }
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
-    let (r1, r2, r3, r4, r5, r6, r7) = std::thread::scope(|s| {
+    // Gemini CLI / Hermes session scanners removed with those apps.
+    let (r1, r2, r3, r4, r5, r6) = std::thread::scope(|s| {
         let h1 = s.spawn(codex::scan_sessions);
         let h2 = s.spawn(claude::scan_sessions);
         let h3 = s.spawn(opencode::scan_sessions);
         let h4 = s.spawn(openclaw::scan_sessions);
-        let h5 = s.spawn(gemini::scan_sessions);
-        let h6 = s.spawn(hermes::scan_sessions);
-        let h7 = s.spawn(grokbuild::scan_sessions);
+        let h5 = s.spawn(grokbuild::scan_sessions);
+        let h6 = s.spawn(kimi::scan_sessions);
         (
             h1.join().unwrap_or_default(),
             h2.join().unwrap_or_default(),
@@ -71,7 +71,6 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
             h4.join().unwrap_or_default(),
             h5.join().unwrap_or_default(),
             h6.join().unwrap_or_default(),
-            h7.join().unwrap_or_default(),
         )
     });
 
@@ -82,7 +81,6 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
     sessions.extend(r4);
     sessions.extend(r5);
     sessions.extend(r6);
-    sessions.extend(r7);
 
     sessions.sort_by(|a, b| {
         let a_ts = a.last_active_at.or(a.created_at).unwrap_or(0);
@@ -98,9 +96,6 @@ pub fn load_messages(provider_id: &str, source_path: &str) -> Result<Vec<Session
     if provider_id == "opencode" && source_path.starts_with("sqlite:") {
         return opencode::load_messages_sqlite(source_path);
     }
-    if provider_id == "hermes" && source_path.starts_with("sqlite:") {
-        return hermes::load_messages_sqlite(source_path);
-    }
 
     let path = Path::new(source_path);
     match provider_id {
@@ -108,9 +103,8 @@ pub fn load_messages(provider_id: &str, source_path: &str) -> Result<Vec<Session
         "claude" => claude::load_messages(path),
         "opencode" => opencode::load_messages(path),
         "openclaw" => openclaw::load_messages(path),
-        "gemini" => gemini::load_messages(path),
         "grokbuild" => grokbuild::load_messages(path),
-        "hermes" => hermes::load_messages(path),
+        "kimicode" => kimi::load_messages(path),
         _ => Err(format!("Unsupported provider: {provider_id}")),
     }
 }
@@ -123,9 +117,6 @@ pub fn delete_session(
     // SQLite sessions bypass the file-based deletion path
     if provider_id == "opencode" && source_path.starts_with("sqlite:") {
         return opencode::delete_session_sqlite(session_id, source_path);
-    }
-    if provider_id == "hermes" && source_path.starts_with("sqlite:") {
-        return hermes::delete_session_sqlite(session_id, source_path);
     }
 
     let roots = provider_roots(provider_id)?;
@@ -168,11 +159,10 @@ fn delete_session_with_roots(
                 "openclaw" => {
                     openclaw::delete_session(&validated_root, &validated_source, session_id)
                 }
-                "gemini" => gemini::delete_session(&validated_root, &validated_source, session_id),
                 "grokbuild" => {
                     grokbuild::delete_session(&validated_root, &validated_source, session_id)
                 }
-                "hermes" => hermes::delete_session(&validated_root, &validated_source, session_id),
+                "kimicode" => kimi::delete_session(&validated_root, &validated_source, session_id),
                 _ => Err(format!("Unsupported provider: {provider_id}")),
             };
         }
@@ -200,9 +190,8 @@ fn provider_roots(provider_id: &str) -> Result<Vec<PathBuf>, String> {
         "claude" => vec![crate::config::get_claude_config_dir().join("projects")],
         "opencode" => vec![opencode::get_opencode_data_dir()],
         "openclaw" => vec![crate::openclaw_config::get_openclaw_dir().join("agents")],
-        "gemini" => vec![crate::gemini_config::get_gemini_dir().join("tmp")],
         "grokbuild" => grokbuild::session_roots(),
-        "hermes" => vec![crate::hermes_config::get_hermes_dir().join("sessions")],
+        "kimicode" => vec![kimi::session_root()],
         _ => return Err(format!("Unsupported provider: {provider_id}")),
     };
 
@@ -331,7 +320,7 @@ mod tests {
                 source_path: "/tmp/s2".to_string(),
             },
             DeleteSessionRequest {
-                provider_id: "gemini".to_string(),
+                provider_id: "grokbuild".to_string(),
                 session_id: "s3".to_string(),
                 source_path: "/tmp/s3".to_string(),
             },

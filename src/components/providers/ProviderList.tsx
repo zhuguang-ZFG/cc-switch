@@ -32,6 +32,7 @@ import {
 import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
+import { KimiAuthSection } from "@/components/providers/KimiAuthSection";
 import {
   useAutoFailoverEnabled,
   useFailoverQueue,
@@ -109,10 +110,14 @@ export function ProviderList({
   );
 
   // Hermes: 查询 live 配置中的供应商 ID 列表，用于判断 isInConfig
-  const { data: hermesLiveIds } = useHermesLiveProviderIds(appId === "hermes");
+  const { data: hermesLiveIds } = useHermesLiveProviderIds(
+    appId === "kimicode",
+  );
 
   // Hermes: 读取当前 model.provider，用于判断哪个供应商是"当前激活"（高亮）
-  const { data: hermesModelConfig } = useHermesModelConfig(appId === "hermes");
+  const { data: hermesModelConfig } = useHermesModelConfig(
+    appId === "kimicode",
+  );
   const hermesCurrentProviderId = hermesModelConfig?.provider;
 
   // 判断供应商是否已添加到配置（累加模式应用：OpenCode/OpenClaw/Hermes）
@@ -124,7 +129,7 @@ export function ProviderList({
       if (appId === "openclaw") {
         return openclawLiveIds?.includes(providerId) ?? false;
       }
-      if (appId === "hermes") {
+      if (appId === "kimicode") {
         return hermesLiveIds?.includes(providerId) ?? false;
       }
       return true; // 其他应用始终返回 true
@@ -218,7 +223,7 @@ export function ProviderList({
         const count = await providersApi.importOpenClawFromLive();
         return count > 0;
       }
-      if (appId === "hermes") {
+      if (appId === "kimicode") {
         const count = await providersApi.importHermesFromLive();
         return count > 0;
       }
@@ -348,6 +353,7 @@ export function ProviderList({
   if (isLoading) {
     return (
       <div className="space-y-3">
+        {appId === "kimicode" && <KimiAuthSection />}
         {[0, 1, 2].map((index) => (
           <div
             key={index}
@@ -360,11 +366,14 @@ export function ProviderList({
 
   if (sortedProviders.length === 0) {
     return (
-      <ProviderEmptyState
-        appId={appId}
-        onCreate={onCreate}
-        onImport={() => importMutation.mutate()}
-      />
+      <div className="space-y-4">
+        {appId === "kimicode" && <KimiAuthSection />}
+        <ProviderEmptyState
+          appId={appId}
+          onCreate={onCreate}
+          onImport={() => importMutation.mutate()}
+        />
+      </div>
     );
   }
 
@@ -386,7 +395,7 @@ export function ProviderList({
             const isOmoSlimCurrent =
               isOmoSlim && provider.id === (currentOmoSlimId || "");
             const isHermesCurrent =
-              appId === "hermes" && hermesCurrentProviderId === provider.id;
+              appId === "kimicode" && hermesCurrentProviderId === provider.id;
             return (
               <SortableProviderCard
                 key={provider.id}
@@ -396,7 +405,7 @@ export function ProviderList({
                     ? isOmoCurrent
                     : isOmoSlim
                       ? isOmoSlimCurrent
-                      : appId === "hermes"
+                      : appId === "kimicode"
                         ? isHermesCurrent
                         : provider.id === currentProviderId
                 }
@@ -427,7 +436,7 @@ export function ProviderList({
                 activeProviderId={activeProviderId}
                 // OpenClaw: default model / Hermes: model.provider === provider.id
                 isDefaultModel={
-                  appId === "hermes"
+                  appId === "kimicode"
                     ? isHermesCurrent
                     : isProviderDefaultModel(provider.id)
                 }
@@ -444,6 +453,7 @@ export function ProviderList({
 
   return (
     <div className="mt-4 space-y-4">
+      {appId === "kimicode" && <KimiAuthSection />}
       {claudeDesktopStatusMessages.length > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
           <div className="flex items-center gap-2 font-medium">

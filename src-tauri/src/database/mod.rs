@@ -139,6 +139,7 @@ impl Database {
         }
 
         db.apply_schema_migrations()?;
+        db.apply_fork_data_migrations()?;
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }

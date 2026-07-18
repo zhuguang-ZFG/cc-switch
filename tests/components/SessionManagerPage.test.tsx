@@ -289,6 +289,24 @@ describe("SessionManagerPage", () => {
     expect(toastSuccessMock).toHaveBeenCalled();
   });
 
+  it("offers Kimi Code in the provider filter", async () => {
+    renderPage("all");
+
+    await waitFor(() =>
+      expect(screen.getByText("Alpha Session")).toBeInTheDocument(),
+    );
+    await userEvent.click(
+      screen.getByRole("combobox", { name: /供应商筛选/i }),
+    );
+
+    expect(
+      await screen.findByRole("option", { name: /Kimi Code/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: /Gemini CLI/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("restores batch delete controls when deleteMany rejects", async () => {
     const deleteManySpy = vi
       .spyOn(sessionsApi, "deleteMany")

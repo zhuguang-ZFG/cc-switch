@@ -56,7 +56,7 @@ pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
     handle
         .opener()
         .open_url(
-            "https://github.com/farion1231/cc-switch/releases/latest",
+            "https://github.com/zhuguang-ZFG/cc-switch/releases/latest",
             None::<String>,
         )
         .map_err(|e| format!("打开更新页面失败: {e}"))?;
@@ -111,9 +111,16 @@ pub struct ToolVersion {
     wsl_distro: Option<String>,
 }
 
-const VALID_TOOLS: [&str; 7] = [
-    "claude", "codex", "gemini", "grok", "opencode", "openclaw", "hermes",
+const VALID_TOOLS: [&str; 6] = [
+    "claude", "codex", "grok", "opencode", "openclaw", "kimicode",
 ];
+
+fn tool_executable_name(tool: &str) -> &str {
+    match tool {
+        "kimicode" | "kimi-code" | "hermes" => "kimi",
+        _ => tool,
+    }
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -427,7 +434,7 @@ fn tool_display_name(tool: &str) -> &'static str {
         "grok" => "Grok Build",
         "opencode" => "OpenCode",
         "openclaw" => "OpenClaw",
-        "hermes" => "Hermes",
+        "hermes" | "kimicode" | "kimi" | "kimi-code" => "Kimi Code",
         _ => "Unknown",
     }
 }
@@ -446,14 +453,13 @@ const OPENCODE_INSTALL_UNIX: &str =
 /// `python3 -m pip ... || python -m pip ...`:Hermes PyPI 包要求 Python >=3.11,
 /// 但 macOS 系统 `python3` 常是 3.9,而 pyenv 下 `python` shim 还可能不存在,会把
 /// 真正的 Python 版本问题盖成 "python command exists in these Python versions"。
-const HERMES_INSTALL_UNIX: &str =
-    "bash -c 'tmp=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
-const HERMES_UPDATE_UNIX: &str =
-    "hermes update || bash -c 'tmp=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
+const KIMI_INSTALL_UNIX: &str =
+    "bash -c 'tmp=$(mktemp) && curl -fsSL https://code.kimi.com/kimi-code/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
+const KIMI_UPDATE_UNIX: &str =
+    "kimi update || bash -c 'tmp=$(mktemp) && curl -fsSL https://code.kimi.com/kimi-code/install.sh -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'";
 
 #[cfg(target_os = "windows")]
-const HERMES_INSTALL_WINDOWS_SCRIPT: &str =
-    "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex";
+const KIMI_INSTALL_WINDOWS_SCRIPT: &str = "irm https://code.kimi.com/kimi-code/install.ps1 | iex";
 
 #[cfg(target_os = "windows")]
 fn powershell_encoded_command(script: &str) -> String {
@@ -467,18 +473,18 @@ fn powershell_encoded_command(script: &str) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn hermes_install_windows_command() -> String {
+fn kimi_install_windows_command() -> String {
     format!(
         "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {}",
-        powershell_encoded_command(HERMES_INSTALL_WINDOWS_SCRIPT)
+        powershell_encoded_command(KIMI_INSTALL_WINDOWS_SCRIPT)
     )
 }
 
 #[cfg(target_os = "windows")]
-fn hermes_update_windows_command() -> String {
+fn kimi_update_windows_command() -> String {
     // fallback 是 powershell.exe，不是 .cmd/.bat；这里不需要 `call`。PowerShell 的
     // `irm | iex` 已被 EncodedCommand 收进单一参数,避免 `cmd.exe` 解析管道符。
-    format!("hermes update || {}", hermes_install_windows_command())
+    format!("kimi update || {}", kimi_install_windows_command())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -502,7 +508,7 @@ fn npm_install_command_for(tool: &str) -> Option<&'static str> {
 
 fn official_update_args(tool: &str) -> Option<&'static str> {
     match tool {
-        "claude" | "codex" | "hermes" => Some("update"),
+        "claude" | "codex" | "kimicode" => Some("update"),
         "openclaw" => Some("update --yes"),
         "opencode" => Some("upgrade"),
         _ => None,
@@ -510,7 +516,7 @@ fn official_update_args(tool: &str) -> Option<&'static str> {
 }
 
 fn bare_official_update_command(tool: &str) -> Option<String> {
-    official_update_args(tool).map(|args| format!("{tool} {args}"))
+    official_update_args(tool).map(|args| format!("{} {args}", tool_executable_name(tool)))
 }
 
 fn chain_update_commands(
@@ -534,18 +540,18 @@ fn tool_action_shell_command_for_shell(
     action: ToolLifecycleAction,
     shell: LifecycleCommandShell,
 ) -> Option<String> {
-    if tool == "hermes" {
+    if tool == "kimicode" {
         return Some(
             match (action, shell) {
-                (ToolLifecycleAction::Install, LifecycleCommandShell::Posix) => HERMES_INSTALL_UNIX,
-                (ToolLifecycleAction::Update, LifecycleCommandShell::Posix) => HERMES_UPDATE_UNIX,
+                (ToolLifecycleAction::Install, LifecycleCommandShell::Posix) => KIMI_INSTALL_UNIX,
+                (ToolLifecycleAction::Update, LifecycleCommandShell::Posix) => KIMI_UPDATE_UNIX,
                 #[cfg(target_os = "windows")]
                 (ToolLifecycleAction::Install, LifecycleCommandShell::WindowsBatch) => {
-                    return Some(hermes_install_windows_command());
+                    return Some(kimi_install_windows_command());
                 }
                 #[cfg(target_os = "windows")]
                 (ToolLifecycleAction::Update, LifecycleCommandShell::WindowsBatch) => {
-                    return Some(hermes_update_windows_command());
+                    return Some(kimi_update_windows_command());
                 }
                 #[cfg(not(target_os = "windows"))]
                 (_, LifecycleCommandShell::WindowsBatch) => return None,
@@ -725,13 +731,14 @@ async fn get_single_tool_version_impl(
 
     // 判断该工具的运行环境 & WSL distro（如有）
     let (env_type, wsl_distro) = tool_env_type_and_wsl_distro(tool);
+    let executable = tool_executable_name(tool);
 
     // 使用全局 HTTP 客户端（已包含代理配置）
     let client = crate::proxy::http_client::get();
 
     // 1. 获取本地版本
     let probe = if let Some(distro) = wsl_distro.as_deref() {
-        try_get_version_wsl(tool, distro, wsl_shell, wsl_shell_flag)
+        try_get_version_wsl(executable, distro, wsl_shell, wsl_shell_flag)
     } else {
         #[cfg(target_os = "windows")]
         {
@@ -743,7 +750,7 @@ async fn get_single_tool_version_impl(
         #[cfg(not(target_os = "windows"))]
         {
             // PATH 第一个命令优先；只有它确实没装(NotFound)才去常见目录兜底扫描。
-            match try_get_version(tool) {
+            match try_get_version(executable) {
                 ShellProbe::NotFound(_) => scan_cli_version(tool),
                 found => found,
             }
@@ -775,7 +782,7 @@ async fn get_single_tool_version_impl(
             }
         }
         "openclaw" => fetch_npm_latest_for_tool(&client, "openclaw", tool, local).await,
-        "hermes" => fetch_pypi_latest_version(&client, "hermes-agent").await,
+        "kimicode" => fetch_github_latest_version(&client, "MoonshotAI/kimi-code").await,
         _ => None,
     };
 
@@ -1196,7 +1203,10 @@ fn try_get_version_wsl(
     use std::process::Command;
 
     // 防御性断言：tool 只能是预定义的值
-    debug_assert!(VALID_TOOLS.contains(&tool), "unexpected tool name: {tool}");
+    debug_assert!(
+        VALID_TOOLS.contains(&tool) || tool == "kimi",
+        "unexpected tool name: {tool}"
+    );
 
     // 校验 distro 名称，防止命令注入
     if !is_valid_wsl_distro_name(distro) {
@@ -1455,6 +1465,7 @@ fn opencode_extra_search_paths(
 }
 
 fn tool_executable_candidates(tool: &str, dir: &Path) -> Vec<std::path::PathBuf> {
+    let tool = tool_executable_name(tool);
     #[cfg(target_os = "windows")]
     {
         let extensionless = dir.join(tool);
@@ -2267,7 +2278,7 @@ fn package_manager_anchored_command_from_paths(
 fn anchored_command_from_paths(tool: &str, bin_path: &str, real_target: &str) -> Option<String> {
     let real_lower = real_target.to_ascii_lowercase();
 
-    if tool == "hermes" {
+    if tool == "kimicode" {
         return anchored_official_update_command(tool, bin_path);
     }
     if tool == "claude"
@@ -2350,7 +2361,7 @@ fn package_manager_anchored_command_from_paths(tool: &str, bin_path: &str) -> Op
 /// 才返 None 让上游兜回静态命令、`anchored=false`。
 #[cfg(target_os = "windows")]
 fn anchored_command_from_paths(tool: &str, bin_path: &str, _real_target: &str) -> Option<String> {
-    if tool == "hermes" {
+    if tool == "kimicode" {
         return anchored_official_update_command(tool, bin_path);
     }
     let package_command = package_manager_anchored_command_from_paths(tool, bin_path);
@@ -2449,7 +2460,7 @@ fn posix_install_command_for(tool: &str) -> String {
     match tool {
         "claude" => installer_with_npm_fallback(CLAUDE_INSTALL_UNIX, tool),
         "opencode" => installer_with_npm_fallback(OPENCODE_INSTALL_UNIX, tool),
-        "hermes" => HERMES_INSTALL_UNIX.to_string(),
+        "kimicode" => KIMI_INSTALL_UNIX.to_string(),
         _ => static_fallback_command_for(tool, ToolLifecycleAction::Install),
     }
 }
@@ -2557,11 +2568,10 @@ fn wsl_distro_for_tool(tool: &str) -> Option<String> {
     let override_dir = match tool {
         "claude" => crate::settings::get_claude_override_dir(),
         "codex" => crate::settings::get_codex_override_dir(),
-        "gemini" => crate::settings::get_gemini_override_dir(),
-        "grok" => crate::settings::get_grok_override_dir(),
+        "grok" | "grokbuild" => crate::settings::get_grok_override_dir(),
         "opencode" => crate::settings::get_opencode_override_dir(),
         "openclaw" => crate::settings::get_openclaw_override_dir(),
-        "hermes" => crate::settings::get_hermes_override_dir(),
+        "hermes" | "kimicode" | "kimi-code" | "kimi" => crate::settings::get_kimi_override_dir(),
         _ => None,
     }?;
 
@@ -2649,7 +2659,6 @@ fn extract_env_vars_from_config(
         // 处理 base_url: 根据应用类型添加对应的环境变量
         let base_url_key = match app_type {
             AppType::Claude | AppType::ClaudeDesktop => Some("ANTHROPIC_BASE_URL"),
-            AppType::Gemini => Some("GOOGLE_GEMINI_BASE_URL"),
             _ => None,
         };
 
@@ -2668,7 +2677,7 @@ fn extract_env_vars_from_config(
     }
 
     // Gemini 使用 api_key 字段转换为 GEMINI_API_KEY
-    if *app_type == AppType::Gemini {
+    if *app_type == AppType::GrokBuild {
         if let Some(api_key) = obj.get("api_key").and_then(|v| v.as_str()) {
             env_vars.push(("GEMINI_API_KEY".to_string(), api_key.to_string()));
         }
@@ -3962,18 +3971,18 @@ mod tests {
         }
 
         #[test]
-        fn hermes_windows_uses_cli_update() {
+        fn kimicode_windows_uses_cli_update() {
             // Hermes 自带 `hermes update`,不要再回退到 py/python/pip。即便同目录有
             // npm.cmd,也不应走 npm 分支。
-            let (_dir, _sub, bin_path) = setup_sibling("", "hermes.exe", &["npm.cmd"]);
-            let cmd = anchored_command_from_paths("hermes", &bin_path, &bin_path);
+            let (_dir, _sub, bin_path) = setup_sibling("", "kimi.exe", &["npm.cmd"]);
+            let cmd = anchored_command_from_paths("kimicode", &bin_path, &bin_path);
             let expected = format!("{} update", expect_quoted_path(&bin_path));
             assert_eq!(cmd.as_deref(), Some(expected.as_str()));
         }
 
         #[test]
-        fn hermes_windows_static_fallback_uses_powershell_installer_without_pip() {
-            let install = static_fallback_command_for("hermes", ToolLifecycleAction::Install);
+        fn kimicode_windows_static_fallback_uses_powershell_installer_without_pip() {
+            let install = static_fallback_command_for("kimicode", ToolLifecycleAction::Install);
             assert!(
                 install
                     .starts_with("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand "),
@@ -3985,7 +3994,7 @@ mod tests {
                 .expect("installer should include encoded command");
             assert_eq!(
                 encoded,
-                powershell_encoded_command(HERMES_INSTALL_WINDOWS_SCRIPT)
+                powershell_encoded_command(KIMI_INSTALL_WINDOWS_SCRIPT)
             );
             let install_prefix = install
                 .split_once("-EncodedCommand ")
@@ -3999,10 +4008,10 @@ mod tests {
                 "should hide PowerShell pipe from cmd.exe and avoid system Python/pip: {install}"
             );
 
-            let update = static_fallback_command("hermes");
+            let update = static_fallback_command("kimicode");
             assert!(
                 update.starts_with(
-                    "hermes update || powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
+                    "kimi update || powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
                 ),
                 "should try CLI update before PowerShell installer: {update}"
             );
@@ -4202,13 +4211,13 @@ mod tests {
         }
 
         #[test]
-        fn wsl_hermes_command_uses_unix_installer_not_powershell_or_pip() {
+        fn wsl_kimicode_command_uses_unix_installer_not_powershell_or_pip() {
             // 跨 wsl.exe 边界后跑的是 Linux,Windows PowerShell installer 不适用;
             // 也不要再走 python3/python pip 链,避免 Python 版本/pyenv shim 问题。
             let update_cmd =
-                wsl_tool_action_shell_command("hermes", ToolLifecycleAction::Update).unwrap();
+                wsl_tool_action_shell_command("kimicode", ToolLifecycleAction::Update).unwrap();
             assert!(
-                update_cmd.starts_with("hermes update || bash -c 'tmp=$(mktemp) && curl -fsSL "),
+                update_cmd.starts_with("kimi update || bash -c 'tmp=$(mktemp) && curl -fsSL "),
                 "WSL hermes 更新应先尝试 CLI 自更新再回退官方 installer,得到: {update_cmd}"
             );
             let fallback = update_cmd
@@ -4224,7 +4233,7 @@ mod tests {
             );
 
             let install_cmd =
-                wsl_tool_action_shell_command("hermes", ToolLifecycleAction::Install).unwrap();
+                wsl_tool_action_shell_command("kimicode", ToolLifecycleAction::Install).unwrap();
             assert!(
                 install_cmd.starts_with("bash -c 'tmp=$(mktemp) && curl -fsSL "),
                 "WSL hermes 安装应直接走官方 Unix installer,得到: {install_cmd}"
@@ -4236,8 +4245,8 @@ mod tests {
         }
 
         #[test]
-        fn wsl_hermes_install_line_does_not_depend_on_outer_pipefail() {
-            let line = build_wsl_tool_action_line("Ubuntu", HERMES_INSTALL_UNIX, None, None)
+        fn wsl_kimicode_install_line_does_not_depend_on_outer_pipefail() {
+            let line = build_wsl_tool_action_line("Ubuntu", KIMI_INSTALL_UNIX, None, None)
                 .expect("valid WSL command line");
             assert!(line.starts_with("wsl.exe -d Ubuntu -- sh -c "));
             assert!(
@@ -4554,15 +4563,15 @@ mod tests {
         }
 
         #[test]
-        fn hermes_uses_cli_update_anchor() {
+        fn kimicode_uses_cli_update_anchor() {
             // Hermes 自带 `hermes update`;锚定到命令行默认那处 CLI,避免 cc-switch 猜
             // 系统 Python/pip 时撞上 Python >=3.11 或 pyenv shim 问题。
             let cmd = anchored_command_from_paths(
-                "hermes",
-                "/usr/local/bin/hermes",
-                "/usr/local/bin/hermes",
+                "kimicode",
+                "/usr/local/bin/kimi",
+                "/usr/local/bin/kimi",
             );
-            assert_eq!(cmd.as_deref(), Some("/usr/local/bin/hermes update"));
+            assert_eq!(cmd.as_deref(), Some("/usr/local/bin/kimi update"));
         }
 
         #[test]
@@ -4942,10 +4951,10 @@ mod tests {
         }
 
         #[test]
-        fn hermes_install_uses_official_installer() {
+        fn kimicode_install_uses_official_installer() {
             // Hermes 官方 installer 会处理 Python 3.11+/uv 等运行时;不要再从 cc-switch
             // 里走 `python3 || python` pip 链。
-            let cmd = install_command_for("hermes");
+            let cmd = install_command_for("kimicode");
             assert!(
                 cmd.starts_with("bash -c 'tmp=$(mktemp) && curl -fsSL ")
                     && cmd.contains("install.sh -o $tmp && bash $tmp"),
@@ -4958,12 +4967,12 @@ mod tests {
         }
 
         #[test]
-        fn hermes_update_fallback_uses_cli_update_then_installer() {
+        fn kimicode_update_fallback_uses_cli_update_then_installer() {
             // 锚定失败时也不回退 pip:先让 PATH 上的 hermes 自更新,找不到/失败再跑官方
             // installer。这样 pyenv 的 `python` shim 不会参与错误路径。
-            let cmd = static_fallback_command("hermes");
+            let cmd = static_fallback_command("kimicode");
             assert!(
-                cmd.starts_with("hermes update || bash -c 'tmp=$(mktemp) && curl -fsSL "),
+                cmd.starts_with("kimi update || bash -c 'tmp=$(mktemp) && curl -fsSL "),
                 "should try CLI update before official installer: {cmd}"
             );
             let fallback = cmd

@@ -1,7 +1,7 @@
 {
   "name": "cc-switch",
-  "version": "3.17.0",
-  "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI",
+  "version": "3.17.1",
+  "description": "All-in-One Assistant for Claude Code, Codex, Grok Build & Kimi Code",
   "type": "module",
   "scripts": {
     "dev": "pnpm tauri dev",

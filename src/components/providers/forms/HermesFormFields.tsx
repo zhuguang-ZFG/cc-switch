@@ -46,10 +46,10 @@ import {
   type FetchedModel,
 } from "@/lib/api/model-fetch";
 import {
-  hermesApiModes,
-  type HermesApiMode,
-  type HermesModel,
-} from "@/config/hermesProviderPresets";
+  KIMI_PROVIDER_TYPES,
+  type KimiModel,
+  type KimiProviderType,
+} from "@/config/kimiProviderPresets";
 import type { ProviderCategory } from "@/types";
 
 interface HermesFormFieldsProps {
@@ -62,10 +62,10 @@ interface HermesFormFieldsProps {
   websiteUrl: string;
   isPartner?: boolean;
   partnerPromotionKey?: string;
-  apiMode: HermesApiMode;
-  onApiModeChange: (mode: HermesApiMode) => void;
-  models: HermesModel[];
-  onModelsChange: (models: HermesModel[]) => void;
+  apiMode: KimiProviderType;
+  onApiModeChange: (mode: KimiProviderType) => void;
+  models: KimiModel[];
+  onModelsChange: (models: KimiModel[]) => void;
   rateLimitDelay: number | undefined;
   onRateLimitDelayChange: (delay: number | undefined) => void;
 }
@@ -73,9 +73,9 @@ interface HermesFormFieldsProps {
 type BaseUrlErrorCode = "empty" | "invalid" | "scheme";
 
 const BASE_URL_ERROR_I18N_KEY: Record<BaseUrlErrorCode, string> = {
-  empty: "hermes.form.baseUrlRequired",
-  scheme: "hermes.form.baseUrlScheme",
-  invalid: "hermes.form.baseUrlInvalid",
+  empty: "kimicode.form.baseUrlRequired",
+  scheme: "kimicode.form.baseUrlScheme",
+  invalid: "kimicode.form.baseUrlInvalid",
 };
 
 const TEMPLATE_TOKEN_RE = /\$\{[^}]+\}/g;
@@ -218,7 +218,7 @@ export function HermesFormFields({
     modelKeysRef.current.push(crypto.randomUUID());
     onModelsChange([
       ...models,
-      { id: "", name: "", context_length: undefined },
+      { id: "", alias: "", name: "", max_context_size: undefined },
     ]);
   };
 
@@ -263,7 +263,7 @@ export function HermesFormFields({
 
   const handleModelChange = (
     index: number,
-    field: keyof HermesModel,
+    field: keyof KimiModel,
     value: unknown,
   ) => {
     const next = [...models];
@@ -275,17 +275,17 @@ export function HermesFormFields({
     <>
       <div className="space-y-2">
         <FormLabel htmlFor="hermes-api-mode">
-          {t("hermes.form.apiMode", { defaultValue: "API 模式" })}
+          {t("kimicode.form.apiMode", { defaultValue: "Provider type" })}
         </FormLabel>
         <Select
           value={apiMode}
-          onValueChange={(v) => onApiModeChange(v as HermesApiMode)}
+          onValueChange={(v) => onApiModeChange(v as KimiProviderType)}
         >
           <SelectTrigger id="hermes-api-mode">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {hermesApiModes.map((mode) => (
+            {KIMI_PROVIDER_TYPES.map((mode) => (
               <SelectItem key={mode.value} value={mode.value}>
                 {t(mode.labelKey)}
               </SelectItem>
@@ -293,7 +293,7 @@ export function HermesFormFields({
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          {t("hermes.form.apiModeHint", {
+          {t("kimicode.form.apiModeHint", {
             defaultValue: "供应商 API 协议。请根据端点选择正确的协议。",
           })}
         </p>
@@ -301,7 +301,7 @@ export function HermesFormFields({
 
       <div className="space-y-2">
         <FormLabel htmlFor="hermes-baseurl">
-          {t("hermes.form.baseUrl", { defaultValue: "API 端点" })}
+          {t("kimicode.form.baseUrl", { defaultValue: "API endpoint" })}
         </FormLabel>
         <Input
           id="hermes-baseurl"
@@ -320,7 +320,7 @@ export function HermesFormFields({
           <p className="text-xs text-destructive">{baseUrlErrorMessage}</p>
         ) : (
           <p className="text-xs text-muted-foreground">
-            {t("hermes.form.baseUrlHint", {
+            {t("kimicode.form.baseUrlHint", {
               defaultValue: "供应商的 API 端点地址。",
             })}
           </p>
@@ -342,7 +342,7 @@ export function HermesFormFields({
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <FormLabel>
-            {t("hermes.form.models", { defaultValue: "模型列表" })}
+            {t("kimicode.form.models", { defaultValue: "Models" })}
           </FormLabel>
           <div className="flex gap-1">
             <Button
@@ -368,14 +368,14 @@ export function HermesFormFields({
               className="h-7 gap-1"
             >
               <Plus className="h-3.5 w-3.5" />
-              {t("hermes.form.addModel", { defaultValue: "添加模型" })}
+              {t("kimicode.form.addModel", { defaultValue: "Add model" })}
             </Button>
           </div>
         </div>
 
         {models.length === 0 ? (
           <p className="text-sm text-muted-foreground py-2">
-            {t("hermes.form.noModels", {
+            {t("kimicode.form.noModels", {
               defaultValue: "暂无模型配置。切换到此供应商时将无默认模型。",
             })}
           </p>
@@ -396,10 +396,10 @@ export function HermesFormFields({
                     }`}
                   >
                     {index === 0
-                      ? t("hermes.form.primaryModel", {
+                      ? t("kimicode.form.primaryModel", {
                           defaultValue: "默认模型",
                         })
-                      : t("hermes.form.fallbackModel", {
+                      : t("kimicode.form.fallbackModel", {
                           defaultValue: "备选模型",
                         })}
                   </span>
@@ -408,7 +408,7 @@ export function HermesFormFields({
                 <div className="flex items-center gap-2">
                   <div className="flex-1 space-y-1">
                     <label className="text-xs text-muted-foreground">
-                      {t("hermes.form.modelId", { defaultValue: "模型 ID" })}
+                      {t("kimicode.form.modelId", { defaultValue: "Model ID" })}
                     </label>
                     <div className="flex gap-1">
                       <Input
@@ -416,7 +416,7 @@ export function HermesFormFields({
                         onChange={(e) =>
                           handleModelChange(index, "id", e.target.value)
                         }
-                        placeholder={t("hermes.form.modelIdPlaceholder", {
+                        placeholder={t("kimicode.form.modelIdPlaceholder", {
                           defaultValue: "anthropic/claude-opus-4-8",
                         })}
                         className="flex-1"
@@ -463,7 +463,7 @@ export function HermesFormFields({
                   </div>
                   <div className="flex-1 space-y-1">
                     <label className="text-xs text-muted-foreground">
-                      {t("hermes.form.modelName", {
+                      {t("kimicode.form.modelName", {
                         defaultValue: "显示名称",
                       })}
                     </label>
@@ -472,7 +472,7 @@ export function HermesFormFields({
                       onChange={(e) =>
                         handleModelChange(index, "name", e.target.value)
                       }
-                      placeholder={t("hermes.form.modelNamePlaceholder", {
+                      placeholder={t("kimicode.form.modelNamePlaceholder", {
                         defaultValue: "Claude Opus 4.8",
                       })}
                     />
@@ -491,21 +491,35 @@ export function HermesFormFields({
                 <AdvancedSection
                   open={expandedModels[index] ?? false}
                   onOpenChange={() => toggleModelAdvanced(index)}
-                  labelKey="hermes.form.advancedOptions"
+                  labelKey="kimicode.form.advancedOptions"
                 >
                   <div className="space-y-1">
                     <label className="text-xs text-muted-foreground">
-                      {t("hermes.form.contextLength", {
+                      {t("kimicode.form.modelAlias", {
+                        defaultValue: "Model alias",
+                      })}
+                    </label>
+                    <Input
+                      value={model.alias ?? ""}
+                      onChange={(e) =>
+                        handleModelChange(index, "alias", e.target.value)
+                      }
+                      placeholder="provider/model-id"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">
+                      {t("kimicode.form.contextLength", {
                         defaultValue: "上下文长度",
                       })}
                     </label>
                     <Input
                       type="number"
-                      value={model.context_length ?? ""}
+                      value={model.max_context_size ?? ""}
                       onChange={(e) =>
                         handleModelChange(
                           index,
-                          "context_length",
+                          "max_context_size",
                           e.target.value ? parseInt(e.target.value) : undefined,
                         )
                       }
@@ -519,7 +533,7 @@ export function HermesFormFields({
         )}
 
         <p className="text-xs text-muted-foreground">
-          {t("hermes.form.modelsHint", {
+          {t("kimicode.form.modelsHint", {
             defaultValue:
               "切换到此供应商时，第一个模型会写入顶层 model.default。",
           })}
@@ -529,11 +543,11 @@ export function HermesFormFields({
       <AdvancedSection
         open={providerAdvancedOpen}
         onOpenChange={setProviderAdvancedOpen}
-        labelKey="hermes.form.providerAdvanced"
+        labelKey="kimicode.form.providerAdvanced"
       >
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground">
-            {t("hermes.form.rateLimitDelay", {
+            {t("kimicode.form.rateLimitDelay", {
               defaultValue: "请求间隔（秒）",
             })}
           </label>
@@ -556,7 +570,7 @@ export function HermesFormFields({
             placeholder="0.5"
           />
           <p className="text-xs text-muted-foreground">
-            {t("hermes.form.rateLimitDelayHint", {
+            {t("kimicode.form.rateLimitDelayHint", {
               defaultValue:
                 "连续请求间的最小间隔秒数（可选）。留空表示无限制。",
             })}

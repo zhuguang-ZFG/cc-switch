@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   extractCodexPromptPreview,
   formatSessionMessagePreview,
+  getProviderIconName,
   groupSessionsByProviderAndDirectory,
   shouldHideCodexMessageFromToc,
 } from "@/components/sessions/utils";
 import type { SessionMeta } from "@/types";
 
 describe("session utils", () => {
+  it("uses the Kimi brand icon for Kimi Code sessions", () => {
+    expect(getProviderIconName("kimicode")).toBe("kimi");
+  });
+
   it("extracts Codex VS Code prompts after the request marker", () => {
     const content = [
       "# Context from my IDE setup:",

@@ -1,7 +1,7 @@
 {
   "app": {
     "title": "CC Switch",
-    "description": "Claude Code / Codex / Gemini CLI 全方位輔助工具"
+    "description": "Claude Code / Codex / Grok Build / Kimi Code 全方位輔助工具"
   },
   "common": {
     "add": "新增",
@@ -44,7 +44,7 @@
   },
   "firstRunNotice": {
     "title": "歡迎使用 CC Switch",
-    "bodyDefault": "CC Switch 可以協助您在 Claude Code / Codex / Gemini CLI 的多個供應商之間一鍵切換。如果您之前已經設定過這些工具，CC Switch 會自動將現有設定儲存為名為 default 的供應商，確保您的設定不會遺失。",
+    "bodyDefault": "CC Switch 可以協助您在 Claude Code / Codex / Grok Build / Kimi Code 的多個供應商之間一鍵切換。如果您之前已經設定過這些工具，CC Switch 會自動將現有設定儲存為名為 default 的供應商，確保您的設定不會遺失。",
     "bodyOfficial": "清單中還預設了「官方 (Official)」供應商，隨時點擊即可切換回官方預設設定。切換前 CC Switch 會自動將目前設定備份回 default，可以放心來回切換。這就是 CC Switch 的運作方式。",
     "confirm": "我了解了"
   },
@@ -331,7 +331,7 @@
     "advanced": {
       "configDir": {
         "title": "設定檔目錄",
-        "description": "管理 Claude、Codex 和 Gemini 的設定儲存路徑"
+        "description": "管理 Claude、Codex、Grok Build 和 Kimi Code 的設定儲存路徑"
       },
       "proxy": {
         "title": "本地路由",
@@ -792,7 +792,7 @@
     "officialWebsite": "官方網站",
     "github": "GitHub",
     "oneClickInstall": "一鍵安裝",
-    "oneClickInstallHint": "安裝 Claude Code / Codex / Gemini CLI / OpenCode",
+    "oneClickInstallHint": "安裝或升級 Claude Code / Codex / Grok Build / OpenCode / OpenClaw / Kimi Code",
     "localEnvCheck": "本地環境檢查",
     "envBadge": {
       "wsl": "WSL",
@@ -841,7 +841,9 @@
       "defaultCostMultiplierRequired": "預設倍率不能為空",
       "defaultCostMultiplierInvalid": "預設倍率格式不正確"
     },
-    "saveFailedGeneric": "儲存失敗，請重試"
+    "saveFailedGeneric": "儲存失敗，請重試",
+    "kimiConfigDir": "Kimi Code 設定目錄",
+    "browsePlaceholderKimi": "選擇 Kimi Code 設定目錄 (~/.kimi-code)"
   },
   "apps": {
     "claude": "Claude",
@@ -853,6 +855,7 @@
     "grokbuild": "Grok Build",
     "opencode": "OpenCode",
     "openclaw": "OpenClaw",
+    "kimicode": "Kimi Code",
     "hermes": "Hermes"
   },
   "grokBuild": {
@@ -865,7 +868,7 @@
   },
   "sessionManager": {
     "title": "工作階段管理",
-    "subtitle": "管理 Claude Code、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw 與 Hermes 工作階段紀錄",
+    "subtitle": "管理 Claude Code、Codex、Grok Build、OpenCode 與 OpenClaw 工作階段紀錄",
     "searchPlaceholder": "搜尋對話內容、目錄或 ID",
     "searchSessions": "搜尋工作階段",
     "providerFilterAll": "全部",
@@ -1707,7 +1710,7 @@
         "grokbuild": "Grok Build",
         "opencode": "OpenCode",
         "openclaw": "OpenClaw",
-        "hermes": "Hermes"
+        "kimicode": "Kimi Code"
       }
     },
     "userLevelPath": "使用者級 MCP 設定路徑",
@@ -1884,7 +1887,8 @@
     "switcherTooltip": {
       "claude": "專案：一鍵切換 Claude Code 的供應商 / MCP / Skills / 記憶檔案",
       "claude-desktop": "專案：一鍵切換 Claude Desktop 的供應商",
-      "codex": "專案：一鍵切換 Codex 的供應商 / MCP / Skills / 記憶檔案"
+      "codex": "專案：一鍵切換 Codex 的供應商 / MCP / Skills / 記憶檔案",
+      "kimicode": "專案：一鍵切換 Kimi Code 的供應商 / MCP / Skills / 記憶檔案"
     },
     "none": "不使用專案",
     "searchPlaceholder": "搜尋專案",
@@ -1893,7 +1897,8 @@
     "createDescription": {
       "claude": "把 Claude Code 目前的供應商、MCP、Skills、記憶檔案儲存為一個專案，之後可一鍵切換。",
       "claude-desktop": "把 Claude Desktop 目前的供應商儲存為一個專案，之後可一鍵切換。",
-      "codex": "把 Codex 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。"
+      "codex": "把 Codex 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。",
+      "kimicode": "把 Kimi Code 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。"
     },
     "manage": "管理專案…",
     "manageTitle": "管理專案",
@@ -2062,18 +2067,25 @@
     "primaryModel": "預設模型",
     "fallbackModel": "備用模型"
   },
-  "hermes": {
+  "kimicode": {
     "form": {
       "baseUrl": "API 端點",
       "baseUrlHint": "供應商的 API 端點位址。",
       "providerKey": "供應商標識",
       "providerKeyPlaceholder": "my-provider",
-      "providerKeyHint": "只能使用小寫字母、數字和連字號。用作 config.yaml 中的供應商名稱。",
-      "providerKeyLockedHint": "該供應商已新增至 Hermes 設定中，標識不可修改。",
+      "providerKeyHint": "只能使用小寫字母、數字和連字號。用作 config.toml 中的供應商名稱。",
+      "providerKeyLockedHint": "該供應商已新增至 Kimi Code 設定中，標識不可修改。",
       "providerKeyRequired": "供應商標識不能為空",
       "providerKeyInvalid": "供應商標識只能包含小寫字母、數字和連字號",
       "providerKeyDuplicate": "該供應商標識已存在",
       "apiMode": "API 模式",
+      "typeOpenai": "OpenAI Chat Completions",
+      "typeOpenaiResponses": "OpenAI Responses",
+      "typeAnthropic": "Anthropic Messages",
+      "typeKimi": "Kimi 原生協議",
+      "typeGoogleGenai": "Google GenAI",
+      "typeVertexai": "Vertex AI",
+      "modelAlias": "模型別名",
       "apiModeHint": "供應商 API 協定。請根據端點選擇正確的協定。",
       "apiModeChatCompletions": "OpenAI Chat Completions",
       "apiModeAnthropicMessages": "Anthropic Messages",
@@ -2091,7 +2103,7 @@
       "modelNamePlaceholder": "Claude Opus 4.8",
       "contextLength": "上下文長度",
       "advancedOptions": "進階選項",
-      "modelsHint": "切換至此供應商時，第一個模型會寫入頂層 model.default。",
+      "modelsHint": "切換至此供應商時，第一個模型別名會寫入頂層 default_model。",
       "primaryModel": "預設模型",
       "fallbackModel": "備用模型",
       "providerAdvanced": "供應商進階選項",

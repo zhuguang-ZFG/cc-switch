@@ -45,11 +45,14 @@ export interface ProxyTakeoverStatus {
   claude: boolean;
   "claude-desktop"?: boolean;
   codex: boolean;
-  gemini: boolean;
+  /** @deprecated Gemini CLI app removed */
+  gemini?: boolean;
   grokbuild: boolean;
-  opencode: boolean;
-  openclaw: boolean;
-  hermes: boolean;
+  opencode?: boolean;
+  openclaw?: boolean;
+  /** @deprecated Hermes replaced by Kimi Code; no proxy takeover in MVP */
+  hermes?: boolean;
+  kimicode?: boolean;
 }
 
 export interface ProviderHealth {

@@ -90,15 +90,6 @@ pub async fn get_config_status(
 
             Ok(ConfigStatus { exists, path })
         }
-        AppType::Gemini => {
-            let env_path = crate::gemini_config::get_gemini_env_path();
-            let exists = env_path.exists();
-            let path = crate::gemini_config::get_gemini_dir()
-                .to_string_lossy()
-                .to_string();
-
-            Ok(ConfigStatus { exists, path })
-        }
         AppType::GrokBuild => {
             let config_path = crate::grok_config::get_grok_config_path();
             let exists = config_path.exists();
@@ -126,10 +117,10 @@ pub async fn get_config_status(
 
             Ok(ConfigStatus { exists, path })
         }
-        AppType::Hermes => {
-            let config_path = crate::hermes_config::get_hermes_config_path();
+        AppType::KimiCode => {
+            let config_path = crate::kimi_config::get_kimi_config_path();
             let exists = config_path.exists();
-            let path = crate::hermes_config::get_hermes_dir()
+            let path = crate::kimi_config::get_kimi_dir()
                 .to_string_lossy()
                 .to_string();
 
@@ -151,11 +142,10 @@ pub async fn get_config_dir(app: String) -> Result<String, String> {
             crate::claude_desktop_config::get_config_library_path().map_err(|e| e.to_string())?
         }
         AppType::Codex => codex_config::get_codex_config_dir(),
-        AppType::Gemini => crate::gemini_config::get_gemini_dir(),
         AppType::GrokBuild => crate::grok_config::get_grok_config_dir(),
         AppType::OpenCode => crate::opencode_config::get_opencode_dir(),
         AppType::OpenClaw => crate::openclaw_config::get_openclaw_dir(),
-        AppType::Hermes => crate::hermes_config::get_hermes_dir(),
+        AppType::KimiCode => crate::kimi_config::get_kimi_dir(),
     };
 
     Ok(dir.to_string_lossy().to_string())
@@ -169,11 +159,10 @@ pub async fn open_config_folder(handle: AppHandle, app: String) -> Result<bool, 
             crate::claude_desktop_config::get_config_library_path().map_err(|e| e.to_string())?
         }
         AppType::Codex => codex_config::get_codex_config_dir(),
-        AppType::Gemini => crate::gemini_config::get_gemini_dir(),
         AppType::GrokBuild => crate::grok_config::get_grok_config_dir(),
         AppType::OpenCode => crate::opencode_config::get_opencode_dir(),
         AppType::OpenClaw => crate::openclaw_config::get_openclaw_dir(),
-        AppType::Hermes => crate::hermes_config::get_hermes_dir(),
+        AppType::KimiCode => crate::kimi_config::get_kimi_dir(),
     };
 
     if !config_dir.exists() {

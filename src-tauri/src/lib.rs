@@ -15,8 +15,8 @@ mod error;
 mod gemini_config;
 mod gemini_mcp;
 mod grok_config;
-pub mod hermes_config;
 mod init_status;
+pub mod kimi_config;
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
@@ -674,9 +674,9 @@ pub fn run() {
                 log::info!("✓ First-run welcome notice pending");
             }
 
-            // 1.6. 自动同步 OpenCode / OpenClaw 的 live providers 到数据库
+            // 1.6. 自动同步 additive 应用的 live providers 到数据库
             //
-            // additive 模式（OpenCode / OpenClaw）的 import 函数按 id 幂等——
+            // additive 模式（OpenCode / OpenClaw / Kimi Code）的 import 函数按 id 幂等——
             // 新 id 执行导入，已有 id 则更新 settings 和 display name，所以每次
             // 启动都跑是安全的：既保证新装用户开箱可见 live 中的供应商，也让外部
             // 修改的 live 文件能在重启后同步到数据库（与之前依赖前端"导入当前配置"
@@ -698,12 +698,12 @@ pub fn run() {
                 Ok(_) => log::debug!("○ No OpenClaw provider changes from live config"),
                 Err(e) => log::warn!("✗ Failed to import OpenClaw providers: {e}"),
             }
-            match crate::services::provider::import_hermes_providers_from_live(&app_state) {
+            match crate::services::provider::import_kimicode_providers_from_live(&app_state) {
                 Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} Hermes provider(s) from live config");
+                    log::info!("✓ Synced {count} Kimi Code provider(s) from live config");
                 }
-                Ok(_) => log::debug!("○ No Hermes provider changes from live config"),
-                Err(e) => log::warn!("✗ Failed to import Hermes providers: {e}"),
+                Ok(_) => log::debug!("○ No Kimi Code provider changes from live config"),
+                Err(e) => log::warn!("✗ Failed to import Kimi Code providers: {e}"),
             }
 
             // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
@@ -777,14 +777,6 @@ pub fn run() {
                     Err(e) => log::warn!("✗ Failed to import Codex MCP: {e}"),
                 }
 
-                match crate::services::mcp::McpService::import_from_gemini(&app_state) {
-                    Ok(count) if count > 0 => {
-                        log::info!("✓ Imported {count} MCP server(s) from Gemini");
-                    }
-                    Ok(_) => log::debug!("○ No Gemini MCP servers found to import"),
-                    Err(e) => log::warn!("✗ Failed to import Gemini MCP: {e}"),
-                }
-
                 match crate::services::mcp::McpService::import_from_grokbuild(&app_state) {
                     Ok(count) if count > 0 => {
                         log::info!("✓ Imported {count} MCP server(s) from Grok Build");
@@ -801,12 +793,12 @@ pub fn run() {
                     Err(e) => log::warn!("✗ Failed to import OpenCode MCP: {e}"),
                 }
 
-                match crate::services::mcp::McpService::import_from_hermes(&app_state) {
+                match crate::services::mcp::McpService::import_from_kimi(&app_state) {
                     Ok(count) if count > 0 => {
-                        log::info!("✓ Imported {count} MCP server(s) from Hermes");
+                        log::info!("✓ Imported {count} MCP server(s) from Kimi Code");
                     }
-                    Ok(_) => log::debug!("○ No Hermes MCP servers found to import"),
-                    Err(e) => log::warn!("✗ Failed to import Hermes MCP: {e}"),
+                    Ok(_) => log::debug!("○ No Kimi Code MCP servers found to import"),
+                    Err(e) => log::warn!("✗ Failed to import Kimi Code MCP: {e}"),
                 }
             }
 
@@ -817,11 +809,10 @@ pub fn run() {
                 for app in [
                     crate::app_config::AppType::Claude,
                     crate::app_config::AppType::Codex,
-                    crate::app_config::AppType::Gemini,
                     crate::app_config::AppType::GrokBuild,
                     crate::app_config::AppType::OpenCode,
                     crate::app_config::AppType::OpenClaw,
-                    crate::app_config::AppType::Hermes,
+                    crate::app_config::AppType::KimiCode,
                 ] {
                     match crate::services::prompt::PromptService::import_from_file_on_first_launch(
                         &app_state,
@@ -1458,9 +1449,13 @@ pub fn run() {
             commands::set_openclaw_env,
             commands::get_openclaw_tools,
             commands::set_openclaw_tools,
-            // Hermes specific
-            commands::import_hermes_providers_from_live,
-            commands::get_hermes_live_provider_ids,
+            // Kimi Code (replaces Hermes)
+            commands::import_kimicode_providers_from_live,
+            commands::get_kimicode_live_provider_ids,
+            commands::get_kimicode_live_provider,
+            commands::get_kimicode_default_model,
+            commands::get_kimicode_default_provider,
+            // Legacy Hermes stubs (return clear errors)
             commands::get_hermes_live_provider,
             commands::get_hermes_model_config,
             commands::open_hermes_web_ui,
@@ -1863,7 +1858,6 @@ fn initialize_common_config_snippets(state: &store::AppState) {
         for app_type in [
             crate::app_config::AppType::Claude,
             crate::app_config::AppType::Codex,
-            crate::app_config::AppType::Gemini,
         ] {
             if let Err(e) = crate::services::provider::ProviderService::migrate_legacy_common_config_usage_if_needed(
                 state,

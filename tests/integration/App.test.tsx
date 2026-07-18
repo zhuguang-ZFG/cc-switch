@@ -124,6 +124,7 @@ vi.mock("@/components/AppSwitcher", () => ({
       <button onClick={() => onSwitch("claude")}>switch-claude</button>
       <button onClick={() => onSwitch("codex")}>switch-codex</button>
       <button onClick={() => onSwitch("openclaw")}>switch-openclaw</button>
+      <button onClick={() => onSwitch("kimicode")}>switch-kimicode</button>
     </div>
   ),
 }));
@@ -156,7 +157,7 @@ const renderApp = (AppComponent: ComponentType) => {
   );
 };
 
-describe("App integration with MSW", () => {
+describe("App integration with MSW", { timeout: 15_000 }, () => {
   beforeEach(() => {
     resetProviderState();
     toastSuccessMock.mockReset();
@@ -218,6 +219,23 @@ describe("App integration with MSW", () => {
 
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalled();
+  });
+
+  it("exposes shared Skills, Prompts, Sessions, and MCP actions for Kimi Code", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("switch-kimicode"));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("skills.manage")).toBeInTheDocument();
+      expect(screen.getByTitle("prompts.manage")).toBeInTheDocument();
+      expect(screen.getByTitle("sessionManager.title")).toBeInTheDocument();
+      expect(screen.getByTitle("mcp.title")).toBeInTheDocument();
+    });
   });
 
   it("shows toast when auto sync fails in background", async () => {

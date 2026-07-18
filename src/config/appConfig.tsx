@@ -1,11 +1,6 @@
 import React from "react";
 import type { AppId } from "@/lib/api/types";
-import {
-  ClaudeIcon,
-  CodexIcon,
-  GeminiIcon,
-  OpenClawIcon,
-} from "@/components/BrandIcons";
+import { ClaudeIcon, CodexIcon, OpenClawIcon } from "@/components/BrandIcons";
 import { ProviderIcon } from "@/components/ProviderIcon";
 
 export interface AppConfig {
@@ -19,24 +14,22 @@ export const APP_IDS: AppId[] = [
   "claude",
   "claude-desktop",
   "codex",
-  "gemini",
   "grokbuild",
   "opencode",
   "openclaw",
-  "hermes",
+  "kimicode",
 ];
 
-/** App IDs shown in Skills panels (excludes OpenClaw — it doesn't support Skills) */
+/** App IDs shown in Skills panels (excludes OpenClaw, which has its own workspace tools) */
 export const SKILLS_APP_IDS: AppId[] = [
   "claude",
   "codex",
-  "gemini",
   "grokbuild",
   "opencode",
-  "hermes",
+  "kimicode",
 ];
 
-/** App IDs shown in MCP panels (excludes OpenClaw) */
+/** App IDs shown in MCP panels (excludes OpenClaw, which has its own workspace tools) */
 export const MCP_APP_IDS: AppId[] = [...SKILLS_APP_IDS];
 
 export const APP_ICON_MAP: Record<AppId, AppConfig> = {
@@ -63,14 +56,6 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
       "bg-green-500/10 ring-1 ring-green-500/20 hover:bg-green-500/20 text-green-600 dark:text-green-400",
     badgeClass:
       "bg-green-500/10 text-green-700 dark:text-green-300 hover:bg-green-500/20 border-0 gap-1.5",
-  },
-  gemini: {
-    label: "Gemini",
-    icon: <GeminiIcon size={14} />,
-    activeClass:
-      "bg-blue-500/10 ring-1 ring-blue-500/20 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400",
-    badgeClass:
-      "bg-blue-500/10 text-blue-700 dark:text-blue-300 hover:bg-blue-500/20 border-0 gap-1.5",
   },
   grokbuild: {
     label: "Grok Build",
@@ -110,12 +95,12 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
     badgeClass:
       "bg-rose-500/10 text-rose-700 dark:text-rose-300 hover:bg-rose-500/20 border-0 gap-1.5",
   },
-  hermes: {
-    label: "Hermes",
+  kimicode: {
+    label: "Kimi Code",
     icon: (
       <ProviderIcon
-        icon="hermes"
-        name="Hermes"
+        icon="moonshot"
+        name="Kimi Code"
         size={14}
         showFallback={false}
       />

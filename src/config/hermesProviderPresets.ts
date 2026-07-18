@@ -1,6 +1,6 @@
 /**
- * Hermes Agent provider presets configuration
- * Hermes uses custom_providers array in config.yaml
+ * Legacy module name kept for import compatibility; Kimi Code uses
+ * providers/models tables in config.toml.
  */
 import type { ProviderCategory } from "../types";
 import type { PresetTheme, TemplateValueConfig } from "./claudeProviderPresets";
@@ -25,7 +25,12 @@ export function isHermesReadOnlyProvider(settingsConfig: unknown): boolean {
   const marker = (settingsConfig as Record<string, unknown>)[
     HERMES_PROVIDER_SOURCE_FIELD
   ];
-  return marker === HERMES_PROVIDER_SOURCE_DICT;
+  const config = settingsConfig as Record<string, unknown>;
+  return (
+    marker === HERMES_PROVIDER_SOURCE_DICT ||
+    config._cc_managed === true ||
+    (config.oauth !== null && typeof config.oauth === "object")
+  );
 }
 
 /**
@@ -585,7 +590,7 @@ export const hermesProviderPresets: HermesProviderPreset[] = [
     },
     isOfficial: true,
     category: "official",
-    icon: "hermes",
+    icon: "kimicode",
     iconColor: "#7C3AED",
     suggestedDefaults: {
       model: { default: "Hermes-4-405B", provider: "nous" },

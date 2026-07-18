@@ -35,14 +35,16 @@ pub enum ProfileScope {
     #[serde(rename = "claude-desktop")]
     ClaudeDesktop,
     Codex,
+    KimiCode,
 }
 
 impl ProfileScope {
     /// 全部分组（扩展新分组时同步扩展 apps/for_app 与前端 scope.ts 镜像）
-    pub const ALL: [ProfileScope; 3] = [
+    pub const ALL: [ProfileScope; 4] = [
         ProfileScope::Claude,
         ProfileScope::ClaudeDesktop,
         ProfileScope::Codex,
+        ProfileScope::KimiCode,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -50,6 +52,7 @@ impl ProfileScope {
             ProfileScope::Claude => "claude",
             ProfileScope::ClaudeDesktop => "claude-desktop",
             ProfileScope::Codex => "codex",
+            ProfileScope::KimiCode => "kimicode",
         }
     }
 
@@ -58,6 +61,7 @@ impl ProfileScope {
             "claude" => Ok(ProfileScope::Claude),
             "claude-desktop" => Ok(ProfileScope::ClaudeDesktop),
             "codex" => Ok(ProfileScope::Codex),
+            "kimicode" | "kimi-code" | "hermes" => Ok(ProfileScope::KimiCode),
             other => Err(AppError::InvalidInput(format!(
                 "Unknown profile scope: {other}"
             ))),
@@ -70,6 +74,7 @@ impl ProfileScope {
             ProfileScope::Claude => &[AppType::Claude],
             ProfileScope::ClaudeDesktop => &[AppType::ClaudeDesktop],
             ProfileScope::Codex => &[AppType::Codex],
+            ProfileScope::KimiCode => &[AppType::KimiCode],
         }
     }
 
@@ -79,6 +84,7 @@ impl ProfileScope {
             AppType::Claude => Some(ProfileScope::Claude),
             AppType::ClaudeDesktop => Some(ProfileScope::ClaudeDesktop),
             AppType::Codex => Some(ProfileScope::Codex),
+            AppType::KimiCode => Some(ProfileScope::KimiCode),
             _ => None,
         }
     }
@@ -92,6 +98,8 @@ pub struct PerApp<T> {
     #[serde(rename = "claude-desktop")]
     pub claude_desktop: T,
     pub codex: T,
+    #[serde(rename = "kimicode", alias = "hermes")]
+    pub kimicode: T,
 }
 
 impl<T> PerApp<T> {
@@ -100,6 +108,7 @@ impl<T> PerApp<T> {
             AppType::Claude => Some(&self.claude),
             AppType::ClaudeDesktop => Some(&self.claude_desktop),
             AppType::Codex => Some(&self.codex),
+            AppType::KimiCode => Some(&self.kimicode),
             _ => None,
         }
     }
@@ -109,6 +118,7 @@ impl<T> PerApp<T> {
             AppType::Claude => Some(&mut self.claude),
             AppType::ClaudeDesktop => Some(&mut self.claude_desktop),
             AppType::Codex => Some(&mut self.codex),
+            AppType::KimiCode => Some(&mut self.kimicode),
             _ => None,
         }
     }
@@ -193,6 +203,24 @@ fn plan_toggles(
 pub struct ProfileService;
 
 impl ProfileService {
+    /// Resolve the provider that is actually active for a profile snapshot.
+    /// Kimi Code is additive, so its active provider comes from `default_model`
+    /// rather than the database `is_current` flag used by switch-mode apps.
+    pub(crate) fn current_provider_id(
+        state: &AppState,
+        app: &AppType,
+    ) -> Result<Option<String>, AppError> {
+        if matches!(app, AppType::KimiCode) {
+            let Some(provider_id) = crate::kimi_config::get_default_provider()? else {
+                return Ok(None);
+            };
+            let providers = state.db.get_all_providers(app.as_str())?;
+            return Ok(providers.contains_key(&provider_id).then_some(provider_id));
+        }
+
+        crate::settings::get_effective_current_provider(&state.db, app)
+    }
+
     /// 抓取分组内应用的当前配置状态生成快照（组外槽位保持默认值）
     pub fn snapshot_current(
         state: &AppState,
@@ -204,7 +232,7 @@ impl ProfileService {
 
         for app in scope.apps().iter() {
             if let Some(slot) = payload.providers.get_mut(app) {
-                *slot = crate::settings::get_effective_current_provider(&state.db, app)?;
+                *slot = Self::current_provider_id(state, app)?;
             }
             if let Some(slot) = payload.mcp.get_mut(app) {
                 *slot = Some(
@@ -379,7 +407,7 @@ impl ProfileService {
                         "[{app_str}] provider '{target_pid}' no longer exists, skipped"
                     ));
                 } else {
-                    let current = crate::settings::get_effective_current_provider(&state.db, app)?;
+                    let current = Self::current_provider_id(state, app)?;
                     if current.as_deref() != Some(target_pid.as_str()) {
                         match ProviderService::switch(state, app.clone(), target_pid) {
                             Ok(result) => warnings.extend(result.warnings),
@@ -480,21 +508,25 @@ mod tests {
                 claude: Some("p1".into()),
                 claude_desktop: Some("d1".into()),
                 codex: None,
+                kimicode: Some("k1".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m1", "m2"])),
                 claude_desktop: Some(vec![]),
                 codex: None,
+                kimicode: Some(ids(&["km1"])),
             },
             skills: PerApp {
                 claude: Some(vec![]),
                 claude_desktop: Some(vec![]),
                 codex: Some(ids(&["s1"])),
+                kimicode: Some(ids(&["ks1"])),
             },
             prompts: PerApp {
                 claude: None,
                 claude_desktop: None,
                 codex: Some("pr1".into()),
+                kimicode: Some("kpr1".into()),
             },
         };
         let json = serde_json::to_string(&payload).unwrap();
@@ -502,6 +534,8 @@ mod tests {
         assert!(json.contains("\"claude\""));
         assert!(json.contains("\"claude-desktop\""));
         assert!(json.contains("\"codex\""));
+        assert!(json.contains("\"kimicode\""));
+        assert!(!json.contains("\"hermes\""));
         let back: ProfilePayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, payload);
     }
@@ -516,13 +550,22 @@ mod tests {
         assert_eq!(back.providers.claude, Some("p1".to_string()));
         assert_eq!(back.providers.claude_desktop, None);
         assert_eq!(back.providers.codex, None);
+        assert_eq!(back.providers.kimicode, None);
         assert_eq!(back.mcp.claude, Some(ids(&["m1"])));
         assert_eq!(back.mcp.claude_desktop, None);
         assert_eq!(back.mcp.codex, None, "missing slot means untouched");
+        assert_eq!(back.mcp.kimicode, None, "missing slot means untouched");
         assert_eq!(back.prompts.codex, None);
 
         let empty: ProfilePayload = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, ProfilePayload::default());
+
+        let legacy: ProfilePayload = serde_json::from_str(
+            r#"{"providers":{"hermes":"legacy-kimi"},"mcp":{"hermes":["m1"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.providers.kimicode.as_deref(), Some("legacy-kimi"));
+        assert_eq!(legacy.mcp.kimicode, Some(ids(&["m1"])));
     }
 
     #[test]
@@ -533,11 +576,13 @@ mod tests {
                 claude: Some("p1".into()),
                 claude_desktop: Some("d1".into()),
                 codex: Some("c1".into()),
+                kimicode: Some("k1".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m1"])),
                 claude_desktop: Some(vec![]),
                 codex: Some(ids(&["m9"])),
+                kimicode: Some(ids(&["km9"])),
             },
             ..Default::default()
         };
@@ -547,11 +592,13 @@ mod tests {
                 claude: Some("p2".into()),
                 claude_desktop: None,
                 codex: Some("SHOULD-NOT-LEAK".into()),
+                kimicode: Some("SHOULD-NOT-LEAK".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m2"])),
                 claude_desktop: Some(vec![]),
                 codex: None,
+                kimicode: None,
             },
             ..Default::default()
         };
@@ -567,6 +614,8 @@ mod tests {
         // codex 侧完好：既没被覆盖也没被 fresh 的值污染
         assert_eq!(payload.providers.codex, Some("c1".to_string()));
         assert_eq!(payload.mcp.codex, Some(ids(&["m9"])));
+        assert_eq!(payload.providers.kimicode, Some("k1".to_string()));
+        assert_eq!(payload.mcp.kimicode, Some(ids(&["km9"])));
     }
 
     #[test]
@@ -575,12 +624,14 @@ mod tests {
         assert!(!payload.scope_captured(ProfileScope::Claude));
         assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
+        assert!(!payload.scope_captured(ProfileScope::KimiCode));
 
         // 只拍过 claude 组（哪怕拍到的是空集）
         payload.mcp.claude = Some(vec![]);
         assert!(payload.scope_captured(ProfileScope::Claude));
         assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
+        assert!(!payload.scope_captured(ProfileScope::KimiCode));
 
         // Desktop 槽位属于独立的 claude-desktop 组
         let mut desktop_only = ProfilePayload::default();
@@ -595,7 +646,8 @@ mod tests {
         assert!(per.get(&AppType::Claude).is_some());
         assert!(per.get(&AppType::ClaudeDesktop).is_some());
         assert!(per.get(&AppType::Codex).is_some());
-        assert!(per.get(&AppType::Gemini).is_none());
+        assert!(per.get(&AppType::KimiCode).is_some());
+        assert!(per.get(&AppType::GrokBuild).is_none());
     }
 
     #[test]
@@ -622,12 +674,13 @@ mod tests {
             &[AppType::ClaudeDesktop]
         );
         assert_eq!(ProfileScope::Codex.apps(), &[AppType::Codex]);
+        assert_eq!(ProfileScope::KimiCode.apps(), &[AppType::KimiCode]);
         for scope in ProfileScope::ALL {
             for app in scope.apps() {
                 assert_eq!(ProfileScope::for_app(app), Some(scope));
             }
         }
-        assert_eq!(ProfileScope::for_app(&AppType::Gemini), None);
+        assert_eq!(ProfileScope::for_app(&AppType::GrokBuild), None);
     }
 
     #[test]

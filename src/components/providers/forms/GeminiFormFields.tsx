@@ -195,7 +195,7 @@ export function GeminiFormFields({
       {/* 端点测速弹窗 */}
       {shouldShowSpeedTest && isEndpointModalOpen && (
         <EndpointSpeedTest
-          appId="gemini"
+          appId={"claude" as any}
           providerId={providerId}
           value={baseUrl}
           onChange={onBaseUrlChange}

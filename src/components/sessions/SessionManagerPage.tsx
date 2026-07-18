@@ -87,8 +87,7 @@ type ProviderFilter =
   | "claude"
   | "opencode"
   | "openclaw"
-  | "gemini"
-  | "hermes";
+  | "kimicode";
 
 type SessionListViewMode = "flat" | "grouped";
 
@@ -1118,14 +1117,14 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                 <span>OpenClaw</span>
                               </div>
                             </SelectItem>
-                            <SelectItem value="gemini">
+                            <SelectItem value="kimicode">
                               <div className="flex items-center gap-2">
                                 <ProviderIcon
-                                  icon="gemini"
-                                  name="gemini"
+                                  icon="kimi"
+                                  name="kimi"
                                   size={14}
                                 />
-                                <span>Gemini CLI</span>
+                                <span>Kimi Code</span>
                               </div>
                             </SelectItem>
                           </SelectContent>

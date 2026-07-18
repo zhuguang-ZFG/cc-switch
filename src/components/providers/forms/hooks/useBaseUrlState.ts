@@ -65,7 +65,7 @@ export function useBaseUrlState({
 
   // 从Claude配置同步到 state（Gemini）
   useEffect(() => {
-    if (appType !== "gemini") return;
+    if ((appType as string) !== "gemini") return;
     // 只有 official 类别不显示 Base URL 输入框，其他类别都需要回填
     if (category === "official") return;
     if (isUpdatingRef.current) return;

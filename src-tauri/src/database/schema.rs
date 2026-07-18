@@ -4,7 +4,7 @@
 
 use super::{lock_conn, Database, SCHEMA_VERSION};
 use crate::error::AppError;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -527,6 +527,108 @@ impl Database {
                 conn.execute("ROLLBACK TO schema_migration;", []).ok();
                 conn.execute("RELEASE schema_migration;", []).ok();
                 Err(e)
+            }
+        }
+    }
+
+    /// Migrate fork-owned data without consuming the upstream SQLite schema
+    /// version namespace. This keeps future upstream migrations replayable and
+    /// allows an official build to open the database after a fork rollback.
+    pub(crate) fn apply_fork_data_migrations(&self) -> Result<(), AppError> {
+        const MARKER: &str = "fork_migration_kimicode_v1";
+        let conn = lock_conn!(self.conn);
+        let applied = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [MARKER],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        if applied.as_deref() == Some("done") {
+            return Ok(());
+        }
+
+        conn.execute_batch("SAVEPOINT fork_kimicode_migration; PRAGMA defer_foreign_keys = ON;")
+            .map_err(|e| AppError::Database(format!("开启 Kimi 数据迁移失败: {e}")))?;
+        let result = (|| {
+            // Copy legacy rows first so foreign-key children can be retagged.
+            conn.execute(
+                "INSERT OR IGNORE INTO providers
+                 (id, app_type, name, settings_config, website_url, category,
+                  created_at, sort_index, notes, icon, icon_color, meta,
+                  is_current, in_failover_queue)
+                 SELECT id, 'kimicode', name, settings_config, website_url, category,
+                        created_at, sort_index, notes, icon, icon_color, meta,
+                        is_current, in_failover_queue
+                 FROM providers WHERE app_type = 'hermes'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE provider_endpoints SET app_type = 'kimicode' WHERE app_type = 'hermes'",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR IGNORE INTO provider_health
+                 (provider_id, app_type, is_healthy, consecutive_failures,
+                  last_success_at, last_failure_at, last_error, updated_at)
+                 SELECT provider_id, 'kimicode', is_healthy, consecutive_failures,
+                        last_success_at, last_failure_at, last_error, updated_at
+                 FROM provider_health WHERE app_type = 'hermes'",
+                [],
+            )?;
+            conn.execute("DELETE FROM provider_health WHERE app_type = 'hermes'", [])?;
+            conn.execute("DELETE FROM providers WHERE app_type = 'hermes'", [])?;
+
+            conn.execute(
+                "INSERT OR IGNORE INTO prompts
+                 (id, app_type, name, content, description, enabled, created_at, updated_at)
+                 SELECT id, 'kimicode', name, content, description, enabled, created_at, updated_at
+                 FROM prompts WHERE app_type = 'hermes'",
+                [],
+            )?;
+            conn.execute("DELETE FROM prompts WHERE app_type = 'hermes'", [])?;
+
+            // These tables have no provider foreign key. Retagging preserves
+            // historical usage and diagnostics for the renamed application.
+            for table in [
+                "proxy_request_logs",
+                "stream_check_logs",
+                "usage_daily_rollups",
+            ] {
+                let sql = format!(
+                    "UPDATE OR IGNORE {table} SET app_type = 'kimicode' WHERE app_type = 'hermes'"
+                );
+                conn.execute(&sql, [])?;
+            }
+            conn.execute(
+                "INSERT OR IGNORE INTO proxy_live_backup
+                 (app_type, original_config, backed_up_at)
+                 SELECT 'kimicode', original_config, backed_up_at
+                 FROM proxy_live_backup WHERE app_type = 'hermes'",
+                [],
+            )?;
+            conn.execute(
+                "DELETE FROM proxy_live_backup WHERE app_type = 'hermes'",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, 'done')",
+                [MARKER],
+            )?;
+            Ok::<(), rusqlite::Error>(())
+        })();
+
+        match result {
+            Ok(()) => conn
+                .execute_batch("RELEASE fork_kimicode_migration;")
+                .map_err(|e| AppError::Database(format!("提交 Kimi 数据迁移失败: {e}"))),
+            Err(error) => {
+                conn.execute_batch(
+                    "ROLLBACK TO fork_kimicode_migration; RELEASE fork_kimicode_migration;",
+                )
+                .ok();
+                Err(AppError::Database(format!("Kimi 数据迁移失败: {error}")))
             }
         }
     }
@@ -3019,6 +3121,71 @@ mod tests {
         assert_eq!(mcp_values, (1, 0));
         assert_eq!(skill_values, (1, 0));
 
+        Ok(())
+    }
+
+    #[test]
+    fn fork_migration_retags_legacy_hermes_provider_data_without_schema_bump(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO providers
+                 (id, app_type, name, settings_config, meta, is_current)
+                 VALUES ('legacy', 'hermes', 'Legacy Kimi', '{}', '{}', 1)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO provider_endpoints (provider_id, app_type, url)
+                 VALUES ('legacy', 'hermes', 'https://api.example.com')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO provider_health
+                 (provider_id, app_type, is_healthy, updated_at)
+                 VALUES ('legacy', 'hermes', 1, 'now')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO prompts (id, app_type, name, content)
+                 VALUES ('prompt', 'hermes', 'Legacy Prompt', 'content')",
+                [],
+            )?;
+        }
+        let schema_version = {
+            let conn = lock_conn!(db.conn);
+            Database::get_user_version(&conn)?
+        };
+
+        db.apply_fork_data_migrations()?;
+        db.apply_fork_data_migrations()?;
+
+        let conn = lock_conn!(db.conn);
+        assert_eq!(Database::get_user_version(&conn)?, schema_version);
+        for table in [
+            "providers",
+            "provider_endpoints",
+            "provider_health",
+            "prompts",
+        ] {
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE app_type = 'hermes'");
+            let legacy_count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
+            assert_eq!(legacy_count, 0, "legacy rows remain in {table}");
+        }
+        let migrated_provider: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers
+             WHERE id = 'legacy' AND app_type = 'kimicode' AND is_current = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(migrated_provider, 1);
+        let marker: String = conn.query_row(
+            "SELECT value FROM settings WHERE key = 'fork_migration_kimicode_v1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(marker, "done");
         Ok(())
     }
 }

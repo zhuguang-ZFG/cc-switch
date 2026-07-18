@@ -1,67 +1,68 @@
-import { invoke } from "@tauri-apps/api/core";
-import type {
-  HermesMemoryKind,
-  HermesMemoryLimits,
-  HermesModelConfig,
-} from "@/types";
-
 /**
- * Hermes Agent configuration API (CC Switch side).
+ * Kimi Code configuration API (legacy module name kept for fewer import churn).
  *
- * CC Switch intentionally keeps its Hermes surface minimal — deep configuration
- * (model, agent behavior, env vars, skills, cron, logs, analytics) lives in
- * the Hermes Web UI at http://127.0.0.1:9119. CC Switch only reads the `model`
- * section to highlight the active provider and launches the Hermes Web UI for
- * everything else. Writes to `model` happen implicitly via
- * `apply_switch_defaults` when the user switches providers.
+ * Memory / Web UI from Hermes are stubs that throw clear errors.
  */
+
+export interface HermesModelConfig {
+  /** Active provider id (best-effort from default_model prefix) */
+  provider?: string | null;
+  default?: string | null;
+}
+
+export type HermesMemoryKind = "memory" | "user";
+
+export interface HermesMemoryLimits {
+  maxChars?: number;
+  memory?: number;
+  user?: number;
+  memoryEnabled?: boolean;
+  userEnabled?: boolean;
+}
+
 export const hermesApi = {
   async getModelConfig(): Promise<HermesModelConfig | null> {
-    return await invoke("get_hermes_model_config");
+    try {
+      const [defaultModel, provider] = await Promise.all([
+        invokeOptionalString("get_kimicode_default_model"),
+        invokeOptionalString("get_kimicode_default_provider"),
+      ]);
+      if (!defaultModel) return null;
+      return { provider, default: defaultModel };
+    } catch {
+      return null;
+    }
   },
 
-  /**
-   * Probe the local Hermes Web UI and open it in the system browser.
-   * Optional `path` lets callers deep-link to specific pages like `/config`.
-   */
-  async openWebUI(path?: string): Promise<void> {
-    await invoke("open_hermes_web_ui", { path: path ?? null });
+  async openWebUI(_path?: string | null): Promise<void> {
+    throw new Error("Hermes Web UI is not available; use Kimi Code CLI");
   },
 
-  /** Open the preferred terminal and run `hermes dashboard` (non-blocking). */
   async launchDashboard(): Promise<void> {
-    await invoke("launch_hermes_dashboard");
+    throw new Error("Hermes dashboard is not available; use Kimi Code CLI");
   },
 
-  /**
-   * Read one of Hermes' memory blobs (`MEMORY.md` or `USER.md`). Returns an
-   * empty string when the file hasn't been created yet.
-   */
-  async getMemory(kind: HermesMemoryKind): Promise<string> {
-    return await invoke("get_hermes_memory", { kind });
+  async getMemory(_kind: HermesMemoryKind): Promise<string> {
+    throw new Error("Hermes memory is not available");
   },
 
-  /** Atomically overwrite a Hermes memory file. */
-  async setMemory(kind: HermesMemoryKind, content: string): Promise<void> {
-    await invoke("set_hermes_memory", { kind, content });
+  async setMemory(_kind: HermesMemoryKind, _content: string): Promise<void> {
+    throw new Error("Hermes memory is not available");
   },
 
-  /**
-   * Character budgets + enable flags for both memory blobs, read from
-   * config.yaml with Hermes defaults as fallback.
-   */
   async getMemoryLimits(): Promise<HermesMemoryLimits> {
-    return await invoke("get_hermes_memory_limits");
+    return {};
   },
 
-  /**
-   * Toggle the on/off flag for one memory blob. Other fields in the `memory:`
-   * section (budgets, external provider config) are preserved.
-   */
   async setMemoryEnabled(
-    kind: HermesMemoryKind,
-    enabled: boolean,
+    _kind: HermesMemoryKind,
+    _enabled: boolean,
   ): Promise<void> {
-    await invoke("set_hermes_memory_enabled", { kind, enabled });
+    throw new Error("Hermes memory is not available");
   },
 };
+
+async function invokeOptionalString(cmd: string): Promise<string | null> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<string | null>(cmd);
+}

@@ -54,6 +54,18 @@ export const handlers = [
     return success(getCurrentProviderId(app));
   }),
 
+  http.post(`${TAURI_ENDPOINT}/list_profiles`, () =>
+    success({
+      profiles: [],
+      currentIds: {
+        claude: null,
+        claudeDesktop: null,
+        codex: null,
+        kimicode: null,
+      },
+    }),
+  ),
+
   http.post(
     `${TAURI_ENDPOINT}/update_providers_sort_order`,
     async ({ request }) => {

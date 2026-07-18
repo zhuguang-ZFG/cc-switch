@@ -84,10 +84,10 @@ export function useApiKeyLink({
       appId === "claude" ||
       appId === "claude-desktop" ||
       appId === "codex" ||
-      appId === "gemini" ||
+      (appId as string) === "gemini" ||
       appId === "opencode" ||
       appId === "openclaw" ||
-      appId === "hermes"
+      appId === "kimicode"
         ? shouldShowApiKeyLink
         : false,
     websiteUrl: getWebsiteUrl,
