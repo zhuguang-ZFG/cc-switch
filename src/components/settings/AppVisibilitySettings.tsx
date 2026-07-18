@@ -90,11 +90,19 @@ export function AppVisibilitySettings({
     const currentlyVisible = isAppVisible(visibleApps, appId);
     if (currentlyVisible && visibleCount <= 1) return;
 
+    const canonicalVisibleApps = { ...visibleApps };
+    if (
+      canonicalVisibleApps.kimicode === undefined &&
+      canonicalVisibleApps.hermes !== undefined
+    ) {
+      canonicalVisibleApps.kimicode = canonicalVisibleApps.hermes;
+    }
+    delete canonicalVisibleApps.hermes;
+
     onChange({
       visibleApps: {
-        ...visibleApps,
+        ...canonicalVisibleApps,
         [appId]: !currentlyVisible,
-        ...(appId === "kimicode" ? { hermes: !currentlyVisible } : {}),
       },
     });
   };
