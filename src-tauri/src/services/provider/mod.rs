@@ -1838,6 +1838,137 @@ requires_openai_auth = true
         });
     }
 
+    /// During takeover, Kimi CRUD must update the restore backup and leave the
+    /// live `cc-switch-proxy` projection intact (PRD R5).
+    #[test]
+    #[serial]
+    fn kimicode_update_during_takeover_writes_backup_not_live() {
+        with_test_home(|state, home| {
+            std::env::set_var("KIMI_CODE_HOME", home.join("kimi-code-home"));
+            crate::settings::reload_settings().expect("reload settings");
+
+            let provider = kimi_provider("demo");
+            ProviderService::add(state, AppType::KimiCode, provider.clone(), true)
+                .expect("add demo");
+
+            let original = crate::kimi_config::read_config_text().expect("read live");
+            futures::executor::block_on(
+                state
+                    .db
+                    .save_live_backup(AppType::KimiCode.as_str(), &original),
+            )
+            .expect("seed backup");
+            crate::kimi_config::apply_proxy_takeover(
+                "http://127.0.0.1:15721/kimicode/v1",
+                "PROXY_MANAGED",
+            )
+            .expect("apply takeover");
+
+            let mut edited = provider.clone();
+            edited.settings_config["base_url"] =
+                Value::String("https://updated.example/v1".into());
+            ProviderService::update(state, AppType::KimiCode, None, edited)
+                .expect("update during takeover");
+
+            let live = crate::kimi_config::read_config_text().expect("live after update");
+            assert!(
+                live.contains("cc-switch-proxy") && live.contains("PROXY_MANAGED"),
+                "live must keep proxy projection, got:\n{live}"
+            );
+            assert!(
+                !live.contains("updated.example"),
+                "edited base_url must not land in live during takeover"
+            );
+
+            let backup = futures::executor::block_on(state.db.get_live_backup("kimicode"))
+                .expect("read backup")
+                .expect("backup exists");
+            assert!(
+                backup.original_config.contains("updated.example"),
+                "backup must receive the edit, got:\n{}",
+                backup.original_config
+            );
+
+            std::env::remove_var("KIMI_CODE_HOME");
+        });
+    }
+
+    /// Kimi Code must maintain Claude/Codex-aligned current SSOT even outside
+    /// proxy takeover: switch updates settings + DB is_current, live default_model,
+    /// and proxy select_providers (failover off) returns the switched provider.
+    #[test]
+    #[serial]
+    fn kimicode_switch_without_takeover_updates_current_ssot_and_proxy_routing() {
+        with_test_home(|state, home| {
+            std::env::set_var("KIMI_CODE_HOME", home.join("kimi-code-home"));
+            crate::settings::reload_settings().expect("reload settings");
+
+            let a = kimi_provider("provider-a");
+            let b = kimi_provider("provider-b");
+            ProviderService::add(state, AppType::KimiCode, a.clone(), true)
+                .expect("add provider A");
+            ProviderService::add(state, AppType::KimiCode, b.clone(), true)
+                .expect("add provider B");
+
+            // First add seeds current to A (Claude/Codex parity for first provider).
+            assert_eq!(
+                ProviderService::current(state, AppType::KimiCode).expect("current after add"),
+                "provider-a"
+            );
+            assert_eq!(
+                crate::settings::get_effective_current_provider(&state.db, &AppType::KimiCode)
+                    .expect("effective current")
+                    .as_deref(),
+                Some("provider-a")
+            );
+
+            ProviderService::switch(state, AppType::KimiCode, "provider-b")
+                .expect("switch to B without takeover");
+
+            assert_eq!(
+                ProviderService::current(state, AppType::KimiCode).expect("current after switch"),
+                "provider-b",
+                "UI getCurrent must report the switched Kimi provider"
+            );
+            assert_eq!(
+                crate::settings::get_current_provider(&AppType::KimiCode).as_deref(),
+                Some("provider-b")
+            );
+            assert_eq!(
+                state
+                    .db
+                    .get_current_provider("kimicode")
+                    .expect("db current")
+                    .as_deref(),
+                Some("provider-b")
+            );
+            assert_eq!(
+                crate::kimi_config::get_default_model()
+                    .expect("default model")
+                    .as_deref(),
+                Some("provider-b/gpt-4o"),
+                "live default_model must follow the switch"
+            );
+
+            // Proxy routing with failover off uses current SSOT (same as Claude/Codex).
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let selected = runtime.block_on(async {
+                let router = crate::proxy::provider_router::ProviderRouter::new(state.db.clone());
+                router
+                    .select_providers("kimicode")
+                    .await
+                    .expect("select kimi providers")
+            });
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].id, "provider-b");
+
+            std::env::remove_var("KIMI_CODE_HOME");
+        });
+    }
+
     #[test]
     #[serial]
     fn legacy_additive_provider_still_errors_on_live_config_parse_failure() {
@@ -2128,6 +2259,46 @@ impl ProviderService {
             .live_config_managed = Some(managed);
     }
 
+    /// True when Kimi live is owned by proxy takeover (backup present or live
+    /// has the cc-switch-proxy projection). During takeover, CRUD must update
+    /// the restore backup — never the live proxy ingress (PRD R5 / Claude parity).
+    fn kimi_proxy_owns_live(state: &AppState) -> bool {
+        futures::executor::block_on(state.db.get_live_backup(AppType::KimiCode.as_str()))
+            .ok()
+            .flatten()
+            .is_some()
+            || state
+                .proxy_service
+                .detect_takeover_in_live_config_for_app(&AppType::KimiCode)
+    }
+
+    /// Project a Kimi provider upsert into the restore backup while live stays
+    /// on `cc-switch-proxy`.
+    fn kimi_update_takeover_backup(
+        state: &AppState,
+        provider: &Provider,
+    ) -> Result<(), AppError> {
+        futures::executor::block_on(
+            state
+                .proxy_service
+                .update_live_backup_from_provider(AppType::KimiCode.as_str(), provider),
+        )
+        .map_err(|e| AppError::Message(format!("更新 Kimi Code 接管备份失败: {e}")))
+    }
+
+    /// Remove a Kimi provider from the restore backup snapshot only.
+    fn kimi_remove_from_takeover_backup(state: &AppState, id: &str) -> Result<(), AppError> {
+        let backup = futures::executor::block_on(state.db.get_live_backup(AppType::KimiCode.as_str()))
+            .map_err(|e| AppError::Message(format!("读取 Kimi Code 备份失败: {e}")))?;
+        let Some(backup) = backup else {
+            return Ok(());
+        };
+        let updated = crate::kimi_config::remove_provider_from_text(&backup.original_config, id)
+            .map_err(|e| AppError::Message(format!("从 Kimi 备份移除供应商失败: {e}")))?;
+        futures::executor::block_on(state.db.save_live_backup(AppType::KimiCode.as_str(), &updated))
+            .map_err(|e| AppError::Message(format!("写入 Kimi Code 备份失败: {e}")))
+    }
+
     fn normalize_usage_script_credential_overrides(app_type: &AppType, provider: &mut Provider) {
         let current_credentials = provider.resolve_usage_credentials(app_type);
 
@@ -2208,10 +2379,13 @@ impl ProviderService {
     /// 优先从本地 settings 读取，验证后 fallback 到数据库的 is_current 字段。
     /// 这确保了云同步场景下多设备可以独立选择供应商，且返回的 ID 一定有效。
     ///
-    /// 对于累加模式应用（OpenCode, OpenClaw），不存在"当前供应商"概念，直接返回空字符串。
+    /// 对于纯累加模式应用（OpenCode, OpenClaw），不存在"当前供应商"概念，直接返回空字符串。
+    /// Kimi Code 虽为 additive live（多 provider 共存于 config.toml），但仍维护与
+    /// Claude/Codex 对齐的 current SSOT，供代理路由与 UI 使用。
     pub fn current(state: &AppState, app_type: AppType) -> Result<String, AppError> {
-        // Additive mode apps have no "current" provider concept
-        if app_type.is_additive_mode() {
+        // Pure additive apps have no "current" provider concept.
+        // Kimi Code is hybrid: additive live projection + exclusive current SSOT.
+        if matches!(app_type, AppType::OpenCode | AppType::OpenClaw) {
             return Ok(String::new());
         }
         crate::settings::get_effective_current_provider(&state.db, &app_type)
@@ -2239,7 +2413,7 @@ impl ProviderService {
         // Save to database
         state.db.save_provider(app_type.as_str(), &provider)?;
 
-        // Additive mode apps (OpenCode, OpenClaw): optionally write to live config.
+        // Additive mode apps (OpenCode, OpenClaw, Kimi Code): optionally write to live config.
         if app_type.is_additive_mode() {
             // OMO / OMO Slim providers use exclusive mode and write to dedicated config file.
             if matches!(app_type, AppType::OpenCode)
@@ -2249,14 +2423,53 @@ impl ProviderService {
                 // Users must explicitly switch/apply an OMO provider to activate it.
                 return Ok(true);
             }
+
+            // Kimi Code maintains Claude/Codex-aligned current SSOT for proxy routing.
+            // First provider becomes current; subsequent adds leave current unchanged.
+            let seed_kimi_current = matches!(app_type, AppType::KimiCode)
+                && state.db.get_current_provider(app_type.as_str())?.is_none();
+
             if !add_to_live {
+                if seed_kimi_current {
+                    state
+                        .db
+                        .set_current_provider(app_type.as_str(), &provider.id)?;
+                    crate::settings::set_current_provider(&app_type, Some(provider.id.as_str()))?;
+                }
                 return Ok(true);
             }
+
+            // During proxy takeover, never write live (would clobber cc-switch-proxy).
+            // Project into the restore backup instead (PRD R5).
+            if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
+                Self::kimi_update_takeover_backup(state, &provider)?;
+                if seed_kimi_current {
+                    state
+                        .db
+                        .set_current_provider(app_type.as_str(), &provider.id)?;
+                    crate::settings::set_current_provider(&app_type, Some(provider.id.as_str()))?;
+                }
+                return Ok(true);
+            }
+
+            if matches!(app_type, AppType::KimiCode) && seed_kimi_current {
+                // Project provider + default_model together (same as switch).
+                crate::kimi_config::apply_switch_defaults(
+                    &provider.id,
+                    &provider.settings_config,
+                )?;
+                state
+                    .db
+                    .set_current_provider(app_type.as_str(), &provider.id)?;
+                crate::settings::set_current_provider(&app_type, Some(provider.id.as_str()))?;
+                return Ok(true);
+            }
+
             write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
             return Ok(true);
         }
 
-        // For other apps: Check if sync is needed (if this is current provider, or no current provider)
+        // For exclusive apps: Check if sync is needed (if this is current provider, or no current provider)
         let current = state.db.get_current_provider(app_type.as_str())?;
         if current.is_none() {
             // No current provider, set as current and sync
@@ -2418,6 +2631,14 @@ impl ProviderService {
             if !live_config_managed {
                 return Ok(true);
             }
+
+            // Kimi takeover: update restore backup only (PRD R5). Live stays on
+            // the fixed local proxy projection.
+            if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
+                Self::kimi_update_takeover_backup(state, &provider)?;
+                return Ok(true);
+            }
+
             write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
             return Ok(true);
         }
@@ -2544,6 +2765,22 @@ impl ProviderService {
             let live_managed = existing
                 .as_ref()
                 .and_then(Self::provider_live_config_managed);
+
+            // Kimi under takeover: remove from restore backup only, never live.
+            // Refuse deleting the routing SSOT target (Claude/Codex parity).
+            if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
+                let local_current = crate::settings::get_current_provider(&app_type);
+                let db_current = state.db.get_current_provider(app_type.as_str())?;
+                if local_current.as_deref() == Some(id) || db_current.as_deref() == Some(id) {
+                    return Err(AppError::Message(
+                        "无法删除当前正在使用的供应商".to_string(),
+                    ));
+                }
+                Self::kimi_remove_from_takeover_backup(state, id)?;
+                state.db.delete_provider(app_type.as_str(), id)?;
+                return Ok(());
+            }
+
             if Self::check_live_config_exists(&app_type, id, live_managed)? {
                 match app_type {
                     AppType::OpenCode => remove_opencode_provider_from_live(id)?,
@@ -2621,7 +2858,11 @@ impl ProviderService {
                 remove_openclaw_provider_from_live(id)?;
             }
             AppType::KimiCode => {
-                remove_kimicode_provider_from_live(id)?;
+                if Self::kimi_proxy_owns_live(state) {
+                    Self::kimi_remove_from_takeover_backup(state, id)?;
+                } else {
+                    remove_kimicode_provider_from_live(id)?;
+                }
             }
             _ => {
                 return Err(AppError::Message(format!(
@@ -2658,56 +2899,6 @@ impl ProviderService {
             .get(id)
             .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
 
-        // Kimi Code's official provider is owned by OAuth provisioning. In
-        // takeover mode it follows the same per-app hot-switch path as Claude
-        // and Codex; outside takeover retain additive TOML projection rules.
-        if matches!(app_type, AppType::KimiCode) {
-            let taken_over =
-                futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
-                    .ok()
-                    .flatten()
-                    .is_some()
-                    || state
-                        .proxy_service
-                        .detect_takeover_in_live_config_for_app(&app_type);
-            if taken_over {
-                let _guard = futures::executor::block_on(
-                    state.proxy_service.lock_switch_for_app(app_type.as_str()),
-                );
-                futures::executor::block_on(
-                    state
-                        .proxy_service
-                        .hot_switch_provider_inner(app_type.as_str(), id),
-                )
-                .map_err(|e| AppError::Message(format!("热切换失败: {e}")))?;
-                return Ok(SwitchResult::default());
-            }
-            let target_is_managed = crate::kimi_config::is_managed_provider(&_provider.id)?;
-            crate::kimi_config::apply_switch_defaults(&_provider.id, &_provider.settings_config)?;
-
-            if !target_is_managed && Self::provider_live_config_managed(_provider) != Some(true) {
-                let mut updated = _provider.clone();
-                Self::set_provider_live_config_managed(&mut updated, true);
-                if let Err(err) = state.db.save_provider(app_type.as_str(), &updated) {
-                    return match remove_kimicode_provider_from_live(&_provider.id) {
-                        Ok(()) => Err(AppError::Message(format!(
-                            "Failed to persist live_config_managed for '{}' after switching Kimi Code; live changes were rolled back: {err}",
-                            _provider.id
-                        ))),
-                        Err(rollback_err) => Err(AppError::Message(format!(
-                            "Failed to persist live_config_managed for '{}' after switching Kimi Code: {err}; additionally failed to roll back live config: {rollback_err}",
-                            _provider.id
-                        ))),
-                    };
-                }
-            }
-
-            if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
-                log::warn!("Kimi Code MCP projection failed after provider switch: {err}");
-            }
-            return Ok(SwitchResult::default());
-        }
-
         // OMO providers are switched through their own exclusive path.
         if matches!(app_type, AppType::OpenCode) && _provider.category.as_deref() == Some("omo") {
             return Self::switch_normal(state, app_type, id, &providers);
@@ -2728,9 +2919,10 @@ impl ProviderService {
         // restore backup. Serialize them per app, then decide from the locked
         // current state so a just-started takeover cannot be overwritten by a
         // normal live write.
+        // Kimi Code uses the same per-app lock + hot-switch path as Claude/Codex/Grok.
         let _switch_guard = if matches!(
             app_type,
-            AppType::Claude | AppType::Codex | AppType::GrokBuild
+            AppType::Claude | AppType::Codex | AppType::GrokBuild | AppType::KimiCode
         ) {
             Some(futures::executor::block_on(
                 state.proxy_service.lock_switch_for_app(app_type.as_str()),
@@ -2868,8 +3060,10 @@ impl ProviderService {
             }
         }
 
-        // Additive mode apps skip setting is_current (no such concept)
-        if !app_type.is_additive_mode() {
+        // Exclusive apps and Kimi Code maintain current SSOT (settings + DB is_current)
+        // so proxy select_providers / tray / UI agree with the selected provider.
+        // Pure additive apps (OpenCode / OpenClaw) still skip is_current.
+        if !app_type.is_additive_mode() || matches!(app_type, AppType::KimiCode) {
             // Update local settings (device-level, takes priority)
             crate::settings::set_current_provider(&app_type, Some(id))?;
 
@@ -2877,16 +3071,30 @@ impl ProviderService {
             state.db.set_current_provider(app_type.as_str(), id)?;
         }
 
-        // Sync to live (write_gemini_live handles security flag internally for Gemini)
-        write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
+        // Sync to live. Kimi uses apply_switch_defaults so managed OAuth providers
+        // only change default_model and custom providers get full additive projection
+        // (equivalent to Claude/Codex live write + Kimi multi-provider coexistence).
+        if matches!(app_type, AppType::KimiCode) {
+            crate::kimi_config::apply_switch_defaults(&provider.id, &provider.settings_config)?;
+        } else {
+            // write_gemini_live handles security flag internally for Gemini
+            write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
+        }
 
         // For additive-mode providers that were DB-only (live_config_managed == Some(false)),
         // flip the flag to true now that the provider has been successfully written to the live
         // file. This ensures sync_all_providers_to_live() will include it on future syncs.
         //
+        // Managed Kimi OAuth providers are login-owned and never projected from DB, so
+        // skip the marker flip for them (matches previous Kimi-only switch path).
+        //
         // If persisting the marker fails, roll back the just-written live config so we don't leave
         // the provider in a silent inconsistent state (present in live, but still marked DB-only).
-        if app_type.is_additive_mode() && Self::provider_live_config_managed(provider) != Some(true)
+        let skip_live_managed_flip = matches!(app_type, AppType::KimiCode)
+            && crate::kimi_config::is_managed_provider(&provider.id).unwrap_or(false);
+        if app_type.is_additive_mode()
+            && !skip_live_managed_flip
+            && Self::provider_live_config_managed(provider) != Some(true)
         {
             let mut updated = provider.clone();
             Self::set_provider_live_config_managed(&mut updated, true);

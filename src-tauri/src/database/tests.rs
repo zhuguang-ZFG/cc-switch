@@ -561,6 +561,76 @@ fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
         .expect("query by app_type");
 }
 
+/// Hermes → Kimi rollup retag must merge conflicting PK rows instead of
+/// silently leaving hermes rows behind (UPDATE OR IGNORE bug).
+#[test]
+fn fork_migration_merges_hermes_usage_rollups_into_kimicode() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    {
+        let conn = lock_conn!(db.conn);
+        // Seed dual rows that would conflict under PK (date, app_type, provider, model, ...)
+        conn.execute(
+            "INSERT INTO usage_daily_rollups
+             (date, app_type, provider_id, model, request_model, pricing_model,
+              request_count, success_count, input_tokens, output_tokens,
+              cache_read_tokens, cache_creation_tokens, total_cost_usd, avg_latency_ms)
+             VALUES
+             ('2026-01-01', 'hermes', 'p1', 'm1', '', '', 3, 2, 30, 10, 0, 0, '0.3', 100),
+             ('2026-01-01', 'kimicode', 'p1', 'm1', '', '', 1, 1, 10, 5, 0, 0, '0.1', 50),
+             ('2026-01-02', 'hermes', 'p2', 'm2', '', '', 7, 7, 70, 20, 0, 0, '0.7', 80)",
+            [],
+        )?;
+        // Force data migration to re-run for this test DB.
+        conn.execute(
+            "DELETE FROM settings WHERE key = 'fork_migration_kimicode_v1'",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value)
+             VALUES ('fork_migration_kimicode_proxy_v1', 'done')",
+            [],
+        )?;
+    }
+
+    db.apply_fork_data_migrations()?;
+
+    let conn = lock_conn!(db.conn);
+    let hermes_left: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM usage_daily_rollups WHERE app_type = 'hermes'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(hermes_left, 0, "no hermes rollup rows may remain");
+
+    let merged: (i64, i64, i64, String) = conn.query_row(
+        "SELECT request_count, success_count, input_tokens, total_cost_usd
+         FROM usage_daily_rollups
+         WHERE app_type = 'kimicode' AND date = '2026-01-01' AND provider_id = 'p1'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(
+        (merged.0, merged.1, merged.2),
+        (4, 3, 40),
+        "conflicting day must sum hermes+kimicode"
+    );
+    let cost: f64 = merged.3.parse().expect("cost is numeric text");
+    assert!(
+        (cost - 0.4).abs() < 1e-9,
+        "conflicting day must sum total_cost_usd, got {}",
+        merged.3
+    );
+
+    let retagged: i64 = conn.query_row(
+        "SELECT request_count FROM usage_daily_rollups
+         WHERE app_type = 'kimicode' AND date = '2026-01-02' AND provider_id = 'p2'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(retagged, 7, "hermes-only day must retag to kimicode");
+    Ok(())
+}
+
 #[test]
 fn fork_migration_adds_kimicode_proxy_row_without_schema_bump() -> Result<(), AppError> {
     let db = Database::memory()?;

@@ -394,8 +394,20 @@ export function ProviderList({
             const isOmoCurrent = isOmo && provider.id === (currentOmoId || "");
             const isOmoSlimCurrent =
               isOmoSlim && provider.id === (currentOmoSlimId || "");
-            const isHermesCurrent =
-              appId === "kimicode" && hermesCurrentProviderId === provider.id;
+            // Kimi is hybrid: additive live multi-provider + exclusive current SSOT
+            // (aligned with Claude/Codex). Prefer backend currentProviderId so
+            // takeover (live default = cc-switch-proxy) still highlights the
+            // selected routing target. Fall back to live default_model only when
+            // SSOT is empty (legacy / first import).
+            const isKimiSSotCurrent =
+              appId === "kimicode" &&
+              Boolean(currentProviderId) &&
+              provider.id === currentProviderId;
+            const isKimiLiveCurrent =
+              appId === "kimicode" &&
+              !currentProviderId &&
+              hermesCurrentProviderId === provider.id;
+            const isKimiCurrent = isKimiSSotCurrent || isKimiLiveCurrent;
             return (
               <SortableProviderCard
                 key={provider.id}
@@ -406,7 +418,7 @@ export function ProviderList({
                     : isOmoSlim
                       ? isOmoSlimCurrent
                       : appId === "kimicode"
-                        ? isHermesCurrent
+                        ? isKimiCurrent
                         : provider.id === currentProviderId
                 }
                 appId={appId}
@@ -434,10 +446,10 @@ export function ProviderList({
                   handleToggleFailover(provider.id, enabled)
                 }
                 activeProviderId={activeProviderId}
-                // OpenClaw: default model / Hermes: model.provider === provider.id
+                // OpenClaw: default model / Kimi: SSOT current (live default under takeover is proxy)
                 isDefaultModel={
                   appId === "kimicode"
-                    ? isHermesCurrent
+                    ? isKimiCurrent
                     : isProviderDefaultModel(provider.id)
                 }
                 onSetAsDefault={

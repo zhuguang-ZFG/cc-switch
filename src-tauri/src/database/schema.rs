@@ -611,16 +611,16 @@ impl Database {
 
             // These tables have no provider foreign key. Retagging preserves
             // historical usage and diagnostics for the renamed application.
-            for table in [
-                "proxy_request_logs",
-                "stream_check_logs",
-                "usage_daily_rollups",
-            ] {
-                let sql = format!(
-                    "UPDATE OR IGNORE {table} SET app_type = 'kimicode' WHERE app_type = 'hermes'"
-                );
+            // proxy_request_logs / stream_check_logs: PK does not include app_type,
+            // so a plain UPDATE is lossless.
+            for table in ["proxy_request_logs", "stream_check_logs"] {
+                let sql =
+                    format!("UPDATE {table} SET app_type = 'kimicode' WHERE app_type = 'hermes'");
                 conn.execute(&sql, [])?;
             }
+            // usage_daily_rollups PK includes app_type. Merge hermes into any
+            // existing kimicode dual rows, then retag remaining hermes rows.
+            Self::migrate_hermes_usage_rollups_to_kimicode(conn)?;
             conn.execute(
                 "INSERT OR IGNORE INTO proxy_live_backup
                  (app_type, original_config, backed_up_at)
@@ -651,6 +651,132 @@ impl Database {
                 Err(AppError::Database(format!("Kimi 数据迁移失败: {error}")))
             }
         }
+    }
+
+    /// Retag Hermes usage rollups to `kimicode` without dropping conflicting days.
+    ///
+    /// `usage_daily_rollups` primary key includes `app_type`. A plain
+    /// `UPDATE OR IGNORE` would silently leave hermes rows behind when a kimicode
+    /// dual already exists. Instead: merge metrics into the kimicode row, delete
+    /// the hermes duplicate, then retag any remaining hermes-only rows.
+    fn migrate_hermes_usage_rollups_to_kimicode(conn: &Connection) -> Result<(), rusqlite::Error> {
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_daily_rollups' LIMIT 1",
+                [],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !exists {
+            return Ok(());
+        }
+
+        // Merge hermes metrics into matching kimicode rows (additive counts/cost).
+        conn.execute(
+            "UPDATE usage_daily_rollups
+             SET
+               request_count = request_count + (
+                 SELECT h.request_count FROM usage_daily_rollups h
+                 WHERE h.app_type = 'hermes'
+                   AND h.date = usage_daily_rollups.date
+                   AND h.provider_id = usage_daily_rollups.provider_id
+                   AND h.model = usage_daily_rollups.model
+                   AND h.request_model = usage_daily_rollups.request_model
+                   AND h.pricing_model = usage_daily_rollups.pricing_model
+               ),
+               success_count = success_count + (
+                 SELECT h.success_count FROM usage_daily_rollups h
+                 WHERE h.app_type = 'hermes'
+                   AND h.date = usage_daily_rollups.date
+                   AND h.provider_id = usage_daily_rollups.provider_id
+                   AND h.model = usage_daily_rollups.model
+                   AND h.request_model = usage_daily_rollups.request_model
+                   AND h.pricing_model = usage_daily_rollups.pricing_model
+               ),
+               input_tokens = input_tokens + (
+                 SELECT h.input_tokens FROM usage_daily_rollups h
+                 WHERE h.app_type = 'hermes'
+                   AND h.date = usage_daily_rollups.date
+                   AND h.provider_id = usage_daily_rollups.provider_id
+                   AND h.model = usage_daily_rollups.model
+                   AND h.request_model = usage_daily_rollups.request_model
+                   AND h.pricing_model = usage_daily_rollups.pricing_model
+               ),
+               output_tokens = output_tokens + (
+                 SELECT h.output_tokens FROM usage_daily_rollups h
+                 WHERE h.app_type = 'hermes'
+                   AND h.date = usage_daily_rollups.date
+                   AND h.provider_id = usage_daily_rollups.provider_id
+                   AND h.model = usage_daily_rollups.model
+                   AND h.request_model = usage_daily_rollups.request_model
+                   AND h.pricing_model = usage_daily_rollups.pricing_model
+               ),
+               cache_read_tokens = cache_read_tokens + (
+                 SELECT h.cache_read_tokens FROM usage_daily_rollups h
+                 WHERE h.app_type = 'hermes'
+                   AND h.date = usage_daily_rollups.date
+                   AND h.provider_id = usage_daily_rollups.provider_id
+                   AND h.model = usage_daily_rollups.model
+                   AND h.request_model = usage_daily_rollups.request_model
+                   AND h.pricing_model = usage_daily_rollups.pricing_model
+               ),
+               cache_creation_tokens = cache_creation_tokens + (
+                 SELECT h.cache_creation_tokens FROM usage_daily_rollups h
+                 WHERE h.app_type = 'hermes'
+                   AND h.date = usage_daily_rollups.date
+                   AND h.provider_id = usage_daily_rollups.provider_id
+                   AND h.model = usage_daily_rollups.model
+                   AND h.request_model = usage_daily_rollups.request_model
+                   AND h.pricing_model = usage_daily_rollups.pricing_model
+               ),
+               total_cost_usd = printf(
+                 '%.10g',
+                 CAST(total_cost_usd AS REAL) + (
+                   SELECT CAST(h.total_cost_usd AS REAL) FROM usage_daily_rollups h
+                   WHERE h.app_type = 'hermes'
+                     AND h.date = usage_daily_rollups.date
+                     AND h.provider_id = usage_daily_rollups.provider_id
+                     AND h.model = usage_daily_rollups.model
+                     AND h.request_model = usage_daily_rollups.request_model
+                     AND h.pricing_model = usage_daily_rollups.pricing_model
+                 )
+               )
+             WHERE app_type = 'kimicode'
+               AND EXISTS (
+                 SELECT 1 FROM usage_daily_rollups h
+                 WHERE h.app_type = 'hermes'
+                   AND h.date = usage_daily_rollups.date
+                   AND h.provider_id = usage_daily_rollups.provider_id
+                   AND h.model = usage_daily_rollups.model
+                   AND h.request_model = usage_daily_rollups.request_model
+                   AND h.pricing_model = usage_daily_rollups.pricing_model
+               )",
+            [],
+        )?;
+
+        // Drop hermes rows that now have a kimicode counterpart (metrics already merged).
+        conn.execute(
+            "DELETE FROM usage_daily_rollups
+             WHERE app_type = 'hermes'
+               AND EXISTS (
+                 SELECT 1 FROM usage_daily_rollups k
+                 WHERE k.app_type = 'kimicode'
+                   AND k.date = usage_daily_rollups.date
+                   AND k.provider_id = usage_daily_rollups.provider_id
+                   AND k.model = usage_daily_rollups.model
+                   AND k.request_model = usage_daily_rollups.request_model
+                   AND k.pricing_model = usage_daily_rollups.pricing_model
+               )",
+            [],
+        )?;
+
+        // Retag remaining hermes-only rows (no PK conflict).
+        conn.execute(
+            "UPDATE usage_daily_rollups SET app_type = 'kimicode' WHERE app_type = 'hermes'",
+            [],
+        )?;
+        Ok(())
     }
 
     fn apply_kimicode_proxy_migration(conn: &Connection) -> Result<(), AppError> {

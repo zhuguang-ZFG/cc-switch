@@ -302,12 +302,10 @@ fn backup_config_if_exists(path: &Path) -> Result<Option<String>, AppError> {
 // Document I/O
 // ============================================================================
 
-pub fn read_document() -> Result<DocumentMut, AppError> {
-    let path = get_kimi_config_path();
-    if !path.exists() {
+pub fn parse_document_text(text: &str) -> Result<DocumentMut, AppError> {
+    if text.trim().is_empty() {
         return Ok(DocumentMut::new());
     }
-    let text = fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
     text.parse::<DocumentMut>().map_err(|e| {
         AppError::localized(
             "provider.kimicode.config.invalid_toml",
@@ -315,6 +313,15 @@ pub fn read_document() -> Result<DocumentMut, AppError> {
             format!("Invalid Kimi Code config.toml: {e}"),
         )
     })
+}
+
+pub fn read_document() -> Result<DocumentMut, AppError> {
+    let path = get_kimi_config_path();
+    if !path.exists() {
+        return Ok(DocumentMut::new());
+    }
+    let text = fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
+    parse_document_text(&text)
 }
 
 fn write_document(doc: &DocumentMut) -> Result<KimiWriteOutcome, AppError> {
@@ -557,12 +564,15 @@ pub fn get_providers() -> Result<Map<String, Value>, AppError> {
     Ok(out)
 }
 
-/// Upsert a provider + its models into live config.toml.
-pub fn set_provider(name: &str, provider_config: Value) -> Result<KimiWriteOutcome, AppError> {
-    let _guard = write_lock()
-        .lock()
-        .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
-
+/// Upsert a provider + its models into an in-memory TOML document.
+///
+/// Managed providers are rejected so official OAuth tables cannot be rewritten
+/// from the simplified database projection.
+fn upsert_provider_into_document(
+    doc: &mut DocumentMut,
+    name: &str,
+    provider_config: &Value,
+) -> Result<(), AppError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(AppError::localized(
@@ -572,7 +582,6 @@ pub fn set_provider(name: &str, provider_config: Value) -> Result<KimiWriteOutco
         ));
     }
 
-    let mut doc = read_document()?;
     let existing = doc
         .get("providers")
         .and_then(Item::as_table)
@@ -581,7 +590,7 @@ pub fn set_provider(name: &str, provider_config: Value) -> Result<KimiWriteOutco
     if provider_table_is_managed(name, existing) {
         return Err(managed_provider_error(name));
     }
-    let providers = ensure_table_mut(&mut doc, "providers");
+    let providers = ensure_table_mut(doc, "providers");
     let entry = ensure_nested_table_mut(providers, name);
 
     let object = provider_config.as_object().ok_or_else(|| {
@@ -630,7 +639,7 @@ pub fn set_provider(name: &str, provider_config: Value) -> Result<KimiWriteOutco
                 models_root.remove(&alias);
             }
         }
-        let models_root = ensure_table_mut(&mut doc, "models");
+        let models_root = ensure_table_mut(doc, "models");
         for model in models {
             let Some(alias) = model_alias_for_entry(name, model) else {
                 continue;
@@ -678,17 +687,24 @@ pub fn set_provider(name: &str, provider_config: Value) -> Result<KimiWriteOutco
         }
     }
 
-    write_document(&doc)
+    Ok(())
 }
 
-/// Remove a provider and all models that point at it.
-pub fn remove_provider(name: &str) -> Result<KimiWriteOutcome, AppError> {
+/// Upsert a provider + its models into live config.toml.
+pub fn set_provider(name: &str, provider_config: Value) -> Result<KimiWriteOutcome, AppError> {
     let _guard = write_lock()
         .lock()
         .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
 
-    let name = name.trim();
     let mut doc = read_document()?;
+    upsert_provider_into_document(&mut doc, name, &provider_config)?;
+    write_document(&doc)
+}
+
+/// Remove a provider and its models from an in-memory TOML document.
+/// Returns whether anything changed.
+fn remove_provider_from_document(doc: &mut DocumentMut, name: &str) -> Result<bool, AppError> {
+    let name = name.trim();
     let existing = doc
         .get("providers")
         .and_then(Item::as_table)
@@ -747,10 +763,69 @@ pub fn remove_provider(name: &str) -> Result<KimiWriteOutcome, AppError> {
         }
     }
 
-    if !changed {
+    Ok(changed)
+}
+
+/// Remove a provider from a full TOML snapshot text (proxy restore backup).
+pub fn remove_provider_from_text(text: &str, name: &str) -> Result<String, AppError> {
+    let mut doc = parse_document_text(text)?;
+    let _ = remove_provider_from_document(&mut doc, name)?;
+    Ok(doc.to_string())
+}
+
+/// Remove a provider and all models that point at it.
+pub fn remove_provider(name: &str) -> Result<KimiWriteOutcome, AppError> {
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
+
+    let mut doc = read_document()?;
+    if !remove_provider_from_document(&mut doc, name)? {
         return Ok(KimiWriteOutcome::default());
     }
     write_document(&doc)
+}
+
+/// Project a provider switch into a TOML document.
+///
+/// - Custom providers are upserted from the DB projection.
+/// - Managed OAuth providers only change `default_model` (table is login-owned).
+/// - Unrelated tables/comments are preserved via toml_edit.
+fn apply_switch_defaults_to_document(
+    doc: &mut DocumentMut,
+    provider_id: &str,
+    settings_config: &Value,
+) -> Result<(), AppError> {
+    let name = provider_id.trim();
+    let existing = doc
+        .get("providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(name))
+        .and_then(Item::as_table);
+    let is_managed = provider_table_is_managed(name, existing);
+
+    if !is_managed {
+        upsert_provider_into_document(doc, name, settings_config)?;
+    }
+
+    if let Some(alias) = first_model_alias(name, settings_config) {
+        doc["default_model"] = Item::Value(TomlEditValue::from(alias.as_str()));
+    }
+    Ok(())
+}
+
+/// Project switch defaults into a full TOML snapshot text.
+///
+/// Used by proxy hot-switch to update the restore backup's `default_model`
+/// (and custom provider projection) while live stays on `cc-switch-proxy`.
+pub fn apply_switch_defaults_to_text(
+    text: &str,
+    provider_id: &str,
+    settings_config: &Value,
+) -> Result<String, AppError> {
+    let mut doc = parse_document_text(text)?;
+    apply_switch_defaults_to_document(&mut doc, provider_id, settings_config)?;
+    Ok(doc.to_string())
 }
 
 /// On switch: ensure provider is present and set `default_model` to first model alias.
@@ -758,20 +833,12 @@ pub fn apply_switch_defaults(
     provider_id: &str,
     settings_config: &Value,
 ) -> Result<KimiWriteOutcome, AppError> {
-    // Managed providers are provisioned by official login and must not be
-    // rewritten from the simplified database projection.
-    if !is_managed_provider(provider_id)? {
-        set_provider(provider_id, settings_config.clone())?;
-    }
-
     let _guard = write_lock()
         .lock()
         .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
 
     let mut doc = read_document()?;
-    if let Some(alias) = first_model_alias(provider_id, settings_config) {
-        doc["default_model"] = Item::Value(TomlEditValue::from(alias.as_str()));
-    }
+    apply_switch_defaults_to_document(&mut doc, provider_id, settings_config)?;
     write_document(&doc)
 }
 
@@ -1315,6 +1382,37 @@ mod tests {
             let providers = get_providers().unwrap();
             assert!(providers.contains_key("demo"));
         });
+    }
+
+    #[test]
+    fn apply_switch_defaults_to_text_updates_default_without_touching_live() {
+        let original = r#"default_model = "a/model"
+
+[thinking]
+enabled = true
+
+[providers.a]
+type = "openai"
+base_url = "https://a.example/v1"
+api_key = "a-key"
+
+[models."a/model"]
+provider = "a"
+model = "model"
+"#;
+        let settings = serde_json::json!({
+            "type": "openai",
+            "base_url": "https://b.example/v1",
+            "api_key": "b-key",
+            "models": [{ "id": "b-model", "alias": "b/b-model" }]
+        });
+        let updated = apply_switch_defaults_to_text(original, "b", &settings)
+            .expect("project switch into snapshot text");
+        assert!(updated.contains("default_model = \"b/b-model\""));
+        assert!(updated.contains("[providers.b]"));
+        assert!(updated.contains("[thinking]"));
+        assert!(updated.contains("enabled = true"));
+        assert!(updated.contains("[providers.a]"));
     }
 
     #[test]

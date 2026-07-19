@@ -1249,7 +1249,7 @@ impl ProxyService {
             .map_err(|e| format!("清除接管状态失败: {e}"))?;
 
         // 4. 清除所有应用的 enabled 状态（用户手动关闭，不需要下次自动恢复）
-        for app_type in ["claude", "codex", "gemini", "grokbuild"] {
+        for app_type in ["claude", "codex", "gemini", "grokbuild", "kimicode"] {
             if let Ok(mut config) = self.db.get_proxy_config_for_app(app_type).await {
                 if config.enabled {
                     config.enabled = false;
@@ -1849,6 +1849,17 @@ impl ProxyService {
             return Ok(false);
         }
 
+        // Kimi: never use JSON write_live — clear the proxy projection first, then
+        // re-project the SSOT provider + default_model (Claude/Codex SSOT parity
+        // for additive TOML).
+        if matches!(app_type, AppType::KimiCode) {
+            crate::kimi_config::clear_proxy_takeover()
+                .map_err(|e| format!("清理 Kimi Code 接管占位失败: {e}"))?;
+            crate::kimi_config::apply_switch_defaults(&provider.id, &provider.settings_config)
+                .map_err(|e| format!("从 SSOT 恢复 Kimi Code Live 失败: {e}"))?;
+            return Ok(true);
+        }
+
         write_live_with_common_config(self.db.as_ref(), app_type, provider)
             .map_err(|e| format!("写入 {app_type:?} Live 配置失败: {e}"))?;
 
@@ -2064,7 +2075,7 @@ impl ProxyService {
     /// 检查是否处于 Live 接管模式
     pub async fn is_takeover_active(&self) -> Result<bool, String> {
         let status = self.get_takeover_status().await?;
-        Ok(status.claude || status.codex || status.grokbuild)
+        Ok(status.claude || status.codex || status.grokbuild || status.kimicode)
     }
 
     /// 从异常退出中恢复（启动时调用）
@@ -2188,6 +2199,19 @@ impl ProxyService {
             AppType::Claude => Self::is_claude_live_taken_over(config),
             AppType::Codex => Self::is_codex_live_taken_over(config),
             AppType::GrokBuild => Self::is_grok_live_taken_over(config),
+            // Kimi backup/live is raw TOML text stored under {"config": "..."} when
+            // serialized through JSON helpers; also accept direct string values.
+            AppType::KimiCode => {
+                let text = config
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .or_else(|| config.as_str())
+                    .unwrap_or("");
+                !text.trim().is_empty()
+                    && (text.contains("cc-switch-proxy")
+                        || text.contains(PROXY_TOKEN_PLACEHOLDER)
+                        || text.contains("/kimicode/v1"))
+            }
             _ => false,
         }
     }
@@ -2213,17 +2237,25 @@ impl ProxyService {
         provider: &Provider,
     ) -> Result<(), String> {
         if app_type == "kimicode" {
-            // Kimi takeover owns a full TOML snapshot. Provider hot-switches
-            // change routing state in the DB; the fixed local projection stays
-            // untouched and the original snapshot remains the restore source.
+            // Kimi takeover owns a full TOML snapshot. Live stays on the fixed
+            // local `cc-switch-proxy` projection, but the restore backup must
+            // track the newly selected provider's default_model (and custom
+            // provider projection) — same SSOT discipline as Claude/Codex
+            // backup updates during hot-switch (design §4 / stage E).
             if let Some(backup) = self
                 .db
                 .get_live_backup(app_type)
                 .await
                 .map_err(|e| format!("读取 Kimi Code 备份失败: {e}"))?
             {
+                let updated = crate::kimi_config::apply_switch_defaults_to_text(
+                    &backup.original_config,
+                    &provider.id,
+                    &provider.settings_config,
+                )
+                .map_err(|e| format!("更新 Kimi Code 备份投影失败: {e}"))?;
                 self.db
-                    .save_live_backup(app_type, &backup.original_config)
+                    .save_live_backup(app_type, &updated)
                     .await
                     .map_err(|e| format!("保留 Kimi Code 备份失败: {e}"))?;
             }
@@ -3005,6 +3037,11 @@ impl ProxyService {
                         .await?;
                     updated_any = true;
                 }
+                if takeover.kimicode {
+                    self.takeover_live_config_best_effort(&AppType::KimiCode)
+                        .await?;
+                    updated_any = true;
+                }
 
                 if updated_any {
                     log::info!("已同步更新 Live 配置中的代理地址");
@@ -3213,6 +3250,213 @@ model = "model"
         assert_eq!(
             crate::kimi_config::read_config_text().expect("read restored config"),
             original
+        );
+        env::remove_var("KIMI_CODE_HOME");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn is_takeover_active_includes_kimicode_only_takeover() {
+        let home = TempHome::new();
+        let kimi_home = home.dir.path().join("kimi-code-home");
+        std::fs::create_dir_all(&kimi_home).expect("create kimi home");
+        env::set_var("KIMI_CODE_HOME", &kimi_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        std::fs::write(
+            crate::kimi_config::get_kimi_config_path(),
+            r#"default_model = "demo/model"
+[providers.demo]
+type = "openai"
+base_url = "https://example.test/v1"
+api_key = "secret"
+[models."demo/model"]
+provider = "demo"
+model = "model"
+"#,
+        )
+        .expect("seed kimi");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+        let provider = Provider::with_id(
+            "demo".into(),
+            "Demo".into(),
+            json!({
+                "type": "openai",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "models": [{"id": "model", "alias": "demo/model"}]
+            }),
+            None,
+        );
+        db.save_provider("kimicode", &provider).expect("save");
+        db.set_current_provider("kimicode", "demo").expect("current");
+        crate::settings::set_current_provider(&AppType::KimiCode, Some("demo"))
+            .expect("local current");
+
+        assert!(
+            !state
+                .proxy_service
+                .is_takeover_active()
+                .await
+                .expect("status"),
+            "no takeover yet"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("kimicode", true)
+            .await
+            .expect("enable kimi");
+        assert!(
+            state
+                .proxy_service
+                .is_takeover_active()
+                .await
+                .expect("status"),
+            "kimicode-only takeover must count as active"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("kimicode", false)
+            .await
+            .expect("disable");
+        env::remove_var("KIMI_CODE_HOME");
+    }
+
+    /// Hot-switch during Kimi takeover must update the restore backup's
+    /// default_model (and custom provider projection) while live stays on
+    /// cc-switch-proxy — aligned with design §4 / Claude-Codex backup SSOT.
+    #[tokio::test]
+    #[serial]
+    async fn kimicode_hot_switch_updates_backup_default_model_not_live_proxy() {
+        let home = TempHome::new();
+        let kimi_home = home.dir.path().join("kimi-code-home");
+        std::fs::create_dir_all(&kimi_home).expect("create kimi home");
+        env::set_var("KIMI_CODE_HOME", &kimi_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        let original = r#"default_model = "demo/model"
+
+[thinking]
+enabled = true
+
+[providers.demo]
+type = "openai"
+base_url = "https://example.test/v1"
+api_key = "secret"
+
+[models."demo/model"]
+provider = "demo"
+model = "model"
+"#;
+        std::fs::write(crate::kimi_config::get_kimi_config_path(), original)
+            .expect("seed kimi config");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+
+        let demo = Provider::with_id(
+            "demo".to_string(),
+            "Demo".to_string(),
+            json!({
+                "type": "openai",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "models": [{"id": "model", "alias": "demo/model"}]
+            }),
+            None,
+        );
+        let other = Provider::with_id(
+            "other".to_string(),
+            "Other".to_string(),
+            json!({
+                "type": "openai",
+                "base_url": "https://other.test/v1",
+                "api_key": "other-secret",
+                "models": [{"id": "other-model", "alias": "other/other-model"}]
+            }),
+            None,
+        );
+        db.save_provider("kimicode", &demo).expect("save demo");
+        db.save_provider("kimicode", &other).expect("save other");
+        db.set_current_provider("kimicode", "demo")
+            .expect("set current");
+        crate::settings::set_current_provider(&AppType::KimiCode, Some("demo"))
+            .expect("set local current");
+
+        state
+            .proxy_service
+            .set_takeover_for_app("kimicode", true)
+            .await
+            .expect("enable kimi takeover");
+
+        let live_before = crate::kimi_config::read_config_text().expect("read live");
+        assert!(live_before.contains("cc-switch-proxy"));
+
+        // Scope the switch lock so set_takeover_for_app(false) can re-acquire it
+        // (same lock serialization as production Claude/Codex switch path).
+        {
+            let _guard = state.proxy_service.lock_switch_for_app("kimicode").await;
+            state
+                .proxy_service
+                .hot_switch_provider_inner("kimicode", "other")
+                .await
+                .expect("hot switch to other");
+        }
+
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::KimiCode).as_deref(),
+            Some("other")
+        );
+        assert_eq!(
+            db.get_current_provider("kimicode")
+                .expect("db current")
+                .as_deref(),
+            Some("other")
+        );
+
+        let live_after = crate::kimi_config::read_config_text().expect("read live after");
+        assert!(
+            live_after.contains("cc-switch-proxy"),
+            "live must remain on proxy projection during takeover"
+        );
+        assert!(
+            live_after.contains("default_model = \"cc-switch-proxy/default\"")
+                || live_after.contains("default_model = 'cc-switch-proxy/default'"),
+            "live default_model must stay on proxy alias, got:\n{live_after}"
+        );
+
+        let backup = db
+            .get_live_backup("kimicode")
+            .await
+            .expect("read backup")
+            .expect("backup exists");
+        assert!(
+            backup.original_config.contains("other/other-model")
+                || backup.original_config.contains("default_model = \"other/other-model\""),
+            "backup must project switched default_model, got:\n{}",
+            backup.original_config
+        );
+        assert!(
+            backup.original_config.contains("[providers.other]")
+                || backup.original_config.contains("providers.other"),
+            "backup must include the switched custom provider projection"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("kimicode", false)
+            .await
+            .expect("disable kimi takeover");
+        let restored = crate::kimi_config::read_config_text().expect("restored");
+        assert!(
+            restored.contains("other/other-model") || restored.contains("default_model"),
+            "restore must use updated backup, got:\n{restored}"
         );
         env::remove_var("KIMI_CODE_HOME");
     }
