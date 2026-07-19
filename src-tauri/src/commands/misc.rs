@@ -950,6 +950,7 @@ async fn fetch_github_latest_version(client: &reqwest::Client, repo: &str) -> Op
 }
 
 /// Helper function to fetch latest version from PyPI
+#[allow(dead_code)]
 async fn fetch_pypi_latest_version(client: &reqwest::Client, package: &str) -> Option<String> {
     let url = format!("https://pypi.org/pypi/{package}/json");
     match client.get(&url).send().await {
@@ -3349,6 +3350,7 @@ fn run_windows_start_command(args: &[&str], terminal_name: &str) -> Result<(), S
 ///
 /// **Security**：`command_line` 会被原样拼进 shell/batch 脚本，调用方必须
 /// 保证它是可信字符串（当前只由后端硬编码调用）。
+#[allow(dead_code)]
 pub(crate) fn launch_terminal_running(command_line: &str, label: &str) -> Result<(), String> {
     let temp_dir = std::env::temp_dir();
     let pid = std::process::id();

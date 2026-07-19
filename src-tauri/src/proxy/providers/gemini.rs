@@ -62,6 +62,14 @@ impl GeminiAdapter {
 
     /// 检测认证类型
     pub fn detect_auth_type(&self, provider: &Provider) -> AuthStrategy {
+        if provider
+            .settings_config
+            .get("type")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("vertexai"))
+        {
+            return AuthStrategy::GoogleOAuth;
+        }
         match self.provider_type(provider) {
             ProviderType::GeminiCli => AuthStrategy::GoogleOAuth,
             _ => AuthStrategy::Google,
@@ -124,14 +132,23 @@ impl GeminiAdapter {
     /// 从 Provider 配置中提取原始 API Key
     fn extract_key_raw(&self, provider: &Provider) -> Option<String> {
         if let Some(env) = provider.settings_config.get("env") {
-            // 使用 GEMINI_API_KEY
-            if let Some(key) = env
-                .get("GEMINI_API_KEY")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
-                return Some(key.to_string());
+            // Explicit bearer token envs are checked before API keys so Vertex
+            // ADC/gcloud tokens are never sent as x-goog-api-key values.
+            for field in [
+                "GOOGLE_OAUTH_ACCESS_TOKEN",
+                "GOOGLE_ACCESS_TOKEN",
+                "GEMINI_API_KEY",
+                "GOOGLE_API_KEY",
+                "VERTEXAI_API_KEY",
+            ] {
+                if let Some(key) = env
+                    .get(field)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    return Some(key.to_string());
+                }
             }
         }
 
@@ -165,8 +182,10 @@ impl ProviderAdapter for GeminiAdapter {
     fn extract_base_url(&self, provider: &Provider) -> Result<String, ProxyError> {
         // 从 env 中获取
         if let Some(env) = provider.settings_config.get("env") {
-            if let Some(url) = env.get("GOOGLE_GEMINI_BASE_URL").and_then(|v| v.as_str()) {
-                return Ok(url.trim_end_matches('/').to_string());
+            for field in ["GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL"] {
+                if let Some(url) = env.get(field).and_then(|v| v.as_str()) {
+                    return Ok(url.trim_end_matches('/').to_string());
+                }
             }
         }
 
@@ -187,6 +206,23 @@ impl ProviderAdapter for GeminiAdapter {
             return Ok(url.trim_end_matches('/').to_string());
         }
 
+        if provider
+            .settings_config
+            .get("type")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("vertexai"))
+        {
+            let location = provider
+                .settings_config
+                .get("env")
+                .and_then(|env| env.get("GOOGLE_CLOUD_LOCATION"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("us-central1");
+            return Ok(format!("https://{location}-aiplatform.googleapis.com"));
+        }
+
         Err(ProxyError::ConfigError(
             "Gemini Provider 缺少 base_url 配置".to_string(),
         ))
@@ -203,7 +239,7 @@ impl ProviderAdapter for GeminiAdapter {
                     Some(AuthInfo::with_access_token(key, creds.access_token))
                 } else {
                     // 回退到普通 API Key
-                    Some(AuthInfo::new(key, AuthStrategy::Google))
+                    Some(AuthInfo::with_access_token(key.clone(), key))
                 }
             }
             _ => Some(AuthInfo::new(key, AuthStrategy::Google)),
@@ -304,6 +340,59 @@ mod tests {
         assert_eq!(auth.api_key, "AIza-test-key-12345678");
         assert_eq!(auth.strategy, AuthStrategy::Google);
         assert!(auth.access_token.is_none());
+    }
+
+    #[test]
+    fn test_extract_auth_supports_google_and_vertex_env_keys() {
+        for key_name in ["GOOGLE_API_KEY", "VERTEXAI_API_KEY"] {
+            let adapter = GeminiAdapter::new();
+            let mut provider = create_provider(json!({
+                "type": "google-genai",
+                "env": {}
+            }));
+            provider.settings_config["env"][key_name] = json!("google-key");
+            let auth = adapter.extract_auth(&provider).expect("auth");
+            assert_eq!(auth.strategy, AuthStrategy::Google);
+            let headers = adapter.get_auth_headers(&auth).unwrap();
+            assert_eq!(headers[0].0.as_str(), "x-goog-api-key");
+        }
+    }
+
+    #[test]
+    fn test_vertex_env_token_uses_bearer_and_location_fallback_base_url() {
+        let adapter = GeminiAdapter::new();
+        let provider = create_provider(json!({
+            "type": "vertexai",
+            "env": {
+                "VERTEXAI_API_KEY": "vertex-token",
+                "GOOGLE_CLOUD_LOCATION": "europe-west4"
+            }
+        }));
+        let auth = adapter.extract_auth(&provider).expect("auth");
+        assert_eq!(auth.strategy, AuthStrategy::GoogleOAuth);
+        let headers = adapter.get_auth_headers(&auth).unwrap();
+        assert_eq!(headers[0].0.as_str(), "authorization");
+        assert_eq!(headers[0].1, "Bearer vertex-token");
+        assert_eq!(
+            adapter.extract_base_url(&provider).unwrap(),
+            "https://europe-west4-aiplatform.googleapis.com"
+        );
+    }
+
+    #[test]
+    fn test_vertex_oauth_access_token_env_uses_bearer_header() {
+        let adapter = GeminiAdapter::new();
+        let provider = create_provider(json!({
+            "type": "vertexai",
+            "env": {
+                "GOOGLE_CLOUD_PROJECT": "project-1",
+                "GOOGLE_OAUTH_ACCESS_TOKEN": "ya29.adc-token"
+            }
+        }));
+        let auth = adapter.extract_auth(&provider).expect("ADC token auth");
+        let headers = adapter.get_auth_headers(&auth).unwrap();
+        assert_eq!(headers[0].0.as_str(), "authorization");
+        assert_eq!(headers[0].1, "Bearer ya29.adc-token");
     }
 
     #[test]

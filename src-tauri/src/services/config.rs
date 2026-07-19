@@ -233,6 +233,7 @@ impl ConfigService {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn sync_gemini_live(
         config: &mut MultiAppConfig,
         provider_id: &str,

@@ -549,7 +549,7 @@ fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
     let count: i32 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count rows");
-    assert_eq!(count, 4, "per-app proxy_config should have 4 rows");
+    assert_eq!(count, 5, "per-app proxy_config should have 5 rows");
 
     // 新结构下应能按 app_type 查询
     let _: i32 = conn
@@ -559,6 +559,110 @@ fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
             |r| r.get(0),
         )
         .expect("query by app_type");
+}
+
+#[test]
+fn fork_migration_adds_kimicode_proxy_row_without_schema_bump() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    let schema_version = {
+        let conn = lock_conn!(db.conn);
+        Database::get_user_version(&conn)?
+    };
+
+    db.apply_fork_data_migrations()?;
+    db.apply_fork_data_migrations()?;
+
+    let conn = lock_conn!(db.conn);
+    assert_eq!(Database::get_user_version(&conn)?, schema_version);
+    let rows: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'kimicode'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(rows, 1);
+    let defaults: (i64, i64, i64, i64, i64) = conn.query_row(
+        "SELECT max_retries, streaming_first_byte_timeout, streaming_idle_timeout,
+                circuit_failure_threshold, circuit_min_requests
+         FROM proxy_config WHERE app_type = 'kimicode'",
+        [],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    assert_eq!(defaults, (3, 60, 120, 4, 10));
+    let marker: String = conn.query_row(
+        "SELECT value FROM settings WHERE key = 'fork_migration_kimicode_proxy_v1'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(marker, "done");
+    Ok(())
+}
+
+#[test]
+fn fork_migration_rebuilds_legacy_four_row_proxy_config_losslessly() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    let before = {
+        let conn = lock_conn!(db.conn);
+        conn.execute("DROP TABLE proxy_config", [])?;
+        conn.execute_batch(
+            "CREATE TABLE proxy_config (
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
+            proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+            listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+            max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+            streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+            circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+            circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+            circuit_min_requests INTEGER NOT NULL DEFAULT 10, default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+            pricing_model_source TEXT NOT NULL DEFAULT 'response', live_takeover_active INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+         );
+         INSERT INTO proxy_config (app_type, proxy_enabled, listen_address, listen_port, enable_logging,
+            enabled, auto_failover_enabled, max_retries, streaming_first_byte_timeout,
+            streaming_idle_timeout, non_streaming_timeout, circuit_failure_threshold,
+            circuit_success_threshold, circuit_timeout_seconds, circuit_error_rate_threshold,
+            circuit_min_requests, default_cost_multiplier, pricing_model_source, live_takeover_active)
+         VALUES ('claude',1,'10.0.0.1',19001,0,1,1,7,91,181,601,9,3,91,0.71,16,'1.25','request',1),
+                ('codex',0,'127.0.0.1',19002,1,0,0,8,62,122,602,5,2,62,0.61,11,'0.9','response',0),
+                ('gemini',0,'127.0.0.1',19003,1,0,0,5,63,123,603,6,2,63,0.62,12,'1','response',0),
+                ('grokbuild',0,'127.0.0.1',19004,1,0,0,4,64,124,604,7,2,64,0.63,13,'1','response',0);",
+        )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value)
+             VALUES ('fork_migration_kimicode_v1', 'done')",
+            [],
+        )?;
+        Database::set_user_version(&conn, 15)?;
+        conn.query_row(
+            "SELECT max_retries, listen_address, listen_port, default_cost_multiplier
+             FROM proxy_config WHERE app_type = 'claude'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?
+    };
+
+    db.apply_fork_data_migrations()?;
+    db.apply_fork_data_migrations()?;
+    let conn = lock_conn!(db.conn);
+    let after: (i64, String, i64, String) = conn.query_row(
+        "SELECT max_retries, listen_address, listen_port, default_cost_multiplier
+         FROM proxy_config WHERE app_type = 'claude'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(after, before);
+    assert_eq!(Database::get_user_version(&conn)?, 15);
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM proxy_config", [], |row| row.get(0))?;
+    assert_eq!(count, 5);
+    Ok(())
 }
 
 #[test]
@@ -685,11 +789,11 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         "skills migration snapshot should preserve legacy app mapping"
     );
 
-    // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
+    // proxy_config 每应用 seed 必须存在（否则 UI 会查不到默认值）
     let proxy_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 4);
+    assert_eq!(proxy_rows, 5);
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn

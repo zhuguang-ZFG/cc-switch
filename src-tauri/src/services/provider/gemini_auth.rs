@@ -8,6 +8,7 @@ use crate::provider::Provider;
 /// Gemini authentication type enumeration
 ///
 /// Used to optimize performance by avoiding repeated provider type detection.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GeminiAuthType {
     /// PackyCode provider (uses API Key)
@@ -19,10 +20,13 @@ pub(crate) enum GeminiAuthType {
 }
 
 // Partner Promotion Key constants
+#[allow(dead_code)]
 const PACKYCODE_PARTNER_KEY: &str = "packycode";
+#[allow(dead_code)]
 const GOOGLE_OFFICIAL_PARTNER_KEY: &str = "google-official";
 
 // PackyCode keyword constants
+#[allow(dead_code)]
 const PACKYCODE_KEYWORDS: [&str; 3] = ["packycode", "packyapi", "packy"];
 
 /// Detect Gemini provider authentication type
@@ -34,6 +38,7 @@ const PACKYCODE_KEYWORDS: [&str; 3] = ["packycode", "packyapi", "packy"];
 /// - `GeminiAuthType::GoogleOfficial`: Google official, uses OAuth
 /// - `GeminiAuthType::Packycode`: PackyCode provider, uses API Key
 /// - `GeminiAuthType::Generic`: Other generic providers, uses API Key
+#[allow(dead_code)]
 pub(crate) fn detect_gemini_auth_type(provider: &Provider) -> GeminiAuthType {
     // Priority 1: Check partner_promotion_key (most reliable)
     if let Some(key) = provider
@@ -82,6 +87,7 @@ pub(crate) fn detect_gemini_auth_type(provider: &Provider) -> GeminiAuthType {
 /// Check if string contains PackyCode related keywords (case-insensitive)
 ///
 /// Keyword list: ["packycode", "packyapi", "packy"]
+#[allow(dead_code)]
 fn contains_packycode_keyword(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     PACKYCODE_KEYWORDS
@@ -94,6 +100,7 @@ fn contains_packycode_keyword(value: &str) -> bool {
 /// Google Official Gemini uses OAuth personal authentication, no API Key needed.
 ///
 /// This is a convenience wrapper around `detect_gemini_auth_type`.
+#[allow(dead_code)]
 pub(crate) fn is_google_official_gemini(provider: &Provider) -> bool {
     detect_gemini_auth_type(provider) == GeminiAuthType::GoogleOfficial
 }
@@ -129,6 +136,7 @@ pub(crate) fn is_google_official_gemini(provider: &Provider) -> bool {
 /// # Error handling
 ///
 /// If provider is not Google Official, function returns `Ok(())` immediately without any operation.
+#[allow(dead_code)]
 pub(crate) fn ensure_google_oauth_security_flag(provider: &Provider) -> Result<(), AppError> {
     if !is_google_official_gemini(provider) {
         return Ok(());

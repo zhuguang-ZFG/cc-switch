@@ -746,6 +746,61 @@ mod tests {
     }
 
     #[test]
+    fn validate_kimicode_vertex_requires_project_and_explicit_credentials() {
+        let valid = Provider::with_id(
+            "vertex".into(),
+            "Vertex".into(),
+            json!({
+                "type": "vertexai",
+                "env": {
+                    "GOOGLE_CLOUD_PROJECT": "project-1",
+                    "GOOGLE_CLOUD_LOCATION": "asia-east1",
+                    "GOOGLE_OAUTH_ACCESS_TOKEN": "ya29.test"
+                },
+                "models": [{ "id": "gemini-2.5-pro" }]
+            }),
+            None,
+        );
+        ProviderService::validate_provider_settings(&AppType::KimiCode, &valid)
+            .expect("Vertex can use the official regional endpoint and bearer token");
+
+        let missing_project = Provider::with_id(
+            "vertex".into(),
+            "Vertex".into(),
+            json!({
+                "type": "vertexai",
+                "env": { "GOOGLE_OAUTH_ACCESS_TOKEN": "ya29.test" },
+                "models": [{ "id": "gemini-2.5-pro" }]
+            }),
+            None,
+        );
+        assert!(
+            ProviderService::validate_provider_settings(&AppType::KimiCode, &missing_project)
+                .unwrap_err()
+                .to_string()
+                .contains("GOOGLE_CLOUD_PROJECT")
+        );
+
+        let missing_credentials = Provider::with_id(
+            "vertex".into(),
+            "Vertex".into(),
+            json!({
+                "type": "vertexai",
+                "env": { "GOOGLE_CLOUD_PROJECT": "project-1" },
+                "models": [{ "id": "gemini-2.5-pro" }]
+            }),
+            None,
+        );
+        assert!(ProviderService::validate_provider_settings(
+            &AppType::KimiCode,
+            &missing_credentials
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("OAuth access token"));
+    }
+
+    #[test]
     fn extract_claude_common_config_strips_all_credentials_keeps_shareable() {
         // env 混入多种凭据（Anthropic/OpenRouter/Google/OpenAI/Gemini + AWS/Vertex）
         // 与可共享配置；顶层混入非标准的 apiKey/api_key 凭据与正常设置。
@@ -2603,11 +2658,30 @@ impl ProviderService {
             .get(id)
             .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
 
-        // Kimi Code's official provider is owned by OAuth provisioning and must
-        // never pass through the generic live writer. Custom providers are still
-        // written by apply_switch_defaults; managed providers only change the
-        // top-level default model alias.
+        // Kimi Code's official provider is owned by OAuth provisioning. In
+        // takeover mode it follows the same per-app hot-switch path as Claude
+        // and Codex; outside takeover retain additive TOML projection rules.
         if matches!(app_type, AppType::KimiCode) {
+            let taken_over =
+                futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
+                    .ok()
+                    .flatten()
+                    .is_some()
+                    || state
+                        .proxy_service
+                        .detect_takeover_in_live_config_for_app(&app_type);
+            if taken_over {
+                let _guard = futures::executor::block_on(
+                    state.proxy_service.lock_switch_for_app(app_type.as_str()),
+                );
+                futures::executor::block_on(
+                    state
+                        .proxy_service
+                        .hot_switch_provider_inner(app_type.as_str(), id),
+                )
+                .map_err(|e| AppError::Message(format!("热切换失败: {e}")))?;
+                return Ok(SwitchResult::default());
+            }
             let target_is_managed = crate::kimi_config::is_managed_provider(&_provider.id)?;
             crate::kimi_config::apply_switch_defaults(&_provider.id, &_provider.settings_config)?;
 
@@ -3342,6 +3416,7 @@ impl ProviderService {
     /// Extracts `.env` values while excluding provider-specific credentials:
     /// - GOOGLE_GEMINI_BASE_URL
     /// - GEMINI_API_KEY
+    #[allow(dead_code)]
     fn extract_gemini_common_config(settings: &Value) -> Result<String, AppError> {
         let env = settings.get("env").and_then(|v| v.as_object());
 
@@ -3527,6 +3602,7 @@ impl ProviderService {
         .await
     }
 
+    #[allow(dead_code)]
     pub(crate) fn write_gemini_live(provider: &Provider) -> Result<(), AppError> {
         write_gemini_live(provider)
     }
@@ -3657,47 +3733,85 @@ impl ProviderService {
                             "Kimi Code provider type is invalid",
                         )
                     })?;
-                let _ = provider_type;
+                let is_vertex = provider_type == "vertexai";
 
                 let base_url = settings
                     .get("base_url")
                     .and_then(Value::as_str)
                     .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        AppError::localized(
-                            "provider.kimicode.base_url.missing",
-                            "Kimi Code API 端点不能为空",
-                            "Kimi Code API endpoint is required",
-                        )
-                    })?;
-                let parsed_url = reqwest::Url::parse(base_url).map_err(|_| {
-                    AppError::localized(
-                        "provider.kimicode.base_url.invalid",
-                        "Kimi Code API 端点必须是有效的 HTTP(S) URL",
-                        "Kimi Code API endpoint must be a valid HTTP(S) URL",
-                    )
-                })?;
-                if !matches!(parsed_url.scheme(), "http" | "https") {
+                    .filter(|value| !value.is_empty());
+                if !is_vertex && base_url.is_none() {
                     return Err(AppError::localized(
-                        "provider.kimicode.base_url.invalid",
-                        "Kimi Code API 端点必须是有效的 HTTP(S) URL",
-                        "Kimi Code API endpoint must be a valid HTTP(S) URL",
+                        "provider.kimicode.base_url.missing",
+                        "Kimi Code API 端点不能为空",
+                        "Kimi Code API endpoint is required",
                     ));
                 }
+                if let Some(base_url) = base_url {
+                    let parsed_url = reqwest::Url::parse(base_url).map_err(|_| {
+                        AppError::localized(
+                            "provider.kimicode.base_url.invalid",
+                            "Kimi Code API 端点必须是有效的 HTTP(S) URL",
+                            "Kimi Code API endpoint must be a valid HTTP(S) URL",
+                        )
+                    })?;
+                    if !matches!(parsed_url.scheme(), "http" | "https") {
+                        return Err(AppError::localized(
+                            "provider.kimicode.base_url.invalid",
+                            "Kimi Code API 端点必须是有效的 HTTP(S) URL",
+                            "Kimi Code API endpoint must be a valid HTTP(S) URL",
+                        ));
+                    }
+                }
 
-                settings
+                let has_api_key = settings
                     .get("api_key")
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        AppError::localized(
-                            "provider.kimicode.api_key.missing",
-                            "Kimi Code API Key 不能为空",
-                            "Kimi Code API key is required",
-                        )
-                    })?;
+                    .is_some();
+                if is_vertex {
+                    let env = settings.get("env").and_then(Value::as_object);
+                    let has_project = env
+                        .and_then(|env| env.get("GOOGLE_CLOUD_PROJECT"))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty());
+                    if !has_project {
+                        return Err(AppError::localized(
+                            "provider.kimicode.vertex.project.missing",
+                            "Vertex AI 需要 Google Cloud project",
+                            "Vertex AI requires env.GOOGLE_CLOUD_PROJECT",
+                        ));
+                    }
+                    let has_vertex_auth = has_api_key
+                        || [
+                            "VERTEXAI_API_KEY",
+                            "GOOGLE_API_KEY",
+                            "GOOGLE_OAUTH_ACCESS_TOKEN",
+                            "GOOGLE_ACCESS_TOKEN",
+                        ]
+                        .iter()
+                        .any(|key| {
+                            env.and_then(|env| env.get(*key))
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .is_some_and(|value| !value.is_empty())
+                        });
+                    if !has_vertex_auth {
+                        return Err(AppError::localized(
+                            "provider.kimicode.vertex.credentials.missing",
+                            "Vertex AI 需要 API token 或 OAuth access token",
+                            "Vertex AI requires an API token or OAuth access token",
+                        ));
+                    }
+                } else if !has_api_key {
+                    return Err(AppError::localized(
+                        "provider.kimicode.api_key.missing",
+                        "Kimi Code API Key 不能为空",
+                        "Kimi Code API key is required",
+                    ));
+                }
 
                 let models = settings
                     .get("models")

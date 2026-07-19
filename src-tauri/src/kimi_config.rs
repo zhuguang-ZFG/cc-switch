@@ -134,6 +134,111 @@ pub fn get_kimi_config_path() -> PathBuf {
     get_kimi_dir().join("config.toml")
 }
 
+/// Return the exact live TOML text for lossless takeover backups.
+pub fn read_config_text() -> Result<String, AppError> {
+    let path = get_kimi_config_path();
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))
+}
+
+/// Restore an exact TOML snapshot captured before proxy takeover.
+pub fn write_config_text(text: &str) -> Result<(), AppError> {
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
+    let path = get_kimi_config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+    }
+    atomic_write(&path, text.as_bytes())
+}
+
+/// Project Kimi Code onto the stable local Responses ingress while preserving
+/// every unrelated TOML table and user-defined provider/model field.
+pub fn apply_proxy_takeover(
+    proxy_base_url: &str,
+    api_key: &str,
+) -> Result<KimiWriteOutcome, AppError> {
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
+    let mut doc = read_document()?;
+    let providers = ensure_table_mut(&mut doc, "providers");
+    let provider = ensure_nested_table_mut(providers, "cc-switch-proxy");
+    provider.insert("type", Item::Value(TomlEditValue::from("openai_responses")));
+    provider.insert("base_url", Item::Value(TomlEditValue::from(proxy_base_url)));
+    provider.insert("api_key", Item::Value(TomlEditValue::from(api_key)));
+
+    let models = ensure_table_mut(&mut doc, "models");
+    let model = ensure_nested_table_mut(models, "cc-switch-proxy/default");
+    model.insert(
+        "provider",
+        Item::Value(TomlEditValue::from("cc-switch-proxy")),
+    );
+    model.insert(
+        "model",
+        Item::Value(TomlEditValue::from("cc-switch-proxy-default")),
+    );
+    model.insert(
+        "max_context_size",
+        Item::Value(TomlEditValue::from(262144i64)),
+    );
+    doc["default_model"] = Item::Value(TomlEditValue::from("cc-switch-proxy/default"));
+    write_document(&doc)
+}
+
+pub fn is_proxy_takeover_active() -> Result<bool, AppError> {
+    let doc = read_document()?;
+    let provider = doc
+        .get("providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get("cc-switch-proxy"))
+        .and_then(Item::as_table);
+    Ok(provider.is_some_and(|table| {
+        table_str(table, "api_key").as_deref() == Some("PROXY_MANAGED")
+            || table_str(table, "base_url")
+                .is_some_and(|url| url.contains("127.0.0.1") || url.contains("localhost"))
+    }))
+}
+
+/// Remove only the CC Switch-owned projection if no backup is available.
+pub fn clear_proxy_takeover() -> Result<KimiWriteOutcome, AppError> {
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
+    let mut doc = read_document()?;
+    let mut changed = false;
+    if let Some(providers) = doc.get_mut("providers").and_then(Item::as_table_mut) {
+        changed |= providers.remove("cc-switch-proxy").is_some();
+    }
+    if let Some(models) = doc.get_mut("models").and_then(Item::as_table_mut) {
+        changed |= models.remove("cc-switch-proxy/default").is_some();
+    }
+    if doc
+        .get("default_model")
+        .and_then(Item::as_str)
+        .is_some_and(|value| value == "cc-switch-proxy/default")
+    {
+        if let Some(fallback) = doc
+            .get("models")
+            .and_then(Item::as_table)
+            .and_then(|models| models.iter().next().map(|(alias, _)| alias.to_string()))
+        {
+            doc["default_model"] = Item::Value(TomlEditValue::from(fallback.as_str()));
+        } else {
+            doc.as_table_mut().remove("default_model");
+        }
+        changed = true;
+    }
+    if changed {
+        write_document(&doc)
+    } else {
+        Ok(KimiWriteOutcome::default())
+    }
+}
+
 pub fn get_kimi_credentials_path() -> PathBuf {
     get_kimi_dir()
         .join("credentials")
@@ -737,6 +842,121 @@ pub fn save_oauth_token(token: &KimiOAuthToken) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Return a usable managed Kimi access token, refreshing it when it is near
+/// expiry. The process-wide mutex prevents refresh-token rotation races when
+/// several proxy requests arrive at the same time.
+pub async fn ensure_fresh_oauth_token(force: bool) -> Result<Option<String>, AppError> {
+    ensure_fresh_oauth_token_with_expected(force, None).await
+}
+
+/// Refresh after an upstream 401, but reuse a token another request already
+/// rotated while this request was in flight. This prevents a burst of 401s
+/// from consuming a rotated refresh token more than once.
+pub async fn refresh_oauth_token_after_unauthorized(
+    rejected_access_token: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    ensure_fresh_oauth_token_with_expected(true, rejected_access_token).await
+}
+
+async fn ensure_fresh_oauth_token_with_expected(
+    force: bool,
+    expected_access_token: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    static REFRESH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    let lock = REFRESH_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _guard = lock.lock().await;
+
+    let Some(current) = load_oauth_token()? else {
+        return Ok(None);
+    };
+    if let Some(expected) = expected_access_token {
+        if current.access_token != expected {
+            return Ok(Some(current.access_token));
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    let threshold = 300_i64.max(current.expires_in.max(0) / 2);
+    if !force && current.expires_at.saturating_sub(now) > threshold {
+        return Ok(Some(current.access_token));
+    }
+    if current.refresh_token.trim().is_empty() {
+        return Err(AppError::Message(
+            "Kimi OAuth token has expired and no refresh token is available; please log in again"
+                .to_string(),
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .default_headers(get_kimi_device_headers().map_err(AppError::Message)?)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| {
+            AppError::Message(format!("Failed to build Kimi OAuth client: {error}"))
+        })?;
+    let response = client
+        .post(format!("{}/api/oauth/token", get_kimi_oauth_host()))
+        .form(&[
+            ("client_id", KIMI_OAUTH_CLIENT_ID),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", current.refresh_token.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|error| AppError::Message(format!("Kimi OAuth refresh failed: {error}")))?;
+    let status = response.status();
+    let payload: Value = response.json().await.map_err(|error| {
+        AppError::Message(format!("Invalid Kimi OAuth refresh response: {error}"))
+    })?;
+    if !status.is_success() {
+        let detail = payload
+            .get("error_description")
+            .or_else(|| payload.get("message"))
+            .or_else(|| payload.get("error"))
+            .and_then(Value::as_str)
+            .unwrap_or("authorization rejected");
+        return Err(AppError::Message(format!(
+            "Kimi OAuth refresh rejected (HTTP {}): {detail}",
+            status.as_u16()
+        )));
+    }
+
+    let access_token = payload
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::Message("Kimi OAuth refresh response missing access_token".into())
+        })?;
+    let refresh_token = payload
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&current.refresh_token);
+    let expires_in = payload
+        .get("expires_in")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| current.expires_in.max(3600));
+    let refreshed = KimiOAuthToken {
+        access_token: access_token.to_string(),
+        refresh_token: refresh_token.to_string(),
+        expires_at: now.saturating_add(expires_in),
+        scope: payload
+            .get("scope")
+            .and_then(Value::as_str)
+            .unwrap_or(&current.scope)
+            .to_string(),
+        token_type: payload
+            .get("token_type")
+            .and_then(Value::as_str)
+            .unwrap_or(&current.token_type)
+            .to_string(),
+        expires_in,
+    };
+    save_oauth_token(&refreshed)?;
+    Ok(Some(refreshed.access_token))
+}
+
 fn remove_managed_config_from_document(doc: &mut DocumentMut) -> bool {
     let mut changed = false;
     if let Some(providers) = doc.get_mut("providers").and_then(Item::as_table_mut) {
@@ -981,10 +1201,75 @@ pub fn logout_managed_provider() -> Result<KimiWriteOutcome, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::Bytes,
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::post,
+        Json, Router,
+    };
+    use futures::future::join_all;
     use serde_json::json;
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[derive(Default)]
+    struct MockOAuthState {
+        requests: AtomicUsize,
+        forms: Mutex<Vec<(String, String)>>,
+    }
+
+    async fn mock_oauth_token(
+        State(state): State<Arc<MockOAuthState>>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> impl IntoResponse {
+        let request_number = state.requests.fetch_add(1, Ordering::SeqCst);
+        state.forms.lock().unwrap().push((
+            String::from_utf8_lossy(&body).into_owned(),
+            headers
+                .get("x-msh-platform")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string(),
+        ));
+
+        match request_number {
+            0 => (
+                StatusCode::OK,
+                Json(json!({
+                    "access_token": "access-1",
+                    "refresh_token": "refresh-rotated-1",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                    "scope": "coding"
+                })),
+            )
+                .into_response(),
+            1 => (
+                StatusCode::OK,
+                Json(json!({
+                    "access_token": "access-2",
+                    "refresh_token": "refresh-rotated-2",
+                    "expires_in": 3600
+                })),
+            )
+                .into_response(),
+            _ => (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "invalid_grant",
+                    "error_description": "refresh token is invalid"
+                })),
+            )
+                .into_response(),
+        }
+    }
 
     fn with_temp_home<F: FnOnce(&Path)>(f: F) {
         let _g = TEST_LOCK.lock().unwrap();
@@ -993,9 +1278,18 @@ mod tests {
         fs::create_dir_all(home.join(".kimi-code")).unwrap();
         // Point via env override used by get_kimi_dir when settings override is None.
         // We set KIMI_CODE_HOME to our temp dir.
+        let previous_home = std::env::var_os("KIMI_CODE_HOME");
+        let previous_oauth_host = std::env::var_os("KIMI_CODE_OAUTH_HOST");
         std::env::set_var("KIMI_CODE_HOME", home.join(".kimi-code"));
         f(&home);
-        std::env::remove_var("KIMI_CODE_HOME");
+        match previous_home {
+            Some(value) => std::env::set_var("KIMI_CODE_HOME", value),
+            None => std::env::remove_var("KIMI_CODE_HOME"),
+        }
+        match previous_oauth_host {
+            Some(value) => std::env::set_var("KIMI_CODE_OAUTH_HOST", value),
+            None => std::env::remove_var("KIMI_CODE_OAUTH_HOST"),
+        }
     }
 
     #[test]
@@ -1054,6 +1348,36 @@ api_key = "x"
             assert!(text.contains("[thinking]"));
             assert!(text.contains("effort = \"high\""));
             assert!(text.contains("[providers.other]"));
+        });
+    }
+
+    #[test]
+    fn proxy_takeover_preserves_unrelated_toml_and_restores_exact_snapshot() {
+        with_temp_home(|_home| {
+            let original = r#"default_model = "demo/model"
+
+[thinking]
+enabled = true
+
+[providers.demo]
+type = "openai"
+base_url = "https://example.test/v1"
+api_key = "secret"
+
+[models."demo/model"]
+provider = "demo"
+model = "model"
+"#;
+            fs::write(get_kimi_config_path(), original).unwrap();
+            apply_proxy_takeover("http://127.0.0.1:15721/kimicode/v1", "PROXY_MANAGED").unwrap();
+            assert!(is_proxy_takeover_active().unwrap());
+            let taken = read_config_text().unwrap();
+            assert!(taken.contains("[thinking]"));
+            assert!(taken.contains("[providers.demo]"));
+            assert!(taken.contains("default_model = \"cc-switch-proxy/default\""));
+            write_config_text(original).unwrap();
+            assert_eq!(read_config_text().unwrap(), original);
+            assert!(!is_proxy_takeover_active().unwrap());
         });
     }
 
@@ -1241,5 +1565,136 @@ model = "real-model"
             assert_eq!(value["refresh_token"], "refresh");
             assert_eq!(load_oauth_token().unwrap().unwrap().expires_in, 3600);
         });
+    }
+
+    #[test]
+    fn oauth_refresh_mock_covers_rotation_coalescing_and_rejection() {
+        with_temp_home(|_home| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("OAuth test runtime");
+            runtime.block_on(async {
+                let state = Arc::new(MockOAuthState::default());
+                let app = Router::new()
+                    .route("/api/oauth/token", post(mock_oauth_token))
+                    .with_state(state.clone());
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("mock oauth listener");
+                let host = format!("http://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, app).await.expect("mock oauth server");
+                });
+                std::env::set_var("KIMI_CODE_OAUTH_HOST", &host);
+
+                let now = chrono::Utc::now().timestamp();
+                save_oauth_token(&KimiOAuthToken {
+                    access_token: "access-valid".into(),
+                    refresh_token: "refresh-valid".into(),
+                    expires_at: now + 3600,
+                    scope: "coding".into(),
+                    token_type: "Bearer".into(),
+                    expires_in: 3600,
+                })
+                .unwrap();
+                assert_eq!(
+                    ensure_fresh_oauth_token(false).await.unwrap().as_deref(),
+                    Some("access-valid")
+                );
+                assert_eq!(state.requests.load(Ordering::SeqCst), 0);
+
+                save_oauth_token(&KimiOAuthToken {
+                    access_token: "access-expired".into(),
+                    refresh_token: "refresh-1".into(),
+                    expires_at: now - 1,
+                    scope: String::new(),
+                    token_type: "Bearer".into(),
+                    expires_in: 3600,
+                })
+                .unwrap();
+                assert_eq!(
+                    ensure_fresh_oauth_token(false).await.unwrap().as_deref(),
+                    Some("access-1")
+                );
+                assert_eq!(
+                    load_oauth_token().unwrap().unwrap().refresh_token,
+                    "refresh-rotated-1"
+                );
+                assert_eq!(state.requests.load(Ordering::SeqCst), 1);
+                {
+                    let forms = state.forms.lock().unwrap();
+                    assert!(forms[0].0.contains("grant_type=refresh_token"));
+                    assert!(forms[0].0.contains("refresh_token=refresh-1"));
+                    assert_eq!(forms[0].1, "kimi_code_cli");
+                }
+
+                save_oauth_token(&KimiOAuthToken {
+                    access_token: "access-expired-2".into(),
+                    refresh_token: "refresh-2".into(),
+                    expires_at: now - 1,
+                    scope: String::new(),
+                    token_type: "Bearer".into(),
+                    expires_in: 3600,
+                })
+                .unwrap();
+                let results = join_all((0..8).map(|_| ensure_fresh_oauth_token(false))).await;
+                assert!(results
+                    .iter()
+                    .all(|result| result.as_ref().unwrap().as_deref() == Some("access-2")));
+                assert_eq!(state.requests.load(Ordering::SeqCst), 2);
+
+                assert_eq!(
+                    refresh_oauth_token_after_unauthorized(Some("access-1"))
+                        .await
+                        .unwrap()
+                        .as_deref(),
+                    Some("access-2")
+                );
+                assert_eq!(state.requests.load(Ordering::SeqCst), 2);
+
+                save_oauth_token(&KimiOAuthToken {
+                    access_token: "access-expired-3".into(),
+                    refresh_token: "refresh-3".into(),
+                    expires_at: now - 1,
+                    scope: String::new(),
+                    token_type: "Bearer".into(),
+                    expires_in: 3600,
+                })
+                .unwrap();
+                let error = refresh_oauth_token_after_unauthorized(Some("access-expired-3"))
+                    .await
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("HTTP 401"));
+                assert_eq!(state.requests.load(Ordering::SeqCst), 3);
+
+                server.abort();
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "requires an explicit real Kimi OAuth account"]
+    fn real_oauth_refresh_smoke() {
+        assert_eq!(
+            std::env::var("CC_SWITCH_RUN_REAL_KIMI_OAUTH").as_deref(),
+            Ok("1"),
+            "set CC_SWITCH_RUN_REAL_KIMI_OAUTH=1 explicitly"
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("real OAuth smoke runtime");
+        let access_token = runtime
+            .block_on(ensure_fresh_oauth_token(false))
+            .expect("real Kimi OAuth refresh")
+            .expect("real Kimi OAuth credentials");
+        let refreshed = load_oauth_token()
+            .expect("load refreshed Kimi token")
+            .expect("refreshed Kimi credentials");
+        assert!(!access_token.is_empty());
+        assert_eq!(access_token, refreshed.access_token);
+        assert!(refreshed.expires_at > chrono::Utc::now().timestamp());
     }
 }

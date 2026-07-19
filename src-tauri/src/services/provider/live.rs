@@ -1497,6 +1497,7 @@ pub fn should_import_default_config_on_startup(
 }
 
 /// Write Gemini live configuration with authentication handling
+#[allow(dead_code)]
 pub(crate) fn write_gemini_live(provider: &Provider) -> Result<(), AppError> {
     use crate::gemini_config::{
         get_gemini_settings_path, json_to_env, validate_gemini_settings_strict,

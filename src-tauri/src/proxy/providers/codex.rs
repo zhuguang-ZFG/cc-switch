@@ -22,10 +22,90 @@ static CODEX_CLIENT_REGEX: LazyLock<Regex> =
 /// Codex 适配器
 pub struct CodexAdapter;
 
+/// Wire protocol selected for a Kimi Code routing attempt.  The local Kimi
+/// ingress is always Responses; this enum describes only the real upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KimiWireProtocol {
+    Chat,
+    Responses,
+    Anthropic,
+    GoogleGenAi,
+    VertexAi,
+}
+
+/// Resolve Kimi's explicit provider type to the upstream wire protocol.
+/// Unknown/missing values intentionally use Responses, matching the managed
+/// Kimi provider and avoiding protocol guessing from host names.
+pub fn kimi_wire_protocol(provider: &Provider) -> KimiWireProtocol {
+    let declared = provider
+        .settings_config
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("api_format")
+                .and_then(JsonValue::as_str)
+        })
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("apiFormat")
+                .and_then(JsonValue::as_str)
+        })
+        .map(str::trim)
+        .map(|value| value.to_ascii_lowercase());
+
+    let Some(declared) = declared else {
+        return provider
+            .settings_config
+            .get("config")
+            .and_then(JsonValue::as_str)
+            .and_then(extract_codex_wire_api_from_toml)
+            .map(|value| kimi_wire_protocol_from_name(&value))
+            .unwrap_or(KimiWireProtocol::Responses);
+    };
+    kimi_wire_protocol_from_name(&declared)
+}
+
+fn kimi_wire_protocol_from_name(name: &str) -> KimiWireProtocol {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "kimi" | "openai" | "openai_chat" | "openai_chat_completions" | "chat" => {
+            KimiWireProtocol::Chat
+        }
+        "anthropic" | "anthropic_messages" => KimiWireProtocol::Anthropic,
+        "google-genai" | "google_genai" | "gemini_native" => KimiWireProtocol::GoogleGenAi,
+        "vertexai" | "vertex-ai" | "vertex_ai" => KimiWireProtocol::VertexAi,
+        "openai_responses" | "responses" | "codex" => KimiWireProtocol::Responses,
+        _ => KimiWireProtocol::Responses,
+    }
+}
+
+pub fn should_convert_codex_responses_to_gemini(provider: &Provider, endpoint: &str) -> bool {
+    let path = endpoint.split_once('?').map_or(endpoint, |(path, _)| path);
+    matches!(
+        path,
+        "/responses" | "/v1/responses" | "/responses/compact" | "/v1/responses/compact"
+    ) && matches!(
+        kimi_wire_protocol(provider),
+        KimiWireProtocol::GoogleGenAi | KimiWireProtocol::VertexAi
+    )
+}
+
 /// Whether this Codex provider's real upstream should be called through
 /// OpenAI Chat Completions, even if the local Codex client is talking to CC
 /// Switch through the Responses API.
 pub fn codex_provider_uses_chat_completions(provider: &Provider) -> bool {
+    if let Some(provider_type) = provider
+        .settings_config
+        .get("type")
+        .and_then(|value| value.as_str())
+    {
+        return matches!(
+            provider_type.trim().to_ascii_lowercase().as_str(),
+            "kimi" | "openai" | "openai_chat" | "openai_chat_completions"
+        );
+    }
     if let Some(api_format) = provider
         .meta
         .as_ref()
@@ -166,6 +246,16 @@ pub fn inject_codex_chat_prompt_cache_key(
 /// Determined solely from explicit config (apiFormat / wire_api); no base_url
 /// guessing — Anthropic gateway addresses vary widely and guessing easily misfires.
 pub fn codex_provider_uses_anthropic(provider: &Provider) -> bool {
+    if let Some(provider_type) = provider
+        .settings_config
+        .get("type")
+        .and_then(|value| value.as_str())
+    {
+        return matches!(
+            provider_type.trim().to_ascii_lowercase().as_str(),
+            "anthropic" | "anthropic_messages"
+        );
+    }
     if let Some(api_format) = provider
         .meta
         .as_ref()
@@ -1069,6 +1159,51 @@ wire_api = "anthropic"
         let chat = create_provider(json!({ "apiFormat": "openai_chat" }));
         assert!(codex_provider_uses_chat_completions(&chat));
         assert!(!codex_provider_uses_anthropic(&chat));
+    }
+
+    #[test]
+    fn kimi_provider_types_map_to_explicit_wire_protocols() {
+        let cases = [
+            ("kimi", KimiWireProtocol::Chat),
+            ("openai", KimiWireProtocol::Chat),
+            ("openai_responses", KimiWireProtocol::Responses),
+            ("anthropic", KimiWireProtocol::Anthropic),
+            ("google-genai", KimiWireProtocol::GoogleGenAi),
+            ("vertexai", KimiWireProtocol::VertexAi),
+        ];
+
+        for (provider_type, expected) in cases {
+            let provider = create_provider(json!({ "type": provider_type }));
+            assert_eq!(kimi_wire_protocol(&provider), expected, "{provider_type}");
+        }
+    }
+
+    #[test]
+    fn kimi_unknown_type_does_not_guess_from_host() {
+        let provider = create_provider(json!({
+            "type": "future-provider",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta"
+        }));
+        assert_eq!(kimi_wire_protocol(&provider), KimiWireProtocol::Responses);
+    }
+
+    #[test]
+    fn kimi_google_types_enable_responses_bridge_only_on_responses_paths() {
+        for provider_type in ["google-genai", "vertexai"] {
+            let provider = create_provider(json!({ "type": provider_type }));
+            assert!(should_convert_codex_responses_to_gemini(
+                &provider,
+                "/responses"
+            ));
+            assert!(should_convert_codex_responses_to_gemini(
+                &provider,
+                "/v1/responses/compact?stream=true"
+            ));
+            assert!(!should_convert_codex_responses_to_gemini(
+                &provider,
+                "/chat/completions"
+            ));
+        }
     }
 
     #[test]

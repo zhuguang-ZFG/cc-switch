@@ -428,6 +428,7 @@ requires_openai_auth = true
 }
 
 /// Build Gemini settings configuration
+#[allow(dead_code)]
 fn build_gemini_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
     let mut env = serde_json::Map::new();
     env.insert("GEMINI_API_KEY".to_string(), json!(request.api_key));

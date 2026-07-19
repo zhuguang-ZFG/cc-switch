@@ -13,7 +13,8 @@ use super::{
     provider_router::ProviderRouter,
     providers::{
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore, get_adapter,
-        AuthInfo, AuthStrategy, ProviderAdapter, ProviderType,
+        get_adapter_for_provider_type, AuthInfo, AuthStrategy, KimiWireProtocol, ProviderAdapter,
+        ProviderType,
     },
     thinking_budget_rectifier::{rectify_thinking_budget, should_rectify_thinking_budget},
     thinking_rectifier::{
@@ -53,6 +54,16 @@ fn validate_codex_official_authorization(headers: &http::HeaderMap) -> Result<()
         )),
         Some(_) => Ok(()),
     }
+}
+
+fn is_managed_kimi_provider(provider: &Provider) -> bool {
+    provider.id == crate::kimi_config::MANAGED_KIMI_PROVIDER
+        || provider
+            .settings_config
+            .get("oauth")
+            .and_then(|oauth| oauth.get("key"))
+            .and_then(Value::as_str)
+            .is_some_and(|key| key == crate::kimi_config::KIMI_OAUTH_KEY)
 }
 
 pub struct ForwardResult {
@@ -476,19 +487,61 @@ impl RequestForwarder {
             }
 
             // 转发请求（每个 Provider 只尝试一次，重试由客户端控制）
-            match self
-                .forward(
-                    app_type,
-                    &method,
-                    provider,
-                    endpoint,
-                    &provider_body,
-                    &headers,
-                    &extensions,
-                    adapter.as_ref(),
-                )
-                .await
-            {
+            let kimi_managed_oauth =
+                matches!(app_type, AppType::KimiCode) && is_managed_kimi_provider(provider);
+            // Keep the credential used for this attempt so a concurrent 401
+            // can reuse a token that another request already rotated.
+            let kimi_attempt_access_token = if kimi_managed_oauth {
+                crate::kimi_config::load_oauth_token()
+                    .ok()
+                    .flatten()
+                    .map(|token| token.access_token)
+            } else {
+                None
+            };
+            let mut kimi_force_refreshed = false;
+            let forward_result = loop {
+                let result = self
+                    .forward(
+                        app_type,
+                        &method,
+                        provider,
+                        endpoint,
+                        &provider_body,
+                        &headers,
+                        &extensions,
+                        adapter.as_ref(),
+                    )
+                    .await;
+                if kimi_managed_oauth
+                    && !kimi_force_refreshed
+                    && matches!(
+                        result.as_ref(),
+                        Err(ProxyError::UpstreamError { status: 401, .. })
+                    )
+                {
+                    kimi_force_refreshed = true;
+                    match crate::kimi_config::refresh_oauth_token_after_unauthorized(
+                        kimi_attempt_access_token.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(Some(_)) => continue,
+                        Ok(None) => {
+                            break Err(ProxyError::AuthError(
+                                "Kimi Code OAuth is not logged in; please sign in again".into(),
+                            ));
+                        }
+                        Err(error) => {
+                            break Err(ProxyError::AuthError(format!(
+                                "Kimi Code OAuth refresh failed after HTTP 401: {error}"
+                            )));
+                        }
+                    }
+                }
+                break result;
+            };
+            match forward_result {
                 Ok((response, claude_api_format, outbound_model)) => {
                     // 成功：普通闭合熔断状态异步记录，避免阻塞流式首包返回；
                     // HalfOpen 探测仍同步等待，保证 permit 与熔断状态及时释放。
@@ -1123,6 +1176,15 @@ impl RequestForwarder {
         adapter: &dyn ProviderAdapter,
     ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
         // 使用适配器提取 base_url
+        let kimi_wire_protocol = matches!(app_type, AppType::KimiCode)
+            .then(|| super::providers::kimi_wire_protocol(provider));
+        let kimi_adapter = match kimi_wire_protocol {
+            Some(KimiWireProtocol::GoogleGenAi | KimiWireProtocol::VertexAi) => {
+                Some(get_adapter_for_provider_type(&ProviderType::Gemini))
+            }
+            _ => None,
+        };
+        let adapter = kimi_adapter.as_deref().unwrap_or(adapter);
         let mut base_url = adapter.extract_base_url(provider)?;
 
         let is_full_url = provider
@@ -1142,10 +1204,18 @@ impl RequestForwarder {
         // Codex upstream conversion mode — computed early because the [1m]-suffix strip
         // below must be skipped on the Anthropic path (the marker has to survive to
         // catalog matching and to the transform's own strip+beta detection).
-        let codex_responses_to_chat = matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && super::providers::should_convert_codex_responses_to_chat(provider, endpoint);
-        let codex_responses_to_anthropic = matches!(app_type, AppType::Codex | AppType::GrokBuild)
+        let codex_responses_to_chat =
+            matches!(
+                app_type,
+                AppType::Codex | AppType::GrokBuild | AppType::KimiCode
+            ) && super::providers::should_convert_codex_responses_to_chat(provider, endpoint);
+        let codex_responses_to_anthropic = matches!(
+            app_type,
+            AppType::Codex | AppType::GrokBuild | AppType::KimiCode
+        )
             && super::providers::should_convert_codex_responses_to_anthropic(provider, endpoint);
+        let codex_responses_to_gemini = matches!(app_type, AppType::KimiCode)
+            && super::providers::should_convert_codex_responses_to_gemini(provider, endpoint);
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
 
@@ -1171,7 +1241,7 @@ impl RequestForwarder {
         // Grok Build exposes a stable client-side model profile in config.toml.
         // Route requests to the provider's real upstream model before applying
         // the optional Responses -> Chat/Anthropic bridge.
-        if matches!(app_type, AppType::GrokBuild) {
+        if matches!(app_type, AppType::GrokBuild | AppType::KimiCode) {
             super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
         }
 
@@ -1180,7 +1250,7 @@ impl RequestForwarder {
                 super::providers::copilot_model_map::apply_copilot_model_normalization(mapped_body);
             self.apply_copilot_live_model_resolution(provider, &mut mapped_body)
                 .await;
-        } else if !codex_responses_to_anthropic {
+        } else if !codex_responses_to_anthropic && !codex_responses_to_gemini {
             // Skip on the Codex→Anthropic path: stripping [1m] here would break both the
             // model-catalog match (apply_codex_upstream_model) and the transform's own
             // strip+`context-1m` beta detection. The marker is stripped later, on the
@@ -1358,6 +1428,13 @@ impl RequestForwarder {
             rewrite_codex_responses_endpoint_to_chat(endpoint)
         } else if codex_responses_to_anthropic {
             rewrite_codex_responses_endpoint_to_anthropic(endpoint)
+        } else if codex_responses_to_gemini {
+            rewrite_codex_responses_endpoint_to_gemini(
+                endpoint,
+                &mapped_body,
+                kimi_wire_protocol == Some(KimiWireProtocol::VertexAi),
+                provider,
+            )?
         } else if needs_transform && adapter.name() == "Claude" {
             let api_format = resolved_claude_api_format
                 .as_deref()
@@ -1383,7 +1460,9 @@ impl RequestForwarder {
         let codex_anthropic_base_is_full_endpoint =
             codex_responses_to_anthropic && base_url_is_full_endpoint(&base_url, "/v1/messages");
 
-        let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
+        let url = if codex_responses_to_gemini
+            || matches!(resolved_claude_api_format.as_deref(), Some("gemini_native"))
+        {
             super::gemini_url::resolve_gemini_native_url(
                 &base_url,
                 &effective_endpoint,
@@ -1498,6 +1577,20 @@ impl RequestForwarder {
                 &codex_anthropic_cache_config(&self.optimizer_config),
             );
             anthropic_body
+        } else if codex_responses_to_gemini {
+            const DEFAULT_CODEX_GEMINI_MAX_TOKENS: u64 = 8192;
+            let anthropic_body =
+                super::providers::transform_codex_anthropic::responses_request_to_anthropic(
+                    mapped_body,
+                    DEFAULT_CODEX_GEMINI_MAX_TOKENS,
+                )?;
+            super::providers::transform_gemini::anthropic_to_gemini_with_shadow(
+                anthropic_body,
+                Some(self.gemini_shadow.as_ref()),
+                Some(&provider.id),
+                self.session_client_provided
+                    .then_some(self.session_id.as_str()),
+            )?
         } else if needs_transform {
             if adapter.name() == "Claude" {
                 let api_format = resolved_claude_api_format
@@ -1557,6 +1650,7 @@ impl RequestForwarder {
         let force_identity_encoding = needs_transform
             || codex_responses_to_chat
             || codex_responses_to_anthropic
+            || codex_responses_to_gemini
             || request_is_streaming;
 
         // Codex OAuth 需要注入的 ChatGPT-Account-Id（在动态 token 获取期间填充）
@@ -1564,7 +1658,26 @@ impl RequestForwarder {
         let mut should_send_codex_oauth_session_headers = false;
 
         // 获取认证头（提前准备，用于内联替换）
-        let mut auth_headers = if let Some(mut auth) = adapter.extract_auth(provider) {
+        let kimi_managed_oauth =
+            matches!(app_type, AppType::KimiCode) && is_managed_kimi_provider(provider);
+        let extracted_auth = if kimi_managed_oauth {
+            match crate::kimi_config::ensure_fresh_oauth_token(false).await {
+                Ok(Some(token)) => Some(AuthInfo::new(token, AuthStrategy::Bearer)),
+                Ok(None) => {
+                    return Err(ProxyError::AuthError(
+                        "Kimi Code OAuth is not logged in; please sign in again".to_string(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(ProxyError::AuthError(format!(
+                        "Kimi Code OAuth refresh failed: {error}"
+                    )));
+                }
+            }
+        } else {
+            adapter.extract_auth(provider)
+        };
+        let mut auth_headers = if let Some(mut auth) = extracted_auth {
             // GitHub Copilot 特殊处理：从 CopilotAuthManager 获取真实 token
             if auth.strategy == AuthStrategy::GitHubCopilot {
                 if let Some(app_handle) = &self.app_handle {
@@ -1670,6 +1783,10 @@ impl RequestForwarder {
             }
 
             adapter.get_auth_headers(&auth)?
+        } else if kimi_managed_oauth {
+            return Err(ProxyError::AuthError(
+                "Kimi Code OAuth is not logged in; please sign in again".to_string(),
+            ));
         } else {
             Vec::new()
         };
@@ -2535,6 +2652,20 @@ impl RequestForwarder {
     }
 
     fn categorize_proxy_error(&self, error: &ProxyError, provider: &Provider) -> ErrorCategory {
+        let is_managed_kimi = is_managed_kimi_provider(provider);
+        if is_managed_kimi
+            && (matches!(error, ProxyError::AuthError(_))
+                || matches!(
+                    error,
+                    ProxyError::UpstreamError {
+                        status: 401 | 403,
+                        ..
+                    }
+                ))
+        {
+            return ErrorCategory::NonRetryable;
+        }
+
         // Authentication belongs to the Codex client for the built-in official
         // route. Retrying another provider would silently move the conversation
         // away from the selected official account and poison its health state.
@@ -2979,6 +3110,56 @@ fn rewrite_codex_responses_endpoint_to_anthropic(endpoint: &str) -> (String, Opt
     };
 
     (rewritten, passthrough_query)
+}
+
+fn rewrite_codex_responses_endpoint_to_gemini(
+    endpoint: &str,
+    body: &Value,
+    vertex: bool,
+    provider: &Provider,
+) -> Result<(String, Option<String>), ProxyError> {
+    let (_, query) = split_endpoint_and_query(endpoint);
+    let model = super::gemini_url::normalize_gemini_model_id(
+        super::providers::transform_gemini::extract_gemini_model(body).unwrap_or("unknown"),
+    );
+    let is_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let target_path = if vertex {
+        let env = provider.settings_config.get("env");
+        let project = env
+            .and_then(|value| value.get("GOOGLE_CLOUD_PROJECT"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ProxyError::ConfigError(
+                    "Kimi Vertex AI provider requires env.GOOGLE_CLOUD_PROJECT".to_string(),
+                )
+            })?;
+        let location = env
+            .and_then(|value| value.get("GOOGLE_CLOUD_LOCATION"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("us-central1");
+        let action = if is_stream {
+            "streamGenerateContent"
+        } else {
+            "generateContent"
+        };
+        format!(
+            "/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:{action}"
+        )
+    } else if is_stream {
+        format!("/v1beta/models/{model}:streamGenerateContent")
+    } else {
+        format!("/v1beta/models/{model}:generateContent")
+    };
+    let rewritten_query = merge_query_params(query, is_stream.then_some("alt=sse"));
+    let rewritten = match rewritten_query.as_deref() {
+        Some(query) if !query.is_empty() => format!("{target_path}?{query}"),
+        _ => target_path,
+    };
+    Ok((rewritten, rewritten_query))
 }
 
 fn rewrite_claude_transform_endpoint(
@@ -3463,8 +3644,10 @@ mod tests {
     use crate::provider::LocalProxyRequestOverrides;
     use axum::http::header::{HeaderValue, ACCEPT};
     use axum::http::HeaderMap;
+    use axum::{routing::any, Router};
     use bytes::Bytes;
     use http::StatusCode;
+    use http_body_util::BodyExt;
     use serde_json::json;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -3512,6 +3695,108 @@ mod tests {
             non_streaming_timeout,
             streaming_first_byte_timeout,
             max_attempts: 1,
+        }
+    }
+
+    async fn spawn_gemini_smoke_upstream(
+        captured: Arc<tokio::sync::Mutex<Option<(String, Value)>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind smoke upstream");
+        let address = listener.local_addr().expect("smoke upstream address");
+        let app = Router::new().fallback(any(move |request: axum::extract::Request| {
+            let captured = captured.clone();
+            async move {
+                let path = request.uri().path().to_string();
+                let body = request
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("read smoke request")
+                    .to_bytes();
+                let value: Value = serde_json::from_slice(&body).expect("smoke JSON");
+                *captured.lock().await = Some((path, value));
+                axum::Json(json!({
+                    "responseId": "smoke-response",
+                    "modelVersion": "gemini-2.5-pro",
+                    "candidates": [{
+                        "finishReason": "STOP",
+                        "content": { "parts": [{ "text": "kimi-smoke-ok" }] }
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 4,
+                        "candidatesTokenCount": 2,
+                        "totalTokenCount": 6
+                    }
+                }))
+            }
+        }));
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve smoke upstream");
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[tokio::test]
+    async fn kimi_google_and_vertex_requests_reach_native_upstream() {
+        for (provider_type, expected_segment) in [
+            ("google-genai", "/v1beta/models/gemini-2.5-pro:generateContent"),
+            (
+                "vertexai",
+                "/v1/projects/project-1/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent",
+            ),
+        ] {
+            let captured = Arc::new(tokio::sync::Mutex::new(None));
+            let (base_url, handle) = spawn_gemini_smoke_upstream(captured.clone()).await;
+            let mut provider = test_provider_with_type(None);
+            provider.id = format!("smoke-{provider_type}");
+            provider.settings_config = json!({
+                "type": provider_type,
+                "base_url": base_url,
+                "api_key": "smoke-key",
+                "models": [{ "id": "gemini-2.5-pro" }],
+                "env": {
+                    "GOOGLE_CLOUD_PROJECT": "project-1",
+                    "GOOGLE_CLOUD_LOCATION": "us-central1"
+                }
+            });
+
+            let forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+            let result = forwarder
+                .forward(
+                    &AppType::KimiCode,
+                    &http::Method::POST,
+                    &provider,
+                    "/responses",
+                    &json!({
+                        "model": "gemini-2.5-pro",
+                        "stream": false,
+                        "input": [{ "role": "user", "content": [{ "type": "input_text", "text": "hi" }] }]
+                    }),
+                    &HeaderMap::new(),
+                    &http::Extensions::new(),
+                    get_adapter(&AppType::KimiCode).as_ref(),
+                )
+            .await
+                .expect("Kimi Gemini upstream request");
+            assert_eq!(result.0.status(), 200);
+            let upstream_response: Value =
+                serde_json::from_slice(&result.0.bytes().await.expect("read smoke response"))
+                    .expect("smoke response JSON");
+            let anthropic = crate::proxy::providers::transform_gemini::gemini_to_anthropic(
+                upstream_response,
+            )
+            .expect("Gemini response conversion");
+            let responses = crate::proxy::providers::transform_codex_anthropic::anthropic_response_to_responses(anthropic)
+                .expect("Responses response conversion");
+            assert_eq!(responses["output"][0]["content"][0]["text"], "kimi-smoke-ok");
+            let (path, body) = captured.lock().await.clone().expect("captured request");
+            assert_eq!(path, expected_segment);
+            assert_eq!(body["contents"][0]["parts"][0]["text"], "hi");
+            handle.abort();
         }
     }
 
@@ -3657,6 +3942,79 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&prepared).unwrap(),
             r#"{"a":2,"tools":[{"name":"lookup","parameters":{"properties":{"_id":{"type":"string"},"a":{"type":"string"},"b":{"type":"number"}},"type":"object"}}],"z":1}"#
+        );
+    }
+
+    #[test]
+    fn kimi_google_endpoint_uses_native_streaming_method() {
+        let provider = test_provider_with_type(None);
+        let (endpoint, query) = rewrite_codex_responses_endpoint_to_gemini(
+            "/responses",
+            &json!({ "model": "models/gemini-2.5-pro", "stream": true }),
+            false,
+            &provider,
+        )
+        .unwrap();
+        assert_eq!(
+            endpoint,
+            "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+        );
+        assert_eq!(query.as_deref(), Some("alt=sse"));
+    }
+
+    #[test]
+    fn kimi_vertex_endpoint_requires_project_and_uses_location() {
+        let mut provider = test_provider_with_type(None);
+        provider.settings_config = json!({
+            "type": "vertexai",
+            "env": {
+                "GOOGLE_CLOUD_PROJECT": "project-1",
+                "GOOGLE_CLOUD_LOCATION": "asia-east1"
+            }
+        });
+        let (endpoint, _) = rewrite_codex_responses_endpoint_to_gemini(
+            "/responses",
+            &json!({ "model": "gemini-2.5-pro", "stream": false }),
+            true,
+            &provider,
+        )
+        .unwrap();
+        assert_eq!(
+            endpoint,
+            "/v1/projects/project-1/locations/asia-east1/publishers/google/models/gemini-2.5-pro:generateContent"
+        );
+
+        provider.settings_config["env"] = json!({});
+        assert!(rewrite_codex_responses_endpoint_to_gemini(
+            "/responses",
+            &json!({ "model": "gemini-2.5-pro" }),
+            true,
+            &provider,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn managed_kimi_auth_errors_are_not_failed_over() {
+        let forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+        let mut provider = test_provider_with_type(None);
+        provider.id = crate::kimi_config::MANAGED_KIMI_PROVIDER.to_string();
+        provider.settings_config = json!({ "oauth": { "storage": "file" } });
+
+        assert_eq!(
+            forwarder
+                .categorize_proxy_error(&ProxyError::AuthError("expired".to_string()), &provider),
+            ErrorCategory::NonRetryable
+        );
+        assert_eq!(
+            forwarder.categorize_proxy_error(
+                &ProxyError::UpstreamError {
+                    status: 401,
+                    body: None
+                },
+                &provider
+            ),
+            ErrorCategory::NonRetryable
         );
     }
 

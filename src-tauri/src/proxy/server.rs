@@ -333,6 +333,15 @@ impl ProxyServer {
                 "/grokbuild/v1/responses",
                 post(handlers::handle_grokbuild_responses),
             )
+            .route(
+                "/kimicode/v1/responses",
+                post(handlers::handle_kimicode_responses),
+            )
+            .route(
+                "/kimicode/v1/responses/compact",
+                post(handlers::handle_kimicode_responses_compact),
+            )
+            .route("/kimicode/v1/models", get(handlers::handle_kimicode_models))
             // OpenAI Responses Compact API (Codex CLI 远程压缩，透传)
             .route(
                 "/responses/compact",

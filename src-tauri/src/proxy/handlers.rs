@@ -776,6 +776,44 @@ pub async fn handle_grokbuild_responses(
     .await
 }
 
+/// Kimi Code always enters through the local Responses boundary. The generic
+/// handler still selects the real upstream adapter per provider attempt.
+pub async fn handle_kimicode_responses(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_for_app(state, request, AppType::KimiCode, "Kimi Code", "kimicode").await
+}
+
+pub async fn handle_kimicode_responses_compact(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_compact_for_app(state, request, AppType::KimiCode, "Kimi Code", "kimicode")
+        .await
+}
+
+pub async fn handle_kimicode_models() -> Result<Json<Value>, ProxyError> {
+    let providers = crate::kimi_config::get_providers()
+        .map_err(|e| ProxyError::Internal(format!("读取 Kimi 模型目录失败: {e}")))?;
+    let mut data = Vec::new();
+    for (provider, value) in providers {
+        if let Some(models) = value.get("models").and_then(Value::as_array) {
+            for model in models {
+                let id = model
+                    .get("alias")
+                    .or_else(|| model.get("id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !id.is_empty() {
+                    data.push(json!({"id": id, "object": "model", "owned_by": provider}));
+                }
+            }
+        }
+    }
+    Ok(Json(json!({"object": "list", "data": data})))
+}
+
 async fn handle_responses_for_app(
     state: ProxyState,
     request: axum::extract::Request,
@@ -834,6 +872,18 @@ async fn handle_responses_for_app(
     ctx.outbound_model = result.outbound_model.take();
     ctx.provider = result.provider;
     let response = result.response;
+
+    if super::providers::should_convert_codex_responses_to_gemini(&ctx.provider, &endpoint) {
+        return handle_codex_gemini_to_responses_transform(
+            response,
+            &ctx,
+            &state,
+            is_stream,
+            connection_guard,
+            codex_tool_context,
+        )
+        .await;
+    }
 
     if super::providers::should_convert_codex_responses_to_anthropic(&ctx.provider, &endpoint) {
         return handle_codex_anthropic_to_responses_transform(
@@ -949,6 +999,18 @@ async fn handle_responses_compact_for_app(
     ctx.outbound_model = result.outbound_model.take();
     ctx.provider = result.provider;
     let response = result.response;
+
+    if super::providers::should_convert_codex_responses_to_gemini(&ctx.provider, &endpoint) {
+        return handle_codex_gemini_to_responses_transform(
+            response,
+            &ctx,
+            &state,
+            is_stream,
+            connection_guard,
+            codex_tool_context,
+        )
+        .await;
+    }
 
     if super::providers::should_convert_codex_responses_to_anthropic(&ctx.provider, &endpoint) {
         return handle_codex_anthropic_to_responses_transform(
@@ -1217,6 +1279,100 @@ async fn handle_codex_chat_to_responses_transform(
 /// `handle_codex_chat_error_response` (whose extraction logic also works for
 /// Anthropic's `{"error":{type,message}}`). It does not involve codex_chat_history
 /// (tool ids round-trip natively through Anthropic).
+async fn handle_codex_gemini_to_responses_transform(
+    response: super::hyper_client::ProxyResponse,
+    ctx: &RequestContext,
+    state: &ProxyState,
+    is_stream: bool,
+    connection_guard: Option<ActiveConnectionGuard>,
+    codex_tool_context: transform_codex_chat::CodexToolContext,
+) -> Result<axum::response::Response, ProxyError> {
+    let status = response.status();
+    if !status.is_success() {
+        return handle_codex_chat_error_response(response, ctx, status).await;
+    }
+
+    if response.is_sse() || (is_stream && !response.is_json()) {
+        let anthropic_stream = create_anthropic_sse_stream_from_gemini(
+            response.bytes_stream(),
+            Some(state.gemini_shadow.clone()),
+            Some(ctx.provider.id.clone()),
+            Some(ctx.session_id.clone()),
+            None,
+        );
+        let responses_stream = create_responses_sse_stream_from_anthropic_with_context(
+            anthropic_stream,
+            codex_tool_context,
+        );
+        return build_codex_anthropic_sse_response(
+            responses_stream,
+            ctx,
+            state,
+            status,
+            connection_guard,
+        );
+    }
+
+    let body_timeout =
+        if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
+            std::time::Duration::from_secs(ctx.app_config.non_streaming_timeout as u64)
+        } else {
+            std::time::Duration::ZERO
+        };
+    let (mut response_headers, status, body_bytes) =
+        read_decoded_body(response, ctx.tag, body_timeout).await?;
+    let gemini_response: Value = serde_json::from_slice(&body_bytes).map_err(|error| {
+        let body = String::from_utf8_lossy(&body_bytes);
+        log::error!("[Kimi Code] Failed to parse Gemini response: {error}, body: {body}");
+        upstream_body_parse_error(
+            "Failed to parse Gemini upstream response",
+            &error,
+            &response_headers,
+            &body,
+        )
+    })?;
+    let anthropic_response = transform_gemini::gemini_to_anthropic_with_shadow_and_hints(
+        gemini_response,
+        Some(state.gemini_shadow.as_ref()),
+        Some(&ctx.provider.id),
+        Some(&ctx.session_id),
+        None,
+    )?;
+
+    if is_stream {
+        let events =
+            responses_sse_events_from_anthropic_message(&anthropic_response, codex_tool_context);
+        let sse_stream = futures::stream::iter(events.into_iter().map(Ok::<Bytes, std::io::Error>));
+        return build_codex_anthropic_sse_response(
+            sse_stream,
+            ctx,
+            state,
+            status,
+            connection_guard,
+        );
+    }
+
+    strip_entity_headers_for_rebuilt_body(&mut response_headers);
+    strip_hop_by_hop_response_headers(&mut response_headers);
+    response_headers.remove(axum::http::header::CONTENT_TYPE);
+    let body = serde_json::to_vec(&anthropic_response).map_err(|error| {
+        ProxyError::TransformError(format!(
+            "Failed to serialize converted Gemini response: {error}"
+        ))
+    })?;
+    let anthropic_proxy =
+        super::hyper_client::ProxyResponse::buffered(status, response_headers, Bytes::from(body));
+    handle_codex_anthropic_to_responses_transform(
+        anthropic_proxy,
+        ctx,
+        state,
+        false,
+        connection_guard,
+        codex_tool_context,
+    )
+    .await
+}
+
 async fn handle_codex_anthropic_to_responses_transform(
     response: super::hyper_client::ProxyResponse,
     ctx: &RequestContext,

@@ -703,6 +703,12 @@ impl ProxyService {
             .await
             .map(|c| c.enabled)
             .unwrap_or(false);
+        let kimicode_enabled = self
+            .db
+            .get_proxy_config_for_app("kimicode")
+            .await
+            .map(|c| c.enabled)
+            .unwrap_or(false);
         // OpenCode and OpenClaw don't support proxy features, always return false
         let opencode_enabled = false;
         let openclaw_enabled = false;
@@ -714,6 +720,7 @@ impl ProxyService {
             grokbuild: grokbuild_enabled,
             opencode: opencode_enabled,
             openclaw: openclaw_enabled,
+            kimicode: kimicode_enabled,
         })
     }
 
@@ -956,6 +963,7 @@ impl ProxyService {
             AppType::Claude => self.read_claude_live()?,
             AppType::Codex => self.read_codex_live()?,
             AppType::GrokBuild => self.read_grok_live()?,
+            AppType::KimiCode => return Ok(()),
             _ => return Err("该应用不支持代理功能".to_string()),
         };
 
@@ -1352,12 +1360,38 @@ impl ProxyService {
             }
         }
 
+        // Kimi Code uses a lossless TOML snapshot rather than a JSON projection.
+        if let Ok(text) = crate::kimi_config::read_config_text() {
+            if !text.trim().is_empty()
+                && !crate::kimi_config::is_proxy_takeover_active().unwrap_or(false)
+            {
+                self.db
+                    .save_live_backup("kimicode", &text)
+                    .await
+                    .map_err(|e| format!("备份 Kimi Code 配置失败: {e}"))?;
+            }
+        }
+
         log::info!("已备份所有应用的 Live 配置");
         Ok(())
     }
 
     /// 备份指定应用的 Live 配置（严格模式：目标配置不存在则返回错误）
     async fn backup_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
+        if matches!(app_type, AppType::KimiCode) {
+            let text = crate::kimi_config::read_config_text()
+                .map_err(|e| format!("读取 Kimi Code 配置失败: {e}"))?;
+            if text.trim().is_empty() {
+                return Err("Kimi Code config.toml 不存在或为空".to_string());
+            }
+            if !crate::kimi_config::is_proxy_takeover_active().unwrap_or(false) {
+                self.db
+                    .save_live_backup("kimicode", &text)
+                    .await
+                    .map_err(|e| format!("备份 Kimi Code 配置失败: {e}"))?;
+            }
+            return Ok(());
+        }
         let (app_type_str, config) = match app_type {
             AppType::Claude => ("claude", self.read_claude_live()?),
             AppType::Codex => ("codex", self.read_codex_live()?),
@@ -1483,6 +1517,18 @@ impl ProxyService {
             log::info!("Grok Build Live 配置已接管，代理地址: {proxy_grok_base_url}");
         }
 
+        if crate::kimi_config::read_config_text()
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(false)
+        {
+            crate::kimi_config::apply_proxy_takeover(
+                &format!("{proxy_url}/kimicode/v1"),
+                PROXY_TOKEN_PLACEHOLDER,
+            )
+            .map_err(|e| format!("更新 Kimi Code 接管配置失败: {e}"))?;
+            log::info!("Kimi Code Live 配置已接管，代理地址: {proxy_url}/kimicode/v1");
+        }
+
         Ok(())
     }
 
@@ -1522,6 +1568,14 @@ impl ProxyService {
                 Self::apply_grok_takeover_fields(&mut live_config, &proxy_grok_base_url)?;
                 self.write_grok_live(&live_config)?;
                 log::info!("Grok Build Live 配置已接管，代理地址: {proxy_grok_base_url}");
+            }
+            AppType::KimiCode => {
+                crate::kimi_config::apply_proxy_takeover(
+                    &format!("{proxy_url}/kimicode/v1"),
+                    PROXY_TOKEN_PLACEHOLDER,
+                )
+                .map_err(|e| format!("更新 Kimi Code 接管配置失败: {e}"))?;
+                log::info!("Kimi Code Live 配置已接管，代理地址: {proxy_url}/kimicode/v1");
             }
             _ => return Err("该应用不支持代理功能".to_string()),
         }
@@ -1579,6 +1633,17 @@ impl ProxyService {
                     let _ = self.write_grok_live(&live_config);
                 }
             }
+            AppType::KimiCode
+                if crate::kimi_config::read_config_text()
+                    .map(|text| !text.trim().is_empty())
+                    .unwrap_or(false) =>
+            {
+                crate::kimi_config::apply_proxy_takeover(
+                    &format!("{proxy_url}/kimicode/v1"),
+                    PROXY_TOKEN_PLACEHOLDER,
+                )
+                .map_err(|e| format!("更新 Kimi Code 接管配置失败: {e}"))?;
+            }
             _ => {}
         }
 
@@ -1611,6 +1676,13 @@ impl ProxyService {
                     log::info!("Grok Build Live 配置已恢复");
                 }
             }
+            AppType::KimiCode => {
+                if let Ok(Some(backup)) = self.db.get_live_backup("kimicode").await {
+                    crate::kimi_config::write_config_text(&backup.original_config)
+                        .map_err(|e| format!("恢复 Kimi Code 配置失败: {e}"))?;
+                    log::info!("Kimi Code Live 配置已恢复");
+                }
+            }
             _ => {}
         }
 
@@ -1621,7 +1693,12 @@ impl ProxyService {
     async fn restore_live_configs(&self) -> Result<(), String> {
         let mut errors = Vec::new();
 
-        for app_type in [AppType::Claude, AppType::Codex, AppType::GrokBuild] {
+        for app_type in [
+            AppType::Claude,
+            AppType::Codex,
+            AppType::GrokBuild,
+            AppType::KimiCode,
+        ] {
             if let Err(e) = self
                 .restore_live_config_for_app_with_fallback(&app_type)
                 .await
@@ -1659,6 +1736,12 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取 {app_type_str} Live 备份失败: {e}"))?;
         if let Some(backup) = backup {
+            if matches!(app_type, AppType::KimiCode) {
+                crate::kimi_config::write_config_text(&backup.original_config)
+                    .map_err(|e| format!("恢复 Kimi Code 配置失败: {e}"))?;
+                log::info!("{app_type_str} Live 配置已从备份恢复");
+                return Ok(());
+            }
             let config: Value = serde_json::from_str(&backup.original_config)
                 .map_err(|e| format!("解析 {app_type_str} 备份失败: {e}"))?;
 
@@ -1710,6 +1793,7 @@ impl ProxyService {
             AppType::Claude => self.write_claude_live(config),
             AppType::Codex => self.write_codex_live(config),
             AppType::GrokBuild => self.write_grok_live(config),
+            AppType::KimiCode => Err("Kimi Code 必须从原始 TOML 快照恢复".to_string()),
             _ => Err("该应用不支持代理功能".to_string()),
         }
     }
@@ -1728,6 +1812,7 @@ impl ProxyService {
                 Ok(config) => Self::is_grok_live_taken_over(&config),
                 Err(_) => false,
             },
+            AppType::KimiCode => crate::kimi_config::is_proxy_takeover_active().unwrap_or(false),
             _ => false,
         }
     }
@@ -1778,6 +1863,9 @@ impl ProxyService {
             AppType::Claude => self.cleanup_claude_takeover_placeholders_in_live(),
             AppType::Codex => self.cleanup_codex_takeover_placeholders_in_live(),
             AppType::GrokBuild => self.cleanup_grok_takeover_placeholders_in_live(),
+            AppType::KimiCode => crate::kimi_config::clear_proxy_takeover()
+                .map(|_| ())
+                .map_err(|e| format!("清理 Kimi Code 接管配置失败: {e}")),
             _ => Ok(()),
         }
     }
@@ -1873,6 +1961,22 @@ impl ProxyService {
                             })
                         });
                 Ok(Self::is_grok_live_taken_over(&config) && base_url_matches)
+            }
+            AppType::KimiCode => {
+                let expected = format!("{proxy_url}/kimicode/v1");
+                let doc = crate::kimi_config::read_document()
+                    .map_err(|e| format!("读取 Kimi Code 配置失败: {e}"))?;
+                let actual = doc
+                    .get("providers")
+                    .and_then(toml_edit::Item::as_table)
+                    .and_then(|providers| providers.get("cc-switch-proxy"))
+                    .and_then(toml_edit::Item::as_table)
+                    .and_then(|provider| provider.get("base_url"))
+                    .and_then(toml_edit::Item::as_str);
+                Ok(
+                    crate::kimi_config::is_proxy_takeover_active().unwrap_or(false)
+                        && actual.is_some_and(|url| Self::proxy_urls_match(url, &expected)),
+                )
             }
             _ => Ok(false),
         }
@@ -2010,6 +2114,10 @@ impl ProxyService {
             }
         }
 
+        if crate::kimi_config::is_proxy_takeover_active().unwrap_or(false) {
+            return true;
+        }
+
         false
     }
 
@@ -2104,6 +2212,23 @@ impl ProxyService {
         app_type: &str,
         provider: &Provider,
     ) -> Result<(), String> {
+        if app_type == "kimicode" {
+            // Kimi takeover owns a full TOML snapshot. Provider hot-switches
+            // change routing state in the DB; the fixed local projection stays
+            // untouched and the original snapshot remains the restore source.
+            if let Some(backup) = self
+                .db
+                .get_live_backup(app_type)
+                .await
+                .map_err(|e| format!("读取 Kimi Code 备份失败: {e}"))?
+            {
+                self.db
+                    .save_live_backup(app_type, &backup.original_config)
+                    .await
+                    .map_err(|e| format!("保留 Kimi Code 备份失败: {e}"))?;
+            }
+            return Ok(());
+        }
         let app_type_enum =
             AppType::from_str(app_type).map_err(|_| format!("未知的应用类型: {app_type}"))?;
         let mut effective_settings =
@@ -3016,6 +3141,80 @@ mod tests {
         db.update_proxy_config(proxy_config)
             .await
             .expect("set test proxy config to an ephemeral port");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn kimicode_takeover_smoke_is_lossless_and_reports_status() {
+        let home = TempHome::new();
+        let kimi_home = home.dir.path().join("kimi-code-home");
+        std::fs::create_dir_all(&kimi_home).expect("create kimi home");
+        env::set_var("KIMI_CODE_HOME", &kimi_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        let original = r#"default_model = "demo/model"
+
+[thinking]
+enabled = true
+
+[providers.demo]
+type = "openai"
+base_url = "https://example.test/v1"
+api_key = "secret"
+
+[models."demo/model"]
+provider = "demo"
+model = "model"
+"#;
+        std::fs::write(crate::kimi_config::get_kimi_config_path(), original)
+            .expect("seed kimi config");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+        let provider = Provider::with_id(
+            "demo".to_string(),
+            "Demo".to_string(),
+            json!({
+                "type": "openai",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "models": [{"id": "model", "alias": "demo/model"}]
+            }),
+            None,
+        );
+        db.save_provider("kimicode", &provider)
+            .expect("save provider");
+        db.set_current_provider("kimicode", "demo")
+            .expect("set current provider");
+        crate::settings::set_current_provider(&AppType::KimiCode, Some("demo"))
+            .expect("set local current provider");
+
+        state
+            .proxy_service
+            .set_takeover_for_app("kimicode", true)
+            .await
+            .expect("enable kimi takeover");
+        let status = state
+            .proxy_service
+            .get_takeover_status()
+            .await
+            .expect("get takeover status");
+        assert!(status.kimicode);
+        let taken = crate::kimi_config::read_config_text().expect("read takeover config");
+        assert!(taken.contains("cc-switch-proxy/default"));
+        assert!(taken.contains("[thinking]"));
+
+        state
+            .proxy_service
+            .set_takeover_for_app("kimicode", false)
+            .await
+            .expect("disable kimi takeover");
+        assert_eq!(
+            crate::kimi_config::read_config_text().expect("read restored config"),
+            original
+        );
+        env::remove_var("KIMI_CODE_HOME");
     }
 
     async fn running_codex_base_url(service: &ProxyService) -> String {

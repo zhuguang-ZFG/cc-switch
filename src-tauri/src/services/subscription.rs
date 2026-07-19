@@ -529,89 +529,6 @@ async fn query_kimi_quota(access_token: &str) -> Result<SubscriptionQuota, Strin
     })
 }
 
-async fn refresh_kimi_oauth_token(
-    current: &crate::kimi_config::KimiOAuthToken,
-) -> Result<Option<crate::kimi_config::KimiOAuthToken>, String> {
-    let client = reqwest::Client::builder()
-        .default_headers(crate::kimi_config::get_kimi_device_headers()?)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let response = client
-        .post(format!(
-            "{}/api/oauth/token",
-            crate::kimi_config::get_kimi_oauth_host()
-        ))
-        .form(&[
-            ("client_id", crate::kimi_config::KIMI_OAUTH_CLIENT_ID),
-            ("grant_type", "refresh_token"),
-            ("refresh_token", current.refresh_token.as_str()),
-        ])
-        .send()
-        .await
-        .map_err(|error| format!("Kimi token refresh failed: {error}"))?;
-    let status = response.status();
-    let payload: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|error| format!("Invalid Kimi token refresh response: {error}"))?;
-    let error_code = payload
-        .get("error")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if status == reqwest::StatusCode::UNAUTHORIZED
-        || status == reqwest::StatusCode::FORBIDDEN
-        || error_code == "invalid_grant"
-    {
-        return Ok(None);
-    }
-    if !status.is_success() {
-        return Err(format!(
-            "Kimi token refresh failed (HTTP {}): {}",
-            status.as_u16(),
-            payload
-        ));
-    }
-
-    let access_token = payload
-        .get("access_token")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Kimi token refresh response missing access_token".to_string())?;
-    let expires_in = payload
-        .get("expires_in")
-        .and_then(serde_json::Value::as_i64)
-        .filter(|value| *value > 0)
-        .unwrap_or(3600);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let refreshed = crate::kimi_config::KimiOAuthToken {
-        access_token: access_token.to_string(),
-        refresh_token: payload
-            .get("refresh_token")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&current.refresh_token)
-            .to_string(),
-        expires_at: now.saturating_add(expires_in),
-        scope: payload
-            .get("scope")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(&current.scope)
-            .to_string(),
-        token_type: payload
-            .get("token_type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(&current.token_type)
-            .to_string(),
-        expires_in,
-    };
-    crate::kimi_config::save_oauth_token(&refreshed).map_err(|error| error.to_string())?;
-    Ok(Some(refreshed))
-}
-
 const KNOWN_TIERS: &[&str] = &[
     TIER_FIVE_HOUR,
     TIER_SEVEN_DAY,
@@ -1630,30 +1547,20 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
             }
         }
         "kimicode" | "kimi-code" | "kimi" => {
-            let token =
-                crate::kimi_config::load_oauth_token().map_err(|error| error.to_string())?;
-            let Some(mut token) = token else {
+            let Some(access_token) = crate::kimi_config::ensure_fresh_oauth_token(false)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
                 return Ok(SubscriptionQuota::not_found("kimicode"));
             };
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            if token.expires_at <= now.saturating_add(30) {
-                let Some(refreshed) = refresh_kimi_oauth_token(&token).await? else {
-                    return Ok(SubscriptionQuota::error(
-                        "kimicode",
-                        CredentialStatus::Expired,
-                        "Kimi OAuth token has expired. Please log in again.".to_string(),
-                    ));
-                };
-                token = refreshed;
-            }
-
-            let result = query_kimi_quota(&token.access_token).await?;
+            let result = query_kimi_quota(&access_token).await?;
             if matches!(&result.credential_status, CredentialStatus::Expired) {
-                if let Some(refreshed) = refresh_kimi_oauth_token(&token).await? {
-                    return query_kimi_quota(&refreshed.access_token).await;
+                if let Some(refreshed) =
+                    crate::kimi_config::refresh_oauth_token_after_unauthorized(Some(&access_token))
+                        .await
+                        .map_err(|error| error.to_string())?
+                {
+                    return query_kimi_quota(&refreshed).await;
                 }
             }
             Ok(result)

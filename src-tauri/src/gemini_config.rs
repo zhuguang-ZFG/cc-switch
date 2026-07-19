@@ -23,6 +23,7 @@ pub fn get_gemini_env_path() -> PathBuf {
 ///
 /// 此函数宽松地解析 .env 文件，跳过无效行。
 /// 对于需要严格验证的场景，请使用 `parse_env_file_strict`。
+#[allow(dead_code)]
 pub fn parse_env_file(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
 
@@ -140,6 +141,7 @@ pub fn serialize_env_file(map: &HashMap<String, String>) -> String {
 }
 
 /// 读取 Gemini .env 文件
+#[allow(dead_code)]
 pub fn read_gemini_env() -> Result<HashMap<String, String>, AppError> {
     let path = get_gemini_env_path();
 
@@ -190,6 +192,7 @@ pub fn write_gemini_env_atomic(map: &HashMap<String, String>) -> Result<(), AppE
 }
 
 /// 从 .env 格式转换为 Provider.settings_config (JSON Value)
+#[allow(dead_code)]
 pub fn env_to_json(env_map: &HashMap<String, String>) -> Value {
     let mut json_map = serde_json::Map::new();
 
@@ -201,6 +204,7 @@ pub fn env_to_json(env_map: &HashMap<String, String>) -> Value {
 }
 
 /// 从 Provider.settings_config (JSON Value) 提取 .env 格式
+#[allow(dead_code)]
 pub fn json_to_env(settings: &Value) -> Result<HashMap<String, String>, AppError> {
     let mut env_map = HashMap::new();
 
@@ -221,6 +225,7 @@ pub fn json_to_env(settings: &Value) -> Result<HashMap<String, String>, AppError
 /// 这允许用户先创建供应商配置，稍后再填写 API Key。
 ///
 /// API Key 的验证会在切换供应商时进行（通过 `validate_gemini_settings_strict`）。
+#[allow(dead_code)]
 pub fn validate_gemini_settings(settings: &Value) -> Result<(), AppError> {
     // 只验证基本结构，不强制要求 GEMINI_API_KEY
     // 如果有 env 字段，验证它是一个对象
@@ -252,6 +257,7 @@ pub fn validate_gemini_settings(settings: &Value) -> Result<(), AppError> {
 ///
 /// 此函数在切换供应商时使用，确保配置包含所有必需的字段。
 /// 对于需要 API Key 的供应商（如 PackyCode），会验证 GEMINI_API_KEY 字段。
+#[allow(dead_code)]
 pub fn validate_gemini_settings_strict(settings: &Value) -> Result<(), AppError> {
     // 先做基础格式验证（包含 env/config 类型）
     validate_gemini_settings(settings)?;
@@ -291,6 +297,7 @@ pub fn get_gemini_settings_path() -> PathBuf {
 ///
 /// # 参数
 /// - `selected_type`: 要设置的 selectedType 值（如 "gemini-api-key" 或 "oauth-personal"）
+#[allow(dead_code)]
 fn update_selected_type(selected_type: &str) -> Result<(), AppError> {
     let settings_path = get_gemini_settings_path();
 
@@ -348,6 +355,7 @@ fn update_selected_type(selected_type: &str) -> Result<(), AppError> {
 /// ```
 ///
 /// 保留文件中的其他所有字段。
+#[allow(dead_code)]
 pub fn write_packycode_settings() -> Result<(), AppError> {
     update_selected_type("gemini-api-key")
 }
@@ -366,6 +374,7 @@ pub fn write_packycode_settings() -> Result<(), AppError> {
 /// ```
 ///
 /// 保留文件中的其他所有字段。
+#[allow(dead_code)]
 pub fn write_google_oauth_settings() -> Result<(), AppError> {
     update_selected_type("oauth-personal")
 }
