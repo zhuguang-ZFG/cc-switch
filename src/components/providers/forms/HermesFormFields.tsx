@@ -42,6 +42,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ApiKeySection } from "./shared";
 import EndpointSpeedTest from "./EndpointSpeedTest";
+import { CustomUserAgentField } from "./CustomUserAgentField";
+import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
 import {
   fetchModelsForConfig,
   showFetchModelsError,
@@ -55,6 +57,7 @@ import {
 import type { EndpointCandidate, ProviderCategory } from "@/types";
 
 interface HermesFormFieldsProps {
+  providerId?: string;
   baseUrl: string;
   onBaseUrlChange: (value: string) => void;
   apiKey: string;
@@ -70,6 +73,16 @@ interface HermesFormFieldsProps {
   onModelsChange: (models: KimiModel[]) => void;
   rateLimitDelay: number | undefined;
   onRateLimitDelayChange: (delay: number | undefined) => void;
+  onCustomEndpointsChange?: (urls: string[]) => void;
+  autoSelect: boolean;
+  onAutoSelectChange: (checked: boolean) => void;
+  // Local proxy User-Agent override
+  customUserAgent: string;
+  onCustomUserAgentChange: (value: string) => void;
+  localProxyHeadersOverride: string;
+  onLocalProxyHeadersOverrideChange: (value: string) => void;
+  localProxyBodyOverride: string;
+  onLocalProxyBodyOverrideChange: (value: string) => void;
 }
 
 type BaseUrlErrorCode = "empty" | "invalid" | "scheme";
@@ -142,6 +155,7 @@ function AdvancedSection({
 }
 
 export function HermesFormFields({
+  providerId,
   baseUrl,
   onBaseUrlChange,
   apiKey,
@@ -157,6 +171,15 @@ export function HermesFormFields({
   onModelsChange,
   rateLimitDelay,
   onRateLimitDelayChange,
+  onCustomEndpointsChange,
+  autoSelect,
+  onAutoSelectChange,
+  customUserAgent,
+  onCustomUserAgentChange,
+  localProxyHeadersOverride,
+  onLocalProxyHeadersOverrideChange,
+  localProxyBodyOverride,
+  onLocalProxyBodyOverrideChange,
 }: HermesFormFieldsProps) {
   const { t } = useTranslation();
   const [expandedModels, setExpandedModels] = useState<Record<number, boolean>>(
@@ -165,19 +188,25 @@ export function HermesFormFields({
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [baseUrlTouched, setBaseUrlTouched] = useState(false);
+  const hasRequestOverrides = Boolean(
+    localProxyHeadersOverride.trim() || localProxyBodyOverride.trim(),
+  );
+  const hasProviderAdvancedValue =
+    rateLimitDelay !== undefined ||
+    Boolean(customUserAgent) ||
+    hasRequestOverrides;
   const [providerAdvancedOpen, setProviderAdvancedOpen] = useState(
-    rateLimitDelay !== undefined,
+    hasProviderAdvancedValue,
   );
   const [isEndpointModalOpen, setIsEndpointModalOpen] = useState(false);
-  const [endpointAutoSelect, setEndpointAutoSelect] = useState(true);
 
   // Auto-expand when a preset switch brings in a value so the user sees it;
   // don't force-collapse on clear, to avoid yanking the panel shut mid-edit.
   useEffect(() => {
-    if (rateLimitDelay !== undefined) {
+    if (hasProviderAdvancedValue) {
       setProviderAdvancedOpen(true);
     }
-  }, [rateLimitDelay]);
+  }, [hasProviderAdvancedValue]);
 
   const baseUrlErrorCode = useMemo(() => validateBaseUrl(baseUrl), [baseUrl]);
   const showBaseUrlError = baseUrlTouched && baseUrlErrorCode !== null;
@@ -599,19 +628,40 @@ export function HermesFormFields({
             })}
           </p>
         </div>
+
+        {category !== "official" && (
+          <>
+            <CustomUserAgentField
+              id="hermes-custom-user-agent"
+              value={customUserAgent}
+              onChange={onCustomUserAgentChange}
+            />
+
+            <div className="border-t border-border-default pt-3">
+              <LocalProxyRequestOverridesField
+                headersJson={localProxyHeadersOverride}
+                bodyJson={localProxyBodyOverride}
+                onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
+                onBodyJsonChange={onLocalProxyBodyOverrideChange}
+              />
+            </div>
+          </>
+        )}
       </AdvancedSection>
 
       {/* 端点测速弹窗 - Kimi（与 claude/codex 表单内测速一致） */}
       {isEndpointModalOpen && (
         <EndpointSpeedTest
           appId="kimicode"
+          providerId={providerId}
           value={baseUrl}
           onChange={onBaseUrlChange}
           initialEndpoints={speedTestEndpoints}
           visible={isEndpointModalOpen}
           onClose={() => setIsEndpointModalOpen(false)}
-          autoSelect={endpointAutoSelect}
-          onAutoSelectChange={setEndpointAutoSelect}
+          autoSelect={autoSelect}
+          onAutoSelectChange={onAutoSelectChange}
+          onCustomEndpointsChange={onCustomEndpointsChange}
         />
       )}
     </>

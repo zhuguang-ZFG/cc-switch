@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
 import { providerPresets } from "@/config/claudeProviderPresets";
 import { codexProviderPresets } from "@/config/codexProviderPresets";
-import { hermesProviderPresets } from "@/config/hermesProviderPresets";
 import { openclawProviderPresets } from "@/config/openclawProviderPresets";
 import { opencodeProviderPresets } from "@/config/opencodeProviderPresets";
 
@@ -55,18 +54,6 @@ describe("Longcat provider presets", () => {
         labelOverride: LONGCAT_MODEL,
       },
     ]);
-  });
-
-  it("uses the official LongCat 2.0 model for Hermes", () => {
-    const preset = findLongcatPreset(hermesProviderPresets);
-
-    expect(preset.settingsConfig.models).toEqual([
-      { id: LONGCAT_MODEL, name: LONGCAT_DISPLAY_NAME },
-    ]);
-    expect(preset.suggestedDefaults?.model).toEqual({
-      default: LONGCAT_MODEL,
-      provider: "longcat",
-    });
   });
 
   it("uses the official LongCat 2.0 model for OpenCode", () => {
@@ -135,7 +122,6 @@ describe("Longcat provider presets", () => {
     const longcatPresets = [
       findLongcatPreset(providerPresets),
       findLongcatPreset(claudeDesktopProviderPresets),
-      findLongcatPreset(hermesProviderPresets),
       findLongcatPreset(opencodeProviderPresets),
       findLongcatPreset(openclawProviderPresets),
       findLongcatPreset(codexProviderPresets),

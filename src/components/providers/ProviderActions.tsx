@@ -84,15 +84,35 @@ export function ProviderActions({
   const { t } = useTranslation();
   const iconButtonClass = "h-8 w-8 p-1";
 
+  // Kimi 开启自动故障转移时主按钮走队列语义（加入/已加入），与 Claude/Codex
+  // 一致；队列语义优先于接管切换与累加语义（否则故障转移永远被前两者抢占，
+  // 供应商无法从卡片加入故障路由）。
+  const isKimiFailover =
+    appId === "kimicode" && isAutoFailoverEnabled && Boolean(onToggleFailover);
+
+  // 代理接管下的 Kimi：live 被代理冻结，isInConfig（由 live 推导）不再随操作变化，
+  // 累加语义失效。主按钮退化为 isCurrent 驱动的切换语义（与 Claude/Codex 接管一致：
+  // 启用/已在用），热切换后 DB is_current 即时可见。
+  const isKimiTakeoverSwitch =
+    appId === "kimicode" && isProxyTakeover && !isKimiFailover;
+
   // 累加模式应用（OpenCode 非 OMO / OpenClaw / Hermes）
   const isAdditiveMode =
-    (appId === "opencode" && !isOmo) ||
-    appId === "openclaw" ||
-    appId === "kimicode";
+    !isKimiTakeoverSwitch &&
+    !isKimiFailover &&
+    ((appId === "opencode" && !isOmo) ||
+      appId === "openclaw" ||
+      appId === "kimicode");
 
-  // 故障转移模式下的按钮逻辑（累加模式和 OMO 应用不支持故障转移）
+  // 故障转移模式下的按钮逻辑（累加模式、OMO 应用和 Kimi 接管切换不支持故障转移；
+  // Kimi 故障转移由上面的 isKimiFailover 单独放行）
   const isFailoverMode =
-    !isAdditiveMode && !isOmo && isAutoFailoverEnabled && onToggleFailover;
+    isKimiFailover ||
+    (!isKimiTakeoverSwitch &&
+      !isAdditiveMode &&
+      !isOmo &&
+      isAutoFailoverEnabled &&
+      Boolean(onToggleFailover));
 
   const handleMainButtonClick = () => {
     if (isOmo) {
@@ -113,7 +133,7 @@ export function ProviderActions({
         onSwitch(); // 添加到配置
       }
     } else if (isFailoverMode) {
-      onToggleFailover(!isInFailoverQueue);
+      onToggleFailover?.(!isInFailoverQueue);
     } else {
       onSwitch();
     }
@@ -225,12 +245,17 @@ export function ProviderActions({
   const readOnlyHint = t("provider.managedByKimiHint", {
     defaultValue: "Managed by Kimi official login",
   });
+  // 只读条目（Kimi 官方登录托管）在累加模式下已在配置中且不可移除，
+  // 禁用态「移除」是个无解释的死按钮，直接不渲染主按钮。
+  const hideMainButton = isAdditiveMode && isReadOnly && isInConfig;
 
   return (
     <div className="flex items-center gap-1.5">
+      {/* Kimi 接管下隐藏「设为默认」：默认模型由代理备份管理， additive Zap 会误导 */}
       {(appId === "openclaw" || appId === "kimicode") &&
         isInConfig &&
         onSetAsDefault &&
+        !isKimiTakeoverSwitch &&
         (() => {
           const activeLabel =
             appId === "kimicode"
@@ -261,24 +286,26 @@ export function ProviderActions({
 
       {/* wrapper span 承接 hover：disabled 按钮自身 pointer-events:none，
           原生 title 与 cursor 都必须挂在未禁用的外层元素上才会生效 */}
-      <span
-        title={buttonState.title}
-        className={cn(
-          "inline-flex",
-          buttonState.disabled && "cursor-not-allowed",
-        )}
-      >
-        <Button
-          size="sm"
-          variant={buttonState.variant}
-          onClick={handleMainButtonClick}
-          disabled={buttonState.disabled}
-          className={cn("w-[4.5rem] px-2.5", buttonState.className)}
+      {!hideMainButton && (
+        <span
+          title={buttonState.title}
+          className={cn(
+            "inline-flex",
+            buttonState.disabled && "cursor-not-allowed",
+          )}
         >
-          {buttonState.icon}
-          {buttonState.text}
-        </Button>
-      </span>
+          <Button
+            size="sm"
+            variant={buttonState.variant}
+            onClick={handleMainButtonClick}
+            disabled={buttonState.disabled}
+            className={cn("w-[4.5rem] px-2.5", buttonState.className)}
+          >
+            {buttonState.icon}
+            {buttonState.text}
+          </Button>
+        </span>
+      )}
 
       <div className="flex items-center gap-1">
         <Button

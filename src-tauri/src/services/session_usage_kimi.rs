@@ -182,7 +182,31 @@ fn collect_wire_files_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: u32
     }
 }
 
+/// 判断文件是否以换行结尾。无 `\n` 结尾说明最后一行可能尚未写完
+///（写入方还在追加），该行的 offset 不能落库，否则补全后会被永久跳过。
+/// 读取失败时按"未完结"处理：下轮同步重读一行即可自愈，没有数据丢失风险。
+fn file_ends_with_newline(file: &fs::File, file_len: u64) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+
+    if file_len == 0 {
+        return true;
+    }
+    let mut cursor = file;
+    if cursor.seek(SeekFrom::End(-1)).is_err() {
+        return false;
+    }
+    let mut byte = [0u8; 1];
+    cursor.read_exact(&mut byte).is_ok() && byte[0] == b'\n'
+}
+
 /// 同步单个 Kimi wire.jsonl 文件，返回 (imported, skipped)
+///
+/// 增量语义：
+/// - 落库的 offset 不越过无法解析的部分尾行（无 `\n` 结尾），待其补全后
+///   下轮同步重新处理；
+/// - wire.jsonl 是 append-only：当前行数小于已落库 offset 说明文件被
+///   截断/重写，此时重置 offset 从头同步，避免截断期间数据永久丢失
+///   （重放行号与 request_id 稳定方案一致，已有条目靠去重跳过）。
 fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), AppError> {
     let file_path_str = file_path.to_string_lossy().to_string();
 
@@ -190,9 +214,10 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
     let metadata = fs::metadata(file_path)
         .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
     let file_modified = metadata_modified_nanos(&metadata);
+    let file_len = metadata.len();
 
     // 检查同步状态
-    let (last_modified, last_offset) = get_sync_state(db, &file_path_str)?;
+    let (last_modified, mut last_offset) = get_sync_state(db, &file_path_str)?;
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
@@ -201,6 +226,22 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
 
     let (session_id, agent_name) = wire_file_identity(file_path);
 
+    let file =
+        fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
+
+    // 第一遍只数行，用于截断检测（不解析 JSON，代价可忽略）。
+    // 数行结束后共享句柄自然停在 EOF，正好供尾字节检查 seek 使用。
+    let total_lines = BufReader::new(&file).lines().count() as i64;
+    let partial_tail = !file_ends_with_newline(&file, file_len);
+    if total_lines < last_offset {
+        log::info!(
+            "[KIMI-SYNC] 检测到 {} 被截断或重写（{total_lines} 行 < 已同步 offset {last_offset}），从头重新同步",
+            file_path.display()
+        );
+        last_offset = 0;
+    }
+
+    // 第一遍通过 &File 读取会推进共享句柄偏移，第二遍重开以获得 offset-0 流。
     let file =
         fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
     let reader = BufReader::new(file);
@@ -276,8 +317,13 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
         }
     }
 
-    // 更新同步状态
-    update_sync_state(db, &file_path_str, file_modified, line_offset)?;
+    // 更新同步状态：部分尾行不计入已同步 offset，待补全后下轮重读
+    let committed_offset = if partial_tail {
+        (line_offset - 1).max(0)
+    } else {
+        line_offset
+    };
+    update_sync_state(db, &file_path_str, file_modified, committed_offset)?;
 
     Ok((imported, skipped))
 }
@@ -680,6 +726,133 @@ mod tests {
             Some(1784462210300),
         )?;
         assert!(!inserted);
+
+        Ok(())
+    }
+
+    fn write_wire_raw(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    fn sync_state_key(path: &Path) -> String {
+        path.to_string_lossy().to_string()
+    }
+
+    /// 无 `\n` 结尾的部分尾行不计入落库 offset：写入方补全该行后，
+    /// 下轮同步必须能读到它（修复前该行会被永久跳过）。
+    #[test]
+    fn test_sync_single_kimi_file_does_not_commit_partial_tail_line() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let wire = temp.path().join("wd_a/session_1/agents/main/wire.jsonl");
+        let key = sync_state_key(&wire);
+
+        let first = turn_record(100, 50, 0, 10).to_string();
+        let second = turn_record(200, 100, 0, 20).to_string();
+        // 第二行只写一半且无换行结尾：模拟写入进行中的部分尾行
+        let partial = &second[..second.len() / 2];
+        write_wire_raw(&wire, &format!("{first}\n{partial}"));
+
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (1, 0));
+        let (_, offset) = get_sync_state(&db, &key)?;
+        assert_eq!(offset, 1, "部分尾行不得计入已同步 offset");
+
+        // 写入方补全第二行并追加第三行
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let third = turn_record(300, 150, 0, 30).to_string();
+        write_wire_raw(&wire, &format!("{first}\n{second}\n{third}\n"));
+
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (2, 0));
+
+        let conn = lock_conn!(db.conn);
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'kimi_session'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 3);
+
+        Ok(())
+    }
+
+    /// 永久畸形行（含 usage.record 标记但 JSON 损坏）被容错跳过，
+    /// 且因为它有 `\n` 结尾，offset 照常越过它，不会每轮重复扫描。
+    #[test]
+    fn test_sync_single_kimi_file_tolerates_malformed_lines() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let wire = temp.path().join("wd_a/session_1/agents/main/wire.jsonl");
+        let key = sync_state_key(&wire);
+
+        let good1 = turn_record(100, 50, 0, 10).to_string();
+        let good2 = turn_record(200, 100, 0, 20).to_string();
+        let malformed = "{\"type\":\"usage.record\",\"usageScope\":\"turn\",BROKEN";
+        write_wire_raw(&wire, &format!("{good1}\n{malformed}\n{good2}\n"));
+
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (2, 0));
+        let (_, offset) = get_sync_state(&db, &key)?;
+        assert_eq!(offset, 3, "完整结尾的畸形行不应卡住 offset");
+        // 第二轮空转，证明畸形行没有被反复重扫
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (0, 0));
+
+        Ok(())
+    }
+
+    /// 文件被截断/重写（行数缩到已落库 offset 以下）后重置从头同步：
+    /// 已有条目靠 request_id 去重跳过，后续增长到全新序号的事件正常导入。
+    #[test]
+    fn test_sync_single_kimi_file_resets_offset_after_truncation_rewrite() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let wire = temp.path().join("wd_a/session_1/agents/main/wire.jsonl");
+        let key = sync_state_key(&wire);
+
+        let first = turn_record(100, 50, 0, 10);
+        write_wire(
+            &wire,
+            &[
+                first.clone(),
+                turn_record(200, 100, 0, 20),
+                turn_record(300, 150, 0, 30),
+            ],
+        );
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (3, 0));
+        let (_, offset) = get_sync_state(&db, &key)?;
+        assert_eq!(offset, 3);
+
+        // 截断重写：只剩 1 行（< offset 3）→ 重置，旧条目去重跳过
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_wire(&wire, &[first.clone()]);
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (0, 1));
+        let (_, offset) = get_sync_state(&db, &key)?;
+        assert_eq!(offset, 1, "截断后 offset 必须按新文件长度重建");
+
+        // 继续增长到 5 个事件：行 1 被 offset 跳过（不计入 skipped），
+        // 序号 2/3 与截断前条目撞 request_id 被去重跳过，
+        // 序号 4/5 是全新事件，必须导入（未重置时它们会被旧 offset 挡住）
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_wire(
+            &wire,
+            &[
+                first,
+                turn_record(200, 100, 0, 20),
+                turn_record(300, 150, 0, 30),
+                turn_record(400, 200, 0, 40),
+                turn_record(500, 250, 0, 50),
+            ],
+        );
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (2, 2));
+
+        let conn = lock_conn!(db.conn);
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'kimi_session'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 5);
 
         Ok(())
     }

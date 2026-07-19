@@ -83,6 +83,28 @@ describe("useKimiCommonConfig", () => {
     expect(result.current.commonConfigSnippet).toBe("");
   });
 
+  it("persists the normalized TOML text (curly quotes) that validation sees", async () => {
+    const { result } = renderHook(() => useKimiCommonConfig({ enabled: true }));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let saved = false;
+    await act(async () => {
+      saved = await result.current.handleCommonConfigSnippetChange(
+        "default_model = “kimi-for-coding”\n",
+      );
+    });
+
+    expect(saved).toBe(true);
+    expect(setCommonConfigSnippetMock).toHaveBeenCalledWith(
+      "kimicode",
+      'default_model = "kimi-for-coding"\n',
+    );
+    expect(result.current.commonConfigSnippet).toBe(
+      'default_model = "kimi-for-coding"\n',
+    );
+    expect(result.current.commonConfigError).toBe("");
+  });
+
   it("surfaces a backend save failure", async () => {
     setCommonConfigSnippetMock.mockRejectedValue(new Error("db locked"));
 

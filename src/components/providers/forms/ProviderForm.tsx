@@ -1007,7 +1007,8 @@ function ProviderFormFull({
   const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
 
   const shouldApplyLocalProxyRequestOverrides =
-    (appId === "claude" || appId === "codex") && category !== "official";
+    (appId === "claude" || appId === "codex" || appId === "kimicode") &&
+    category !== "official";
 
   const handleSubmit = async (values: ProviderFormData) => {
     const overridesResult = shouldApplyLocalProxyRequestOverrides
@@ -1558,7 +1559,8 @@ function ProviderFormFull({
           ? promptCacheRouting
           : undefined,
       customUserAgent:
-        (appId === "claude" || appId === "codex") && category !== "official"
+        (appId === "claude" || appId === "codex" || appId === "kimicode") &&
+        category !== "official"
           ? customUserAgent.trim() || undefined
           : undefined,
       localProxyRequestOverrides: shouldApplyLocalProxyRequestOverrides
@@ -2367,6 +2369,7 @@ function ProviderFormFull({
           {/* Hermes 专属字段 */}
           {appId === "kimicode" && (
             <HermesFormFields
+              providerId={providerId}
               baseUrl={hermesForm.hermesBaseUrl}
               onBaseUrlChange={hermesForm.handleHermesBaseUrlChange}
               apiKey={hermesForm.hermesApiKey}
@@ -2384,6 +2387,17 @@ function ProviderFormFull({
               onRateLimitDelayChange={
                 hermesForm.handleHermesRateLimitDelayChange
               }
+              onCustomEndpointsChange={
+                isEditMode ? undefined : setDraftCustomEndpoints
+              }
+              autoSelect={endpointAutoSelect}
+              onAutoSelectChange={setEndpointAutoSelect}
+              customUserAgent={customUserAgent}
+              onCustomUserAgentChange={setCustomUserAgent}
+              localProxyHeadersOverride={localProxyHeadersOverride}
+              onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
+              localProxyBodyOverride={localProxyBodyOverride}
+              onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
             />
           )}
 
@@ -2559,8 +2573,7 @@ function ProviderFormFull({
 
           {!isAnyOmoCategory &&
             appId !== "opencode" &&
-            appId !== "openclaw" &&
-            appId !== "kimicode" && (
+            appId !== "openclaw" && (
               <ProviderAdvancedConfig
                 pricingConfig={pricingConfig}
                 onPricingConfigChange={setPricingConfig}

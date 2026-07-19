@@ -692,6 +692,7 @@ fn update_kimi_doc_common_config(
 /// 把 DB 里的 Kimi Code 通用配置片段合并进 live `config.toml`。
 /// 幂等：additive 同步每次重放；内容未变化时不落盘。切换 / 代理接管路径
 /// 本就保留无关表，已合并的片段不会被它们擦掉。
+/// RMW 在 kimi_config 的 write_lock 内完成，并发写不会丢更新。
 fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppError> {
     let Some(snippet) = db.get_config_snippet(AppType::KimiCode.as_str())? else {
         return Ok(());
@@ -700,14 +701,52 @@ fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppError> {
         return Ok(());
     }
 
-    let original = crate::kimi_config::read_config_text()?;
-    let mut doc = crate::kimi_config::parse_document_text(&original)?;
-    update_kimi_doc_common_config(&mut doc, &snippet, true)?;
-    let updated = doc.to_string();
-    if updated == original {
+    crate::kimi_config::update_document(|doc| {
+        let before = doc.to_string();
+        update_kimi_doc_common_config(doc, &snippet, true)?;
+        Ok(doc.to_string() != before)
+    })?;
+    Ok(())
+}
+
+/// 纯文档变换：先按值剥离旧片段，再合并新片段，返回是否有变更。
+/// 供 replace_kimi_common_config_in_live 在一次 RMW 内调用，也便于测试。
+fn replace_kimi_common_config_in_doc(
+    doc: &mut DocumentMut,
+    old_snippet: Option<&str>,
+    new_snippet: Option<&str>,
+) -> Result<bool, AppError> {
+    let before = doc.to_string();
+    if let Some(old) = old_snippet.filter(|s| !s.trim().is_empty()) {
+        update_kimi_doc_common_config(doc, old, false)?;
+    }
+    if let Some(new) = new_snippet.filter(|s| !s.trim().is_empty()) {
+        update_kimi_doc_common_config(doc, new, true)?;
+    }
+    Ok(doc.to_string() != before)
+}
+
+/// 保存 Kimi Code 通用配置片段时更新 live：剥离旧片段 + 合并新片段在
+/// kimi_config write_lock 内一次 RMW 完成（单次落盘，失败不留"无片段"
+/// 中间态）。代理接管期间 live 归代理所有，跳过写入——片段已落库，
+/// 接管结束后随下次 live 同步应用。
+pub(crate) fn replace_kimi_common_config_in_live(
+    old_snippet: Option<&str>,
+    new_snippet: Option<&str>,
+    live_owned_by_proxy: bool,
+) -> Result<(), AppError> {
+    if live_owned_by_proxy {
         return Ok(());
     }
-    crate::kimi_config::write_config_text(&updated)
+    let old_has = old_snippet.is_some_and(|s| !s.trim().is_empty());
+    let new_has = new_snippet.is_some_and(|s| !s.trim().is_empty());
+    if !old_has && !new_has {
+        return Ok(());
+    }
+    crate::kimi_config::update_document(|doc| {
+        replace_kimi_common_config_in_doc(doc, old_snippet, new_snippet)
+    })?;
+    Ok(())
 }
 
 pub(crate) fn write_live_with_common_config(
@@ -1208,6 +1247,20 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
         // Official Kimi OAuth providers are provisioned in config.toml and are
         // intentionally absent from the editable database projection.
         if matches!(app_type, AppType::KimiCode) {
+            // DB 侧标记优先于 live 侧探测：managed: 前缀 / _cc_managed / oauth
+            // 的供应商归官方登录所有，即使 live 表缺失（登出/配置重置）也绝不
+            // 从 DB 投影回 live——is_managed_provider 在 live 表缺失时返回
+            // false，继续往下会撞 set_provider 对 managed 名的硬拒绝。
+            let db_side_managed = provider.id.starts_with("managed:")
+                || provider
+                    .settings_config
+                    .get("_cc_managed")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                || provider.settings_config.get("oauth").is_some();
+            if db_side_managed {
+                continue;
+            }
             match crate::kimi_config::is_managed_provider(&provider.id) {
                 Ok(true) => continue,
                 Ok(false) => {}
@@ -1844,7 +1897,14 @@ pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, Ap
             continue;
         }
 
-        let is_managed = name == kimi_config::MANAGED_KIMI_PROVIDER;
+        // 托管供应商（官方登录所有）：managed: 前缀或 live 表带 oauth/
+        // _cc_managed 标记。它们只入库做展示与路由，永不回写 live
+        // （set_provider 会拒绝 managed 表，导入必须直达 DB 且带官方标记）。
+        let is_managed = name == kimi_config::MANAGED_KIMI_PROVIDER
+            || name.starts_with("managed:")
+            || config.get("_cc_managed").and_then(Value::as_bool) == Some(true)
+            || config.get("oauth").is_some();
+        let is_official_kimi = name == kimi_config::MANAGED_KIMI_PROVIDER;
         if existing_ids.contains(&name) {
             match state.db.get_provider_by_id(&name, "kimicode") {
                 Ok(Some(existing)) => {
@@ -1854,7 +1914,7 @@ pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, Ap
                         provider.settings_config = config;
                     }
                     if is_managed {
-                        if provider.name != "Kimi For Coding" {
+                        if is_official_kimi && provider.name != "Kimi For Coding" {
                             provider.name = "Kimi For Coding".to_string();
                             changed = true;
                         }
@@ -1890,7 +1950,7 @@ pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, Ap
         }
 
         // Create provider
-        let display_name = if is_managed {
+        let display_name = if is_official_kimi {
             "Kimi For Coding".to_string()
         } else {
             name.clone()
@@ -2426,6 +2486,101 @@ model = "model"
             "user-modified value must survive removal, got: {stripped}"
         );
         assert!(stripped.contains("[providers.demo]"));
+    }
+
+    /// 保存片段的原子路径：剥离旧片段 + 合并新片段在一次文档变换内完成，
+    /// 结果与"先剥后合"两步完全一致，且无变化时报告 unchanged（不落盘）。
+    #[test]
+    fn kimi_common_config_replace_strips_old_and_merges_new_in_one_pass() {
+        let old_snippet = "[thinking]\nenabled = true\neffort = \"high\"\n";
+        let new_snippet = "[tui]\nnotifications = false\n";
+        let live = r#"default_model = "demo/model"
+
+[thinking]
+enabled = true
+effort = "high"
+
+[providers.demo]
+type = "openai"
+"#;
+
+        let mut doc = live.parse::<DocumentMut>().unwrap();
+        let changed =
+            replace_kimi_common_config_in_doc(&mut doc, Some(old_snippet), Some(new_snippet))
+                .unwrap();
+        assert!(changed);
+        let text = doc.to_string();
+        assert!(
+            !text.contains("[thinking]"),
+            "old snippet keys must be stripped: {text}"
+        );
+        assert!(text.contains("[tui]"));
+        assert!(text.contains("notifications = false"));
+        assert!(text.contains("[providers.demo]"));
+        assert!(text.contains("default_model = \"demo/model\""));
+
+        // 单次 RMW 只是把"先剥后合"原子化，语义必须一致
+        let mut two_step = live.parse::<DocumentMut>().unwrap();
+        update_kimi_doc_common_config(&mut two_step, old_snippet, false).unwrap();
+        update_kimi_doc_common_config(&mut two_step, new_snippet, true).unwrap();
+        assert_eq!(text, two_step.to_string());
+
+        // 已处于目标状态时报告 unchanged，调用方据此跳过落盘
+        let mut settled = text.parse::<DocumentMut>().unwrap();
+        let changed =
+            replace_kimi_common_config_in_doc(&mut settled, Some(old_snippet), Some(new_snippet))
+                .unwrap();
+        assert!(!changed);
+        assert_eq!(settled.to_string(), text);
+    }
+
+    /// 标量覆盖语义：片段合并后用户改过的标量在剥离时按值匹配保留；
+    /// 未被改动的片段值则正常剥除（空表随之清理）。
+    #[test]
+    fn kimi_common_config_replace_strip_after_scalar_override_matches_by_value() {
+        let snippet = "[thinking]\nenabled = true\n";
+
+        // 用户把片段写入的标量改成了自己的值 → 剥离必须保留
+        let mut doc = DocumentMut::new();
+        update_kimi_doc_common_config(&mut doc, snippet, true).unwrap();
+        let mut doc = doc
+            .to_string()
+            .replace("enabled = true", "enabled = false")
+            .parse::<DocumentMut>()
+            .unwrap();
+        replace_kimi_common_config_in_doc(&mut doc, Some(snippet), None).unwrap();
+        assert!(
+            doc.to_string().contains("enabled = false"),
+            "user-overridden scalar must survive strip: {}",
+            doc.to_string()
+        );
+
+        // 片段原值未被改动 → 按值匹配剥掉
+        let mut doc = DocumentMut::new();
+        update_kimi_doc_common_config(&mut doc, snippet, true).unwrap();
+        let changed = replace_kimi_common_config_in_doc(&mut doc, Some(snippet), None).unwrap();
+        assert!(changed);
+        assert!(
+            !doc.to_string().contains("thinking"),
+            "snippet-owned table must be stripped: {}",
+            doc.to_string()
+        );
+    }
+
+    /// 代理接管期间 live 归代理所有：replace 直接跳过，连片段解析都不做
+    /// （用无效 TOML 证明提前返回）；非接管时无效片段在文档变换阶段报错。
+    #[test]
+    fn replace_kimi_common_config_in_live_skips_write_during_takeover() {
+        // 接管分支在任何解析/文件访问之前返回（无效 TOML 也不会触发报错）
+        replace_kimi_common_config_in_live(Some("[broken"), Some("[also broken"), true).unwrap();
+
+        let mut doc = DocumentMut::new();
+        let err = replace_kimi_common_config_in_doc(&mut doc, Some("[broken"), None)
+            .expect_err("invalid snippet must error");
+        assert!(
+            format!("{err}").contains("snippet"),
+            "expected snippet parse error, got: {err}"
+        );
     }
 
     #[test]

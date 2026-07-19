@@ -343,6 +343,26 @@ fn write_document(doc: &DocumentMut) -> Result<KimiWriteOutcome, AppError> {
     Ok(KimiWriteOutcome { backup_path })
 }
 
+/// Run a read-modify-write cycle on the live TOML document under the write lock.
+///
+/// `mutate` returns whether it changed the document; the file (and its `.bak`
+/// backup) is only written when it did. Prefer this over read_config_text →
+/// mutate → write_config_text: the unlocked read there lets a concurrent
+/// writer lose updates between the two calls.
+pub fn update_document<F>(mutate: F) -> Result<KimiWriteOutcome, AppError>
+where
+    F: FnOnce(&mut DocumentMut) -> Result<bool, AppError>,
+{
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
+    let mut doc = read_document()?;
+    if !mutate(&mut doc)? {
+        return Ok(KimiWriteOutcome::default());
+    }
+    write_document(&doc)
+}
+
 // ============================================================================
 // Provider helpers
 // ============================================================================
@@ -1521,6 +1541,45 @@ mod tests {
             Some(value) => std::env::set_var("KIMI_CODE_OAUTH_HOST", value),
             None => std::env::remove_var("KIMI_CODE_OAUTH_HOST"),
         }
+    }
+
+    #[test]
+    fn update_document_writes_only_when_mutator_reports_change() {
+        with_temp_home(|_home| {
+            let path = get_kimi_config_path();
+            fs::write(&path, "default_model = \"a/model\"\n").unwrap();
+
+            // 无变更：不重写文件、不产生 .bak 备份
+            let outcome = update_document(|_doc| Ok(false)).unwrap();
+            assert!(outcome.backup_path.is_none());
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                "default_model = \"a/model\"\n"
+            );
+            let backups: Vec<_> = fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("config.toml.bak.")
+                })
+                .collect();
+            assert!(
+                backups.is_empty(),
+                "no-change RMW must not create backups: {backups:?}"
+            );
+
+            // 有变更：单次落盘并产生备份
+            let outcome = update_document(|doc| {
+                doc["default_model"] = Item::Value(TomlEditValue::from("b/model"));
+                Ok(true)
+            })
+            .unwrap();
+            assert!(outcome.backup_path.is_some());
+            assert!(fs::read_to_string(&path).unwrap().contains("b/model"));
+        });
     }
 
     #[test]

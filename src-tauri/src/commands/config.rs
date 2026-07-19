@@ -325,37 +325,26 @@ pub async fn set_common_config_snippet(
 
     state
         .db
-        .set_config_snippet(&app_type, value)
+        .set_config_snippet(&app_type, value.clone())
         .map_err(|e| e.to_string())?;
     state
         .db
         .set_config_snippet_cleared(&app_type, is_cleared)
         .map_err(|e| e.to_string())?;
 
-    // Kimi Code 的 live 是所有供应商共享的 additive TOML 文档：先按旧片段
-    // 从 live 剥离（值匹配剥离，用户改过的值保留），随后重同步把新片段
-    // 合并回去。代理接管期间 live 归代理所有，片段只落库，接管结束后随
-    // 下次 live 同步应用。
+    // Kimi Code 的 live 是所有供应商共享的 additive TOML 文档：旧片段剥离与
+    // 新片段合并在 kimi_config write_lock 内一次 RMW 完成（单次落盘，中间
+    // 失败不会留下"无片段"中间态；值匹配剥离，用户改过的值保留）。代理接管
+    // 期间 live 归代理所有，片段只落库，接管结束后随下次 live 同步应用。
     let kimi_live_owned_by_proxy =
         app_type == "kimicode" && crate::kimi_config::is_proxy_takeover_active().unwrap_or(false);
-    if app_type == "kimicode" && !kimi_live_owned_by_proxy {
-        if let Some(old_snippet) = old_snippet
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            let live_text = crate::kimi_config::read_config_text().map_err(|e| e.to_string())?;
-            if !live_text.trim().is_empty() {
-                let stripped = crate::services::provider::update_toml_common_config_snippet(
-                    &live_text,
-                    old_snippet,
-                    false,
-                )
-                .map_err(|e| e.to_string())?;
-                if stripped != live_text {
-                    crate::kimi_config::write_config_text(&stripped).map_err(|e| e.to_string())?;
-                }
-            }
-        }
+    if app_type == "kimicode" {
+        crate::services::provider::replace_kimi_common_config_in_live(
+            old_snippet.as_deref(),
+            value.as_deref(),
+            kimi_live_owned_by_proxy,
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     if matches!(app_type.as_str(), "claude" | "codex" | "gemini")

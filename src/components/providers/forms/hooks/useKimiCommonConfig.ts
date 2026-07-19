@@ -60,10 +60,13 @@ export function useKimiCommonConfig({ enabled }: UseKimiCommonConfigProps) {
   const handleCommonConfigSnippetChange = useCallback(
     async (value: string): Promise<boolean> => {
       const trimmed = value.trim();
+      // 与校验口径一致：弯引号/全角引号先归一化再保存，
+      // 否则后端 toml_edit 会拒绝原始弯引号文本。
+      const normalized = trimmed ? normalizeTomlText(value) : "";
 
       if (trimmed) {
         try {
-          parseToml(normalizeTomlText(value));
+          parseToml(normalized);
         } catch (error) {
           setCommonConfigError(
             error instanceof Error ? error.message : String(error),
@@ -73,7 +76,7 @@ export function useKimiCommonConfig({ enabled }: UseKimiCommonConfigProps) {
       }
 
       try {
-        await configApi.setCommonConfigSnippet("kimicode", trimmed ? value : "");
+        await configApi.setCommonConfigSnippet("kimicode", normalized);
       } catch (error) {
         console.error("保存 Kimi Code 通用配置失败:", error);
         setCommonConfigError(
@@ -83,7 +86,7 @@ export function useKimiCommonConfig({ enabled }: UseKimiCommonConfigProps) {
       }
 
       setCommonConfigError("");
-      setCommonConfigSnippetState(trimmed ? value : "");
+      setCommonConfigSnippetState(normalized);
       return true;
     },
     [t],

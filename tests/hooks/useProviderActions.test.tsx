@@ -360,6 +360,93 @@ describe("useProviderActions", () => {
     expect(toastErrorMock).toHaveBeenCalledTimes(1);
   });
 
+  it("allows the Kimi managed official provider during takeover", async () => {
+    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
+    const { wrapper } = createWrapper();
+    const provider = createProvider({
+      id: "managed:kimi-code",
+      category: "official",
+    });
+
+    const { result } = renderHook(
+      () => useProviderActions("kimicode", true, true),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.switchProvider(provider);
+    });
+
+    expect(switchProviderMutateAsync).toHaveBeenCalledWith("managed:kimi-code");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    // 接管下主按钮是切换语义（热切换），保持「切换成功！」
+    expect(toastSuccessMock).toHaveBeenCalledWith("切换成功！", {
+      closeButton: true,
+    });
+  });
+
+  it("allows a Kimi official provider carrying oauth config during takeover", async () => {
+    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
+    const { wrapper } = createWrapper();
+    const provider = createProvider({
+      id: "kimi-oauth-imported",
+      category: "official",
+      settingsConfig: { oauth: { access_token: "token" } },
+    });
+
+    const { result } = renderHook(
+      () => useProviderActions("kimicode", true, true),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.switchProvider(provider);
+    });
+
+    expect(switchProviderMutateAsync).toHaveBeenCalledWith(
+      "kimi-oauth-imported",
+    );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("continues blocking non-managed official Kimi providers during takeover", async () => {
+    const { wrapper } = createWrapper();
+    const provider = createProvider({
+      id: "kimi-third-party",
+      category: "official",
+    });
+
+    const { result } = renderHook(
+      () => useProviderActions("kimicode", true, true),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.switchProvider(provider);
+    });
+
+    expect(switchProviderMutateAsync).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the add-to-config toast for Kimi additive switch without takeover", async () => {
+    switchProviderMutateAsync.mockResolvedValueOnce(undefined);
+    const { wrapper } = createWrapper();
+    const provider = createProvider({ category: "third_party" });
+
+    const { result } = renderHook(() => useProviderActions("kimicode"), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await result.current.switchProvider(provider);
+    });
+
+    expect(toastSuccessMock).toHaveBeenCalledWith("已添加到配置", {
+      closeButton: true,
+    });
+  });
+
   it("should sync plugin config when switching Claude provider with integration enabled", async () => {
     switchProviderMutateAsync.mockResolvedValueOnce(undefined);
     settingsApiGetMock.mockResolvedValueOnce({

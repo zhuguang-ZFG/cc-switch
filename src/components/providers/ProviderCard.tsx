@@ -186,8 +186,19 @@ export function ProviderCard({
   });
 
   const displayUrl = useMemo(() => {
-    return extractApiUrl(provider, fallbackUrlText);
-  }, [provider, fallbackUrlText]);
+    const url = extractApiUrl(provider, fallbackUrlText);
+    // Kimi 托管供应商（官方登录注入，无 websiteUrl）避免显示「未配置接口地址」，
+    // 仅显示层 fallback 到官方 Code 页面，不写回 DB。
+    if (
+      url === fallbackUrlText &&
+      appId === "kimicode" &&
+      (provider.id.startsWith("managed:") ||
+        isHermesReadOnlyProvider(provider.settingsConfig))
+    ) {
+      return "https://www.kimi.com/code/";
+    }
+    return url;
+  }, [provider, fallbackUrlText, appId]);
 
   const isClickableUrl = useMemo(() => {
     if (provider.notes?.trim()) {

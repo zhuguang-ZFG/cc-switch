@@ -9,7 +9,7 @@
 //! - `codex` - Codex MCP 同步和导入（含 TOML 转换）
 //! - `gemini` - legacy Gemini CLI MCP (kept for migration/import only)
 //! - `opencode` - OpenCode MCP 同步和导入（含 local/remote 格式转换）
-//! - Kimi Code MCP is deferred (uses separate mcp.json; not in MVP)
+//! - `kimi` - Kimi Code MCP 同步和导入（独立 mcp.json）
 
 mod claude;
 mod codex;
