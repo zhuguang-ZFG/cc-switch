@@ -335,7 +335,7 @@ fn usage_field(object: &serde_json::Map<String, serde_json::Value>, keys: &[&str
 }
 
 fn usage_reset(object: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
-    [
+    let absolute = [
         "resetAt",
         "reset_at",
         "resetTime",
@@ -349,6 +349,19 @@ fn usage_reset(object: &serde_json::Map<String, serde_json::Value>) -> Option<St
             .get(*key)
             .and_then(|value| value.as_str())
             .map(str::to_string)
+    });
+    if absolute.is_some() {
+        return absolute;
+    }
+    // Kimi's /usages has shipped relative windows (`reset_in`/`ttl` seconds)
+    // in some releases; convert to an absolute RFC3339 timestamp so the UI
+    // renders a reset time instead of nothing.
+    ["reset_in", "resetIn", "ttl"].iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(serde_json::Value::as_i64)
+            .filter(|seconds| *seconds > 0)
+            .map(|seconds| (chrono::Utc::now() + chrono::Duration::seconds(seconds)).to_rfc3339())
     })
 }
 
@@ -480,6 +493,60 @@ fn parse_kimi_usage(body: &serde_json::Value) -> Vec<QuotaTier> {
     tiers
 }
 
+/// Parse Kimi's booster wallet (pay-as-you-go extra usage) mirroring the
+/// CLI's `parseBoosterWallet` (managed-usage.ts): `balance.amount`/`amountLeft`
+/// are 1e6 fixed-point cents; `monthlyChargeLimit`/`monthlyUsed` carry whole
+/// cents in `priceInCents`.
+fn parse_kimi_booster_wallet(body: &serde_json::Value) -> Option<ExtraUsage> {
+    let wallet = body.get("boosterWallet")?.as_object()?;
+    let balance = wallet.get("balance")?.as_object()?;
+    if balance.get("type").and_then(serde_json::Value::as_str) != Some("BOOSTER") {
+        return None;
+    }
+    let amount = balance.get("amount").and_then(serde_json::Value::as_i64)?;
+    if amount <= 0 {
+        return None;
+    }
+
+    let money_cents = |key: &str| -> Option<f64> {
+        wallet
+            .get(key)
+            .and_then(serde_json::Value::as_object)
+            .and_then(|money| money.get("priceInCents"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|cents| cents as f64 / 100.0)
+    };
+    let currency = ["monthlyChargeLimit", "monthlyUsed"]
+        .iter()
+        .find_map(|key| {
+            wallet
+                .get(*key)
+                .and_then(serde_json::Value::as_object)
+                .and_then(|money| money.get("currency"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|code| !code.is_empty())
+                .map(str::to_string)
+        });
+
+    let monthly_limit = money_cents("monthlyChargeLimit").filter(|value| *value > 0.0);
+    let used_credits = money_cents("monthlyUsed");
+    let utilization = match (used_credits, monthly_limit) {
+        (Some(used), Some(limit)) if limit > 0.0 => Some((used / limit * 100.0).min(100.0)),
+        _ => None,
+    };
+
+    Some(ExtraUsage {
+        is_enabled: wallet
+            .get("monthlyChargeLimitEnabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+        monthly_limit,
+        used_credits,
+        utilization,
+        currency: Some(currency.unwrap_or_else(|| "USD".to_string())),
+    })
+}
+
 async fn query_kimi_quota(access_token: &str) -> Result<SubscriptionQuota, String> {
     let client = crate::proxy::http_client::get();
     let response = client
@@ -523,7 +590,7 @@ async fn query_kimi_quota(access_token: &str) -> Result<SubscriptionQuota, Strin
         credential_message: None,
         success: true,
         tiers: parse_kimi_usage(&body),
-        extra_usage: None,
+        extra_usage: parse_kimi_booster_wallet(&body),
         error: None,
         queried_at: Some(now_millis()),
     })

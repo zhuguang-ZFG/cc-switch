@@ -40,7 +40,40 @@
 - gemini 迁移后 DB 留有孤儿 provider 行：产品移除 Gemini CLI 的既定行为，无代码路径读取。
 - `mcp_servers`/`skills` 表保留 `enabled_hermes` 列名：DAO 映射一致，无需迁移。
 
+## 第二轮：对照 Kimi Code CLI 0.27 开源实现的契约审查
+
+三个并行审查代理逐契约比对 `.vendor/kimi-code-0.27.0`（OAuth 生命周期 / config.toml 契约 / 用量数据契约）。
+
+### 验证匹配（勿再报）
+
+- 凭据文件格式与 CLI `TokenInfoWire` 字节级兼容（snake_case、`expires_at` 秒、默认值一致），路径一致。
+- 刷新阈值 `max(300, expires_in/2)` 与 CLI `defaultRefreshThreshold` 一致。
+- 六种 provider `type` 拼写与 CLI `ProviderTypeSchema` 完全一致（真正的校验器是 agent-core schema.ts，不是 custom-registry.ts）。
+- `max_context_size` 必填兜底、`${provider}/${id}` 别名推导、`managed:` + `oauth/kimi-code` 受管约定、接管用 `openai_responses` 指向 localhost——全部匹配。
+- usage.record 四个 token 字段名与写入端一致；每条事件是单次 LLM 调用的增量（非累积快照），`turn`/`session` scope 不重叠，不存在重复计数。
+- 会话目录布局（`sessions/<hash>/<id>/agents/<agent>/wire.jsonl`）与 resume `--session <id>` 匹配。
+
+### 已修复（第二轮，见 CHANGELOG）
+
+1. **[blocker] 跨进程并发刷新互踩**：两工具锁路径不同（CLI 在 Windows 干脆无锁），输的一方拿 invalid_grant 后 CLI 会写"注销墓碑"覆盖轮换后的好 token → 双双登出。cc-switch 现在在刷新遭 401/invalid_grant 后重读凭据文件、采纳对端轮换的 token（镜像 oauth-manager.ts:369-383）；icacls 仅首建时执行以缩小窗口。
+2. 刷新对 429/5xx/传输错误 3 次指数退避重试（镜像 oauth.ts RETRYABLE_STATUSES）。
+3. 设备流 `slow_down` 前后端联动升频 +5s（RFC 8628 §3.5）。
+4. managed 目录 `protocol` 仅在恰为 `anthropic` 时写入（CLI zod literal，写其它值会整条模型被丢弃）。
+5. 受管判定收窄到 `managed:` 前缀 / `oauth.key == "oauth/kimi-code"`（原先任何带 oauth 表的自定义 provider 都被锁死）。
+6. Kimi booster 钱包 → `extra_usage`（月度上限/已用/占比/币种，1e6 定点分转换同 CLI）。
+7. `/usages` 相对重置（`reset_in`/`ttl` 秒）转绝对 RFC3339 时间。
+8. 自定义模型 `name` → `display_name`；补种子行裸 `kimi-k2`（原落到 kimi-for-coding 估算价）。
+9. 非标准 wire.jsonl 布局整体跳过（避免 bucket 哈希误标为 session_id、request_id 去重键冲突）。
+
+### 未修（记录在案）
+
+- vertexai / google-genai 类型在表单中无 `env` 字段（`GOOGLE_CLOUD_PROJECT` 等），选它们会得到运行时失败的 provider——需要表单支持 `env`/`custom_headers`，UI 工作量较大。
+- `max_output_size`/`reasoning_key` 未在自定义 provider 表单中暴露（CLI 可选字段，无拒绝风险）。
+- 设备流 `expired_token` 是硬错误而非自动重发新码（CLI 会无缝重来）；前端已有过期计时，仅 UX 差异。
+- `x-msh-os-version` 发送的是 OS 名而非版本号（CLI 发 `os.release()`），纯遥测字段，服务端不校验。
+
 ## 后续跟进
 
 - `deeplink/tests.rs` 的 `TestHomeGuard` 改 `HOME`/`USERPROFILE` 但 31 测试仅 1 个 `#[serial]`——目前未见失败，若出现随机失败按 kimi_config 同法处理。
 - Coding Plan 订阅价目为估算价（schema.rs 种子有 ESTIMATE ONLY 注释），Moonshot 公布正式价后替换。
+- 上表"未修"四项按需求排期。

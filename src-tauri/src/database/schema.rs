@@ -2463,6 +2463,10 @@ impl Database {
                 "0",
             ),
             ("kimi-k2-0905", "Kimi K2", "0.55", "2.20", "0.10", "0"),
+            // Kimi Code CLI 0.27 still emits the bare `kimi-k2` id in some
+            // sessions; price it like kimi-k2-0905 so it doesn't fall through
+            // to the kimi-for-coding estimate rate.
+            ("kimi-k2", "Kimi K2", "0.55", "2.20", "0.10", "0"),
             (
                 "kimi-k2-turbo",
                 "Kimi K2 Turbo",

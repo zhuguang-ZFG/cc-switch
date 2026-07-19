@@ -75,7 +75,7 @@ export function useManagedAuth(
 
       // Add a small buffer on top of GitHub's suggested interval to avoid
       // hitting slow_down responses too aggressively during device polling.
-      const interval = Math.max((response.interval || 5) + 3, 8) * 1000;
+      let interval = Math.max((response.interval || 5) + 3, 8) * 1000;
       const expiresAt = Date.now() + response.expires_in * 1000;
 
       const pollOnce = async () => {
@@ -102,10 +102,17 @@ export function useManagedAuth(
           }
         } catch (e) {
           const errorMessage = e instanceof Error ? e.message : String(e);
-          if (
-            !errorMessage.includes("pending") &&
-            !errorMessage.includes("slow_down")
-          ) {
+          if (errorMessage.includes("slow_down")) {
+            // RFC 8628 §3.5: the server asked us to back off — permanently
+            // increase the polling interval by 5s for the rest of the flow.
+            interval += 5000;
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = setInterval(pollOnce, interval);
+            }
+            return;
+          }
+          if (!errorMessage.includes("pending")) {
             stopPolling();
             setPollingState("error");
             setError(errorMessage);

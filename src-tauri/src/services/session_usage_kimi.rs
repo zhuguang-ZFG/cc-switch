@@ -114,8 +114,17 @@ fn normalize_kimi_model(raw: &str) -> String {
 }
 
 /// wire.jsonl 路径解剖：.../<session_dir>/agents/<agent>/wire.jsonl
-/// 返回 (session_id, agent_name)
+/// 返回 (session_id, agent_name)。仅接受官方 v2 布局（父目录链上必须有
+/// `agents`），否则将 bucket 哈希误当 session_id。
 fn wire_file_identity(file_path: &Path) -> (Option<String>, Option<String>) {
+    let agents_marker = file_path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str());
+    if agents_marker != Some("agents") {
+        return (None, None);
+    }
     let agent = file_path
         .parent()
         .and_then(Path::file_name)
@@ -241,6 +250,16 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
     }
 
     let (session_id, agent_name) = wire_file_identity(file_path);
+    // Non-v2 layout (e.g. a hypothetical top-level <session>/wire.jsonl):
+    // importing it would mislabel the bucket hash as session_id and collide
+    // request_id dedup keys across files. Skip it entirely.
+    if session_id.is_none() {
+        log::debug!(
+            "[KIMI-SYNC] Skipping non-standard wire.jsonl layout: {}",
+            file_path.display()
+        );
+        return Ok((0, 0));
+    }
 
     let file =
         fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
@@ -661,6 +680,16 @@ mod tests {
         let (session, agent) = wire_file_identity(path);
         assert_eq!(session.as_deref(), Some("session_xyz"));
         assert_eq!(agent.as_deref(), Some("agent-0"));
+    }
+
+    #[test]
+    fn test_wire_file_identity_rejects_non_agents_layout() {
+        // A top-level <bucket>/<session>/wire.jsonl must not be mislabeled
+        // with the bucket hash as session_id.
+        let path = Path::new("/home/u/.kimi-code/sessions/wd_proj_ab12/session_xyz/wire.jsonl");
+        let (session, agent) = wire_file_identity(path);
+        assert_eq!(session, None);
+        assert_eq!(agent, None);
     }
 
     #[test]

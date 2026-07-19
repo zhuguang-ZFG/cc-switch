@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced.
+Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced. A second comparative audit against the vendored Kimi Code CLI 0.27 source (OAuth lifecycle, config.toml contract, usage/wire.jsonl contract) then verified the shared-file token format, refresh threshold, provider-type schema, alias derivation, per-call usage semantics, and session layout all match the official implementation, and landed the interop fixes below.
+
+### Fixed (Kimi Code CLI 0.27 interop audit)
+
+- **Concurrent OAuth refresh no longer double-logs-out cc-switch and the real CLI**: the two tools share one credentials file but use disjoint cross-process locks (the CLI disables its lock entirely on Windows). When cc-switch's refresh loses the race it now re-reads the file and adopts the peer's rotated token instead of surfacing an auth failure — mirroring the CLI's own recovery — and the Windows `icacls` ACL pass runs only on first creation so the rotated token lands on disk faster.
+- **Token refresh retries transient failures** (429/5xx/transport) three times with exponential backoff, matching the CLI; only genuine auth rejections short-circuit.
+- **Device-flow login honors `slow_down`** (RFC 8628 §3.5): the backend surfaces it distinctly and the frontend permanently widens its polling interval by 5s each time.
+- **Managed model catalog only writes `protocol = "anthropic"`**: the CLI's schema is a zod literal, and any other value made it silently drop the whole model entry.
+- **"Managed provider" detection narrowed** to the `managed:` prefix / `oauth.key = "oauth/kimi-code"` reference; a custom provider carrying its own `oauth` table (valid per the CLI schema) is editable again.
+- **Kimi booster wallet (pay-as-you-go) now surfaces as extra usage** — monthly cap, monthly spend, utilization, currency — parsed the same way as the CLI's `parseBoosterWallet`.
+- **Relative quota reset hints (`reset_in`/`ttl`) convert to absolute reset times** instead of showing nothing.
+- **Custom model display names survive the round trip** (form `name` → CLI `display_name`), and the bare `kimi-k2` id gets its own seeded list price instead of the kimi-for-coding estimate.
+- **Non-standard `wire.jsonl` layouts are skipped** instead of being imported with a bucket hash mislabeled as the session id.
 
 ### Fixed
 

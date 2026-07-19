@@ -456,7 +456,19 @@ fn merge_json_object_into_table(table: &mut Table, object: &Map<String, Value>, 
 }
 
 fn provider_table_is_managed(name: &str, table: Option<&Table>) -> bool {
-    name.starts_with("managed:") || table.is_some_and(|table| table.contains_key("oauth"))
+    // Match the CLI's notion of managed: the `managed:` name prefix or the
+    // specific `oauth.key = "oauth/kimi-code"` credential reference. A custom
+    // provider carrying some other user-configured `oauth` table is valid per
+    // the CLI schema and must stay editable/removable.
+    name.starts_with("managed:")
+        || table.is_some_and(|table| {
+            table
+                .get("oauth")
+                .and_then(Item::as_table)
+                .and_then(|oauth| oauth.get("key"))
+                .and_then(Item::as_str)
+                == Some(KIMI_OAUTH_KEY)
+        })
 }
 
 pub fn is_managed_provider(name: &str) -> Result<bool, AppError> {
@@ -575,9 +587,15 @@ pub fn get_providers() -> Result<Map<String, Value>, AppError> {
             };
             obj.insert("api_mode".into(), Value::String(api_mode.into()));
         }
+        let oauth_is_kimi_managed = obj
+            .get("oauth")
+            .and_then(Value::as_object)
+            .and_then(|oauth| oauth.get("key"))
+            .and_then(Value::as_str)
+            == Some(KIMI_OAUTH_KEY);
         obj.insert(
             "_cc_managed".into(),
-            Value::Bool(name.starts_with("managed:") || obj.contains_key("oauth")),
+            Value::Bool(name.starts_with("managed:") || oauth_is_kimi_managed),
         );
         if let Some(models) = models_by_provider.get(name) {
             obj.insert("models".into(), models.clone());
@@ -679,6 +697,17 @@ fn upsert_provider_into_document(
                 );
             }
             mt.insert("provider", Item::Value(TomlEditValue::from(name)));
+            // Map the form's `name` to the CLI's `display_name` so custom
+            // model display names survive the round trip (schema.ts maps
+            // display_name → displayName).
+            if let Some(display) = model
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                mt.insert("display_name", Item::Value(TomlEditValue::from(display)));
+            }
             let model_id = model
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -1056,6 +1085,11 @@ fn restrict_path_to_current_user(path: &Path) -> Result<(), String> {
 pub fn save_oauth_token(token: &KimiOAuthToken) -> Result<(), AppError> {
     let path = get_kimi_credentials_path();
     if let Some(parent) = path.parent() {
+        // Restricting ACLs shells out to icacls on Windows (tens–hundreds of
+        // ms). Only pay that on first creation: during a refresh race with
+        // the real Kimi CLI every extra ms before the rotated token lands on
+        // disk widens the window in which the peer clobbers it.
+        let parent_created = !parent.exists();
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         #[cfg(unix)]
         {
@@ -1065,10 +1099,14 @@ pub fn save_oauth_token(token: &KimiOAuthToken) -> Result<(), AppError> {
         }
         #[cfg(windows)]
         {
-            if let Err(error) = restrict_path_to_current_user(parent) {
-                log::warn!("Failed to restrict Kimi credentials directory ACL: {error}");
+            if parent_created {
+                if let Err(error) = restrict_path_to_current_user(parent) {
+                    log::warn!("Failed to restrict Kimi credentials directory ACL: {error}");
+                }
             }
         }
+        #[cfg(not(windows))]
+        let _ = parent_created;
     }
     let mut bytes = serde_json::to_vec_pretty(token)
         .map_err(|e| AppError::Message(format!("Failed to serialize Kimi OAuth token: {e}")))?;
@@ -1146,21 +1184,68 @@ async fn ensure_fresh_oauth_token_with_expected(
         .map_err(|error| {
             AppError::Message(format!("Failed to build Kimi OAuth client: {error}"))
         })?;
-    let response = client
-        .post(format!("{}/api/oauth/token", get_kimi_oauth_host()))
-        .form(&[
-            ("client_id", KIMI_OAUTH_CLIENT_ID),
-            ("grant_type", "refresh_token"),
-            ("refresh_token", current.refresh_token.as_str()),
-        ])
-        .send()
-        .await
-        .map_err(|error| AppError::Message(format!("Kimi OAuth refresh failed: {error}")))?;
-    let status = response.status();
-    let payload: Value = response.json().await.map_err(|error| {
-        AppError::Message(format!("Invalid Kimi OAuth refresh response: {error}"))
-    })?;
+    // Mirror the official CLI: retry transient failures (429/5xx/transport)
+    // with 1s/2s backoff; only auth rejections short-circuit.
+    const RETRYABLE: [u16; 5] = [429, 500, 502, 503, 504];
+    let mut attempt = 0usize;
+    let (status, payload): (reqwest::StatusCode, Value) = loop {
+        attempt += 1;
+        let result = client
+            .post(format!("{}/api/oauth/token", get_kimi_oauth_host()))
+            .form(&[
+                ("client_id", KIMI_OAUTH_CLIENT_ID),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", current.refresh_token.as_str()),
+            ])
+            .send()
+            .await;
+        let retry_after = std::time::Duration::from_millis(1000 * (1 << (attempt - 1).min(4)));
+        match result {
+            Ok(response) => {
+                let status = response.status();
+                if RETRYABLE.contains(&status.as_u16()) && attempt < 3 {
+                    tokio::time::sleep(retry_after).await;
+                    continue;
+                }
+                let payload: Value = response.json().await.map_err(|error| {
+                    AppError::Message(format!("Invalid Kimi OAuth refresh response: {error}"))
+                })?;
+                break (status, payload);
+            }
+            Err(error) if attempt < 3 => {
+                log::warn!("Kimi OAuth refresh transport error (attempt {attempt}): {error}");
+                tokio::time::sleep(retry_after).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(AppError::Message(format!(
+                    "Kimi OAuth refresh failed: {error}"
+                )));
+            }
+        }
+    };
     if !status.is_success() {
+        let error_code = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        // The real Kimi CLI shares this credentials file but uses a different
+        // (or on Windows, no) cross-process lock, so a losing concurrent
+        // refresh gets invalid_grant after the peer rotated the token.
+        // Mirror the CLI's recovery: re-read the file and adopt the peer's
+        // rotated token instead of surfacing an auth failure.
+        if status.as_u16() == 401 || status.as_u16() == 403 || error_code == "invalid_grant" {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            if let Some(peer) = load_oauth_token()? {
+                if peer.refresh_token != current.refresh_token {
+                    log::info!(
+                        "Kimi OAuth refresh lost a cross-process race; adopting peer-rotated token"
+                    );
+                    return Ok(Some(peer.access_token));
+                }
+            }
+        }
         let detail = payload
             .get("error_description")
             .or_else(|| payload.get("message"))
@@ -1375,12 +1460,18 @@ pub fn provision_managed_provider(models_payload: &Value) -> Result<KimiWriteOut
             entry.insert("capabilities", Item::Value(value));
         }
 
-        for (source, target) in [("display_name", "display_name"), ("protocol", "protocol")] {
-            if let Some(value) = model.get(source).and_then(Value::as_str) {
-                entry.insert(target, Item::Value(TomlEditValue::from(value)));
-            } else {
-                entry.remove(target);
-            }
+        if let Some(value) = model.get("display_name").and_then(Value::as_str) {
+            entry.insert("display_name", Item::Value(TomlEditValue::from(value)));
+        } else {
+            entry.remove("display_name");
+        }
+        // Kimi Code 0.27's schema is z.literal("anthropic") for protocol; any
+        // other value makes zod drop the whole model entry. Mirror the CLI's
+        // parseModelProtocol: write it only when it is exactly "anthropic".
+        if model.get("protocol").and_then(Value::as_str) == Some("anthropic") {
+            entry.insert("protocol", Item::Value(TomlEditValue::from("anthropic")));
+        } else {
+            entry.remove("protocol");
         }
         let efforts = model.get("think_efforts").and_then(Value::as_object);
         if let Some(valid) = efforts.and_then(|value| value.get("valid_efforts")) {

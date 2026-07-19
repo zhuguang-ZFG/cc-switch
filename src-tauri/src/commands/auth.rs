@@ -177,8 +177,14 @@ async fn kimi_poll_device_flow(
         .map_err(|e| format!("Invalid Kimi token response: {e}"))?;
     if !status.is_success() {
         let code = payload.get("error").and_then(Value::as_str).unwrap_or("");
-        if matches!(code, "authorization_pending" | "slow_down") {
+        if code == "authorization_pending" {
             return Ok(None);
+        }
+        // Surface slow_down as a recognizable error so the frontend can
+        // escalate its polling interval (RFC 8628 §3.5); it already treats
+        // errors containing "slow_down" as non-fatal.
+        if code == "slow_down" {
+            return Err("slow_down".to_string());
         }
         let detail = payload
             .get("error_description")
