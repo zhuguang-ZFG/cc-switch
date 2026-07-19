@@ -1255,7 +1255,19 @@ function ProviderFormFull({
         }
         settingsConfig = JSON.stringify(configObj);
       } catch (err) {
-        settingsConfig = values.settingsConfig.trim();
+        // Codex edits live in codexAuth/codexConfig state, not in
+        // values.settingsConfig. Falling back to values.settingsConfig here
+        // silently discarded ALL edits and saved the pristine original with a
+        // success toast. Abort instead so the user sees the real error.
+        toast.error(
+          t("providerForm.codexConfigInvalid", {
+            defaultValue: `Codex 配置无效（auth.json / config.toml 解析失败）：${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+        return;
       }
     } else if (
       appId === "opencode" &&

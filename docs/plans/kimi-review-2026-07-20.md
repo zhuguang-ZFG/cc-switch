@@ -121,6 +121,33 @@ profile/流式/韧性：
 - deeplink：CSP `connect-src` 放行任意 http(s) 主机（XSS 时的外泄通道）；`deplink.html` 建议排除出发布产物。
 - 故障转移无退避/抖动；`TransformError` 一刀切 Retryable（畸形客户端请求可毒化全部熔断器，需拆错误类型）——第三轮已记录，仍未做。
 
+## 第五轮：Copilot/Codex OAuth + 非 Kimi 配置写入器 + 前端状态/查询
+
+四路并行：对抗复审第四轮、前端状态/表单/查询、codex/grok/opencode 配置写入器 round-trip、Copilot/Codex OAuth 提供方。
+
+### 已修复（第五轮）
+
+- **[blocker] `to_codex_provider` TOML 注入**：`format!` 插值 model/base_url/reasoning_effort 无转义，含 `"`+换行的 model id 可注入任意顶层 Codex 键（含 Codex 会执行的 `notify`）。改用 toml_edit 构建。
+- **[blocker] Codex 编辑 JSON 打错静默丢弃全部编辑**：auth.json/config.toml 解析失败原先回落到 pristine 原值并报"成功"。改为报错中止。
+- **[blocker] 编辑 API Key/Base URL 回退 raw-JSON 编辑**：useApiKeyState/useBaseUrlState 从渲染快照 merge，raw JSON 经 form.setValue 改动后未触发父组件重渲染→下一次键入把旧配置写回。改为 latestConfigRef 读最新值（对齐 useModelState）。
+- Copilot/Codex token 存储 Windows ACL（长效 GitHub token / ChatGPT refresh token 明文）。
+- Codex OAuth refresh token 轮换加 store 级 save 锁（两账号并发刷新会写回旧 refresh token 吊销其一）。
+- Copilot slow_down/expired_token 携带 RFC 8628 机器码（前端可升频/续期）；登录轮询用 read 锁（原 write 锁跨网络往返阻塞所有代理 token 获取）。
+- Kimi Code 供应商 key 改名在编辑时生效（原仅 opencode/openclaw）；per-provider 配额探测移出 usage 键命名空间（避免 usage-log-recorded 失效触发外部 HTTP 突发）。
+
+### 配置写入器已知未修（记录）
+
+- Codex/Grok live 配置解析失败时切换无备份直接覆盖（B2）；手动加的 `[mcp_servers.*]` 首次切换被删（B3，可改为自动导入）。
+- opencode.json 写入销毁注释 + 键重排序（W1，可移植 OpenClaw 的 AST 写入器）。
+- ProviderService::update 写 live 不 backfill、不加 switch 锁（W2）；Claude MCP sync 会剥离非托管条目字段（W4）。
+- atomic_write 在 Windows 上非原子（先 remove 后 rename）且不 fsync（W3）。
+- 上述均为存量、非本轮新增，风险中低，建议后续批量处理。
+
+### Copilot/Codex OAuth 已知未修
+
+- 代理路径 401 无刷新重试 + token 缓存不失效（H2，Kimi 有、这两个没有，撤销后最长 30 分钟失败）。
+- 刷新无退避重试 + 撤销无墓碑（M5）；token 响应校验偏薄（L1）；store 写入未 spawn_blocking（L3）。
+
 ## 后续跟进
 
 - `deeplink/tests.rs` 的 `TestHomeGuard` 改 `HOME`/`USERPROFILE` 但 31 测试仅 1 个 `#[serial]`——目前未见失败，若出现随机失败按 kimi_config 同法处理。

@@ -808,19 +808,27 @@ impl UniversalProvider {
             base_trimmed.to_string()
         };
 
-        // 生成 Codex 的 config.toml 内容
-        let config_toml = format!(
-            r#"model_provider = "custom"
-model = "{model}"
-model_reasoning_effort = "{reasoning_effort}"
-disable_response_storage = true
-
-[model_providers.custom]
-name = "NewAPI"
-base_url = "{codex_base_url}"
-wire_api = "responses"
-requires_openai_auth = true"#
-        );
+        // 生成 Codex 的 config.toml 内容。用 toml_edit 构建以正确转义
+        // model / reasoning_effort / base_url——直接 format! 插值时，含 `"`
+        // 或换行的值可注入任意顶层 Codex 键（如 notify，Codex 会执行）。
+        let config_toml = {
+            use toml_edit::{value, DocumentMut, Table};
+            let mut doc = DocumentMut::new();
+            doc["model_provider"] = value("custom");
+            doc["model"] = value(&model);
+            doc["model_reasoning_effort"] = value(&reasoning_effort);
+            doc["disable_response_storage"] = value(true);
+            let mut custom = Table::new();
+            custom["name"] = value("NewAPI");
+            custom["base_url"] = value(&codex_base_url);
+            custom["wire_api"] = value("responses");
+            custom["requires_openai_auth"] = value(true);
+            let mut providers = Table::new();
+            providers.set_implicit(true);
+            providers["custom"] = toml_edit::Item::Table(custom);
+            doc["model_providers"] = toml_edit::Item::Table(providers);
+            doc.to_string()
+        };
 
         let settings_config = serde_json::json!({
             "auth": {

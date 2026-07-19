@@ -66,7 +66,9 @@ pub enum CodexOAuthError {
     #[error("用户拒绝授权")]
     AccessDenied,
 
-    #[error("Device Code 已过期")]
+    // Embeds the machine token so the frontend can transparently renew the
+    // device code (parity with Kimi / Copilot).
+    #[error("Device Code 已过期 (expired_token)")]
     ExpiredToken,
 
     #[error("OAuth Token 获取失败: {0}")]
@@ -230,6 +232,10 @@ pub struct CodexOAuthManager {
     /// 进行中的 Device Code 流程：device_auth_id -> {user_code, expires_at_ms}
     /// 过期条目会在 start_device_flow 时被清理，防止放弃的登录流程导致无界增长
     pending_device_codes: Arc<RwLock<HashMap<String, PendingDeviceCode>>>,
+    /// 序列化磁盘写入：两个账号并发刷新时，各自 clone-then-write 会互相
+    /// 覆盖（后落盘者写回前者刷新前的旧 refresh_token，导致账号被吊销）。
+    /// 在此锁内 snapshot + 写盘，保证最后写者看到的是最新 map。
+    save_lock: Arc<Mutex<()>>,
     storage_path: PathBuf,
 }
 
@@ -243,6 +249,7 @@ impl CodexOAuthManager {
             access_tokens: Arc::new(RwLock::new(HashMap::new())),
             refresh_locks: Arc::new(RwLock::new(HashMap::new())),
             pending_device_codes: Arc::new(RwLock::new(HashMap::new())),
+            save_lock: Arc::new(Mutex::new(())),
             storage_path,
         };
 
@@ -819,6 +826,7 @@ impl CodexOAuthManager {
 
         #[cfg(windows)]
         {
+            let existed = self.storage_path.exists();
             let mut file = fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -830,6 +838,15 @@ impl CodexOAuthManager {
                 let _ = fs::remove_file(&self.storage_path);
             }
             fs::rename(&tmp_path, &self.storage_path)?;
+            // ChatGPT refresh tokens in plaintext — owner-only ACL on first
+            // creation (matches the Kimi/settings hardening).
+            if !existed {
+                if let Err(error) =
+                    crate::kimi_config::restrict_path_to_current_user(&self.storage_path)
+                {
+                    log::warn!("Failed to restrict Codex OAuth store ACL: {error}");
+                }
+            }
         }
 
         Ok(())
@@ -861,6 +878,9 @@ impl CodexOAuthManager {
     }
 
     async fn save_to_disk(&self) -> Result<(), CodexOAuthError> {
+        // Hold the save lock across snapshot+write so a concurrent account's
+        // refresh can't interleave and write back a stale refresh_token.
+        let _save_guard = self.save_lock.lock().await;
         let accounts = self.accounts.read().await.clone();
         let default = self.resolve_default_account_id().await;
 

@@ -143,10 +143,15 @@ export const usageKeys = {
   detail: (requestId: string) =>
     [...usageKeys.all, "detail", requestId] as const,
   pricing: () => [...usageKeys.all, "pricing"] as const,
+  // limits/script are per-provider external quota probes (network HTTP to the
+  // provider), NOT dashboard analytics. They live under their own root so a
+  // usage-log-recorded / pricing invalidation of usageKeys.all doesn't mark
+  // every mounted provider card's quota query stale and trigger a burst of
+  // external HTTP calls.
   limits: (providerId: string, appType: string) =>
-    [...usageKeys.all, "limits", providerId, appType] as const,
+    ["usage-probe", "limits", providerId, appType] as const,
   script: (providerId: string, appType: string) =>
-    [...usageKeys.all, providerId, appType] as const,
+    ["usage-probe", providerId, appType] as const,
 };
 
 /** 把 UI 侧的 "all" 哨兵归一成 undefined（后端语义：不过滤）。 */

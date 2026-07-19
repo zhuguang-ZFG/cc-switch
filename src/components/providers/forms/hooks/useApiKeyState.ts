@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import type { ProviderCategory } from "@/types";
 import {
   getApiKeyFromConfig,
@@ -34,6 +34,14 @@ export function useApiKeyState({
     return "";
   });
 
+  // Always track the freshest config prop. `initialConfig` is
+  // form.getValues("settingsConfig") snapshotted at the parent's last render;
+  // raw-JSON edits call form.setValue WITHOUT re-rendering this hook's parent,
+  // so building the merge off the prop would revert those edits on the next
+  // keystroke. Read from the ref instead (mirrors useModelState).
+  const latestConfigRef = useRef(initialConfig);
+  latestConfigRef.current = initialConfig;
+
   // 当外部通过 form.reset / 读取 live 等方式更新配置时，同步回 API Key 状态
   // - 仅在 JSON 可解析时同步，避免用户编辑 JSON 过程中因临时无效导致输入框闪烁
   useEffect(() => {
@@ -57,7 +65,7 @@ export function useApiKeyState({
       setApiKey(key);
 
       const configString = setApiKeyInConfig(
-        initialConfig || "{}",
+        latestConfigRef.current || "{}",
         key.trim(),
         {
           // 最佳实践：仅在"非官方/非云厂商类别"时补齐缺失字段
@@ -73,14 +81,7 @@ export function useApiKeyState({
 
       onConfigChange(configString);
     },
-    [
-      initialConfig,
-      selectedPresetId,
-      category,
-      appType,
-      apiKeyField,
-      onConfigChange,
-    ],
+    [selectedPresetId, category, appType, apiKeyField, onConfigChange],
   );
 
   const showApiKey = useCallback(

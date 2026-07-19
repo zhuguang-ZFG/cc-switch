@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced. A second comparative audit against the vendored Kimi Code CLI 0.27 source (OAuth lifecycle, config.toml contract, usage/wire.jsonl contract) then verified the shared-file token format, refresh threshold, provider-type schema, alias derivation, per-call usage semantics, and session layout all match the official implementation, and landed the interop fixes below. A third audit round (adversarial re-review of the fixes themselves, proxy streaming hot path, failover concurrency, and a whole-app performance sweep) landed the resilience and performance work below. A fourth round audited the external-input security surface (deep-link import), cloud-sync/secrets handling, and the project-profile system, plus an adversarial re-review of round three.
+Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced. A second comparative audit against the vendored Kimi Code CLI 0.27 source (OAuth lifecycle, config.toml contract, usage/wire.jsonl contract) then verified the shared-file token format, refresh threshold, provider-type schema, alias derivation, per-call usage semantics, and session layout all match the official implementation, and landed the interop fixes below. A third audit round (adversarial re-review of the fixes themselves, proxy streaming hot path, failover concurrency, and a whole-app performance sweep) landed the resilience and performance work below. A fourth round audited the external-input security surface (deep-link import), cloud-sync/secrets handling, and the project-profile system, plus an adversarial re-review of round three. A fifth round audited the Copilot/Codex OAuth providers, the non-Kimi config writers, and frontend state/query correctness.
+
+### Security (audit round 5)
+
+- **Codex universal-provider projection is TOML-escaped** (`to_codex_provider`): the config was built by `format!`-interpolating `model`/`base_url`/`reasoning_effort` into TOML text, so a crafted model id could inject arbitrary top-level Codex keys — including `notify`, which Codex executes. Now built with `toml_edit`, matching the deep-link path.
+- **Copilot/Codex OAuth token stores get an owner-only ACL on Windows** on creation (they hold long-lived GitHub tokens / ChatGPT refresh tokens in plaintext and previously only inherited the parent directory ACL — the same gap Kimi/settings.json already closed).
+
+### Fixed (audit round 5 — OAuth providers, frontend edit loss)
+
+- **Codex provider edit no longer silently discards all edits on a JSON typo**: a parse error in auth.json/config.toml now aborts the save with an error toast instead of falling back to the pristine original and reporting success.
+- **Editing the API Key or Base URL field no longer reverts concurrent raw-JSON edits**: `useApiKeyState`/`useBaseUrlState` merge into the freshest config via a ref instead of a stale render snapshot (matching `useModelState`).
+- **Kimi Code provider-key rename now persists on edit** (was applied only for OpenCode/OpenClaw).
+- **Per-provider quota probes moved off the `usage` query namespace**: a `usage-log-recorded` or pricing invalidation no longer marks every mounted provider card's external quota query stale, avoiding bursts of outbound HTTP.
+- **Codex OAuth refresh-token rotation is serialized** by a store-level save lock (concurrent refreshes of two accounts could write back a stale refresh token, bricking one account).
+- **Copilot device-flow `slow_down`/`expired_token` now surface the RFC 8628 machine tokens** so the frontend escalates the poll interval / transparently renews (Copilot previously collapsed `slow_down` into pending; both providers' error strings lacked the tokens the frontend matches on).
+- **Copilot/Codex login polling uses a read lock** instead of a write guard held across the network roundtrip, which stalled all proxy token fetches every ~8s during login.
 
 ### Security (audit round 4 — external input, sync, secrets)
 

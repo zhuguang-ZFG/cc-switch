@@ -32,6 +32,15 @@ export function useBaseUrlState({
   const [geminiBaseUrl, setGeminiBaseUrl] = useState("");
   const isUpdatingRef = useRef(false);
 
+  // Track the freshest config props. The change handlers below merge the new
+  // base URL into the current config; reading the captured prop would revert a
+  // raw-JSON edit made via form.setValue that didn't re-render this parent
+  // (mirrors useModelState / useApiKeyState).
+  const latestSettingsConfigRef = useRef(settingsConfig);
+  latestSettingsConfigRef.current = settingsConfig;
+  const latestCodexConfigRef = useRef(codexConfig);
+  latestCodexConfigRef.current = codexConfig;
+
   // 从配置同步到 state（Claude / Claude Desktop）
   useEffect(() => {
     if (appType !== "claude" && appType !== "claude-desktop") return;
@@ -91,7 +100,7 @@ export function useBaseUrlState({
       isUpdatingRef.current = true;
 
       try {
-        const config = JSON.parse(settingsConfig || "{}");
+        const config = JSON.parse(latestSettingsConfigRef.current || "{}");
         if (!config.env) {
           config.env = {};
         }
@@ -105,7 +114,7 @@ export function useBaseUrlState({
         }, 0);
       }
     },
-    [settingsConfig, onSettingsConfigChange],
+    [onSettingsConfigChange],
   );
 
   // 处理 Codex Base URL 变化
@@ -120,7 +129,7 @@ export function useBaseUrlState({
 
       isUpdatingRef.current = true;
       const updatedConfig = setCodexBaseUrlInConfig(
-        codexConfig || "",
+        latestCodexConfigRef.current || "",
         sanitized,
       );
       onCodexConfigChange(updatedConfig);
@@ -129,7 +138,7 @@ export function useBaseUrlState({
         isUpdatingRef.current = false;
       }, 0);
     },
-    [codexConfig, onCodexConfigChange],
+    [onCodexConfigChange],
   );
 
   // 处理 Gemini Base URL 变化
@@ -141,7 +150,7 @@ export function useBaseUrlState({
       isUpdatingRef.current = true;
 
       try {
-        const config = JSON.parse(settingsConfig || "{}");
+        const config = JSON.parse(latestSettingsConfigRef.current || "{}");
         if (!config.env) {
           config.env = {};
         }
@@ -155,7 +164,7 @@ export function useBaseUrlState({
         }, 0);
       }
     },
-    [settingsConfig, onSettingsConfigChange],
+    [onSettingsConfigChange],
   );
 
   return {

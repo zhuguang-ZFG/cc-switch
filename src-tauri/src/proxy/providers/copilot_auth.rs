@@ -224,10 +224,16 @@ pub enum CopilotAuthError {
     #[error("等待用户授权中")]
     AuthorizationPending,
 
+    // Display strings embed the RFC 8628 machine tokens so the frontend
+    // (useManagedAuth) can escalate the poll interval / transparently renew,
+    // matching the Kimi device-flow behavior.
+    #[error("请求过快，请放慢轮询 (slow_down)")]
+    SlowDown,
+
     #[error("用户拒绝授权")]
     AccessDenied,
 
-    #[error("设备码已过期")]
+    #[error("设备码已过期 (expired_token)")]
     ExpiredToken,
 
     #[error("GitHub 令牌无效或已过期")]
@@ -663,7 +669,7 @@ impl CopilotAuthManager {
         if let Some(error) = oauth_response.error {
             return match error.as_str() {
                 "authorization_pending" => Err(CopilotAuthError::AuthorizationPending),
-                "slow_down" => Err(CopilotAuthError::AuthorizationPending),
+                "slow_down" => Err(CopilotAuthError::SlowDown),
                 "expired_token" => Err(CopilotAuthError::ExpiredToken),
                 "access_denied" => Err(CopilotAuthError::AccessDenied),
                 _ => Err(CopilotAuthError::NetworkError(format!(
@@ -1281,6 +1287,7 @@ impl CopilotAuthManager {
 
         #[cfg(windows)]
         {
+            let existed = self.storage_path.exists();
             let mut file = fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -1292,6 +1299,16 @@ impl CopilotAuthManager {
                 let _ = fs::remove_file(&self.storage_path);
             }
             fs::rename(&tmp_path, &self.storage_path)?;
+            // Long-lived GitHub OAuth tokens in plaintext — restrict the ACL to
+            // the current user on first creation (matches the Kimi/settings
+            // hardening). fs::rename preserves the ACL across later saves.
+            if !existed {
+                if let Err(error) =
+                    crate::kimi_config::restrict_path_to_current_user(&self.storage_path)
+                {
+                    log::warn!("Failed to restrict Copilot auth store ACL: {error}");
+                }
+            }
         }
 
         Ok(())
