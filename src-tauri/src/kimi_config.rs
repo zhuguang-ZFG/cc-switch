@@ -17,8 +17,11 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value as TomlEditValue};
 
 pub const MANAGED_KIMI_PROVIDER: &str = "managed:kimi-code";
@@ -885,6 +888,102 @@ pub fn load_oauth_token() -> Result<Option<KimiOAuthToken>, AppError> {
     }
 }
 
+fn get_kimi_oauth_refresh_lock_path() -> PathBuf {
+    get_kimi_dir().join(".oauth-refresh.lock")
+}
+
+/// Cross-process refresh lock so concurrent CC Switch / Kimi CLI instances do
+/// not rotate the same refresh token twice. Uses an exclusive lock file with
+/// stale recovery (mtime > 60s).
+struct OAuthRefreshFileLock {
+    path: PathBuf,
+    _file: fs::File,
+}
+
+impl Drop for OAuthRefreshFileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn is_stale_lock_file(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return true;
+    };
+    let Ok(modified) = meta.modified() else {
+        return true;
+    };
+    SystemTime::now()
+        .duration_since(modified)
+        .map(|age| age > Duration::from_secs(60))
+        .unwrap_or(true)
+}
+
+fn try_acquire_oauth_refresh_file_lock() -> Result<OAuthRefreshFileLock, AppError> {
+    let path = get_kimi_oauth_refresh_lock_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                let _ = writeln!(file, "{}", std::process::id());
+                let _ = file.flush();
+                return Ok(OAuthRefreshFileLock { path, _file: file });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if is_stale_lock_file(&path) {
+                    let _ = fs::remove_file(&path);
+                    continue;
+                }
+                if Instant::now() >= deadline {
+                    return Err(AppError::Message(
+                        "Timed out waiting for Kimi OAuth refresh lock; another process may be refreshing credentials"
+                            .into(),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => {
+                return Err(AppError::io(&path, error));
+            }
+        }
+    }
+}
+
+/// Restrict credentials file/dir to the current user on Windows (best-effort).
+/// Uses `icacls` which is present on all supported Windows builds. Failure is
+/// logged by the caller as non-fatal so login still succeeds offline.
+#[cfg(windows)]
+fn restrict_path_to_current_user(path: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let path_str = path.to_string_lossy();
+    let user = std::env::var("USERNAME").map_err(|_| "USERNAME env is missing".to_string())?;
+    // Reset inheritance and grant only the current user Full control.
+    let status = Command::new("icacls")
+        .args([
+            path_str.as_ref(),
+            "/inheritance:r",
+            "/grant:r",
+            &format!("{user}:F"),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("icacls failed to start: {e}"))?;
+    if !status.success() {
+        return Err(format!("icacls exited with {status}"));
+    }
+    Ok(())
+}
+
 pub fn save_oauth_token(token: &KimiOAuthToken) -> Result<(), AppError> {
     let path = get_kimi_credentials_path();
     if let Some(parent) = path.parent() {
@@ -894,6 +993,12 @@ pub fn save_oauth_token(token: &KimiOAuthToken) -> Result<(), AppError> {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
                 .map_err(|e| AppError::io(parent, e))?;
+        }
+        #[cfg(windows)]
+        {
+            if let Err(error) = restrict_path_to_current_user(parent) {
+                log::warn!("Failed to restrict Kimi credentials directory ACL: {error}");
+            }
         }
     }
     let mut bytes = serde_json::to_vec_pretty(token)
@@ -906,12 +1011,19 @@ pub fn save_oauth_token(token: &KimiOAuthToken) -> Result<(), AppError> {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .map_err(|e| AppError::io(&path, e))?;
     }
+    #[cfg(windows)]
+    {
+        if let Err(error) = restrict_path_to_current_user(&path) {
+            log::warn!("Failed to restrict Kimi credentials file ACL: {error}");
+        }
+    }
     Ok(())
 }
 
 /// Return a usable managed Kimi access token, refreshing it when it is near
-/// expiry. The process-wide mutex prevents refresh-token rotation races when
-/// several proxy requests arrive at the same time.
+/// expiry. Combines an in-process mutex with a cross-process lock file so
+/// concurrent proxy requests and multi-instance launches cannot race refresh
+/// token rotation.
 pub async fn ensure_fresh_oauth_token(force: bool) -> Result<Option<String>, AppError> {
     ensure_fresh_oauth_token_with_expected(force, None).await
 }
@@ -932,6 +1044,11 @@ async fn ensure_fresh_oauth_token_with_expected(
     static REFRESH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     let lock = REFRESH_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
     let _guard = lock.lock().await;
+    // Cross-process lock must be acquired after the in-process mutex so we do
+    // not hold the file lock while waiting for other tasks in this process.
+    let _file_lock = tokio::task::spawn_blocking(try_acquire_oauth_refresh_file_lock)
+        .await
+        .map_err(|e| AppError::Message(format!("OAuth refresh lock task failed: {e}")))??;
 
     let Some(current) = load_oauth_token()? else {
         return Ok(None);
@@ -1595,6 +1712,40 @@ model = "kimi-for-coding"
             assert_eq!(get_default_provider().unwrap().as_deref(), Some("custom"));
             let text = fs::read_to_string(get_kimi_config_path()).unwrap();
             assert!(!text.contains("managed:kimi-code"));
+        });
+    }
+
+    #[test]
+    fn oauth_refresh_file_lock_is_exclusive_and_releases() {
+        with_temp_home(|home| {
+            let lock_path = home.join(".kimi-code").join(".oauth-refresh.lock");
+            let first = try_acquire_oauth_refresh_file_lock().expect("first lock");
+            assert!(lock_path.exists(), "lock file should exist while held");
+
+            // Stale lock recovery: age the file past the 60s threshold.
+            drop(first);
+            // Hold lock in another "process" simulation by creating the file
+            // without going through Drop, then verify acquire times out only
+            // when the lock is fresh.
+            fs::write(&lock_path, b"99999\n").expect("plant lock");
+            // Fresh lock: spawn_blocking style acquire should fail fast path
+            // after deadline — use a short direct attempt instead.
+            assert!(
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&lock_path)
+                    .is_err(),
+                "create_new must fail while lock file exists"
+            );
+            fs::remove_file(&lock_path).expect("clear planted lock");
+
+            let second = try_acquire_oauth_refresh_file_lock().expect("re-acquire");
+            drop(second);
+            assert!(
+                !lock_path.exists(),
+                "lock file must be removed on Drop"
+            );
         });
     }
 

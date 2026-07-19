@@ -793,24 +793,108 @@ pub async fn handle_kimicode_responses_compact(
         .await
 }
 
-pub async fn handle_kimicode_models() -> Result<Json<Value>, ProxyError> {
-    let providers = crate::kimi_config::get_providers()
-        .map_err(|e| ProxyError::Internal(format!("读取 Kimi 模型目录失败: {e}")))?;
+/// Build OpenAI-style model list entries from DB provider settings.
+/// Excludes CC Switch proxy placeholders.
+fn kimicode_models_from_db_providers(providers: &[crate::provider::Provider]) -> Vec<Value> {
     let mut data = Vec::new();
-    for (provider, value) in providers {
-        if let Some(models) = value.get("models").and_then(Value::as_array) {
-            for model in models {
-                let id = model
-                    .get("alias")
-                    .or_else(|| model.get("id"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                if !id.is_empty() {
-                    data.push(json!({"id": id, "object": "model", "owned_by": provider}));
+    for provider in providers {
+        if provider.id == "cc-switch-proxy" || provider.id.starts_with("cc-switch-") {
+            continue;
+        }
+        let models = provider
+            .settings_config
+            .get("models")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for model in models {
+            let id = model
+                .get("alias")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    model
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|mid| {
+                            if mid.contains('/') {
+                                mid.to_string()
+                            } else {
+                                format!("{}/{}", provider.id, mid)
+                            }
+                        })
+                })
+                .unwrap_or_default();
+            if id.is_empty() {
+                continue;
+            }
+            data.push(json!({
+                "id": id,
+                "object": "model",
+                "owned_by": provider.id,
+            }));
+        }
+    }
+    data
+}
+
+/// GET /kimicode/v1/models — Kimi model catalog for the local proxy ingress.
+///
+/// During takeover the live `config.toml` only exposes `cc-switch-proxy`; the
+/// real catalog must come from the DB / failover queue (same routing SSOT as
+/// Claude/Codex proxy attempts). Outside takeover, fall back to live providers
+/// so non-proxy Kimi CLI probes still see native models.
+pub async fn handle_kimicode_models(
+    State(state): State<ProxyState>,
+) -> Result<Json<Value>, ProxyError> {
+    let takeover = crate::kimi_config::is_proxy_takeover_active().unwrap_or(false);
+    let data = if takeover {
+        // Prefer failover-ordered providers when auto-failover is on; otherwise
+        // the effective current provider only (matches select_providers).
+        let routed = state
+            .provider_router
+            .select_providers("kimicode")
+            .await
+            .unwrap_or_default();
+        let providers = if routed.is_empty() {
+            state
+                .db
+                .get_all_providers("kimicode")
+                .map_err(|e| ProxyError::Internal(format!("读取 Kimi 供应商失败: {e}")))?
+                .into_values()
+                .collect::<Vec<_>>()
+        } else {
+            routed
+        };
+        kimicode_models_from_db_providers(&providers)
+    } else {
+        let providers = crate::kimi_config::get_providers()
+            .map_err(|e| ProxyError::Internal(format!("读取 Kimi 模型目录失败: {e}")))?;
+        let mut data = Vec::new();
+        for (provider, value) in providers {
+            if provider == "cc-switch-proxy" {
+                continue;
+            }
+            if let Some(models) = value.get("models").and_then(Value::as_array) {
+                for model in models {
+                    let id = model
+                        .get("alias")
+                        .or_else(|| model.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if !id.is_empty() {
+                        data.push(json!({"id": id, "object": "model", "owned_by": provider}));
+                    }
                 }
             }
         }
-    }
+        data
+    };
+
     Ok(Json(json!({"object": "list", "data": data})))
 }
 
@@ -2594,10 +2678,42 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, body_snippet, chat_sse_to_response_value, codex_proxy_error_json,
-        responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
-        upstream_body_parse_error,
+        kimicode_models_from_db_providers, responses_sse_to_response_value,
+        should_use_claude_transform_streaming, transform, upstream_body_parse_error,
     };
+    use crate::provider::Provider;
     use crate::proxy::ProxyError;
+    use serde_json::json;
+
+    #[test]
+    fn kimicode_models_catalog_skips_proxy_placeholder_and_uses_alias() {
+        let providers = vec![
+            Provider::with_id(
+                "cc-switch-proxy".into(),
+                "Proxy".into(),
+                json!({ "models": [{ "id": "default", "alias": "cc-switch-proxy/default" }] }),
+                None,
+            ),
+            Provider::with_id(
+                "demo".into(),
+                "Demo".into(),
+                json!({
+                    "type": "openai",
+                    "models": [
+                        { "id": "gpt-x", "alias": "demo/gpt-x" },
+                        { "id": "only-id" }
+                    ]
+                }),
+                None,
+            ),
+        ];
+        let entries = kimicode_models_from_db_providers(&providers);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["id"], "demo/gpt-x");
+        assert_eq!(entries[0]["owned_by"], "demo");
+        assert_eq!(entries[1]["id"], "demo/only-id");
+        assert!(!entries.iter().any(|e| e["owned_by"] == "cc-switch-proxy"));
+    }
 
     #[test]
     fn body_looks_like_sse_detects_unlabeled_sse_prefixes() {
