@@ -90,7 +90,16 @@ pub struct CircuitBreaker {
     config: Arc<RwLock<CircuitBreakerConfig>>,
     /// 半开状态已放行的请求数（用于限流）
     half_open_requests: Arc<AtomicU32>,
+    /// 最近一次半开探测的开始时间。客户端中途断连会把持有探测名额的
+    /// future 直接 drop（axum 取消），名额永远不会归还——超过陈旧阈值后
+    /// 允许下一个探测回收名额，避免 Provider 被永久跳过。
+    half_open_probe_started_at: Arc<std::sync::Mutex<Option<Instant>>>,
+    /// 陈旧探测回收阈值（秒）。默认 300s：大于任何非流式超时，流式长响应
+    /// 被误回收时的代价只是短暂多放行一个探测，远小于名额泄漏的永久卡死。
+    stale_probe_timeout_secs: u64,
 }
+
+const DEFAULT_STALE_PROBE_TIMEOUT_SECS: u64 = 300;
 
 /// 熔断器放行结果
 ///
@@ -114,7 +123,16 @@ impl CircuitBreaker {
             last_opened_at: Arc::new(RwLock::new(None)),
             config: Arc::new(RwLock::new(config)),
             half_open_requests: Arc::new(AtomicU32::new(0)),
+            half_open_probe_started_at: Arc::new(std::sync::Mutex::new(None)),
+            stale_probe_timeout_secs: DEFAULT_STALE_PROBE_TIMEOUT_SECS,
         }
+    }
+
+    #[cfg(test)]
+    fn with_stale_probe_timeout(config: CircuitBreakerConfig, stale_secs: u64) -> Self {
+        let mut breaker = Self::new(config);
+        breaker.stale_probe_timeout_secs = stale_secs;
+        breaker
     }
 
     /// 更新熔断器配置（热更新，不重置状态）
@@ -318,17 +336,50 @@ impl CircuitBreaker {
         let current = self.half_open_requests.fetch_add(1, Ordering::SeqCst);
 
         if current < max_half_open_requests {
-            AllowResult {
+            if let Ok(mut started) = self.half_open_probe_started_at.lock() {
+                *started = Some(Instant::now());
+            }
+            return AllowResult {
                 allowed: true,
                 used_half_open_permit: true,
-            }
-        } else {
-            // 超过限额，回退计数，拒绝请求
+            };
+        }
+
+        // 名额已满：若上一个探测早已超过陈旧阈值仍未归还名额（future 被
+        // drop、进程内 bug 等），回收它并把本次请求当作新探测放行。
+        // 互斥锁下先刷新 started_at 再回退计数，并发竞争者会看到新时间戳
+        // 而拿不到第二个名额。
+        let reclaimed = self
+            .half_open_probe_started_at
+            .lock()
+            .ok()
+            .map(|mut started| match *started {
+                Some(t) if t.elapsed().as_secs() >= self.stale_probe_timeout_secs => {
+                    *started = Some(Instant::now());
+                    true
+                }
+                _ => false,
+            })
+            .unwrap_or(false);
+        if reclaimed {
+            // 我们的 fetch_add 已计入本次探测；再减 1 抵销泄漏的旧名额。
             self.half_open_requests.fetch_sub(1, Ordering::SeqCst);
-            AllowResult {
-                allowed: false,
-                used_half_open_permit: false,
-            }
+            log::warn!(
+                "[{}] 回收超过 {}s 未归还的半开探测名额（疑似请求被取消）",
+                log_cb::MANUAL_RESET,
+                self.stale_probe_timeout_secs
+            );
+            return AllowResult {
+                allowed: true,
+                used_half_open_permit: true,
+            };
+        }
+
+        // 超过限额，回退计数，拒绝请求
+        self.half_open_requests.fetch_sub(1, Ordering::SeqCst);
+        AllowResult {
+            allowed: false,
+            used_half_open_permit: false,
         }
     }
 
@@ -469,6 +520,46 @@ mod tests {
         breaker.transition_to_half_open().await;
 
         // 由于名额仍被占用，第二次请求应被拒绝
+        let second = breaker.allow_request().await;
+        assert!(!second.allowed);
+        assert!(!second.used_half_open_permit);
+    }
+
+    #[tokio::test]
+    async fn test_stale_half_open_probe_is_reclaimed() {
+        let config = CircuitBreakerConfig {
+            timeout_seconds: 0,
+            ..Default::default()
+        };
+        // 阈值 0 秒：上一个探测立即视为陈旧（模拟持有名额的请求被取消后泄漏）
+        let breaker = CircuitBreaker::with_stale_probe_timeout(config, 0);
+
+        breaker.transition_to_open().await;
+        let first = breaker.allow_request().await;
+        assert!(first.allowed);
+        assert!(first.used_half_open_permit);
+        // 第一个探测的名额从未归还（future 被 drop），下一个请求应回收它
+        let second = breaker.allow_request().await;
+        assert!(second.allowed, "stale probe permit must be reclaimed");
+        assert!(second.used_half_open_permit);
+        // 回收后计数保持 1：正常归还路径不受影响
+        breaker.record_success(true).await;
+        let third = breaker.allow_request().await;
+        assert!(third.allowed);
+    }
+
+    #[tokio::test]
+    async fn test_fresh_half_open_probe_is_not_reclaimed() {
+        let config = CircuitBreakerConfig {
+            timeout_seconds: 0,
+            ..Default::default()
+        };
+        let breaker = CircuitBreaker::with_stale_probe_timeout(config, 300);
+
+        breaker.transition_to_open().await;
+        let first = breaker.allow_request().await;
+        assert!(first.allowed);
+        // 名额仍在有效期内，不得被并发请求抢走
         let second = breaker.allow_request().await;
         assert!(!second.allowed);
         assert!(!second.used_half_open_permit);

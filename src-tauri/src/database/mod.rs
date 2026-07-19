@@ -110,6 +110,18 @@ impl Database {
         // 启用外键约束
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
+        // WAL + NORMAL：默认回滚日志模式每次提交两次 fsync，而所有读写共享
+        // 一把全局连接互斥——代理请求日志写入会放大 UI 统计查询的等待。
+        // WAL 降低提交成本，也为将来的独立只读连接铺路。journal_mode 是
+        // 持久属性，PRAGMA 幂等。
+        if let Err(e) = conn.pragma_update(None, "journal_mode", "WAL") {
+            log::warn!("Failed to enable WAL journal mode: {e}");
+        }
+        if let Err(e) = conn.pragma_update(None, "synchronous", "NORMAL") {
+            log::warn!("Failed to set synchronous=NORMAL: {e}");
+        }
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| AppError::Database(e.to_string()))?;
         if !db_exists {
             // For a brand-new database, configure incremental auto-vacuum
             // before creating any tables so no rebuild is needed later.

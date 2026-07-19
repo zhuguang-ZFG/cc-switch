@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced. A second comparative audit against the vendored Kimi Code CLI 0.27 source (OAuth lifecycle, config.toml contract, usage/wire.jsonl contract) then verified the shared-file token format, refresh threshold, provider-type schema, alias derivation, per-call usage semantics, and session layout all match the official implementation, and landed the interop fixes below.
+Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced. A second comparative audit against the vendored Kimi Code CLI 0.27 source (OAuth lifecycle, config.toml contract, usage/wire.jsonl contract) then verified the shared-file token format, refresh threshold, provider-type schema, alias derivation, per-call usage semantics, and session layout all match the official implementation, and landed the interop fixes below. A third audit round (adversarial re-review of the fixes themselves, proxy streaming hot path, failover concurrency, and a whole-app performance sweep) landed the resilience and performance work below.
+
+### Fixed (audit round 3 — failover/streaming/OAuth resilience)
+
+- **A provider can no longer be permanently skipped after a cancelled health probe**: the circuit breaker's single half-open probe permit leaked when the client disconnected mid-probe (the future is dropped between acquire and release); a stale permit is now reclaimed by the next probe after 300s.
+- **Turning takeover off can no longer race a concurrent failover hot-switch**: the sync disable path (profile apply) now takes the same per-app switch lock as every other live-config mutator, and failover-sourced switches re-check that takeover is still enabled after acquiring the lock instead of committing a stale switch.
+- **In-memory circuit breakers reset together with DB health** when takeover is disabled, so re-enabling starts from the clean state the UI shows.
+- **Chat→Responses streaming no longer loses the final event** when the upstream omits the trailing SSE blank line (EOF sentinel, same defense as the other converters), and a gateway that answers `stream:true` with one JSON document now converts cleanly instead of erroring with "stream ended before finish_reason".
+- **Kimi OAuth freshness check has a lock-free fast path**: previously every proxied Kimi request took a global mutex plus a cross-process lock file (fs create/delete + heartbeat thread), serializing all concurrent Kimi traffic and stalling up to 30s behind another process's refresh even with a valid token in hand.
+- **Legacy v1 `wire.jsonl` session logs (session-root layout) import again** — the round-2 layout guard was stricter than the official CLI, which reads both layouts; usage from pre-v2 sessions was silently dropped.
+- **Genuine Kimi token revocation now writes the CLI's tombstone** so both tools stop retrying a dead refresh token; booster-wallet `is_enabled` defaults to off matching the CLI; the OAuth lock waiter deadline covers the holder's full retry window.
+
+### Changed (audit round 3 — performance)
+
+- SQLite runs in WAL mode with `synchronous=NORMAL` and a 5s busy timeout (was default rollback journal: two fsyncs per commit under one global connection mutex shared with the proxy logger).
+- Usage-dashboard aggregation commands run on the blocking thread pool instead of the main thread, and the `usage-log-recorded` invalidation debounce widened from 200ms to 1.5s (up to 5Hz full dashboard refresh under sustained proxy traffic).
+- Removed an O(n²) accumulation in Anthropic thinking-delta streaming.
+
+### Added (Kimi form parity)
+
+- Vertex AI providers can now set `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` from the form (previously the type was selectable but always produced a runtime-broken provider), and models expose `max_output_size`.
+- Device-flow login transparently renews an expired device code (bounded, mirroring the CLI) instead of failing with "Device code expired".
+- Kimi device identity headers carry the real OS release (e.g. `10.0.26200`) and Node-style arch, matching the CLI's fingerprint.
 
 ### Fixed (Kimi Code CLI 0.27 interop audit)
 

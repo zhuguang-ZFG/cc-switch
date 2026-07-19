@@ -2185,6 +2185,8 @@ function ProviderFormFull({
               partnerPromotionKey={hermesPartnerPromotionKey}
               apiMode={hermesForm.hermesApiMode}
               onApiModeChange={hermesForm.handleHermesApiModeChange}
+              env={hermesForm.hermesEnv}
+              onEnvFieldChange={hermesForm.handleHermesEnvFieldChange}
               models={hermesForm.hermesModels}
               onModelsChange={hermesForm.handleHermesModelsChange}
               rateLimitDelay={hermesForm.hermesRateLimitDelay}

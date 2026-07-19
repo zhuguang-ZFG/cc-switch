@@ -33,6 +33,8 @@ const renderHermesForm = (overrides: Partial<HermesFormFieldsProps> = {}) => {
     websiteUrl: "",
     apiMode: "openai",
     onApiModeChange: vi.fn(),
+    env: {},
+    onEnvFieldChange: vi.fn(),
     models: [],
     onModelsChange: vi.fn(),
     rateLimitDelay: undefined,
@@ -137,5 +139,31 @@ describe("HermesFormFields 本地代理字段", () => {
     });
 
     expect(onCustomUserAgentChange).toHaveBeenCalledWith("MyAgent/1.0");
+  });
+});
+
+describe("HermesFormFields vertexai env 字段", () => {
+  it("vertexai 类型显示 GCP env 输入并回写", () => {
+    const onEnvFieldChange = vi.fn();
+    renderHermesForm({
+      apiMode: "vertexai",
+      env: { GOOGLE_CLOUD_PROJECT: "proj-1" },
+      onEnvFieldChange,
+    });
+
+    const project = screen.getByPlaceholderText("my-gcp-project");
+    expect(project).toHaveValue("proj-1");
+    fireEvent.change(screen.getByPlaceholderText("us-central1"), {
+      target: { value: "asia-east1" },
+    });
+    expect(onEnvFieldChange).toHaveBeenCalledWith(
+      "GOOGLE_CLOUD_LOCATION",
+      "asia-east1",
+    );
+  });
+
+  it("非 vertexai 类型不渲染 GCP env 输入", () => {
+    renderHermesForm({ apiMode: "openai" });
+    expect(screen.queryByPlaceholderText("my-gcp-project")).toBeNull();
   });
 });

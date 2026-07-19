@@ -19,8 +19,10 @@ use tauri::{AppHandle, Emitter};
 /// 前端监听的事件名
 pub const EVENT_USAGE_LOG_RECORDED: &str = "usage-log-recorded";
 
-/// 防抖窗口：合并 200ms 内的多次通知。
-const DEBOUNCE_WINDOW: Duration = Duration::from_millis(200);
+/// 防抖窗口：合并窗口内的多次通知。前端收到事件会整族失效 usage 查询
+/// （约 9 个仪表盘聚合查询），200ms 窗口在持续代理流量下最高 5Hz 重刷、
+/// 与全局 DB 互斥叠加造成 UI 卡顿；1.5s 对"近实时"仪表盘足够。
+const DEBOUNCE_WINDOW: Duration = Duration::from_millis(1500);
 
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 

@@ -536,10 +536,12 @@ fn parse_kimi_booster_wallet(body: &serde_json::Value) -> Option<ExtraUsage> {
     };
 
     Some(ExtraUsage {
+        // CLI semantics: `raw['monthlyChargeLimitEnabled'] === true` — absent
+        // means the monthly cap feature is OFF, not on.
         is_enabled: wallet
             .get("monthlyChargeLimitEnabled")
             .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true),
+            .unwrap_or(false),
         monthly_limit,
         used_credits,
         utilization,

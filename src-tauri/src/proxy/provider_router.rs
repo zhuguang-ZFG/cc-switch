@@ -175,6 +175,19 @@ impl ProviderRouter {
         self.reset_circuit_breaker(&circuit_key).await;
     }
 
+    /// 重置某应用全部熔断器。关闭接管会清空该应用的 DB 健康状态，
+    /// 内存熔断器需要一并复位，否则重新开启接管时 Open/HalfOpen 残留
+    /// 会让 UI 的"干净"状态与实际路由行为不一致。
+    pub async fn reset_app_breakers(&self, app_type: &str) {
+        let prefix = format!("{app_type}:");
+        let breakers = self.circuit_breakers.read().await;
+        for (key, breaker) in breakers.iter() {
+            if key.starts_with(&prefix) {
+                breaker.reset().await;
+            }
+        }
+    }
+
     /// 仅释放 HalfOpen permit，不影响健康统计（neutral 接口）
     ///
     /// 用于整流器等场景：请求结果不应计入 Provider 健康度，

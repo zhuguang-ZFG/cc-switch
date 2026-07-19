@@ -26,6 +26,9 @@ export function useManagedAuth(
     null,
   );
   const pollingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Transparent device-code renewals per manual login attempt (the official
+  // CLI restarts the flow on expired_token instead of erroring out).
+  const autoRestartCountRef = useRef(0);
 
   const {
     data: authStatus,
@@ -78,11 +81,22 @@ export function useManagedAuth(
       let interval = Math.max((response.interval || 5) + 3, 8) * 1000;
       const expiresAt = Date.now() + response.expires_in * 1000;
 
+      // Renew the device code transparently (bounded) instead of failing —
+      // mirrors the official CLI's expired_token handling.
+      const restartOrExpire = () => {
+        stopPolling();
+        if (autoRestartCountRef.current < 2) {
+          autoRestartCountRef.current += 1;
+          startLoginMutation.mutate();
+          return;
+        }
+        setPollingState("error");
+        setError("Device code expired. Please try again.");
+      };
+
       const pollOnce = async () => {
         if (Date.now() > expiresAt) {
-          stopPolling();
-          setPollingState("error");
-          setError("Device code expired. Please try again.");
+          restartOrExpire();
           return;
         }
 
@@ -112,6 +126,10 @@ export function useManagedAuth(
             }
             return;
           }
+          if (errorMessage.includes("expired_token")) {
+            restartOrExpire();
+            return;
+          }
           if (!errorMessage.includes("pending")) {
             stopPolling();
             setPollingState("error");
@@ -122,11 +140,7 @@ export function useManagedAuth(
 
       void pollOnce();
       pollingIntervalRef.current = setInterval(pollOnce, interval);
-      pollingTimeoutRef.current = setTimeout(() => {
-        stopPolling();
-        setPollingState("error");
-        setError("Device code expired. Please try again.");
-      }, response.expires_in * 1000);
+      pollingTimeoutRef.current = setTimeout(restartOrExpire, response.expires_in * 1000);
     },
     onError: (e) => {
       setPollingState("error");
@@ -189,6 +203,7 @@ export function useManagedAuth(
     setDeviceCode(null);
     setError(null);
     stopPolling();
+    autoRestartCountRef.current = 0;
     startLoginMutation.mutate();
   }, [startLoginMutation, stopPolling]);
 

@@ -893,6 +893,10 @@ impl ProxyService {
             .clear_provider_health_for_app(app_type_str)
             .await
             .map_err(|e| format!("清除 {app_type_str} 健康状态失败: {e}"))?;
+        // 内存熔断器与 DB 健康状态同源清理，避免重新开启接管时残留 Open 状态
+        if let Some(server) = self.server.read().await.as_ref() {
+            server.reset_app_circuit_breakers(app_type_str).await;
+        }
 
         // 5) 若无其它接管，更新旧标志，并停止代理服务
         // 检查是否还有其它 app 的 enabled = true
@@ -926,6 +930,14 @@ impl ProxyService {
     pub fn disable_takeover_for_app_sync(&self, app_type: &AppType) -> Result<(), String> {
         let app_type_str = app_type.as_str();
 
+        // 与 set_takeover_for_app / hot_switch_provider / ProviderService::switch
+        // 使用同一把 per-app 切换锁：否则并发的故障转移热切换可能在
+        // 「恢复写入 → 删除备份」之间插入一次接管投影写入，留下指向本地
+        // 代理的 Live 配置且备份已被删除（无法再恢复）。sync 调用方线程
+        // 无 runtime，与 ProviderService::switch 相同用 block_on 获取。
+        let _switch_guard =
+            futures::executor::block_on(self.switch_locks.lock_for_app(app_type_str));
+
         // 1) 恢复原始 Live 配置（备份 → SSOT → 清理占位符 三层兜底）
         futures::executor::block_on(self.restore_live_config_for_app_with_fallback_inner(app_type))
             .map_err(|e| format!("恢复 {app_type_str} Live 配置失败: {e}"))?;
@@ -947,6 +959,12 @@ impl ProxyService {
         // 4) 清除该应用的健康状态
         futures::executor::block_on(self.db.clear_provider_health_for_app(app_type_str))
             .map_err(|e| format!("清除 {app_type_str} 健康状态失败: {e}"))?;
+        // 内存熔断器与 DB 健康状态同源清理
+        futures::executor::block_on(async {
+            if let Some(server) = self.server.read().await.as_ref() {
+                server.reset_app_circuit_breakers(app_type_str).await;
+            }
+        });
 
         // 5) 清旧标志
         let _ = futures::executor::block_on(self.db.set_live_takeover_active(false));
@@ -2362,6 +2380,32 @@ impl ProxyService {
         provider_id: &str,
     ) -> Result<HotSwitchOutcome, String> {
         let _guard = self.switch_locks.lock_for_app(app_type).await;
+        self.hot_switch_provider_inner(app_type, provider_id).await
+    }
+
+    /// 故障转移专用入口：拿到切换锁后复查 takeover 仍然启用。
+    ///
+    /// 故障转移在锁外读取 `enabled` 后才排队等锁；期间用户可能已关闭接管
+    /// （恢复 Live + enabled=false）。不复查会让迟到的故障转移在关闭后仍
+    /// 改写「当前供应商」SSOT（Live 文件不受影响，但逻辑状态被偷改）。
+    pub async fn hot_switch_provider_for_failover(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+    ) -> Result<HotSwitchOutcome, String> {
+        let _guard = self.switch_locks.lock_for_app(app_type).await;
+        let still_enabled = self
+            .db
+            .get_proxy_config_for_app(app_type)
+            .await
+            .map(|config| config.enabled)
+            .unwrap_or(false);
+        if !still_enabled {
+            log::info!("[Failover] {app_type} 接管已在等锁期间关闭，放弃故障转移切换");
+            return Ok(HotSwitchOutcome {
+                logical_target_changed: false,
+            });
+        }
         self.hot_switch_provider_inner(app_type, provider_id).await
     }
 

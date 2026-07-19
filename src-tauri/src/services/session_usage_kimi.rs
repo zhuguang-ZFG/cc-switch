@@ -113,31 +113,37 @@ fn normalize_kimi_model(raw: &str) -> String {
     }
 }
 
-/// wire.jsonl 路径解剖：.../<session_dir>/agents/<agent>/wire.jsonl
-/// 返回 (session_id, agent_name)。仅接受官方 v2 布局（父目录链上必须有
-/// `agents`），否则将 bucket 哈希误当 session_id。
+/// wire.jsonl 路径解剖，返回 (session_id, agent_name)。
+///
+/// 官方 CLI 存在两种布局（见 vendored wire-scan.ts："Reads both legacy root
+/// wire.jsonl logs and v2 per-agent"）：
+/// - v2：`.../<session_dir>/agents/<agent>/wire.jsonl`
+/// - legacy v1：`.../<bucket>/<session_dir>/wire.jsonl`（会话根目录）
+///
+/// legacy 视作主 agent；识别不出的布局返回 (None, None) 由调用方跳过，
+/// 避免把 bucket 哈希误标成 session_id、污染 request_id 去重键。
 fn wire_file_identity(file_path: &Path) -> (Option<String>, Option<String>) {
-    let agents_marker = file_path
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str());
-    if agents_marker != Some("agents") {
-        return (None, None);
+    let parent_name = |depth: usize| -> Option<&str> {
+        let mut dir = file_path.parent();
+        for _ in 0..depth {
+            dir = dir.and_then(Path::parent);
+        }
+        dir.and_then(Path::file_name).and_then(|name| name.to_str())
+    };
+
+    if parent_name(1) == Some("agents") {
+        let agent = parent_name(0).map(str::to_string);
+        let session = parent_name(2).map(str::to_string);
+        return (session, agent);
     }
-    let agent = file_path
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .map(str::to_string);
-    let session = file_path
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .map(str::to_string);
-    (session, agent)
+
+    // legacy v1：wire.jsonl 直接位于会话目录下（其父链上没有 agents 段）。
+    // 排除恰好命中 v2 中间层的路径（session 目录本身不会叫 agents）。
+    if parent_name(0).is_some_and(|name| name != "agents" && name != "sessions") {
+        return (parent_name(0).map(str::to_string), None);
+    }
+
+    (None, None)
 }
 
 /// 同步 Kimi Code 使用数据（从 wire.jsonl 会话日志）
@@ -683,10 +689,20 @@ mod tests {
     }
 
     #[test]
-    fn test_wire_file_identity_rejects_non_agents_layout() {
-        // A top-level <bucket>/<session>/wire.jsonl must not be mislabeled
-        // with the bucket hash as session_id.
+    fn test_wire_file_identity_accepts_legacy_root_layout() {
+        // Legacy v1 CLI wrote wire.jsonl at the session root (wire-scan.ts
+        // reads both layouts); session id is the parent dir, agent is main.
         let path = Path::new("/home/u/.kimi-code/sessions/wd_proj_ab12/session_xyz/wire.jsonl");
+        let (session, agent) = wire_file_identity(path);
+        assert_eq!(session.as_deref(), Some("session_xyz"));
+        assert_eq!(agent, None);
+    }
+
+    #[test]
+    fn test_wire_file_identity_rejects_sessions_root_file() {
+        // A stray wire.jsonl directly under the sessions root has no session
+        // dir to attribute to — must be skipped, not mislabeled.
+        let path = Path::new("/home/u/.kimi-code/sessions/wire.jsonl");
         let (session, agent) = wire_file_identity(path);
         assert_eq!(session, None);
         assert_eq!(agent, None);

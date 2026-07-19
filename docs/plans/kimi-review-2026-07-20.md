@@ -72,6 +72,29 @@
 - 设备流 `expired_token` 是硬错误而非自动重发新码（CLI 会无缝重来）；前端已有过期计时，仅 UX 差异。
 - `x-msh-os-version` 发送的是 OS 名而非版本号（CLI 发 `os.release()`），纯遥测字段，服务端不校验。
 
+## 第三轮：对抗性复审 + 流式热路径 + 故障转移并发 + 性能扫描
+
+四路并行：对第二轮修复本身做对抗复审、代理流式转换热路径、故障转移引擎并发正确性、全局性能。
+
+### 已修复（第三轮）
+
+- **[blocker] 半开探测名额泄漏**：客户端中途断连 drop 掉持有探测名额的 future，名额永不归还 → provider 被永久跳过。熔断器现在会回收超过 300s 未归还的陈旧名额（circuit_breaker.rs，附两个单测）。
+- **[blocker] 同步关闭接管绕过切换锁**：`disable_takeover_for_app_sync`（profile apply 路径）现在与其他 Live 写入者共用 per-app 切换锁；故障转移热切换换用 `hot_switch_provider_for_failover`，拿锁后复查 enabled，杜绝迟到切换偷改当前供应商 SSOT。
+- **关闭接管时同步复位内存熔断器**（两条 disable 路径），与 DB 健康清理同源。
+- **Chat→Responses 流式转换**：补 EOF 哨兵（上游漏发结尾空行时不再丢最后一个事件/usage）+ JSON 文档回退（网关无视 stream:true 时不再报 stream_truncated）。
+- **OAuth 免锁快路径**：token 未临期时不再取全局互斥 + 跨进程锁文件（原来每个 Kimi 请求都要建/删锁文件 + 起心跳线程，并发流量全部串行）。
+- **[对抗复审抓到的回归] legacy wire.jsonl 布局**：第二轮的 agents 目录 guard 比官方 CLI 更严（CLI 的 wire-scan 同时读 v1 会话根布局），会静默丢弃老会话用量——已改为双布局解析。
+- 对抗复审其余项：真撤销写 CLI 同款墓碑（两工具停止复用死 token）；booster `is_enabled` 默认改 false（对齐 CLI `=== true`）；锁等待期限 30s→100s 覆盖持有方重试窗口；`real_oauth_refresh_smoke` 补 `#[serial]`；注释漂移修正。
+- **性能**：SQLite 开 WAL + synchronous=NORMAL + busy_timeout(5s)；6 个仪表盘聚合命令 + 会话同步改 async + spawn_blocking（原先跑主线程、与代理写日志抢全局连接锁）；usage 事件去抖 200ms→1.5s；thinking delta O(n²) 累积修复。
+- **表单补全（原"未修"四项全部落地）**：vertexai 显示 GOOGLE_CLOUD_PROJECT/LOCATION env 字段；模型暴露 max_output_size；设备码过期自动换新码重试（限 2 次）；`x-msh-os-version`/`device-model` 携带真实 OS 版本号。
+
+### 已知未修（按需排期）
+
+- 故障转移无退避/抖动：熔断开启前的突发请求会紧凑打满队列（W3）；并发故障转移最终当前供应商是完成序决定（W4）；`TransformError` 一刀切 Retryable 可能让畸形客户端请求毒化所有熔断器（W2，需拆错误类型）。
+- Gemini 流式：无 finishReason 的干净截断被当正常完成（W3）；Claude 路径中途错误裸断连（W4）。
+- 性能后续：启动阻塞的 rollup/vacuum 挪后台（可挂 24h 维护定时器）；会话同步按字节 offset Seek 而非行数重读；前端零代码分割（recharts/CodeMirror 全量进首包）；2s 代理状态轮询三连可合并。
+- vertexai/google-genai 仍无 custom_headers 表单字段。
+
 ## 后续跟进
 
 - `deeplink/tests.rs` 的 `TestHomeGuard` 改 `HOME`/`USERPROFILE` 但 31 测试仅 1 个 `#[serial]`——目前未见失败，若出现随机失败按 kimi_config 同法处理。

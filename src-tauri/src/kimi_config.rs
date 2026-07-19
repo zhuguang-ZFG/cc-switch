@@ -56,6 +56,70 @@ pub fn get_kimi_oauth_host() -> String {
         .to_string()
 }
 
+/// OS release string matching the CLI's `os.release()` (e.g. `10.0.26200` on
+/// Windows, kernel version on Linux, product version on macOS). Resolved once
+/// per process; falls back to the OS name when detection fails.
+fn get_os_release() -> &'static str {
+    static RELEASE: OnceLock<String> = OnceLock::new();
+    RELEASE.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            if let Ok(output) = std::process::Command::new("cmd")
+                .args(["/c", "ver"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+            {
+                // "Microsoft Windows [Version 10.0.26200.1234]"
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Some(pos) = text.find("Version ") {
+                    let version: String = text[pos + 8..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.')
+                        .collect();
+                    let version = version.trim_end_matches('.').to_string();
+                    if !version.is_empty() {
+                        return version;
+                    }
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(output) = std::process::Command::new("sw_vers")
+                .arg("-productVersion")
+                .output()
+            {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !version.is_empty() {
+                    return version;
+                }
+            }
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            if let Ok(output) = std::process::Command::new("uname").arg("-r").output() {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !version.is_empty() {
+                    return version;
+                }
+            }
+        }
+        std::env::consts::OS.to_string()
+    })
+}
+
+/// Node-style arch label used by the CLI's device fingerprint.
+fn node_style_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        "x86" => "ia32",
+        other => other,
+    }
+}
+
 pub fn get_kimi_device_headers() -> Result<reqwest::header::HeaderMap, String> {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 
@@ -75,15 +139,23 @@ pub fn get_kimi_device_headers() -> Result<reqwest::header::HeaderMap, String> {
     let device_name = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
+    // Mirror the CLI's identity.ts fingerprint: os-version carries the real
+    // release (e.g. 10.0.26200), device-model "<OS> <release> <arch>".
+    let os_display = match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "Darwin",
+        "linux" => "Linux",
+        other => other,
+    };
     let values = [
         ("x-msh-platform", "kimi_code_cli".to_string()),
         ("x-msh-version", version.to_string()),
         ("x-msh-device-name", device_name),
         (
             "x-msh-device-model",
-            format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            format!("{os_display} {} {}", get_os_release(), node_style_arch()),
         ),
-        ("x-msh-os-version", std::env::consts::OS.to_string()),
+        ("x-msh-os-version", get_os_release().to_string()),
         ("x-msh-device-id", device_id),
     ];
     let mut headers = HeaderMap::new();
@@ -954,7 +1026,7 @@ fn get_kimi_oauth_refresh_lock_path() -> PathBuf {
 
 /// Cross-process refresh lock so concurrent CC Switch / Kimi CLI instances do
 /// not rotate the same refresh token twice. Uses an exclusive lock file with
-/// stale recovery (mtime > 60s).
+/// stale recovery (mtime > OAUTH_LOCK_STALE_SECS).
 /// Stale threshold for abandoned locks. Must exceed the OAuth HTTP timeout
 /// (30s) plus margin so a live refresh cannot be stolen mid-flight.
 const OAUTH_LOCK_STALE_SECS: u64 = 120;
@@ -1010,7 +1082,12 @@ fn try_acquire_oauth_refresh_file_lock() -> Result<OAuthRefreshFileLock, AppErro
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Must exceed the worst-case hold time of the retry loop in
+    // ensure_fresh_oauth_token_with_expected (3 × 30s HTTP timeout + backoff),
+    // otherwise a waiter errors out while the holder is still legitimately
+    // retrying a 429/5xx storm — the waiter would then miss adopting the
+    // holder's rotated token.
+    let deadline = Instant::now() + Duration::from_secs(100);
     loop {
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
@@ -1148,6 +1225,24 @@ async fn ensure_fresh_oauth_token_with_expected(
     force: bool,
     expected_access_token: Option<&str>,
 ) -> Result<Option<String>, AppError> {
+    // Fast path: this runs on every proxied Kimi request. When the token is
+    // comfortably fresh, skip the in-process mutex AND the cross-process lock
+    // file (fs create/delete + heartbeat thread) entirely — otherwise all
+    // concurrent Kimi traffic serializes here, and a refresh held by another
+    // process (up to 30s) would stall requests whose token is still valid.
+    if !force {
+        match load_oauth_token()? {
+            Some(current) => {
+                let now = chrono::Utc::now().timestamp();
+                let threshold = 300_i64.max(current.expires_in.max(0) / 2);
+                if current.expires_at.saturating_sub(now) > threshold {
+                    return Ok(Some(current.access_token));
+                }
+            }
+            None => return Ok(None),
+        }
+    }
+
     static REFRESH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     let lock = REFRESH_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
     let _guard = lock.lock().await;
@@ -1244,6 +1339,22 @@ async fn ensure_fresh_oauth_token_with_expected(
                     );
                     return Ok(Some(peer.access_token));
                 }
+            }
+            // Genuine revocation (no peer rotated): write the CLI's revoked
+            // tombstone so the Kimi CLI sharing this credentials file stops
+            // burning the dead refresh token too (oauth-manager.ts:384-389).
+            let tombstone = KimiOAuthToken {
+                access_token: String::new(),
+                refresh_token: String::new(),
+                expires_at: 0,
+                scope: String::new(),
+                token_type: "Bearer".to_string(),
+                expires_in: 0,
+            };
+            if let Err(error) =
+                tokio::task::spawn_blocking(move || save_oauth_token(&tombstone)).await
+            {
+                log::warn!("Failed to write Kimi OAuth revoked tombstone: {error}");
             }
         }
         let detail = payload
@@ -2137,6 +2248,7 @@ model = "real-model"
     }
 
     #[test]
+    #[serial]
     #[ignore = "requires an explicit real Kimi OAuth account"]
     fn real_oauth_refresh_smoke() {
         assert_eq!(

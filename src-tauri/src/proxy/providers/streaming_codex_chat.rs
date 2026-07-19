@@ -5,6 +5,7 @@ use super::{
     codex_chat_common::{
         extract_reasoning_field_text, split_leading_think_block, strip_leading_think_open_tag,
     },
+    transform_codex_chat,
     transform_codex_chat::{
         chat_usage_to_responses_usage, custom_tool_input_from_chat_arguments,
         response_id_from_chat_id, response_status_from_finish_reason,
@@ -731,15 +732,69 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
     async_stream::stream! {
         let mut buffer = String::new();
         let mut utf8_remainder: Vec<u8> = Vec::new();
+        let json_fallback_context = tool_context.clone();
         let mut state = ChatToResponsesState::with_tool_context(tool_context);
         let mut stream_failed = false;
 
+        // EOF sentinel so the same parser handles a final SSE event whose
+        // trailing blank line was swallowed (common with buffering reverse
+        // proxies) — mirrors streaming_responses.rs.
+        let stream = stream
+            .map(|result| (result, false))
+            .chain(futures::stream::once(async {
+                (Ok::<Bytes, E>(Bytes::new()), true)
+            }));
         tokio::pin!(stream);
 
-        while let Some(chunk) = stream.next().await {
+        while let Some((chunk, is_eof)) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
                     crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
+
+                    // Compatible gateways may ignore stream:true and return one
+                    // JSON document; hold it intact until EOF then convert via
+                    // the non-stream Chat→Responses transformer.
+                    let looks_like_json = matches!(
+                        buffer
+                            .trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
+                            .as_bytes()
+                            .first(),
+                        Some(b'{') | Some(b'[')
+                    ) && !state.response_started;
+                    if looks_like_json && !is_eof {
+                        continue;
+                    }
+                    if looks_like_json && is_eof {
+                        match serde_json::from_str::<Value>(buffer.trim())
+                            .map_err(|e| e.to_string())
+                            .and_then(|chat| {
+                                transform_codex_chat::chat_completion_to_response_with_context(
+                                    chat,
+                                    &json_fallback_context,
+                                )
+                                .map_err(|e| e.to_string())
+                            }) {
+                            Ok(response) => {
+                                yield Ok(sse::response_created(&response));
+                                yield Ok(sse::response_completed(&response));
+                            }
+                            Err(error) => {
+                                yield Ok(state.failed_event(
+                                    format!(
+                                        "Upstream returned a JSON document that is not a valid chat completion: {error}"
+                                    ),
+                                    Some("response_parse_error".to_string()),
+                                ));
+                            }
+                        }
+                        buffer.clear();
+                        stream_failed = true; // terminal event already emitted
+                        break;
+                    }
+
+                    if is_eof && !buffer.trim().is_empty() {
+                        buffer.push_str("\n\n");
+                    }
 
                     while let Some(block) = take_sse_block(&mut buffer) {
                         if block.trim().is_empty() {

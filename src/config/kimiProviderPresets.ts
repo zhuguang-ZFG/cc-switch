@@ -37,6 +37,8 @@ export interface KimiModel {
   alias?: string;
   name?: string;
   max_context_size?: number;
+  /** Optional per-model output cap (CLI: defaultMaxTokens) */
+  max_output_size?: number;
 }
 
 export interface KimiProviderSettingsConfig {
@@ -45,6 +47,8 @@ export interface KimiProviderSettingsConfig {
   base_url?: string;
   api_key?: string;
   models?: KimiModel[];
+  /** Provider env vars (e.g. GOOGLE_CLOUD_PROJECT for vertexai) */
+  env?: Record<string, string>;
   [key: string]: unknown;
 }
 

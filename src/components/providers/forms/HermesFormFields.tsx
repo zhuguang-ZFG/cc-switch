@@ -69,6 +69,8 @@ interface HermesFormFieldsProps {
   partnerPromotionKey?: string;
   apiMode: KimiProviderType;
   onApiModeChange: (mode: KimiProviderType) => void;
+  env: Record<string, string>;
+  onEnvFieldChange: (key: string, value: string) => void;
   models: KimiModel[];
   onModelsChange: (models: KimiModel[]) => void;
   rateLimitDelay: number | undefined;
@@ -167,6 +169,8 @@ export function HermesFormFields({
   partnerPromotionKey,
   apiMode,
   onApiModeChange,
+  env,
+  onEnvFieldChange,
   models,
   onModelsChange,
   rateLimitDelay,
@@ -379,6 +383,51 @@ export function HermesFormFields({
         )}
       </div>
 
+      {/* vertexai (service-account mode) reads these from [providers.X.env];
+          without them the CLI instantiates a provider that fails at runtime. */}
+      {apiMode === "vertexai" && (
+        <div className="space-y-3 p-3 border border-border/50 rounded-lg">
+          <div className="space-y-1">
+            <label
+              className="text-xs text-muted-foreground"
+              htmlFor="hermes-env-gcp-project"
+            >
+              GOOGLE_CLOUD_PROJECT
+            </label>
+            <Input
+              id="hermes-env-gcp-project"
+              value={env.GOOGLE_CLOUD_PROJECT ?? ""}
+              onChange={(e) =>
+                onEnvFieldChange("GOOGLE_CLOUD_PROJECT", e.target.value)
+              }
+              placeholder="my-gcp-project"
+            />
+          </div>
+          <div className="space-y-1">
+            <label
+              className="text-xs text-muted-foreground"
+              htmlFor="hermes-env-gcp-location"
+            >
+              GOOGLE_CLOUD_LOCATION
+            </label>
+            <Input
+              id="hermes-env-gcp-location"
+              value={env.GOOGLE_CLOUD_LOCATION ?? ""}
+              onChange={(e) =>
+                onEnvFieldChange("GOOGLE_CLOUD_LOCATION", e.target.value)
+              }
+              placeholder="us-central1"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t("kimicode.form.vertexEnvHint", {
+              defaultValue:
+                "Vertex AI 服务账号模式需要项目 ID；区域留空时默认 us-central1。也可仅填 API Key 使用 Express 模式。",
+            })}
+          </p>
+        </div>
+      )}
+
       <ApiKeySection
         value={apiKey}
         onChange={onApiKeyChange}
@@ -576,6 +625,25 @@ export function HermesFormFields({
                         )
                       }
                       placeholder="200000"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-muted-foreground">
+                      {t("kimicode.form.maxOutputSize", {
+                        defaultValue: "最大输出 tokens（可选）",
+                      })}
+                    </label>
+                    <Input
+                      type="number"
+                      value={model.max_output_size ?? ""}
+                      onChange={(e) =>
+                        handleModelChange(
+                          index,
+                          "max_output_size",
+                          e.target.value ? parseInt(e.target.value) : undefined,
+                        )
+                      }
+                      placeholder="32000"
                     />
                   </div>
                 </AdvancedSection>

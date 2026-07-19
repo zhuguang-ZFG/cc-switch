@@ -7,9 +7,24 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 use tauri::State;
 
+/// 聚合统计查询跑在 blocking 线程池：这些命令由仪表盘高频轮询，
+/// 同步命令会在主线程上执行多路 UNION 聚合并与代理日志写入争抢
+/// 全局连接互斥，造成 UI 卡顿。
+fn spawn_usage_query<T, F>(f: F) -> impl std::future::Future<Output = Result<T, AppError>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, AppError> + Send + 'static,
+{
+    async move {
+        tauri::async_runtime::spawn_blocking(f)
+            .await
+            .map_err(|e| AppError::Message(format!("Usage stats task failed: {e}")))?
+    }
+}
+
 /// 获取使用量汇总
 #[tauri::command]
-pub fn get_usage_summary(
+pub async fn get_usage_summary(
     state: State<'_, AppState>,
     start_date: Option<i64>,
     end_date: Option<i64>,
@@ -17,35 +32,43 @@ pub fn get_usage_summary(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<UsageSummary, AppError> {
-    state.db.get_usage_summary(
-        start_date,
-        end_date,
-        app_type.as_deref(),
-        provider_name.as_deref(),
-        model.as_deref(),
-    )
+    let db = state.db.clone();
+    spawn_usage_query(move || {
+        db.get_usage_summary(
+            start_date,
+            end_date,
+            app_type.as_deref(),
+            provider_name.as_deref(),
+            model.as_deref(),
+        )
+    })
+    .await
 }
 
 /// 获取按 app_type 拆分的使用量汇总
 #[tauri::command]
-pub fn get_usage_summary_by_app(
+pub async fn get_usage_summary_by_app(
     state: State<'_, AppState>,
     start_date: Option<i64>,
     end_date: Option<i64>,
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<UsageSummaryByApp>, AppError> {
-    state.db.get_usage_summary_by_app(
-        start_date,
-        end_date,
-        provider_name.as_deref(),
-        model.as_deref(),
-    )
+    let db = state.db.clone();
+    spawn_usage_query(move || {
+        db.get_usage_summary_by_app(
+            start_date,
+            end_date,
+            provider_name.as_deref(),
+            model.as_deref(),
+        )
+    })
+    .await
 }
 
 /// 获取每日趋势
 #[tauri::command]
-pub fn get_usage_trends(
+pub async fn get_usage_trends(
     state: State<'_, AppState>,
     start_date: Option<i64>,
     end_date: Option<i64>,
@@ -53,18 +76,22 @@ pub fn get_usage_trends(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<DailyStats>, AppError> {
-    state.db.get_daily_trends(
-        start_date,
-        end_date,
-        app_type.as_deref(),
-        provider_name.as_deref(),
-        model.as_deref(),
-    )
+    let db = state.db.clone();
+    spawn_usage_query(move || {
+        db.get_daily_trends(
+            start_date,
+            end_date,
+            app_type.as_deref(),
+            provider_name.as_deref(),
+            model.as_deref(),
+        )
+    })
+    .await
 }
 
 /// 获取 Provider 统计
 #[tauri::command]
-pub fn get_provider_stats(
+pub async fn get_provider_stats(
     state: State<'_, AppState>,
     start_date: Option<i64>,
     end_date: Option<i64>,
@@ -72,18 +99,22 @@ pub fn get_provider_stats(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<ProviderStats>, AppError> {
-    state.db.get_provider_stats(
-        start_date,
-        end_date,
-        app_type.as_deref(),
-        provider_name.as_deref(),
-        model.as_deref(),
-    )
+    let db = state.db.clone();
+    spawn_usage_query(move || {
+        db.get_provider_stats(
+            start_date,
+            end_date,
+            app_type.as_deref(),
+            provider_name.as_deref(),
+            model.as_deref(),
+        )
+    })
+    .await
 }
 
 /// 获取模型统计
 #[tauri::command]
-pub fn get_model_stats(
+pub async fn get_model_stats(
     state: State<'_, AppState>,
     start_date: Option<i64>,
     end_date: Option<i64>,
@@ -91,33 +122,39 @@ pub fn get_model_stats(
     provider_name: Option<String>,
     model: Option<String>,
 ) -> Result<Vec<ModelStats>, AppError> {
-    state.db.get_model_stats(
-        start_date,
-        end_date,
-        app_type.as_deref(),
-        provider_name.as_deref(),
-        model.as_deref(),
-    )
+    let db = state.db.clone();
+    spawn_usage_query(move || {
+        db.get_model_stats(
+            start_date,
+            end_date,
+            app_type.as_deref(),
+            provider_name.as_deref(),
+            model.as_deref(),
+        )
+    })
+    .await
 }
 
 /// 获取请求日志列表
 #[tauri::command]
-pub fn get_request_logs(
+pub async fn get_request_logs(
     state: State<'_, AppState>,
     filters: LogFilters,
     page: u32,
     page_size: u32,
 ) -> Result<PaginatedLogs, AppError> {
-    state.db.get_request_logs(&filters, page, page_size)
+    let db = state.db.clone();
+    spawn_usage_query(move || db.get_request_logs(&filters, page, page_size)).await
 }
 
 /// 获取单个请求详情
 #[tauri::command]
-pub fn get_request_detail(
+pub async fn get_request_detail(
     state: State<'_, AppState>,
     request_id: String,
 ) -> Result<Option<RequestLogDetail>, AppError> {
-    state.db.get_request_detail(&request_id)
+    let db = state.db.clone();
+    spawn_usage_query(move || db.get_request_detail(&request_id)).await
 }
 
 /// 获取模型定价列表
@@ -275,65 +312,69 @@ pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Res
 
 /// 手动触发会话日志同步
 #[tauri::command]
-pub fn sync_session_usage(
+pub async fn sync_session_usage(
     state: State<'_, AppState>,
 ) -> Result<crate::services::session_usage::SessionSyncResult, AppError> {
-    // 同步 Claude 会话日志
-    let mut result = crate::services::session_usage::sync_claude_session_logs(&state.db)?;
+    let db = state.db.clone();
+    spawn_usage_query(move || {
+        // 同步 Claude 会话日志
+        let mut result = crate::services::session_usage::sync_claude_session_logs(&db)?;
 
-    // 同步 Codex 使用数据
-    match crate::services::session_usage_codex::sync_codex_usage(&state.db) {
-        Ok(codex_result) => {
-            result.imported += codex_result.imported;
-            result.skipped += codex_result.skipped;
-            result.files_scanned += codex_result.files_scanned;
-            result.errors.extend(codex_result.errors);
+        // 同步 Codex 使用数据
+        match crate::services::session_usage_codex::sync_codex_usage(&db) {
+            Ok(codex_result) => {
+                result.imported += codex_result.imported;
+                result.skipped += codex_result.skipped;
+                result.files_scanned += codex_result.files_scanned;
+                result.errors.extend(codex_result.errors);
+            }
+            Err(e) => {
+                result.errors.push(format!("Codex 同步失败: {e}"));
+            }
         }
-        Err(e) => {
-            result.errors.push(format!("Codex 同步失败: {e}"));
-        }
-    }
 
-    // 同步 Gemini 使用数据
-    match crate::services::session_usage_gemini::sync_gemini_usage(&state.db) {
-        Ok(gemini_result) => {
-            result.imported += gemini_result.imported;
-            result.skipped += gemini_result.skipped;
-            result.files_scanned += gemini_result.files_scanned;
-            result.errors.extend(gemini_result.errors);
+        // 同步 Gemini 使用数据
+        match crate::services::session_usage_gemini::sync_gemini_usage(&db) {
+            Ok(gemini_result) => {
+                result.imported += gemini_result.imported;
+                result.skipped += gemini_result.skipped;
+                result.files_scanned += gemini_result.files_scanned;
+                result.errors.extend(gemini_result.errors);
+            }
+            Err(e) => {
+                result.errors.push(format!("Gemini 同步失败: {e}"));
+            }
         }
-        Err(e) => {
-            result.errors.push(format!("Gemini 同步失败: {e}"));
-        }
-    }
 
-    // 同步 OpenCode 使用数据
-    match crate::services::session_usage_opencode::sync_opencode_usage(&state.db) {
-        Ok(opencode_result) => {
-            result.imported += opencode_result.imported;
-            result.skipped += opencode_result.skipped;
-            result.files_scanned += opencode_result.files_scanned;
-            result.errors.extend(opencode_result.errors);
+        // 同步 OpenCode 使用数据
+        match crate::services::session_usage_opencode::sync_opencode_usage(&db) {
+            Ok(opencode_result) => {
+                result.imported += opencode_result.imported;
+                result.skipped += opencode_result.skipped;
+                result.files_scanned += opencode_result.files_scanned;
+                result.errors.extend(opencode_result.errors);
+            }
+            Err(e) => {
+                result.errors.push(format!("OpenCode 同步失败: {e}"));
+            }
         }
-        Err(e) => {
-            result.errors.push(format!("OpenCode 同步失败: {e}"));
-        }
-    }
 
-    // 同步 Kimi Code 使用数据
-    match crate::services::session_usage_kimi::sync_kimi_usage(&state.db) {
-        Ok(kimi_result) => {
-            result.imported += kimi_result.imported;
-            result.skipped += kimi_result.skipped;
-            result.files_scanned += kimi_result.files_scanned;
-            result.errors.extend(kimi_result.errors);
+        // 同步 Kimi Code 使用数据
+        match crate::services::session_usage_kimi::sync_kimi_usage(&db) {
+            Ok(kimi_result) => {
+                result.imported += kimi_result.imported;
+                result.skipped += kimi_result.skipped;
+                result.files_scanned += kimi_result.files_scanned;
+                result.errors.extend(kimi_result.errors);
+            }
+            Err(e) => {
+                result.errors.push(format!("Kimi Code 同步失败: {e}"));
+            }
         }
-        Err(e) => {
-            result.errors.push(format!("Kimi Code 同步失败: {e}"));
-        }
-    }
 
-    Ok(result)
+        Ok(result)
+    })
+    .await
 }
 
 /// 获取数据来源分布

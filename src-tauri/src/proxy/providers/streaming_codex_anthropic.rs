@@ -309,8 +309,10 @@ impl AnthropicToResponsesState {
             }
             "thinking_delta" => {
                 let text = delta.get("thinking").and_then(|t| t.as_str()).unwrap_or("");
+                // Only accumulate — close_block rewrites source_block["thinking"]
+                // from accum at block end; mirroring it per delta is O(n²) memcpy
+                // on long reasoning streams.
                 block.accum.push_str(text);
-                block.source_block["thinking"] = json!(block.accum);
                 vec![sse::reasoning_summary_text_delta(
                     output_index,
                     &item_id,

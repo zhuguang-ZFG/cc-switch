@@ -40,12 +40,14 @@ export interface HermesFormState {
   hermesApiMode: KimiProviderType;
   hermesModels: KimiModel[];
   hermesRateLimitDelay: number | undefined;
+  hermesEnv: Record<string, string>;
   existingHermesKeys: string[];
   handleHermesBaseUrlChange: (baseUrl: string) => void;
   handleHermesApiKeyChange: (apiKey: string) => void;
   handleHermesApiModeChange: (mode: KimiProviderType) => void;
   handleHermesModelsChange: (models: KimiModel[]) => void;
   handleHermesRateLimitDelayChange: (delay: number | undefined) => void;
+  handleHermesEnvFieldChange: (key: string, value: string) => void;
   resetHermesState: (config?: Partial<KimiProviderSettingsConfig>) => void;
 }
 
@@ -86,6 +88,15 @@ function legacyApiModeToType(mode: unknown): KimiProviderType | "" {
     default:
       return "";
   }
+}
+
+function parseEnvMap(raw: unknown): Record<string, string> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string") out[key] = value;
+  }
+  return out;
 }
 
 // Legacy Hermes models carried `context_length`; Kimi uses `max_context_size`.
@@ -163,6 +174,11 @@ export function useHermesFormState({
     return parseRateLimitDelay(initialData?.settingsConfig?.rate_limit_delay);
   });
 
+  const [hermesEnv, setHermesEnv] = useState<Record<string, string>>(() => {
+    if (appId !== "kimicode") return {};
+    return parseEnvMap(initialData?.settingsConfig?.env);
+  });
+
   const updateHermesConfig = useCallback(
     (updater: (config: Record<string, unknown>) => void) => {
       try {
@@ -235,6 +251,39 @@ export function useHermesFormState({
     [updateHermesConfig],
   );
 
+  const handleHermesEnvFieldChange = useCallback(
+    (key: string, value: string) => {
+      setHermesEnv((prev) => {
+        const next = { ...prev };
+        if (value.trim()) {
+          next[key] = value;
+        } else {
+          delete next[key];
+        }
+        return next;
+      });
+      updateHermesConfig((config) => {
+        const env =
+          typeof config.env === "object" &&
+          config.env !== null &&
+          !Array.isArray(config.env)
+            ? { ...(config.env as Record<string, unknown>) }
+            : {};
+        if (value.trim()) {
+          env[key] = value.trim();
+        } else {
+          delete env[key];
+        }
+        if (Object.keys(env).length === 0) {
+          delete config.env;
+        } else {
+          config.env = env;
+        }
+      });
+    },
+    [updateHermesConfig],
+  );
+
   const resetHermesState = useCallback(
     (config?: Partial<KimiProviderSettingsConfig>) => {
       setHermesProviderKey("");
@@ -243,6 +292,7 @@ export function useHermesFormState({
       setHermesApiMode(config?.type ?? KIMI_DEFAULT_PROVIDER_TYPE);
       setHermesModels(config?.models ?? []);
       setHermesRateLimitDelay(parseRateLimitDelay(config?.rate_limit_delay));
+      setHermesEnv(parseEnvMap(config?.env));
     },
     [],
   );
@@ -255,12 +305,14 @@ export function useHermesFormState({
     hermesApiMode,
     hermesModels,
     hermesRateLimitDelay,
+    hermesEnv,
     existingHermesKeys,
     handleHermesBaseUrlChange,
     handleHermesApiKeyChange,
     handleHermesApiModeChange,
     handleHermesModelsChange,
     handleHermesRateLimitDelayChange,
+    handleHermesEnvFieldChange,
     resetHermesState,
   };
 }

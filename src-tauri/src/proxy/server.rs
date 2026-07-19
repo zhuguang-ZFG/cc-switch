@@ -411,4 +411,12 @@ impl ProxyServer {
             .reset_provider_breaker(provider_id, app_type)
             .await;
     }
+
+    /// 重置某应用全部熔断器（关闭接管时与 DB 健康状态一并清理）
+    pub async fn reset_app_circuit_breakers(&self, app_type: &str) {
+        self.state
+            .provider_router
+            .reset_app_breakers(app_type)
+            .await;
+    }
 }

@@ -186,6 +186,11 @@ async fn kimi_poll_device_flow(
         if code == "slow_down" {
             return Err("slow_down".to_string());
         }
+        // Surface expired_token verbatim so the frontend can transparently
+        // request a fresh device code (the official CLI restarts the flow).
+        if code == "expired_token" {
+            return Err("expired_token".to_string());
+        }
         let detail = payload
             .get("error_description")
             .or_else(|| payload.get("message"))
