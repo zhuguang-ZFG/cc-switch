@@ -1029,8 +1029,8 @@ pub struct OpenCodeModelLimit {
 mod tests {
     use super::{
         ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, KimiCodeModelConfig,
-        LocalProxyRequestOverrides,
-        OpenCodeProviderConfig, Provider, ProviderManager, ProviderMeta, UniversalProvider,
+        LocalProxyRequestOverrides, OpenCodeProviderConfig, Provider, ProviderManager,
+        ProviderMeta, UniversalProvider,
     };
     use serde_json::json;
     use std::collections::HashMap;

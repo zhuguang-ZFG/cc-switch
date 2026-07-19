@@ -56,10 +56,7 @@ pub fn official_provider_supports_proxy_takeover(app_type: &AppType, provider: &
         AppType::KimiCode => {
             provider.id == crate::kimi_config::MANAGED_KIMI_PROVIDER
                 || provider.id.starts_with("managed:kimi")
-                || provider
-                    .settings_config
-                    .get("oauth")
-                    .is_some()
+                || provider.settings_config.get("oauth").is_some()
                 || provider
                     .meta
                     .as_ref()
@@ -1884,8 +1881,7 @@ requires_openai_auth = true
             .expect("apply takeover");
 
             let mut edited = provider.clone();
-            edited.settings_config["base_url"] =
-                Value::String("https://updated.example/v1".into());
+            edited.settings_config["base_url"] = Value::String("https://updated.example/v1".into());
             ProviderService::update(state, AppType::KimiCode, None, edited)
                 .expect("update during takeover");
 
@@ -2293,10 +2289,7 @@ impl ProviderService {
 
     /// Project a Kimi provider upsert into the restore backup while live stays
     /// on `cc-switch-proxy`.
-    fn kimi_update_takeover_backup(
-        state: &AppState,
-        provider: &Provider,
-    ) -> Result<(), AppError> {
+    fn kimi_update_takeover_backup(state: &AppState, provider: &Provider) -> Result<(), AppError> {
         futures::executor::block_on(
             state
                 .proxy_service
@@ -2307,15 +2300,20 @@ impl ProviderService {
 
     /// Remove a Kimi provider from the restore backup snapshot only.
     fn kimi_remove_from_takeover_backup(state: &AppState, id: &str) -> Result<(), AppError> {
-        let backup = futures::executor::block_on(state.db.get_live_backup(AppType::KimiCode.as_str()))
-            .map_err(|e| AppError::Message(format!("读取 Kimi Code 备份失败: {e}")))?;
+        let backup =
+            futures::executor::block_on(state.db.get_live_backup(AppType::KimiCode.as_str()))
+                .map_err(|e| AppError::Message(format!("读取 Kimi Code 备份失败: {e}")))?;
         let Some(backup) = backup else {
             return Ok(());
         };
         let updated = crate::kimi_config::remove_provider_from_text(&backup.original_config, id)
             .map_err(|e| AppError::Message(format!("从 Kimi 备份移除供应商失败: {e}")))?;
-        futures::executor::block_on(state.db.save_live_backup(AppType::KimiCode.as_str(), &updated))
-            .map_err(|e| AppError::Message(format!("写入 Kimi Code 备份失败: {e}")))
+        futures::executor::block_on(
+            state
+                .db
+                .save_live_backup(AppType::KimiCode.as_str(), &updated),
+        )
+        .map_err(|e| AppError::Message(format!("写入 Kimi Code 备份失败: {e}")))
     }
 
     fn normalize_usage_script_credential_overrides(app_type: &AppType, provider: &mut Provider) {
@@ -2473,10 +2471,7 @@ impl ProviderService {
 
             if matches!(app_type, AppType::KimiCode) && seed_kimi_current {
                 // Project provider + default_model together (same as switch).
-                crate::kimi_config::apply_switch_defaults(
-                    &provider.id,
-                    &provider.settings_config,
-                )?;
+                crate::kimi_config::apply_switch_defaults(&provider.id, &provider.settings_config)?;
                 state
                     .db
                     .set_current_provider(app_type.as_str(), &provider.id)?;

@@ -481,10 +481,7 @@ fn is_cc_switch_proxy_model(model: &str) -> bool {
 
 /// Resolve a Kimi client model (alias, bare id, or proxy placeholder) to the
 /// real upstream wire id for the selected failover attempt.
-fn resolve_kimi_upstream_model(
-    provider: &Provider,
-    request_model: Option<&str>,
-) -> Option<String> {
+fn resolve_kimi_upstream_model(provider: &Provider, request_model: Option<&str>) -> Option<String> {
     let entries = kimi_style_model_entries(provider);
     if entries.is_empty() {
         return None;
@@ -1422,13 +1419,10 @@ wire_api = "anthropic"
             ]
         }));
 
-        for placeholder in [
-            "cc-switch-proxy/default",
-            "cc-switch-proxy-default",
-        ] {
+        for placeholder in ["cc-switch-proxy/default", "cc-switch-proxy-default"] {
             let mut body = json!({ "model": placeholder, "input": "ping" });
-            let upstream = apply_kimi_upstream_model(&provider, &mut body)
-                .expect("placeholder must map");
+            let upstream =
+                apply_kimi_upstream_model(&provider, &mut body).expect("placeholder must map");
             assert_eq!(
                 upstream.as_deref(),
                 Some("claude-opus-4-8"),
@@ -1456,8 +1450,7 @@ wire_api = "anthropic"
             "model": "kimi-code/kimi-for-coding",
             "input": "ping"
         });
-        let upstream =
-            apply_kimi_upstream_model(&provider, &mut body).expect("alias must map");
+        let upstream = apply_kimi_upstream_model(&provider, &mut body).expect("alias must map");
         assert_eq!(upstream.as_deref(), Some("kimi-for-coding"));
         assert_eq!(
             body.get("model").and_then(|v| v.as_str()),
@@ -1476,8 +1469,7 @@ wire_api = "anthropic"
         }));
 
         let mut body = json!({ "model": "k3", "input": "ping" });
-        let upstream =
-            apply_kimi_upstream_model(&provider, &mut body).expect("bare id must map");
+        let upstream = apply_kimi_upstream_model(&provider, &mut body).expect("bare id must map");
         assert_eq!(upstream.as_deref(), Some("k3"));
         assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("k3"));
     }
@@ -1489,8 +1481,7 @@ wire_api = "anthropic"
             "models": [{ "id": "gpt-5.6-sol", "alias": "wuming/gpt-5.6-sol" }]
         }));
         let mut body = json!({ "model": "totally-unknown-model", "input": "ping" });
-        let upstream =
-            apply_kimi_upstream_model(&provider, &mut body).expect("pass-through ok");
+        let upstream = apply_kimi_upstream_model(&provider, &mut body).expect("pass-through ok");
         // Pass through unknown model; do not force first catalog entry.
         assert_eq!(upstream.as_deref(), Some("totally-unknown-model"));
         assert_eq!(

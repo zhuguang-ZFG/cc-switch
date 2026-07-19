@@ -3302,7 +3302,8 @@ model = "model"
             None,
         );
         db.save_provider("kimicode", &provider).expect("save");
-        db.set_current_provider("kimicode", "demo").expect("current");
+        db.set_current_provider("kimicode", "demo")
+            .expect("current");
         crate::settings::set_current_provider(&AppType::KimiCode, Some("demo"))
             .expect("local current");
 
@@ -3448,7 +3449,9 @@ model = "model"
             .expect("backup exists");
         assert!(
             backup.original_config.contains("other/other-model")
-                || backup.original_config.contains("default_model = \"other/other-model\""),
+                || backup
+                    .original_config
+                    .contains("default_model = \"other/other-model\""),
             "backup must project switched default_model, got:\n{}",
             backup.original_config
         );

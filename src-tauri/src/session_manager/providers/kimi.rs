@@ -63,8 +63,7 @@ fn scan_sessions_in(root: &Path, index_path: &Path) -> Vec<SessionMeta> {
             continue;
         };
         let indexed_session_dir = PathBuf::from(session_dir);
-        let Some(session_dir) =
-            resolve_indexed_session_dir(root, &indexed_session_dir, session_id)
+        let Some(session_dir) = resolve_indexed_session_dir(root, &indexed_session_dir, session_id)
         else {
             log::warn!(
                 "Skipping invalid Kimi session path: {}",
@@ -261,7 +260,10 @@ fn append_index_tombstone(index_path: &Path, session_id: &str) -> Result<(), Str
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     if file_len > 0 {
         let mut last = [0u8; 1];
-        if file.seek(SeekFrom::End(-1)).is_ok() && file.read_exact(&mut last).is_ok() && last[0] != b'\n' {
+        if file.seek(SeekFrom::End(-1)).is_ok()
+            && file.read_exact(&mut last).is_ok()
+            && last[0] != b'\n'
+        {
             file.write_all(b"\n")
                 .map_err(|e| format!("Failed to append Kimi session index tombstone: {e}"))?;
         }
@@ -354,8 +356,18 @@ mod tests {
     fn scan_recovers_work_dir_from_cwd_then_workdir_then_index() {
         let temp = tempdir().unwrap();
         let root = temp.path().join("sessions");
-        let v2 = make_session(&root, "work", "session-v2", r#"{"version":2,"cwd":"/v2/work","title":"V2"}"#);
-        let v1 = make_session(&root, "work", "session-v1", r#"{"workDir":"/v1/work","title":"V1"}"#);
+        let v2 = make_session(
+            &root,
+            "work",
+            "session-v2",
+            r#"{"version":2,"cwd":"/v2/work","title":"V2"}"#,
+        );
+        let v1 = make_session(
+            &root,
+            "work",
+            "session-v1",
+            r#"{"workDir":"/v1/work","title":"V1"}"#,
+        );
         let bare = make_session(&root, "work", "session-idx", r#"{"title":"Idx"}"#);
 
         let index_path = temp.path().join("session_index.jsonl");
@@ -413,7 +425,10 @@ mod tests {
         .unwrap();
 
         let metas = scan_map(&root, &index_path);
-        assert!(!metas.contains_key("session-a"), "墓碑会话不得因目录残留而复活");
+        assert!(
+            !metas.contains_key("session-a"),
+            "墓碑会话不得因目录残留而复活"
+        );
         assert!(metas.contains_key("session-b"));
 
         // 官方 later-lines-win：墓碑之后出现同名新条目 → 重新出现
@@ -458,7 +473,10 @@ mod tests {
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
         let tombstone: Value = serde_json::from_str(lines[2]).unwrap();
-        assert_eq!(tombstone, serde_json::json!({"sessionId": "session-a", "deleted": true}));
+        assert_eq!(
+            tombstone,
+            serde_json::json!({"sessionId": "session-a", "deleted": true})
+        );
 
         // 联动第 3 点：删除后再 scan 不出现
         let metas = scan_map(&root, &index_path);
@@ -471,7 +489,8 @@ mod tests {
     fn append_index_tombstone_separates_missing_trailing_newline() {
         let temp = tempdir().unwrap();
         let index_path = temp.path().join("session_index.jsonl");
-        let entry = serde_json::json!({"sessionId": "x", "sessionDir": "/d", "workDir": "/w"}).to_string();
+        let entry =
+            serde_json::json!({"sessionId": "x", "sessionDir": "/d", "workDir": "/w"}).to_string();
         fs::write(&index_path, &entry).unwrap(); // 无结尾换行
 
         append_index_tombstone(&index_path, "x").unwrap();

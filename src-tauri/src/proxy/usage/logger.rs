@@ -71,15 +71,14 @@ impl<'a> UsageLogger<'a> {
             };
 
         let created_at = chrono::Utc::now().timestamp();
-        let input_token_semantics =
-            if matches!(
-                log.app_type.as_str(),
-                "codex" | "gemini" | "grokbuild" | "kimicode"
-            ) {
-                INPUT_TOKEN_SEMANTICS_TOTAL
-            } else {
-                INPUT_TOKEN_SEMANTICS_FRESH
-            };
+        let input_token_semantics = if matches!(
+            log.app_type.as_str(),
+            "codex" | "gemini" | "grokbuild" | "kimicode"
+        ) {
+            INPUT_TOKEN_SEMANTICS_TOTAL
+        } else {
+            INPUT_TOKEN_SEMANTICS_FRESH
+        };
 
         conn.execute(
             "INSERT OR REPLACE INTO proxy_request_logs (
