@@ -1185,6 +1185,38 @@ mod tests {
     }
 
     #[test]
+    fn kimicode_parity_matrix_app_type_and_proxy_set() {
+        for raw in ["kimicode", "kimi-code", "kimi_code", "kimi", "hermes"] {
+            assert_eq!(
+                AppType::from_str(raw).expect(raw),
+                AppType::KimiCode,
+                "alias {raw} must map to KimiCode"
+            );
+        }
+        assert_eq!(AppType::KimiCode.as_str(), "kimicode");
+        assert!(
+            AppType::KimiCode.is_additive_mode(),
+            "Kimi live projection stays additive"
+        );
+
+        let proxy_capable: Vec<String> = AppType::all()
+            .filter(|app| {
+                matches!(
+                    app,
+                    AppType::Claude | AppType::Codex | AppType::GrokBuild | AppType::KimiCode
+                )
+            })
+            .map(|app| app.as_str().to_string())
+            .collect();
+        for expected in ["claude", "codex", "grokbuild", "kimicode"] {
+            assert!(
+                proxy_capable.iter().any(|id| id == expected),
+                "{expected} must remain proxy-capable"
+            );
+        }
+    }
+
+    #[test]
     #[serial]
     fn auto_imports_kimicode_prompt_on_first_launch() {
         let _home = TempHome::new();

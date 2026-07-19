@@ -793,6 +793,31 @@ pub async fn handle_kimicode_responses_compact(
         .await
 }
 
+/// Normalize a model entry id: prefer alias, else `provider/id`.
+fn kimicode_model_entry_id(owner: &str, model: &Value) -> String {
+    if let Some(alias) = model
+        .get("alias")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return alias.to_string();
+    }
+    model
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|mid| {
+            if mid.contains('/') {
+                mid.to_string()
+            } else {
+                format!("{owner}/{mid}")
+            }
+        })
+        .unwrap_or_default()
+}
+
 /// Build OpenAI-style model list entries from DB provider settings.
 /// Excludes CC Switch proxy placeholders.
 fn kimicode_models_from_db_providers(providers: &[crate::provider::Provider]) -> Vec<Value> {
@@ -808,27 +833,7 @@ fn kimicode_models_from_db_providers(providers: &[crate::provider::Provider]) ->
             .cloned()
             .unwrap_or_default();
         for model in models {
-            let id = model
-                .get("alias")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-                .or_else(|| {
-                    model
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(|mid| {
-                            if mid.contains('/') {
-                                mid.to_string()
-                            } else {
-                                format!("{}/{}", provider.id, mid)
-                            }
-                        })
-                })
-                .unwrap_or_default();
+            let id = kimicode_model_entry_id(&provider.id, &model);
             if id.is_empty() {
                 continue;
             }
@@ -837,6 +842,26 @@ fn kimicode_models_from_db_providers(providers: &[crate::provider::Provider]) ->
                 "object": "model",
                 "owned_by": provider.id,
             }));
+        }
+    }
+    data
+}
+
+/// Build catalog from live TOML providers using the same id normalizer as DB.
+fn kimicode_models_from_live_map(providers: &serde_json::Map<String, Value>) -> Vec<Value> {
+    let mut data = Vec::new();
+    for (provider, value) in providers {
+        if provider == "cc-switch-proxy" || provider.starts_with("cc-switch-") {
+            continue;
+        }
+        if let Some(models) = value.get("models").and_then(Value::as_array) {
+            for model in models {
+                let id = kimicode_model_entry_id(provider, model);
+                if id.is_empty() {
+                    continue;
+                }
+                data.push(json!({"id": id, "object": "model", "owned_by": provider}));
+            }
         }
     }
     data
@@ -874,25 +899,7 @@ pub async fn handle_kimicode_models(
     } else {
         let providers = crate::kimi_config::get_providers()
             .map_err(|e| ProxyError::Internal(format!("读取 Kimi 模型目录失败: {e}")))?;
-        let mut data = Vec::new();
-        for (provider, value) in providers {
-            if provider == "cc-switch-proxy" {
-                continue;
-            }
-            if let Some(models) = value.get("models").and_then(Value::as_array) {
-                for model in models {
-                    let id = model
-                        .get("alias")
-                        .or_else(|| model.get("id"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if !id.is_empty() {
-                        data.push(json!({"id": id, "object": "model", "owned_by": provider}));
-                    }
-                }
-            }
-        }
-        data
+        kimicode_models_from_live_map(&providers)
     };
 
     Ok(Json(json!({"object": "list", "data": data})))

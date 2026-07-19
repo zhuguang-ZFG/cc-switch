@@ -207,6 +207,9 @@ export const CACHE_INCLUSIVE_APP_TYPES: ReadonlySet<string> = new Set([
   "codex",
   "gemini",
   "grokbuild",
+  // Kimi local ingress is OpenAI Responses; upstream Chat/Responses paths
+  // report input tokens that already include cached tokens.
+  "kimicode",
 ]);
 
 /** Subset of request-log fields needed to derive cache-normalized input. */

@@ -43,12 +43,30 @@ use live::{
 // remove_kimicode_provider_from_live is pub-reexported above for commands
 use usage::validate_usage_script;
 
-/// The built-in Codex official provider is safe to select during takeover:
-/// Codex keeps ownership of its ChatGPT login and the proxy only forwards the
-/// authenticated request. Other official providers retain the existing block.
+/// Official providers that remain safe to select during proxy takeover.
+///
+/// - Codex official: ChatGPT login stays outside the proxy; proxy only forwards.
+/// - Managed Kimi OAuth (`managed:kimi-code`): proxy injects refreshed tokens and
+///   is the designed route for official Kimi under takeover (same class of
+///   exception as Codex official — not a third-party "official" template).
 pub fn official_provider_supports_proxy_takeover(app_type: &AppType, provider: &Provider) -> bool {
-    matches!(app_type, AppType::Codex)
-        && crate::proxy::providers::is_codex_official_provider(provider)
+    match app_type {
+        AppType::Codex => crate::proxy::providers::is_codex_official_provider(provider),
+        AppType::KimiCode => {
+            provider.id == crate::kimi_config::MANAGED_KIMI_PROVIDER
+                || provider.id.starts_with("managed:kimi")
+                || provider
+                    .settings_config
+                    .get("oauth")
+                    .is_some()
+                || provider
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.provider_type.as_deref())
+                    == Some("kimi_oauth")
+        }
+        _ => false,
+    }
 }
 
 /// 统一会话开关变更后，立即按新开关状态重写当前官方 Codex 供应商的

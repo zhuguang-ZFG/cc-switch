@@ -1737,25 +1737,35 @@ impl ProxyService {
             .map_err(|e| format!("获取 {app_type_str} Live 备份失败: {e}"))?;
         if let Some(backup) = backup {
             if matches!(app_type, AppType::KimiCode) {
-                crate::kimi_config::write_config_text(&backup.original_config)
-                    .map_err(|e| format!("恢复 Kimi Code 配置失败: {e}"))?;
-                log::info!("{app_type_str} Live 配置已从备份恢复");
-                return Ok(());
-            }
-            let config: Value = serde_json::from_str(&backup.original_config)
-                .map_err(|e| format!("解析 {app_type_str} 备份失败: {e}"))?;
-
-            // 备份若是代理占位符（异常历史：上次 stop 失败导致 Live 留在了代理状态，
-            // 下次接管时又被错误地备份成"原始 Live"），不能直接用 — 否则 stop 后
-            // Live 永远卡在 127.0.0.1:15721。落到下面的 SSOT 兜底重建。
-            if Self::live_has_proxy_placeholder_for_app(app_type, &config) {
-                log::warn!(
-                    "{app_type_str} 备份本身已是代理占位符（异常历史状态），跳过备份，改走 SSOT 重建 Live"
-                );
+                // Same polluted-backup guard as Claude/Codex: never write a
+                // proxy placeholder snapshot back as "original" live.
+                let placeholder_probe = json!({ "config": backup.original_config });
+                if Self::live_has_proxy_placeholder_for_app(app_type, &placeholder_probe) {
+                    log::warn!(
+                        "{app_type_str} 备份本身已是代理占位符（异常历史状态），跳过备份，改走 SSOT 重建 Live"
+                    );
+                } else {
+                    crate::kimi_config::write_config_text(&backup.original_config)
+                        .map_err(|e| format!("恢复 Kimi Code 配置失败: {e}"))?;
+                    log::info!("{app_type_str} Live 配置已从备份恢复");
+                    return Ok(());
+                }
             } else {
-                self.write_live_config_for_app(app_type, &config)?;
-                log::info!("{app_type_str} Live 配置已从备份恢复");
-                return Ok(());
+                let config: Value = serde_json::from_str(&backup.original_config)
+                    .map_err(|e| format!("解析 {app_type_str} 备份失败: {e}"))?;
+
+                // 备份若是代理占位符（异常历史：上次 stop 失败导致 Live 留在了代理状态，
+                // 下次接管时又被错误地备份成"原始 Live"），不能直接用 — 否则 stop 后
+                // Live 永远卡在 127.0.0.1:15721。落到下面的 SSOT 兜底重建。
+                if Self::live_has_proxy_placeholder_for_app(app_type, &config) {
+                    log::warn!(
+                        "{app_type_str} 备份本身已是代理占位符（异常历史状态），跳过备份，改走 SSOT 重建 Live"
+                    );
+                } else {
+                    self.write_live_config_for_app(app_type, &config)?;
+                    log::info!("{app_type_str} Live 配置已从备份恢复");
+                    return Ok(());
+                }
             }
         }
 

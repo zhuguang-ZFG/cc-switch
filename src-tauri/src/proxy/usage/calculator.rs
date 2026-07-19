@@ -59,7 +59,8 @@ impl CostCalculator {
         pricing: &ModelPricing,
         cost_multiplier: Decimal,
     ) -> CostBreakdown {
-        let input_includes_cache_read = matches!(app_type, "codex" | "gemini" | "grokbuild");
+        let input_includes_cache_read =
+            matches!(app_type, "codex" | "gemini" | "grokbuild" | "kimicode");
         Self::calculate_with_cache_semantics(
             usage,
             pricing,
@@ -209,6 +210,25 @@ mod tests {
             Decimal::from_str("0.000375").unwrap()
         );
         assert_eq!(cost.total_cost, Decimal::from_str("0.010035").unwrap());
+    }
+
+    #[test]
+    fn kimicode_does_not_double_bill_cached_input() {
+        let usage = TokenUsage {
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_read_tokens: 200,
+            cache_creation_tokens: 0,
+            model: None,
+            message_id: None,
+        };
+        let pricing = ModelPricing::from_strings("3.0", "15.0", "0.3", "3.75").unwrap();
+        let multiplier = Decimal::from_str("1.0").unwrap();
+        let cost = CostCalculator::calculate_for_app("kimicode", &usage, &pricing, multiplier);
+        // OpenAI-style: input includes cache read → fresh input = 800
+        assert_eq!(cost.input_cost, Decimal::from_str("0.0024").unwrap());
+        assert_eq!(cost.cache_read_cost, Decimal::from_str("0.00006").unwrap());
+        assert_eq!(cost.output_cost, Decimal::from_str("0.0075").unwrap());
     }
 
     #[test]

@@ -200,9 +200,14 @@ pub fn is_proxy_takeover_active() -> Result<bool, AppError> {
         .and_then(|providers| providers.get("cc-switch-proxy"))
         .and_then(Item::as_table);
     Ok(provider.is_some_and(|table| {
+        // Require the managed placeholder key so a user-owned local gateway
+        // named cc-switch-proxy is not treated as proxy takeover.
         table_str(table, "api_key").as_deref() == Some("PROXY_MANAGED")
-            || table_str(table, "base_url")
-                .is_some_and(|url| url.contains("127.0.0.1") || url.contains("localhost"))
+            && table_str(table, "base_url").is_some_and(|url| {
+                url.contains("/kimicode/")
+                    || url.contains("127.0.0.1")
+                    || url.contains("localhost")
+            })
     }))
 }
 
@@ -895,13 +900,26 @@ fn get_kimi_oauth_refresh_lock_path() -> PathBuf {
 /// Cross-process refresh lock so concurrent CC Switch / Kimi CLI instances do
 /// not rotate the same refresh token twice. Uses an exclusive lock file with
 /// stale recovery (mtime > 60s).
+/// Stale threshold for abandoned locks. Must exceed the OAuth HTTP timeout
+/// (30s) plus margin so a live refresh cannot be stolen mid-flight.
+const OAUTH_LOCK_STALE_SECS: u64 = 120;
+
 struct OAuthRefreshFileLock {
     path: PathBuf,
-    _file: fs::File,
+    /// Kept open so the OS holds the inode while the lock is alive.
+    #[allow(dead_code)]
+    file: fs::File,
+    heartbeat: Option<std::thread::JoinHandle<()>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Drop for OAuthRefreshFileLock {
     fn drop(&mut self) {
+        self.stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(handle) = self.heartbeat.take() {
+            let _ = handle.join();
+        }
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -915,8 +933,20 @@ fn is_stale_lock_file(path: &Path) -> bool {
     };
     SystemTime::now()
         .duration_since(modified)
-        .map(|age| age > Duration::from_secs(60))
+        .map(|age| age > Duration::from_secs(OAUTH_LOCK_STALE_SECS))
         .unwrap_or(true)
+}
+
+fn touch_lock_file(path: &Path) {
+    // Bump mtime so other processes do not treat a long refresh as stale.
+    let _ = OpenOptions::new().write(true).open(path).and_then(|f| {
+        f.set_len(f.metadata()?.len())?;
+        Ok(())
+    });
+    // Fallback for platforms where set_len does not update mtime reliably.
+    if let Ok(content) = fs::read(path) {
+        let _ = fs::write(path, content);
+    }
 }
 
 fn try_acquire_oauth_refresh_file_lock() -> Result<OAuthRefreshFileLock, AppError> {
@@ -934,7 +964,24 @@ fn try_acquire_oauth_refresh_file_lock() -> Result<OAuthRefreshFileLock, AppErro
             Ok(mut file) => {
                 let _ = writeln!(file, "{}", std::process::id());
                 let _ = file.flush();
-                return Ok(OAuthRefreshFileLock { path, _file: file });
+                let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let heartbeat_path = path.clone();
+                let stop_flag = stop.clone();
+                let heartbeat = std::thread::spawn(move || {
+                    while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_secs(15));
+                        if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        touch_lock_file(&heartbeat_path);
+                    }
+                });
+                return Ok(OAuthRefreshFileLock {
+                    path,
+                    file,
+                    heartbeat: Some(heartbeat),
+                    stop,
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 if is_stale_lock_file(&path) {
