@@ -1746,7 +1746,11 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 ///
 /// 检查 `proxy_config.enabled` 字段，如果有任一应用的状态为 `true`，
 /// 则自动启动代理服务并接管对应应用的 Live 配置。
-const PROXY_STARTUP_APP_TYPES: [&str; 4] = ["claude", "codex", "gemini", "grokbuild"];
+// Must include every app that supports proxy takeover. Omitting an app means
+// its `proxy_config.enabled=true` survives a restart without re-takeover
+// (Kimi would keep a dead local route in config.toml).
+const PROXY_STARTUP_APP_TYPES: [&str; 5] =
+    ["claude", "codex", "gemini", "grokbuild", "kimicode"];
 
 async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static str> {
     let mut apps = Vec::new();
@@ -1760,6 +1764,23 @@ async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static 
         }
     }
     apps
+}
+
+#[cfg(test)]
+mod proxy_startup_tests {
+    #[test]
+    fn proxy_startup_app_types_include_kimicode() {
+        assert!(
+            super::PROXY_STARTUP_APP_TYPES.contains(&"kimicode"),
+            "startup restore must re-takeover Kimi when enabled=true"
+        );
+        for required in ["claude", "codex", "grokbuild", "kimicode"] {
+            assert!(
+                super::PROXY_STARTUP_APP_TYPES.contains(&required),
+                "{required} missing from PROXY_STARTUP_APP_TYPES"
+            );
+        }
+    }
 }
 
 async fn restore_proxy_state_on_startup(state: &store::AppState) {

@@ -71,7 +71,6 @@ export function ProxyPanel({
   // 启用自动故障转移后，将按队列优先级（P1→P2→...）选择供应商
   const { data: claudeQueue = [] } = useFailoverQueue("claude");
   const { data: codexQueue = [] } = useFailoverQueue("codex");
-  const { data: geminiQueue = [] } = useFailoverQueue("gemini");
   const { data: grokQueue = [] } = useFailoverQueue("grokbuild");
   const { data: kimiQueue = [] } = useFailoverQueue("kimicode");
 
@@ -274,15 +273,9 @@ export function ProxyPanel({
                     defaultValue: "应用接管",
                   })}
                 </p>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   {(
-                    [
-                      "claude",
-                      "codex",
-                      "gemini",
-                      "grokbuild",
-                      "kimicode",
-                    ] as const
+                    ["claude", "codex", "grokbuild", "kimicode"] as const
                   ).map((appType) => {
                     const isEnabled =
                       takeoverStatus?.[
@@ -429,7 +422,6 @@ export function ProxyPanel({
               {/* [6] Provider queues */}
               {(claudeQueue.length > 0 ||
                 codexQueue.length > 0 ||
-                geminiQueue.length > 0 ||
                 grokQueue.length > 0 ||
                 kimiQueue.length > 0) && (
                 <div className="pt-3 border-t border-border space-y-3">
@@ -457,18 +449,6 @@ export function ProxyPanel({
                       appType="codex"
                       appLabel="Codex"
                       targets={codexQueue.map((item) => ({
-                        id: item.providerId,
-                        name: item.providerName,
-                      }))}
-                      status={status}
-                    />
-                  )}
-
-                  {geminiQueue.length > 0 && (
-                    <ProviderQueueGroup
-                      appType="gemini"
-                      appLabel="Gemini"
-                      targets={geminiQueue.map((item) => ({
                         id: item.providerId,
                         name: item.providerName,
                       }))}

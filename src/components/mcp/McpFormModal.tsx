@@ -42,7 +42,7 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
   onClose,
   existingIds = [],
   defaultFormat = "json",
-  defaultEnabledApps = ["claude", "codex", "grokbuild"],
+  defaultEnabledApps = ["claude", "codex", "grokbuild", "kimicode"],
 }) => {
   const { t } = useTranslation();
   const { formatTomlError, validateTomlConfig, validateJsonConfig } =
@@ -68,6 +68,12 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
         codex: !!initialData.apps.codex,
         grokbuild: !!initialData.apps.grokbuild,
         opencode: !!initialData.apps.opencode,
+        // Hermes legacy alias still may appear on older rows.
+        kimicode: !!(
+          (initialData.apps as { kimicode?: boolean; hermes?: boolean })
+            .kimicode ??
+          (initialData.apps as { kimicode?: boolean; hermes?: boolean }).hermes
+        ),
       };
     }
     return {
@@ -75,6 +81,7 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
       codex: defaultEnabledApps.includes("codex"),
       grokbuild: defaultEnabledApps.includes("grokbuild"),
       opencode: defaultEnabledApps.includes("opencode"),
+      kimicode: defaultEnabledApps.includes("kimicode"),
     };
   });
 
@@ -575,6 +582,24 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
                     className="text-sm text-foreground cursor-pointer select-none"
                   >
                     {t("mcp.unifiedPanel.apps.opencode")}
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="enable-kimicode"
+                    checked={enabledApps.kimicode}
+                    onCheckedChange={(checked: boolean) =>
+                      setEnabledApps({ ...enabledApps, kimicode: checked })
+                    }
+                  />
+                  <label
+                    htmlFor="enable-kimicode"
+                    className="text-sm text-foreground cursor-pointer select-none"
+                  >
+                    {t("mcp.unifiedPanel.apps.kimicode", {
+                      defaultValue: "Kimi Code",
+                    })}
                   </label>
                 </div>
               </div>

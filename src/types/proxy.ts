@@ -50,8 +50,9 @@ export interface ProxyTakeoverStatus {
   grokbuild: boolean;
   opencode?: boolean;
   openclaw?: boolean;
-  /** @deprecated Hermes replaced by Kimi Code; no proxy takeover in MVP */
+  /** @deprecated Hermes replaced by Kimi Code */
   hermes?: boolean;
+  /** Kimi Code local proxy takeover (same class as Claude/Codex/Grok). */
   kimicode?: boolean;
 }
 
