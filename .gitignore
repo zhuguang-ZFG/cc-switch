@@ -27,5 +27,8 @@ flatpak-repo/
 .spec-workflow/
 copilot-api
 .history
+# Local third-party source checkouts (e.g. Kimi Code CLI tag mirrors)
+.vendor/
+.omk/
 CODEBUDDY.md
 mainWindow.js

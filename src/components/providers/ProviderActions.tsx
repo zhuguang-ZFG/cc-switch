@@ -84,11 +84,15 @@ export function ProviderActions({
   const { t } = useTranslation();
   const iconButtonClass = "h-8 w-8 p-1";
 
-  // Kimi 开启自动故障转移时主按钮走队列语义（加入/已加入），与 Claude/Codex
-  // 一致；队列语义优先于接管切换与累加语义（否则故障转移永远被前两者抢占，
-  // 供应商无法从卡片加入故障路由）。
+  // Kimi 仅在「已接管 + 自动故障转移」时主按钮走队列语义（加入/已加入），
+  // 与 Claude/Codex 一致。必须同时要求 isProxyTakeover：否则仅开故障转移开关
+  // （或测试传入 isAutoFailoverEnabled）会把累加模式误判成队列模式，
+  // 导致非接管下无法添加/移除供应商。
   const isKimiFailover =
-    appId === "kimicode" && isAutoFailoverEnabled && Boolean(onToggleFailover);
+    appId === "kimicode" &&
+    isProxyTakeover &&
+    isAutoFailoverEnabled &&
+    Boolean(onToggleFailover);
 
   // 代理接管下的 Kimi：live 被代理冻结，isInConfig（由 live 推导）不再随操作变化，
   // 累加语义失效。主按钮退化为 isCurrent 驱动的切换语义（与 Claude/Codex 接管一致：

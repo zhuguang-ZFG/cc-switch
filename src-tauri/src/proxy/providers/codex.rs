@@ -326,7 +326,13 @@ pub fn resolve_codex_catalog_tool_profile(
     )
 }
 
-/// Extract the real upstream model configured for a Codex provider.
+/// Extract the real upstream model configured for a Codex / Grok provider.
+///
+/// Intentionally **does not** look at Kimi's `settings_config.models[]` — that
+/// catalog is additive-TOML-only and must go through [`apply_kimi_upstream_model`].
+/// Mixing the two paths previously broke auto-routing: any provider with a
+/// `models` array short-circuited Codex catalog matching and rewrote unknown
+/// models to the first entry.
 pub fn codex_provider_upstream_model(provider: &Provider) -> Option<String> {
     provider
         .settings_config
@@ -346,6 +352,126 @@ pub fn codex_provider_upstream_model(provider: &Provider) -> Option<String> {
                         .or_else(|| extract_codex_model_from_toml(config))
                 })
         })
+}
+
+/// Kimi-style model catalog entry: upstream wire id + optional CLI alias.
+#[derive(Debug, Clone)]
+struct KimiStyleModelEntry {
+    id: String,
+    alias: Option<String>,
+}
+
+fn kimi_style_model_entries_from_value(settings: &JsonValue) -> Vec<KimiStyleModelEntry> {
+    settings
+        .get("models")
+        .and_then(|models| models.as_array())
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| {
+                    let id = model
+                        .get("id")
+                        .or_else(|| model.get("model"))
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())?
+                        .to_string();
+                    let alias = model
+                        .get("alias")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string);
+                    Some(KimiStyleModelEntry { id, alias })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn kimi_style_model_entries(provider: &Provider) -> Vec<KimiStyleModelEntry> {
+    let from_db = kimi_style_model_entries_from_value(&provider.settings_config);
+    if !from_db.is_empty() {
+        return from_db;
+    }
+
+    // Managed OAuth providers keep the editable projection sparse (oauth +
+    // base_url only). Models live in config.toml; pull them for routing so
+    // failover does not forward `cc-switch-proxy-default` upstream.
+    if provider.id.starts_with("managed:")
+        || provider.settings_config.get("oauth").is_some()
+        || provider
+            .settings_config
+            .get("_cc_managed")
+            .and_then(JsonValue::as_bool)
+            == Some(true)
+    {
+        if let Ok(live) = crate::kimi_config::get_providers() {
+            if let Some(live_cfg) = live.get(&provider.id) {
+                return kimi_style_model_entries_from_value(live_cfg);
+            }
+        }
+    }
+
+    Vec::new()
+}
+
+/// Local proxy placeholders that must never be forwarded upstream.
+fn is_cc_switch_proxy_model(model: &str) -> bool {
+    let lower = model.trim().to_ascii_lowercase();
+    lower == "cc-switch-proxy-default"
+        || lower == "cc-switch-proxy/default"
+        || lower.starts_with("cc-switch-proxy/")
+        || lower.starts_with("cc-switch-proxy-")
+}
+
+/// Resolve a Kimi client model (alias, bare id, or proxy placeholder) to the
+/// real upstream wire id for the selected failover attempt.
+fn resolve_kimi_upstream_model(
+    provider: &Provider,
+    request_model: Option<&str>,
+) -> Option<String> {
+    let entries = kimi_style_model_entries(provider);
+    if entries.is_empty() {
+        return None;
+    }
+
+    let Some(request_model) = request_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    else {
+        return Some(entries[0].id.clone());
+    };
+
+    // Takeover freezes the client model to the local proxy placeholder;
+    // each failover attempt must remap to that attempt's own default model.
+    if is_cc_switch_proxy_model(request_model) {
+        return Some(entries[0].id.clone());
+    }
+
+    for entry in &entries {
+        if entry.id.eq_ignore_ascii_case(request_model) {
+            return Some(entry.id.clone());
+        }
+        if entry
+            .alias
+            .as_deref()
+            .is_some_and(|alias| alias.eq_ignore_ascii_case(request_model))
+        {
+            return Some(entry.id.clone());
+        }
+        // Accept "provider/id" when the stored id is bare ("id").
+        if let Some((_, suffix)) = request_model.rsplit_once('/') {
+            if entry.id.eq_ignore_ascii_case(suffix) {
+                return Some(entry.id.clone());
+            }
+        }
+    }
+
+    // Unknown non-placeholder model: do not silently rewrite to the first
+    // catalog entry (that broke multi-model selection). Leave it for the
+    // upstream / next failover attempt to reject.
+    None
 }
 
 fn codex_provider_catalog_model_ids(provider: &Provider) -> HashSet<String> {
@@ -378,9 +504,9 @@ pub fn apply_codex_chat_upstream_model(
     apply_codex_upstream_model(provider, body)
 }
 
-/// Same model-substitution logic as `apply_codex_chat_upstream_model`, but without
-/// the chat gating check. Reused by the anthropic conversion path (the forwarder has
-/// already confirmed this provider uses anthropic).
+/// Codex / Grok model substitution — catalog first, then configured default.
+///
+/// Must **not** interpret Kimi `models[]` catalogs (see [`apply_kimi_upstream_model`]).
 pub fn apply_codex_upstream_model(provider: &Provider, body: &mut JsonValue) -> Option<String> {
     let catalog_model_ids = codex_provider_catalog_model_ids(provider);
     if let Some(request_model) = body
@@ -397,6 +523,48 @@ pub fn apply_codex_upstream_model(provider: &Provider, body: &mut JsonValue) -> 
     let upstream_model = codex_provider_upstream_model(provider)?;
     body["model"] = JsonValue::String(upstream_model.clone());
     Some(upstream_model)
+}
+
+/// Kimi Code proxy ingress model rewrite for auto-routing / failover.
+///
+/// Live takeover always sends `cc-switch-proxy/default` (or
+/// `cc-switch-proxy-default`). Each failover attempt must map that placeholder
+/// (or a real alias) onto the selected provider's upstream wire id from
+/// `settings_config.models[]` — never leave the placeholder for the upstream.
+pub fn apply_kimi_upstream_model(provider: &Provider, body: &mut JsonValue) -> Option<String> {
+    let request_model = body
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToString::to_string);
+
+    let Some(upstream) = resolve_kimi_upstream_model(provider, request_model.as_deref()) else {
+        // No catalog and no match: if the client still carries a proxy
+        // placeholder, refuse to forward it (forces a clear routing error
+        // instead of a cryptic 404 from the upstream).
+        if request_model
+            .as_deref()
+            .is_some_and(is_cc_switch_proxy_model)
+        {
+            log::warn!(
+                "[Kimi] cannot map proxy placeholder {:?} for provider {} — missing models[] catalog",
+                request_model,
+                provider.id
+            );
+        }
+        return request_model;
+    };
+
+    let needs_rewrite = request_model
+        .as_deref()
+        .is_none_or(|request| {
+            is_cc_switch_proxy_model(request) || !request.eq_ignore_ascii_case(&upstream)
+        });
+    if needs_rewrite {
+        body["model"] = JsonValue::String(upstream.clone());
+    }
+    Some(upstream)
 }
 
 pub fn resolve_codex_chat_reasoning_config(
@@ -1176,6 +1344,116 @@ wire_api = "anthropic"
             let provider = create_provider(json!({ "type": provider_type }));
             assert_eq!(kimi_wire_protocol(&provider), expected, "{provider_type}");
         }
+    }
+
+    #[test]
+    fn kimi_models_array_maps_proxy_placeholder_to_upstream_id() {
+        // Takeover freezes the client model to the local proxy placeholder.
+        // Failover attempts must rewrite it to the selected provider's real id
+        // (Kimi Code 0.27 stores the catalog under models[{id,alias}], not
+        // a top-level `model` field like Codex/Grok).
+        let provider = create_provider(json!({
+            "type": "openai",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "sk-test",
+            "models": [
+                { "id": "claude-opus-4-8", "alias": "baibei/claude-opus-4-8" },
+                { "id": "claude-sonnet-4-6", "alias": "baibei/claude-sonnet-4-6" }
+            ]
+        }));
+
+        for placeholder in [
+            "cc-switch-proxy/default",
+            "cc-switch-proxy-default",
+        ] {
+            let mut body = json!({ "model": placeholder, "input": "ping" });
+            let upstream = apply_kimi_upstream_model(&provider, &mut body);
+            assert_eq!(
+                upstream.as_deref(),
+                Some("claude-opus-4-8"),
+                "placeholder {placeholder}"
+            );
+            assert_eq!(
+                body.get("model").and_then(|v| v.as_str()),
+                Some("claude-opus-4-8")
+            );
+        }
+    }
+
+    #[test]
+    fn kimi_models_array_maps_alias_to_upstream_id() {
+        let provider = create_provider(json!({
+            "type": "anthropic",
+            "base_url": "https://example.invalid",
+            "models": [
+                { "id": "claude-opus-4-8", "alias": "baibei/claude-opus-4-8" },
+                { "id": "kimi-for-coding", "alias": "kimi-code/kimi-for-coding" }
+            ]
+        }));
+
+        let mut body = json!({
+            "model": "kimi-code/kimi-for-coding",
+            "input": "ping"
+        });
+        let upstream = apply_kimi_upstream_model(&provider, &mut body);
+        assert_eq!(upstream.as_deref(), Some("kimi-for-coding"));
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("kimi-for-coding")
+        );
+    }
+
+    #[test]
+    fn kimi_models_array_keeps_bare_upstream_id() {
+        let provider = create_provider(json!({
+            "type": "kimi",
+            "models": [
+                { "id": "k3", "alias": "kimi-code/k3" },
+                { "id": "kimi-for-coding", "alias": "kimi-code/kimi-for-coding" }
+            ]
+        }));
+
+        let mut body = json!({ "model": "k3", "input": "ping" });
+        let upstream = apply_kimi_upstream_model(&provider, &mut body);
+        assert_eq!(upstream.as_deref(), Some("k3"));
+        assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("k3"));
+    }
+
+    #[test]
+    fn kimi_unknown_non_placeholder_model_is_not_silently_rewritten() {
+        let provider = create_provider(json!({
+            "type": "openai",
+            "models": [{ "id": "gpt-5.6-sol", "alias": "wuming/gpt-5.6-sol" }]
+        }));
+        let mut body = json!({ "model": "totally-unknown-model", "input": "ping" });
+        let upstream = apply_kimi_upstream_model(&provider, &mut body);
+        // Pass through unknown model; do not force first catalog entry.
+        assert_eq!(upstream.as_deref(), Some("totally-unknown-model"));
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("totally-unknown-model")
+        );
+    }
+
+    #[test]
+    fn codex_upstream_model_ignores_kimi_models_array() {
+        // Regression: Kimi models[] must not bleed into Codex/Grok resolution.
+        let provider = create_provider(json!({
+            "model": "codex-configured-model",
+            "models": [{ "id": "should-not-win", "alias": "x/should-not-win" }]
+        }));
+        assert_eq!(
+            codex_provider_upstream_model(&provider).as_deref(),
+            Some("codex-configured-model")
+        );
+        let mut body = json!({ "model": "client-model" });
+        // Not in modelCatalog → rewrite to configured default, not models[0].
+        let upstream = apply_codex_upstream_model(&provider, &mut body);
+        assert_eq!(upstream.as_deref(), Some("codex-configured-model"));
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("codex-configured-model")
+        );
     }
 
     #[test]

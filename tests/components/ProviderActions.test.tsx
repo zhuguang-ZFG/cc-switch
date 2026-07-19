@@ -136,8 +136,9 @@ describe("ProviderActions kimicode additive mode (no takeover)", () => {
 });
 
 describe("ProviderActions kimicode failover mode", () => {
-  it("shows add-to-queue when failover is on and provider is not in queue", () => {
+  it("shows add-to-queue when takeover + failover are on and provider is not in queue", () => {
     const props = createProps({
+      isProxyTakeover: true,
       isAutoFailoverEnabled: true,
       isInFailoverQueue: false,
       onToggleFailover: vi.fn(),
@@ -150,8 +151,9 @@ describe("ProviderActions kimicode failover mode", () => {
     expect(props.onSwitch).not.toHaveBeenCalled();
   });
 
-  it("shows in-queue when provider is already in the failover queue", () => {
+  it("shows in-queue when takeover + failover are on and provider is already in the queue", () => {
     const props = createProps({
+      isProxyTakeover: true,
       isAutoFailoverEnabled: true,
       isInFailoverQueue: true,
       onToggleFailover: vi.fn(),
@@ -180,8 +182,9 @@ describe("ProviderActions kimicode failover mode", () => {
     expect(props.onSwitch).not.toHaveBeenCalled();
   });
 
-  it("lets read-only (managed) providers join the failover queue", () => {
+  it("lets read-only (managed) providers join the failover queue under takeover", () => {
     const props = createProps({
+      isProxyTakeover: true,
       isAutoFailoverEnabled: true,
       isInFailoverQueue: false,
       isReadOnly: true,
@@ -193,5 +196,23 @@ describe("ProviderActions kimicode failover mode", () => {
     expect(button).toBeEnabled();
     fireEvent.click(button);
     expect(props.onToggleFailover).toHaveBeenCalledWith(true);
+  });
+
+  it("does not enter queue mode when failover flag is on but takeover is off", () => {
+    // Regression: isKimiFailover must require takeover, otherwise additive
+    // add/remove is stolen by the queue button.
+    const props = createProps({
+      isProxyTakeover: false,
+      isAutoFailoverEnabled: true,
+      isInConfig: false,
+      onToggleFailover: vi.fn(),
+    });
+    render(<ProviderActions {...props} />);
+
+    expect(screen.queryByRole("button", { name: "加入" })).toBeNull();
+    const button = screen.getByRole("button", { name: "添加" });
+    fireEvent.click(button);
+    expect(props.onSwitch).toHaveBeenCalledTimes(1);
+    expect(props.onToggleFailover).not.toHaveBeenCalled();
   });
 });

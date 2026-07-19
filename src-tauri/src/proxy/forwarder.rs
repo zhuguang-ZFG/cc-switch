@@ -1241,8 +1241,14 @@ impl RequestForwarder {
         // Grok Build exposes a stable client-side model profile in config.toml.
         // Route requests to the provider's real upstream model before applying
         // the optional Responses -> Chat/Anthropic bridge.
-        if matches!(app_type, AppType::GrokBuild | AppType::KimiCode) {
+        //
+        // Kimi Code uses a separate models[] catalog path — do NOT share
+        // apply_codex_upstream_model here (that mixed path previously rewrote
+        // unrelated models and broke auto-routing / failover).
+        if matches!(app_type, AppType::GrokBuild) {
             super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
+        } else if matches!(app_type, AppType::KimiCode) {
+            super::providers::apply_kimi_upstream_model(provider, &mut mapped_body);
         }
 
         if is_copilot {

@@ -688,7 +688,11 @@ fn upsert_provider_into_document(
                 .filter(|s| !s.is_empty())
                 .unwrap_or(alias.as_str());
             mt.insert("model", Item::Value(TomlEditValue::from(model_id)));
-            if let Some(ctx) = model
+            // Kimi Code 0.27 schema requires models.*.max_context_size (min 1).
+            // Prefer explicit values; fall back to an existing live value; then
+            // a safe 256K default so CC Switch never writes a config the CLI
+            // rejects with "must define a positive max_context_size".
+            let ctx = model
                 .get("max_context_size")
                 .and_then(|v| v.as_i64())
                 .or_else(|| {
@@ -709,9 +713,13 @@ fn upsert_provider_into_document(
                         })
                 })
                 .filter(|v| *v > 0)
-            {
-                mt.insert("max_context_size", Item::Value(TomlEditValue::from(ctx)));
-            }
+                .or_else(|| {
+                    table_str(mt, "max_context_size")
+                        .and_then(|raw| raw.parse::<i64>().ok())
+                        .filter(|v| *v > 0)
+                })
+                .unwrap_or(262_144);
+            mt.insert("max_context_size", Item::Value(TomlEditValue::from(ctx)));
         }
     }
 

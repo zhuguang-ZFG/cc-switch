@@ -5,12 +5,15 @@
 //!
 //! ## 数据流
 //! ```text
-//! wire.jsonl → usage.record(usageScope="turn") 增量解析 → 费用计算 → proxy_request_logs 表
+//! wire.jsonl → usage.record(turn/session 两种 scope) 增量解析 → 费用计算 → proxy_request_logs 表
 //! ```
 //!
 //! ## 解析的事件类型
 //! - `usage.record` (usageScope="turn") → 单次 LLM 调用的增量 token 用量
-//! - `usage.record` (usageScope="session") → 会话级汇总，跳过以避免重复计数
+//! - `usage.record` (usageScope="session" 或缺省) → full compaction 等非 turn
+//!   调用的真实增量。官方每次 LLM 调用只写一条 usage.record，消费方
+//!   （vis-server context-projector.ts）两种 scope 都计入总量，不存在重复计数；
+//!   缺 usageScope 字段按官方兜底 `?? 'session'` 视为 session。
 //!
 //! ## usage 字段（实测自 Kimi Code CLI wire.jsonl）
 //! - `inputOther` → 非缓存输入 token
@@ -34,17 +37,26 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 const KIMI_TURN_REQUEST_ID_PREFIX: &str = "kimi_session:turn-v1";
+const KIMI_SESSION_REQUEST_ID_PREFIX: &str = "kimi_session:op-v1";
 
-/// 单次 LLM 调用的 token 增量（usageScope="turn"）
+/// usageScope：官方仅 'turn' | 'session' 两种，缺字段按官方兜底视为 session
+/// （vis-server context-projector.ts `rec.usageScope ?? 'session'`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsageScope {
+    Turn,
+    Session,
+}
+
+/// 单条 usage.record 的 token 增量（turn 或 session scope）
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct TurnTokens {
+struct UsageTokens {
     input_other: u64,
     cache_read: u64,
     cache_creation: u64,
     output: u64,
 }
 
-impl TurnTokens {
+impl UsageTokens {
     fn is_zero(&self) -> bool {
         self.input_other == 0
             && self.cache_read == 0
@@ -59,19 +71,22 @@ impl TurnTokens {
     }
 }
 
-/// 从 usage.record 事件中提取 turn 级 token 增量
-fn parse_turn_usage(record: &serde_json::Value) -> Option<TurnTokens> {
+/// 从 usage.record 事件中提取 token 增量（turn 与 session 两种 scope 都计入，
+/// 与官方消费方口径一致；缺 usageScope 字段按官方兜底视为 session）
+fn parse_usage_record(record: &serde_json::Value) -> Option<(UsageScope, UsageTokens)> {
     if record.get("type").and_then(|v| v.as_str()) != Some("usage.record") {
         return None;
     }
-    if record.get("usageScope").and_then(|v| v.as_str()) != Some("turn") {
-        return None;
-    }
+    let scope = match record.get("usageScope").and_then(|v| v.as_str()) {
+        Some("turn") => UsageScope::Turn,
+        // 含缺字段：官方兜底 ?? 'session'
+        _ => UsageScope::Session,
+    };
     let usage = record.get("usage")?;
     if !usage.is_object() {
         return None;
     }
-    Some(TurnTokens {
+    let tokens = UsageTokens {
         input_other: usage
             .get("inputOther")
             .and_then(|v| v.as_u64())
@@ -85,7 +100,8 @@ fn parse_turn_usage(record: &serde_json::Value) -> Option<TurnTokens> {
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
         output: usage.get("output").and_then(|v| v.as_u64()).unwrap_or(0),
-    })
+    };
+    Some((scope, tokens))
 }
 
 /// 归一化 Kimi 模型名：小写 + 剥离 provider 前缀（`kimi-code/k3` → `k3`）
@@ -247,7 +263,8 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
     let reader = BufReader::new(file);
 
     let mut line_offset: i64 = 0;
-    let mut event_index: u32 = 0;
+    let mut turn_index: u32 = 0;
+    let mut session_index: u32 = 0;
     let mut imported: u32 = 0;
     let mut skipped: u32 = 0;
 
@@ -269,17 +286,27 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
             Err(_) => continue,
         };
 
-        let tokens = match parse_turn_usage(&value) {
-            Some(t) => t,
-            None => continue, // 含 usageScope="session" 的汇总记录
+        let (scope, tokens) = match parse_usage_record(&value) {
+            Some(v) => v,
+            None => continue,
         };
 
         if tokens.is_zero() {
             continue;
         }
 
-        // 所有非零 turn 事件都占据稳定序号，保证增量同步时 request_id 不变
-        event_index += 1;
+        // 所有非零事件都按各自 scope 占据稳定序号，保证增量同步时 request_id 不变；
+        // 两种 scope 各自独立编号 + 不同前缀，同文件混排也不会撞 request_id
+        let (prefix, event_index) = match scope {
+            UsageScope::Turn => {
+                turn_index += 1;
+                (KIMI_TURN_REQUEST_ID_PREFIX, turn_index)
+            }
+            UsageScope::Session => {
+                session_index += 1;
+                (KIMI_SESSION_REQUEST_ID_PREFIX, session_index)
+            }
+        };
 
         // 跳过已处理的行
         if line_offset <= last_offset {
@@ -294,8 +321,7 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
 
         let session_label = session_id.as_deref().unwrap_or("unknown");
         let agent_label = agent_name.as_deref().unwrap_or("main");
-        let request_id =
-            format!("{KIMI_TURN_REQUEST_ID_PREFIX}:{session_label}:{agent_label}:{event_index}");
+        let request_id = format!("{prefix}:{session_label}:{agent_label}:{event_index}");
 
         // time 为毫秒时间戳
         let created_at = value.get("time").and_then(|v| v.as_i64());
@@ -332,7 +358,7 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
 fn insert_kimi_session_entry(
     db: &Database,
     request_id: &str,
-    tokens: &TurnTokens,
+    tokens: &UsageTokens,
     model: &str,
     session_id: Option<&str>,
     created_at_ms: Option<i64>,
@@ -439,8 +465,46 @@ fn insert_kimi_session_entry(
 }
 
 /// 查找 Kimi 模型定价（带归一化）
+///
+/// Order: exact/prefix match on the normalized wire id, then Coding Plan /
+/// K2.7-family aliases used by Kimi Code CLI 0.27 (`kimi-for-coding`, `k3`).
+/// Only Moonshot-family ids fall back to `kimi-k2.7-code` open-platform list
+/// rates so third-party models routed through Kimi (e.g. `claude-opus-4-8`)
+/// still resolve via the generic pricing table instead of being mispriced.
 fn find_kimi_pricing(conn: &rusqlite::Connection, model_id: &str) -> Option<ModelPricing> {
-    find_model_pricing(conn, &normalize_kimi_model(model_id))
+    let normalized = normalize_kimi_model(model_id);
+    if let Some(pricing) = find_model_pricing(conn, &normalized) {
+        return Some(pricing);
+    }
+
+    if !is_moonshot_family_model(&normalized) {
+        return None;
+    }
+
+    // Managed catalog aliases that historically lacked dedicated seed rows.
+    const KIMI_FAMILY_FALLBACKS: &[&str] = &[
+        "kimi-for-coding",
+        "kimi-for-coding-highspeed",
+        "k3",
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+    ];
+    for candidate in KIMI_FAMILY_FALLBACKS {
+        if normalized == *candidate {
+            continue;
+        }
+        if let Some(pricing) = find_model_pricing(conn, candidate) {
+            return Some(pricing);
+        }
+    }
+    None
+}
+
+fn is_moonshot_family_model(normalized: &str) -> bool {
+    normalized == "k3"
+        || normalized.starts_with("kimi")
+        || normalized.starts_with("moonshot")
+        || normalized.contains("kimi-for-coding")
 }
 
 #[cfg(test)]
@@ -476,10 +540,26 @@ mod tests {
         })
     }
 
+    fn session_record(input_other: u64, cache_read: u64, cache_creation: u64, output: u64) -> serde_json::Value {
+        serde_json::json!({
+            "type": "usage.record",
+            "model": "kimi-code/k3",
+            "usage": {
+                "inputOther": input_other,
+                "output": output,
+                "inputCacheRead": cache_read,
+                "inputCacheCreation": cache_creation
+            },
+            "usageScope": "session",
+            "time": 1784462215000i64
+        })
+    }
+
     #[test]
-    fn test_parse_turn_usage_valid() {
+    fn test_parse_usage_record_turn_scope() {
         let record = turn_record(35376, 11264, 128, 234);
-        let tokens = parse_turn_usage(&record).unwrap();
+        let (scope, tokens) = parse_usage_record(&record).unwrap();
+        assert_eq!(scope, UsageScope::Turn);
         assert_eq!(tokens.input_other, 35376);
         assert_eq!(tokens.cache_read, 11264);
         assert_eq!(tokens.cache_creation, 128);
@@ -489,46 +569,60 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_turn_usage_skips_session_scope() {
-        let mut record = turn_record(100, 50, 0, 10);
-        record["usageScope"] = serde_json::json!("session");
-        assert!(parse_turn_usage(&record).is_none());
+    fn test_parse_usage_record_session_scope() {
+        let record = session_record(100, 50, 0, 10);
+        let (scope, tokens) = parse_usage_record(&record).unwrap();
+        assert_eq!(scope, UsageScope::Session);
+        assert_eq!(tokens.input_other, 100);
+        assert_eq!(tokens.output, 10);
+    }
+
+    /// 缺 usageScope 字段的记录按官方兜底 `?? 'session'` 视为 session
+    /// （vis-server context-projector.ts）
+    #[test]
+    fn test_parse_usage_record_missing_scope_defaults_to_session() {
+        let mut record = session_record(1181, 0, 0, 8);
+        record.as_object_mut().unwrap().remove("usageScope");
+        let (scope, tokens) = parse_usage_record(&record).unwrap();
+        assert_eq!(scope, UsageScope::Session);
+        assert_eq!(tokens.input_other, 1181);
     }
 
     #[test]
-    fn test_parse_turn_usage_rejects_non_usage_record() {
+    fn test_parse_usage_record_rejects_non_usage_record() {
         let record = serde_json::json!({
             "type": "context.append_message",
             "message": {"role": "user"}
         });
-        assert!(parse_turn_usage(&record).is_none());
+        assert!(parse_usage_record(&record).is_none());
     }
 
     #[test]
-    fn test_parse_turn_usage_missing_usage_object() {
+    fn test_parse_usage_record_missing_usage_object() {
         let record = serde_json::json!({
             "type": "usage.record",
             "usageScope": "turn",
             "time": 1784462210300i64
         });
-        assert!(parse_turn_usage(&record).is_none());
+        assert!(parse_usage_record(&record).is_none());
     }
 
     #[test]
-    fn test_parse_turn_usage_missing_fields_default_zero() {
+    fn test_parse_usage_record_missing_fields_default_zero() {
         let record = serde_json::json!({
             "type": "usage.record",
             "usageScope": "turn",
             "usage": { "output": 42 }
         });
-        let tokens = parse_turn_usage(&record).unwrap();
+        let (scope, tokens) = parse_usage_record(&record).unwrap();
+        assert_eq!(scope, UsageScope::Turn);
         assert_eq!(tokens.input_other, 0);
         assert_eq!(tokens.output, 42);
     }
 
     #[test]
-    fn test_zero_turn_tokens() {
-        assert!(TurnTokens::default().is_zero());
+    fn test_zero_usage_tokens() {
+        assert!(UsageTokens::default().is_zero());
     }
 
     #[test]
@@ -540,6 +634,15 @@ mod tests {
         );
         assert_eq!(normalize_kimi_model("LOCAL-CPA/Grok-4.5"), "grok-4.5");
         assert_eq!(normalize_kimi_model("kimi-for-coding"), "kimi-for-coding");
+    }
+
+    #[test]
+    fn test_moonshot_family_detection() {
+        assert!(is_moonshot_family_model("k3"));
+        assert!(is_moonshot_family_model("kimi-for-coding"));
+        assert!(is_moonshot_family_model("kimi-k2.7-code"));
+        assert!(!is_moonshot_family_model("claude-opus-4-8"));
+        assert!(!is_moonshot_family_model("gpt-5.6-sol"));
     }
 
     #[test]
@@ -581,8 +684,10 @@ mod tests {
         assert!(files.iter().all(|f| f.file_name().unwrap() == "wire.jsonl"));
     }
 
+    /// turn 与 session 两种 scope 的记录都导入（与官方消费方口径一致，
+    /// session 是 full compaction 等非 turn 调用的真实增量，非汇总重复）
     #[test]
-    fn test_sync_single_kimi_file_imports_turns_skips_session_scope() -> Result<(), AppError> {
+    fn test_sync_single_kimi_file_imports_turn_and_session_scopes() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().unwrap();
         let wire = temp
@@ -592,19 +697,13 @@ mod tests {
             &wire,
             &[
                 turn_record(1000, 500, 0, 100),
-                serde_json::json!({
-                    "type": "usage.record",
-                    "model": "kimi-code/k3",
-                    "usage": {"inputOther": 1500, "output": 200, "inputCacheRead": 600, "inputCacheCreation": 0},
-                    "usageScope": "session",
-                    "time": 1784462215000i64
-                }),
+                session_record(1500, 600, 0, 200),
                 turn_record(0, 0, 0, 0), // 零增量事件应跳过
                 turn_record(2000, 800, 64, 200),
             ],
         );
 
-        assert_eq!(sync_single_kimi_file(&db, &wire)?, (2, 0));
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (3, 0));
 
         let conn = lock_conn!(db.conn);
         let usage: (i64, i64, i64, i64) = conn.query_row(
@@ -628,6 +727,88 @@ mod tests {
         assert_eq!(meta.1, "k3");
         assert_eq!(meta.2, 1784462210300i64 / 1000);
         assert_eq!(meta.3, "kimi_session");
+
+        // session-scope 记录走独立的 op-v1 序列，序号从 1 起
+        let session_usage: (i64, i64, i64) = conn.query_row(
+            "SELECT input_tokens, output_tokens, created_at
+             FROM proxy_request_logs
+             WHERE request_id = 'kimi_session:op-v1:session_1:main:1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(session_usage, (1500 + 600, 200, 1784462215000i64 / 1000));
+
+        Ok(())
+    }
+
+    /// 缺 usageScope 字段的记录按官方兜底 `?? 'session'` 导入 op-v1 序列
+    #[test]
+    fn test_sync_single_kimi_file_missing_scope_imported_as_session() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let wire = temp
+            .path()
+            .join("wd_a/session_1/agents/main/wire.jsonl");
+        let mut scopeless = session_record(1181, 0, 0, 8);
+        scopeless.as_object_mut().unwrap().remove("usageScope");
+        write_wire(&wire, &[scopeless]);
+
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (1, 0));
+
+        let conn = lock_conn!(db.conn);
+        let input: i64 = conn.query_row(
+            "SELECT input_tokens FROM proxy_request_logs
+             WHERE request_id = 'kimi_session:op-v1:session_1:main:1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(input, 1181);
+
+        Ok(())
+    }
+
+    /// turn/session 同文件混排：两种 scope 各自独立编号、不同前缀，
+    /// request_id 互不冲突且各自序号稳定（增量重放幂等）
+    #[test]
+    fn test_sync_single_kimi_file_mixed_scopes_have_stable_distinct_ids() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let temp = tempdir().unwrap();
+        let wire = temp
+            .path()
+            .join("wd_a/session_1/agents/main/wire.jsonl");
+        write_wire(
+            &wire,
+            &[
+                turn_record(100, 0, 0, 10),
+                session_record(1000, 0, 0, 50),
+                turn_record(200, 0, 0, 20),
+                session_record(2000, 0, 0, 60),
+            ],
+        );
+
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (4, 0));
+
+        let conn = lock_conn!(db.conn);
+        let request_ids = conn
+            .prepare(
+                "SELECT request_id FROM proxy_request_logs
+                 WHERE data_source = 'kimi_session' ORDER BY request_id",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            request_ids,
+            vec![
+                "kimi_session:op-v1:session_1:main:1",
+                "kimi_session:op-v1:session_1:main:2",
+                "kimi_session:turn-v1:session_1:main:1",
+                "kimi_session:turn-v1:session_1:main:2",
+            ]
+        );
+        drop(conn);
+
+        // 第二轮空转：序号稳定，重复同步不产生重复/冲突
+        assert_eq!(sync_single_kimi_file(&db, &wire)?, (0, 0));
 
         Ok(())
     }
@@ -702,7 +883,7 @@ mod tests {
     #[test]
     fn test_insert_kimi_session_skips_duplicate_request_id() -> Result<(), AppError> {
         let db = Database::memory()?;
-        let tokens = TurnTokens {
+        let tokens = UsageTokens {
             input_other: 100,
             cache_read: 50,
             cache_creation: 0,
