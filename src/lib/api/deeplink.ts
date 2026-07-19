@@ -7,7 +7,7 @@ export interface DeepLinkImportRequest {
   resource: ResourceType;
 
   // Common fields
-  app?: "claude" | "codex" | "gemini";
+  app?: "claude" | "codex" | "gemini" | "kimicode";
   name?: string;
   enabled?: boolean;
 

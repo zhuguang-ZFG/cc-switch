@@ -121,6 +121,36 @@ fn test_parse_grokbuild_provider() {
 }
 
 #[test]
+fn test_parse_kimicode_provider() {
+    use super::provider::build_provider_from_request;
+
+    let url = "ccswitch://v1/import?resource=provider&app=kimicode&name=Kimi%20Relay&endpoint=https%3A%2F%2Fapi.example.com%2Fv1&apiKey=sk-kimi&model=anthropic%2Fclaude-opus-4-8";
+
+    let request = parse_deeplink_url(url).unwrap();
+
+    assert_eq!(request.app.as_deref(), Some("kimicode"));
+    assert_eq!(request.name.as_deref(), Some("Kimi Relay"));
+    assert_eq!(
+        request.endpoint.as_deref(),
+        Some("https://api.example.com/v1")
+    );
+    assert_eq!(request.api_key.as_deref(), Some("sk-kimi"));
+    assert_eq!(request.model.as_deref(), Some("anthropic/claude-opus-4-8"));
+
+    let provider = build_provider_from_request(&AppType::KimiCode, &request).unwrap();
+    let config = provider.settings_config.as_object().unwrap();
+
+    assert_eq!(config["name"], "Kimi Relay");
+    assert_eq!(config["base_url"], "https://api.example.com/v1");
+    assert_eq!(config["api_key"], "sk-kimi");
+    assert_eq!(config["type"], "openai");
+
+    let models = config["models"].as_array().unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["id"], "anthropic/claude-opus-4-8");
+}
+
+#[test]
 fn test_parse_kimicode_aliases_through_full_deeplink_parser() {
     for alias in ["kimicode", "kimi-code", "kimi", "hermes"] {
         let provider = format!(

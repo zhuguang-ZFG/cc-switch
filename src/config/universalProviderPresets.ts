@@ -53,6 +53,10 @@ const NEWAPI_DEFAULT_MODELS: UniversalProviderModels = {
   gemini: {
     model: "gemini-3.5-flash",
   },
+  kimicode: {
+    providerType: "openai",
+    model: "gpt-5.5",
+  },
 };
 
 /**
@@ -66,6 +70,7 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
       claude: true,
       codex: true,
       gemini: true,
+      kimicode: true,
     },
     defaultModels: NEWAPI_DEFAULT_MODELS,
     websiteUrl: "https://www.newapi.pro",
@@ -81,6 +86,7 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
       claude: true,
       codex: true,
       gemini: true,
+      kimicode: true,
     },
     defaultModels: NEWAPI_DEFAULT_MODELS,
     icon: "openai",

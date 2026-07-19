@@ -146,6 +146,8 @@
     "officialPartner": "官方合作夥伴",
     "managedByHermes": "Hermes 託管",
     "managedByHermesHint": "該專案定義於 Hermes 的 providers: dict，請在 Hermes Web UI 中編輯或刪除。",
+    "managedByKimi": "Kimi 託管",
+    "managedByKimiHint": "該項目由 Kimi 官方登入託管，無法在 CC Switch 中編輯或刪除。",
     "openTerminal": "開啟終端機",
     "terminalOpened": "終端機已開啟",
     "terminalOpenFailed": "開啟終端機失敗",
@@ -679,6 +681,10 @@
     "skipClaudeOnboarding": "跳過 Claude Code 初次安裝確認",
     "skipClaudeOnboardingDescription": "開啟後跳過 Claude Code 初次安裝確認",
     "codexAuth": "Codex 應用增強",
+    "kimiAuth": "Kimi Code 應用增強",
+    "kimiDefaultModel": "目前預設模型",
+    "kimiDefaultProvider": "目前預設供應商",
+    "kimiModelNotConfigured": "未設定",
     "preserveCodexOfficialAuthOnSwitch": "非接管切換時保留官方登入",
     "preserveCodexOfficialAuthOnSwitchDescription": "控制未開啟本機路由時切換第三方供應商是否保留 Codex 官方登入；路由接管期間一律保留",
     "unifyCodexSessionHistory": "統一 Codex 會話歷史",
@@ -2070,6 +2076,12 @@
     "fallbackModel": "備用模型"
   },
   "kimicode": {
+    "commonConfig": {
+      "editTitle": "編輯 Kimi Code 通用設定片段",
+      "hint": "該片段會合併進所有 Kimi Code 供應商共享的 live 設定（~/.kimi-code/config.toml），儲存後立即生效。",
+      "guideUsage": "使用方式：儲存片段後，每次同步 live 設定時都會自動合併，無需逐個供應商勾選。",
+      "emptyHint": "在下方編輯器中輸入要共享的 TOML 設定，儲存後對所有 Kimi Code 供應商生效"
+    },
     "form": {
       "baseUrl": "API 端點",
       "baseUrlHint": "供應商的 API 端點位址。",
@@ -2111,32 +2123,6 @@
       "providerAdvanced": "供應商進階選項",
       "rateLimitDelay": "請求間隔（秒）",
       "rateLimitDelayHint": "連續請求間的最小間隔秒數（選填）。留空表示無限制。"
-    },
-    "webui": {
-      "open": "開啟 Hermes Web UI",
-      "offline": "Hermes Web UI 未啟動，請先執行 `hermes dashboard` 啟動服務。",
-      "openFailed": "開啟 Hermes Web UI 失敗",
-      "launchConfirmTitle": "Hermes Dashboard 未啟動",
-      "launchConfirmMessage": "是否開啟終端機並執行 `hermes dashboard` 啟動服務？\n\n啟動完成後會自動開啟瀏覽器。\n\n若終端機提示找不到 hermes 或缺少 web 相依套件，請先執行：\npip install hermes-agent[web]",
-      "launchConfirmAction": "開啟終端機並啟動",
-      "launching": "已在終端機啟動 hermes dashboard",
-      "launchFailed": "開啟終端機失敗"
-    },
-    "memory": {
-      "title": "記憶管理",
-      "agentTab": "Agent 記憶 (MEMORY.md)",
-      "userTab": "使用者畫像 (USER.md)",
-      "usage": "已用 {{current}} / {{limit}} 字元",
-      "overLimit": "已超過上限，Hermes 下次載入時會截斷",
-      "enableOn": "已啟用",
-      "enableOff": "已停用",
-      "disabledHint": "在重新啟用前 Hermes 會跳過此記憶",
-      "toggleFailed": "切換記憶狀態失敗",
-      "saveSuccess": "記憶已儲存",
-      "saveFailed": "儲存記憶失敗",
-      "loadFailed": "讀取記憶檔案失敗",
-      "openConfig": "在 Hermes Web UI 調整上限",
-      "runtimeNote": "變更將在 Hermes 下次啟動或建立新工作階段時生效。"
     }
   },
   "env": {
@@ -2705,7 +2691,7 @@
     "duplicatedAndSynced": "通用供應商已複製並同步",
     "duplicateError": "複製通用供應商失敗",
     "title": "通用供應商",
-    "description": "通用供應商可以同時管理 Claude、Codex 和 Gemini 的設定。修改後會自動同步至所有啟用的應用程式。",
+    "description": "通用供應商可以同時管理 Claude、Codex、Gemini 和 Kimi Code 的設定。修改後會自動同步至所有啟用的應用程式。",
     "add": "新增通用供應商",
     "edit": "編輯通用供應商",
     "empty": "還沒有通用供應商",
@@ -2722,6 +2708,8 @@
     "enabledApps": "啟用的應用程式",
     "modelConfig": "模型設定",
     "model": "模型",
+    "kimiProviderType": "協定類型",
+    "maxContextSize": "內容長度",
     "sync": "同步至應用程式",
     "synced": "已同步至所有應用程式",
     "syncError": "同步失敗",
@@ -2732,7 +2720,7 @@
     "updated": "通用供應商已更新",
     "deleted": "通用供應商已刪除",
     "addFailed": "通用供應商新增失敗",
-    "hint": "跨應用程式通用設定，自動同步至 Claude/Codex/Gemini",
+    "hint": "跨應用程式通用設定，自動同步至 Claude/Codex/Gemini/Kimi Code",
     "manage": "管理",
     "loadError": "載入通用供應商失敗",
     "saveError": "儲存通用供應商失敗",
@@ -2740,7 +2728,7 @@
     "deleteConfirmTitle": "刪除通用供應商",
     "deleteConfirmDescription": "確定要刪除 \"{{name}}\" 嗎？這將同時刪除它在各應用程式中產生的供應商設定。",
     "syncConfirmTitle": "同步通用供應商",
-    "syncConfirmDescription": "同步 \"{{name}}\" 將會覆寫 Claude、Codex 和 Gemini 中關聯的供應商設定。確定要繼續嗎？",
+    "syncConfirmDescription": "同步 \"{{name}}\" 將會覆寫 Claude、Codex、Gemini 和 Kimi Code 中關聯的供應商設定。確定要繼續嗎？",
     "syncConfirm": "同步",
     "saveAndSync": "儲存並同步",
     "savedAndSynced": "已儲存並同步至所有應用程式",

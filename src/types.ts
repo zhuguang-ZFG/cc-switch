@@ -549,6 +549,8 @@ export interface UniversalProviderApps {
   codex: boolean;
   /** @deprecated Gemini CLI app removed from managed apps */
   gemini?: boolean;
+  /** Kimi Code */
+  kimicode?: boolean;
 }
 
 // Claude 模型配置
@@ -570,11 +572,21 @@ export interface GeminiModelConfig {
   model?: string;
 }
 
+// Kimi Code 模型配置
+export interface KimiCodeModelConfig {
+  /** 供应商协议类型（openai / openai_responses / anthropic / kimi 等） */
+  providerType?: string;
+  model?: string;
+  /** 上下文长度 */
+  maxContextSize?: number;
+}
+
 // 各应用的模型配置
 export interface UniversalProviderModels {
   claude?: ClaudeModelConfig;
   codex?: CodexModelConfig;
   gemini?: GeminiModelConfig;
+  kimicode?: KimiCodeModelConfig;
 }
 
 // 统一供应商（跨应用共享配置）
@@ -725,24 +737,3 @@ export interface OpenClawToolsConfig {
   [key: string]: unknown; // preserve unknown fields
 }
 
-// ============================================================================
-// Hermes Agent 专属配置
-// ============================================================================
-
-export interface HermesModelConfig {
-  default?: string;
-  provider?: string;
-  base_url?: string;
-  context_length?: number;
-  max_tokens?: number;
-  [key: string]: unknown;
-}
-
-export type HermesMemoryKind = "memory" | "user";
-
-export interface HermesMemoryLimits {
-  memory: number;
-  user: number;
-  memoryEnabled: boolean;
-  userEnabled: boolean;
-}

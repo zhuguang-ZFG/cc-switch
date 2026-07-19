@@ -585,6 +585,8 @@ pub struct UniversalProviderApps {
     pub codex: bool,
     #[serde(default)]
     pub gemini: bool,
+    #[serde(default)]
+    pub kimicode: bool,
 }
 
 /// Claude 模型配置
@@ -619,6 +621,22 @@ pub struct CodexModelConfig {
     pub reasoning_effort: Option<String>,
 }
 
+/// Kimi Code 模型配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct KimiCodeModelConfig {
+    /// 供应商协议类型（openai / openai_responses / anthropic / kimi 等）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "providerType")]
+    pub provider_type: Option<String>,
+    /// 模型名称
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// 上下文长度
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxContextSize")]
+    pub max_context_size: Option<i64>,
+}
+
 /// Gemini 模型配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GeminiModelConfig {
@@ -636,6 +654,8 @@ pub struct UniversalProviderModels {
     pub codex: Option<CodexModelConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gemini: Option<GeminiModelConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kimicode: Option<KimiCodeModelConfig>,
 }
 
 /// 统一供应商（跨应用共享配置）
@@ -825,6 +845,53 @@ requires_openai_auth = true"#
         })
     }
 
+    /// 生成 Kimi Code 供应商配置
+    pub fn to_kimi_provider(&self) -> Option<Provider> {
+        if !self.apps.kimicode {
+            return None;
+        }
+
+        let models = self.models.kimicode.as_ref();
+        let provider_type = models
+            .and_then(|m| m.provider_type.clone())
+            .unwrap_or_else(|| "openai".to_string());
+        let model = models
+            .and_then(|m| m.model.clone())
+            .unwrap_or_else(|| "gpt-5.5".to_string());
+
+        // Kimi Code 的 settings_config 由 kimi_config 加法投影到 TOML：
+        // type/base_url/api_key 进 [providers.<id>]，models 数组进 [models."<alias>"]
+        let mut model_entry = serde_json::json!({
+            "id": model,
+            "name": model,
+        });
+        if let Some(ctx) = models.and_then(|m| m.max_context_size).filter(|v| *v > 0) {
+            model_entry["max_context_size"] = serde_json::json!(ctx);
+        }
+
+        let settings_config = serde_json::json!({
+            "type": provider_type,
+            "base_url": self.base_url.trim_end_matches('/'),
+            "api_key": self.api_key,
+            "models": [model_entry],
+        });
+
+        Some(Provider {
+            id: format!("universal-kimicode-{}", self.id),
+            name: self.name.clone(),
+            settings_config,
+            website_url: self.website_url.clone(),
+            category: Some("aggregator".to_string()),
+            created_at: self.created_at,
+            sort_index: self.sort_index,
+            notes: self.notes.clone(),
+            meta: self.meta.clone(),
+            icon: self.icon.clone(),
+            icon_color: self.icon_color.clone(),
+            in_failover_queue: false,
+        })
+    }
+
     /// 生成 Gemini 供应商配置
     pub fn to_gemini_provider(&self) -> Option<Provider> {
         if !self.apps.gemini {
@@ -961,7 +1028,8 @@ pub struct OpenCodeModelLimit {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, LocalProxyRequestOverrides,
+        ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, KimiCodeModelConfig,
+        LocalProxyRequestOverrides,
         OpenCodeProviderConfig, Provider, ProviderManager, ProviderMeta, UniversalProvider,
     };
     use serde_json::json;
@@ -1261,6 +1329,117 @@ mod tests {
         );
 
         assert!(universal.to_codex_provider().is_none());
+    }
+
+    #[test]
+    fn universal_provider_to_kimi_provider_uses_models() {
+        let mut universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "api-key".to_string(),
+        );
+        universal.apps.kimicode = true;
+        universal.models.kimicode = Some(KimiCodeModelConfig {
+            provider_type: Some("openai_responses".to_string()),
+            model: Some("gpt-5.5".to_string()),
+            max_context_size: Some(262144),
+        });
+
+        let provider = universal.to_kimi_provider().expect("kimi provider");
+
+        assert_eq!(provider.id, "universal-kimicode-u1");
+        assert_eq!(provider.name, "Universal");
+        assert_eq!(provider.category.as_deref(), Some("aggregator"));
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/type")
+                .and_then(|item| item.as_str()),
+            Some("openai_responses")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/base_url")
+                .and_then(|item| item.as_str()),
+            Some("https://api.example.com")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/api_key")
+                .and_then(|item| item.as_str()),
+            Some("api-key")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/models/0/id")
+                .and_then(|item| item.as_str()),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/models/0/max_context_size")
+                .and_then(|item| item.as_i64()),
+            Some(262144)
+        );
+    }
+
+    #[test]
+    fn universal_provider_to_kimi_provider_defaults() {
+        let mut universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com/".to_string(),
+            "api-key".to_string(),
+        );
+        universal.apps.kimicode = true;
+
+        let provider = universal.to_kimi_provider().expect("kimi provider");
+
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/type")
+                .and_then(|item| item.as_str()),
+            Some("openai")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/base_url")
+                .and_then(|item| item.as_str()),
+            Some("https://api.example.com")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/models/0/id")
+                .and_then(|item| item.as_str()),
+            Some("gpt-5.5")
+        );
+        assert!(provider
+            .settings_config
+            .pointer("/models/0/max_context_size")
+            .is_none());
+    }
+
+    #[test]
+    fn universal_provider_to_kimi_provider_disabled_returns_none() {
+        let universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "api-key".to_string(),
+        );
+
+        assert!(universal.to_kimi_provider().is_none());
     }
 
     #[test]

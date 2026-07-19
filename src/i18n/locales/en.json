@@ -146,6 +146,8 @@
     "officialPartner": "Official Partner",
     "managedByHermes": "Hermes Managed",
     "managedByHermesHint": "Defined in Hermes' providers: dict. Edit or remove it via Hermes Web UI.",
+    "managedByKimi": "Kimi Managed",
+    "managedByKimiHint": "Managed by Kimi official login; it cannot be edited or removed in CC Switch.",
     "openTerminal": "Open Terminal",
     "terminalOpened": "Terminal opened",
     "terminalOpenFailed": "Failed to open terminal",
@@ -679,6 +681,10 @@
     "skipClaudeOnboarding": "Skip Claude Code first-run confirmation",
     "skipClaudeOnboardingDescription": "When enabled, Claude Code will skip the first-run confirmation",
     "codexAuth": "Codex App Enhancements",
+    "kimiAuth": "Kimi Code App Enhancements",
+    "kimiDefaultModel": "Current default model",
+    "kimiDefaultProvider": "Current default provider",
+    "kimiModelNotConfigured": "Not configured",
     "preserveCodexOfficialAuthOnSwitch": "Keep official login for direct switches",
     "preserveCodexOfficialAuthOnSwitchDescription": "Controls third-party switches when local routing is off. Takeover routing always preserves the Codex official login.",
     "unifyCodexSessionHistory": "Unified Codex session history",
@@ -2098,6 +2104,12 @@
     "fallbackModel": "Fallback Model"
   },
   "kimicode": {
+    "commonConfig": {
+      "editTitle": "Edit Kimi Code Common Config Snippet",
+      "hint": "This snippet is merged into the shared Kimi Code live config (~/.kimi-code/config.toml) and takes effect for every Kimi Code provider on save.",
+      "guideUsage": "How to use: save the snippet and it is merged automatically on every live config sync — no per-provider opt-in needed.",
+      "emptyHint": "Type the shared TOML configuration in the editor below; it applies to all Kimi Code providers"
+    },
     "form": {
       "baseUrl": "API Endpoint",
       "baseUrlHint": "The API endpoint URL for this provider.",
@@ -2139,32 +2151,6 @@
       "providerAdvanced": "Provider advanced options",
       "rateLimitDelay": "Rate limit delay (seconds)",
       "rateLimitDelayHint": "Minimum delay in seconds between consecutive requests (optional). Leave empty for no limit."
-    },
-    "webui": {
-      "open": "Open Hermes Web UI",
-      "offline": "Hermes Web UI is not running. Start it with `hermes dashboard` first.",
-      "openFailed": "Failed to open Hermes Web UI",
-      "launchConfirmTitle": "Hermes Dashboard is not running",
-      "launchConfirmMessage": "Open a terminal and start it now with `hermes dashboard`?\n\nThe browser will open automatically once startup completes.\n\nIf the terminal reports that `hermes` cannot be found or the web extras are missing, run first:\npip install hermes-agent[web]",
-      "launchConfirmAction": "Open terminal & launch",
-      "launching": "Started `hermes dashboard` in a terminal.",
-      "launchFailed": "Failed to open terminal"
-    },
-    "memory": {
-      "title": "Memory",
-      "agentTab": "Agent Memory (MEMORY.md)",
-      "userTab": "User Profile (USER.md)",
-      "usage": "{{current}} / {{limit}} characters",
-      "overLimit": "Over budget — Hermes will truncate on next load",
-      "enableOn": "Enabled",
-      "enableOff": "Disabled",
-      "disabledHint": "Hermes will skip this memory until re-enabled",
-      "toggleFailed": "Failed to toggle memory",
-      "saveSuccess": "Memory saved",
-      "saveFailed": "Failed to save memory",
-      "loadFailed": "Failed to read memory file",
-      "openConfig": "Adjust limits in Hermes Web UI",
-      "runtimeNote": "Changes apply on Hermes restart or new session."
     }
   },
   "env": {
@@ -2733,7 +2719,7 @@
     "duplicatedAndSynced": "Universal provider duplicated and synced",
     "duplicateError": "Failed to duplicate universal provider",
     "title": "Universal Provider",
-    "description": "Universal providers manage Claude, Codex, and Gemini configurations simultaneously. Changes are automatically synced to all enabled apps.",
+    "description": "Universal providers manage Claude, Codex, Gemini, and Kimi Code configurations simultaneously. Changes are automatically synced to all enabled apps.",
     "add": "Add Universal Provider",
     "edit": "Edit Universal Provider",
     "empty": "No universal providers yet",
@@ -2750,6 +2736,8 @@
     "enabledApps": "Enabled Apps",
     "modelConfig": "Model Configuration",
     "model": "Model",
+    "kimiProviderType": "Provider Type",
+    "maxContextSize": "Max Context Size",
     "sync": "Sync to Apps",
     "synced": "Synced to all apps",
     "syncError": "Sync failed",
@@ -2760,7 +2748,7 @@
     "updated": "Universal provider updated",
     "deleted": "Universal provider deleted",
     "addFailed": "Failed to add universal provider",
-    "hint": "Cross-app unified config, auto-sync to Claude/Codex/Gemini",
+    "hint": "Cross-app unified config, auto-sync to Claude/Codex/Gemini/Kimi Code",
     "manage": "Manage",
     "loadError": "Failed to load universal providers",
     "saveError": "Failed to save universal provider",
@@ -2768,7 +2756,7 @@
     "deleteConfirmTitle": "Delete Universal Provider",
     "deleteConfirmDescription": "Are you sure you want to delete \"{{name}}\"? This will also delete its generated provider configurations in each app.",
     "syncConfirmTitle": "Sync Universal Provider",
-    "syncConfirmDescription": "Syncing \"{{name}}\" will overwrite the associated provider configurations in Claude, Codex, and Gemini. Do you want to continue?",
+    "syncConfirmDescription": "Syncing \"{{name}}\" will overwrite the associated provider configurations in Claude, Codex, Gemini, and Kimi Code. Do you want to continue?",
     "syncConfirm": "Sync",
     "saveAndSync": "Save & Sync",
     "savedAndSynced": "Saved and synced to all apps",

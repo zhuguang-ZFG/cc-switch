@@ -222,7 +222,7 @@ export function DeepLinkImportDialog() {
 
   // Parse config file content for display
   interface ParsedConfig {
-    type: "claude" | "codex" | "gemini";
+    type: "claude" | "codex" | "gemini" | "kimicode";
     env?: Record<string, string>;
     auth?: Record<string, string>;
     tomlConfig?: string;
@@ -267,6 +267,29 @@ export function DeepLinkImportDialog() {
         return {
           type: "gemini",
           env: parsed as Record<string, string>,
+          raw: parsed,
+        };
+      } else if (request.app === "kimicode") {
+        // Kimi Code 格式: 原生投影 { type, base_url, api_key, models: [{ id }] }
+        const env: Record<string, string> = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          if (typeof value === "string") {
+            env[key] = value;
+          }
+        }
+        if (Array.isArray(parsed.models)) {
+          env.models = parsed.models
+            .map((m: unknown) =>
+              m && typeof m === "object"
+                ? String((m as Record<string, unknown>).id ?? "")
+                : String(m),
+            )
+            .filter(Boolean)
+            .join(", ");
+        }
+        return {
+          type: "kimicode",
+          env,
           raw: parsed,
         };
       }
@@ -584,8 +607,9 @@ export function DeepLinkImportDialog() {
                             </div>
                           )}
 
-                          {/* Gemini config */}
-                          {parsedConfig.type === "gemini" &&
+                          {/* Gemini / Kimi Code config */}
+                          {(parsedConfig.type === "gemini" ||
+                            parsedConfig.type === "kimicode") &&
                             parsedConfig.env && (
                               <div className="space-y-1.5">
                                 {Object.entries(parsedConfig.env).map(

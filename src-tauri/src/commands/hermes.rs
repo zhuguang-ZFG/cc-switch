@@ -5,10 +5,7 @@
 
 use crate::error::AppError;
 use crate::kimi_config;
-use crate::services::provider::{
-    import_kimicode_providers_from_live as import_kimicode_from_live,
-    remove_kimicode_provider_from_live,
-};
+use crate::services::provider::import_kimicode_providers_from_live as import_kimicode_from_live;
 use crate::AppState;
 use std::sync::Arc;
 use tauri::State;
@@ -33,12 +30,6 @@ pub fn get_kimicode_live_provider_ids() -> Result<Vec<String>, String> {
 pub fn get_kimicode_live_provider(name: String) -> Result<Option<serde_json::Value>, String> {
     let providers = kimi_config::get_providers().map_err(|e| e.to_string())?;
     Ok(providers.get(&name).cloned())
-}
-
-/// Remove a provider from Kimi Code live config (additive mode helper).
-#[tauri::command]
-pub fn remove_kimicode_provider_from_live_cmd(provider_id: String) -> Result<(), String> {
-    remove_kimicode_provider_from_live(&provider_id).map_err(|e| e.to_string())
 }
 
 /// Default model alias currently selected in live config.

@@ -391,6 +391,7 @@ type = "stdio"
       codex: false,
       grokbuild: false,
       opencode: false,
+      kimicode: false,
     });
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith();
@@ -424,6 +425,12 @@ type = "stdio"
     expect(grokbuildCheckbox.checked).toBe(true);
     fireEvent.click(grokbuildCheckbox);
 
+    const kimicodeCheckbox = document.getElementById(
+      "enable-kimicode",
+    ) as HTMLInputElement;
+    expect(kimicodeCheckbox.checked).toBe(true);
+    fireEvent.click(kimicodeCheckbox);
+
     fireEvent.click(screen.getByText("common.add"));
 
     await waitFor(() => expect(upsertMock).toHaveBeenCalledTimes(1));
@@ -434,6 +441,7 @@ type = "stdio"
       codex: false,
       grokbuild: false,
       opencode: false,
+      kimicode: false,
     });
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(toastErrorMock).not.toHaveBeenCalled();

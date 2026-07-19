@@ -51,7 +51,7 @@ fn validate_common_config_snippet(app_type: &str, snippet: &str) -> Result<(), S
             serde_json::from_str::<serde_json::Value>(snippet)
                 .map_err(invalid_json_format_error)?;
         }
-        "codex" => {
+        "codex" | "kimicode" => {
             snippet
                 .parse::<toml_edit::DocumentMut>()
                 .map_err(invalid_toml_format_error)?;
@@ -332,7 +332,35 @@ pub async fn set_common_config_snippet(
         .set_config_snippet_cleared(&app_type, is_cleared)
         .map_err(|e| e.to_string())?;
 
-    if matches!(app_type.as_str(), "claude" | "codex" | "gemini") {
+    // Kimi Code 的 live 是所有供应商共享的 additive TOML 文档：先按旧片段
+    // 从 live 剥离（值匹配剥离，用户改过的值保留），随后重同步把新片段
+    // 合并回去。代理接管期间 live 归代理所有，片段只落库，接管结束后随
+    // 下次 live 同步应用。
+    let kimi_live_owned_by_proxy =
+        app_type == "kimicode" && crate::kimi_config::is_proxy_takeover_active().unwrap_or(false);
+    if app_type == "kimicode" && !kimi_live_owned_by_proxy {
+        if let Some(old_snippet) = old_snippet
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            let live_text = crate::kimi_config::read_config_text().map_err(|e| e.to_string())?;
+            if !live_text.trim().is_empty() {
+                let stripped = crate::services::provider::update_toml_common_config_snippet(
+                    &live_text,
+                    old_snippet,
+                    false,
+                )
+                .map_err(|e| e.to_string())?;
+                if stripped != live_text {
+                    crate::kimi_config::write_config_text(&stripped).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+
+    if matches!(app_type.as_str(), "claude" | "codex" | "gemini")
+        || (app_type == "kimicode" && !kimi_live_owned_by_proxy)
+    {
         let app = AppType::from_str(&app_type).map_err(|e| e.to_string())?;
         crate::services::provider::ProviderService::sync_current_provider_for_app(
             state.inner(),
@@ -384,6 +412,24 @@ mod tests {
     fn validate_common_config_snippet_rejects_invalid_codex_snippet() {
         let err = validate_common_config_snippet("codex", "[broken")
             .expect_err("invalid codex snippet should be rejected");
+        assert!(
+            err.contains("TOML") || err.contains("toml") || err.contains("格式"),
+            "expected TOML validation error, got {err}"
+        );
+    }
+
+    #[test]
+    fn validate_common_config_snippet_accepts_valid_kimicode_snippet() {
+        validate_common_config_snippet("kimicode", "[thinking]\nenabled = true\n")
+            .expect("valid kimicode snippet should be accepted");
+        validate_common_config_snippet("kimicode", "# comment only\n")
+            .expect("comment-only kimicode snippet should be valid");
+    }
+
+    #[test]
+    fn validate_common_config_snippet_rejects_invalid_kimicode_snippet() {
+        let err = validate_common_config_snippet("kimicode", "[broken")
+            .expect_err("invalid kimicode snippet should be rejected");
         assert!(
             err.contains("TOML") || err.contains("toml") || err.contains("格式"),
             "expected TOML validation error, got {err}"

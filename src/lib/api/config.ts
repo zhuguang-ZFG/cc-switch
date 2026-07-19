@@ -1,7 +1,7 @@
 // 配置相关 API
 import { invoke } from "@tauri-apps/api/core";
 
-export type AppType = "claude" | "codex" | "gemini" | "omo" | "omo_slim";
+export type AppType = "claude" | "codex" | "gemini" | "omo" | "omo_slim" | "kimicode";
 
 /**
  * 获取 Claude 通用配置片段（已废弃，使用 getCommonConfigSnippet）
@@ -26,7 +26,7 @@ export async function setClaudeCommonConfigSnippet(
 
 /**
  * 获取通用配置片段（统一接口）
- * @param appType - 应用类型（claude/codex/gemini）
+ * @param appType - 应用类型（claude/codex/gemini/kimicode）
  * @returns 通用配置片段（原始字符串），如果不存在则返回 null
  */
 export async function getCommonConfigSnippet(
@@ -37,9 +37,9 @@ export async function getCommonConfigSnippet(
 
 /**
  * 设置通用配置片段（统一接口）
- * @param appType - 应用类型（claude/codex/gemini）
+ * @param appType - 应用类型（claude/codex/gemini/kimicode）
  * @param snippet - 通用配置片段（原始字符串）
- * @throws 如果格式无效（Claude/Gemini 验证 JSON，Codex 暂不验证）
+ * @throws 如果格式无效（Claude/Gemini 验证 JSON，Codex/Kimi Code 验证 TOML）
  */
 export async function setCommonConfigSnippet(
   appType: AppType,

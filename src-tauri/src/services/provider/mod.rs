@@ -4412,6 +4412,10 @@ impl ProviderService {
                 let gemini_id = format!("universal-gemini-{id}");
                 let _ = state.db.delete_provider("gemini", &gemini_id);
             }
+            if p.apps.kimicode {
+                let kimicode_id = format!("universal-kimicode-{id}");
+                let _ = state.db.delete_provider("kimicode", &kimicode_id);
+            }
         }
 
         Ok(true)
@@ -4465,6 +4469,20 @@ impl ProviderService {
         } else {
             let gemini_id = format!("universal-gemini-{id}");
             let _ = state.db.delete_provider("gemini", &gemini_id);
+        }
+
+        // 同步到 Kimi Code
+        if let Some(mut kimi_provider) = provider.to_kimi_provider() {
+            // 合并已有配置
+            if let Some(existing) = state.db.get_provider_by_id(&kimi_provider.id, "kimicode")? {
+                let mut merged = existing.settings_config.clone();
+                Self::merge_json(&mut merged, &kimi_provider.settings_config);
+                kimi_provider.settings_config = merged;
+            }
+            state.db.save_provider("kimicode", &kimi_provider)?;
+        } else {
+            let kimicode_id = format!("universal-kimicode-{id}");
+            let _ = state.db.delete_provider("kimicode", &kimicode_id);
         }
 
         Ok(true)

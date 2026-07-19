@@ -663,6 +663,53 @@ pub(crate) fn build_effective_settings_with_common_config(
     Ok(effective_settings)
 }
 
+/// Kimi Code 的 live 配置是所有供应商共享的 additive TOML 文档，通用配置
+/// 片段无法像 Codex 那样折叠进单个供应商的 settings（kimi settings JSON
+/// 里没有 config.toml 文本载体），因此直接对 live 文档本身做结构化
+/// 合并/剥离，语义与 Codex 路径一致：标量=片段覆盖、剥离按值匹配
+/// （用户后续改过的值保留）。
+fn update_kimi_doc_common_config(
+    doc: &mut DocumentMut,
+    snippet: &str,
+    enable: bool,
+) -> Result<(), AppError> {
+    let trimmed = snippet.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let source_doc = trimmed
+        .parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("Invalid Kimi Code common config snippet: {e}")))?;
+
+    if enable {
+        merge_toml_table_like(doc.as_table_mut(), source_doc.as_table());
+    } else {
+        remove_toml_table_like(doc.as_table_mut(), source_doc.as_table());
+    }
+    Ok(())
+}
+
+/// 把 DB 里的 Kimi Code 通用配置片段合并进 live `config.toml`。
+/// 幂等：additive 同步每次重放；内容未变化时不落盘。切换 / 代理接管路径
+/// 本就保留无关表，已合并的片段不会被它们擦掉。
+fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppError> {
+    let Some(snippet) = db.get_config_snippet(AppType::KimiCode.as_str())? else {
+        return Ok(());
+    };
+    if snippet.trim().is_empty() {
+        return Ok(());
+    }
+
+    let original = crate::kimi_config::read_config_text()?;
+    let mut doc = crate::kimi_config::parse_document_text(&original)?;
+    update_kimi_doc_common_config(&mut doc, &snippet, true)?;
+    let updated = doc.to_string();
+    if updated == original {
+        return Ok(());
+    }
+    crate::kimi_config::write_config_text(&updated)
+}
+
 pub(crate) fn write_live_with_common_config(
     db: &Database,
     app_type: &AppType,
@@ -682,7 +729,14 @@ pub(crate) fn write_live_with_common_config(
         return Ok(());
     }
 
-    write_live_snapshot(app_type, &effective_provider)
+    write_live_snapshot(app_type, &effective_provider)?;
+
+    // Kimi Code：供应商投影完成后把通用配置片段重放进共享 live 文档。
+    if matches!(app_type, AppType::KimiCode) {
+        apply_kimi_common_config_to_live(db)?;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn strip_common_config_from_live_settings(
@@ -1176,6 +1230,11 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
             continue;
         }
         synced_count += 1;
+    }
+
+    // 片段合并是文档级操作：循环外补一次，覆盖"零供应商也保存了片段"的情况。
+    if matches!(app_type, AppType::KimiCode) {
+        apply_kimi_common_config_to_live(state.db.as_ref())?;
     }
 
     log::info!("Synced {synced_count} {app_type:?} providers to live config");
@@ -2322,6 +2381,51 @@ base_url = "https://a.example/v1"
         let stripped =
             remove_common_config_from_settings(&AppType::Codex, &applied, snippet).unwrap();
         assert_eq!(stripped, settings);
+    }
+
+    /// Kimi Code 的片段直接作用于共享 live TOML 文档：合并保留供应商表与
+    /// 无关表，剥离按值匹配（用户改过的值保留），与 Codex 语义对齐。
+    #[test]
+    fn kimi_common_config_merge_and_strip_roundtrip_on_live_doc() {
+        let live = r#"default_model = "demo/model"
+
+[providers.demo]
+type = "openai"
+base_url = "https://api.example.com/v1"
+api_key = "sk-test"
+
+[models."demo/model"]
+provider = "demo"
+model = "model"
+"#;
+        let snippet = "[thinking]\nenabled = true\neffort = \"high\"\n";
+
+        let mut doc = live.parse::<DocumentMut>().unwrap();
+        update_kimi_doc_common_config(&mut doc, snippet, true).unwrap();
+        let merged = doc.to_string();
+        assert!(merged.contains("[thinking]"));
+        assert!(merged.contains("effort = \"high\""));
+        assert!(merged.contains("[providers.demo]"));
+        assert!(merged.contains("default_model = \"demo/model\""));
+
+        let mut doc = merged.parse::<DocumentMut>().unwrap();
+        update_kimi_doc_common_config(&mut doc, snippet, false).unwrap();
+        assert_eq!(doc.to_string(), live);
+    }
+
+    #[test]
+    fn kimi_common_config_strip_preserves_user_modified_values() {
+        let snippet = "[thinking]\nenabled = true\n";
+        let live = "[thinking]\nenabled = false\n\n[providers.demo]\ntype = \"openai\"\n";
+
+        let mut doc = live.parse::<DocumentMut>().unwrap();
+        update_kimi_doc_common_config(&mut doc, snippet, false).unwrap();
+        let stripped = doc.to_string();
+        assert!(
+            stripped.contains("enabled = false"),
+            "user-modified value must survive removal, got: {stripped}"
+        );
+        assert!(stripped.contains("[providers.demo]"));
     }
 
     #[test]

@@ -18,5 +18,6 @@ export { useOpencodeFormState } from "./useOpencodeFormState";
 export { useOmoDraftState } from "./useOmoDraftState";
 export { useOpenclawFormState } from "./useOpenclawFormState";
 export { useHermesFormState } from "./useHermesFormState";
+export { useKimiCommonConfig } from "./useKimiCommonConfig";
 export { useCopilotAuth } from "./useCopilotAuth";
 export { useCodexOauth } from "./useCodexOauth";

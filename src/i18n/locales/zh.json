@@ -146,6 +146,8 @@
     "officialPartner": "官方合作伙伴",
     "managedByHermes": "Hermes 托管",
     "managedByHermesHint": "该条目定义在 Hermes 的 providers: dict，请在 Hermes Web UI 中编辑或删除。",
+    "managedByKimi": "Kimi 托管",
+    "managedByKimiHint": "该条目由 Kimi 官方登录托管，无法在 CC Switch 中编辑或删除。",
     "openTerminal": "打开终端",
     "terminalOpened": "终端已打开",
     "terminalOpenFailed": "打开终端失败",
@@ -679,6 +681,10 @@
     "skipClaudeOnboarding": "跳过 Claude Code 初次安装确认",
     "skipClaudeOnboardingDescription": "开启后跳过 Claude Code 初次安装确认",
     "codexAuth": "Codex 应用增强",
+    "kimiAuth": "Kimi Code 应用增强",
+    "kimiDefaultModel": "当前默认模型",
+    "kimiDefaultProvider": "当前默认供应商",
+    "kimiModelNotConfigured": "未配置",
     "preserveCodexOfficialAuthOnSwitch": "非接管切换时保留官方登录",
     "preserveCodexOfficialAuthOnSwitchDescription": "控制未开启路由接管时切换第三方供应商是否保留 Codex 官方登录；路由接管期间始终保留",
     "unifyCodexSessionHistory": "统一 Codex 会话历史",
@@ -2098,6 +2104,12 @@
     "fallbackModel": "回退模型"
   },
   "kimicode": {
+    "commonConfig": {
+      "editTitle": "编辑 Kimi Code 通用配置片段",
+      "hint": "该片段会合并进所有 Kimi Code 供应商共享的 live 配置（~/.kimi-code/config.toml），保存后立即生效。",
+      "guideUsage": "使用方式：保存片段后，每次同步 live 配置时都会自动合并，无需逐个供应商勾选。",
+      "emptyHint": "在下方编辑器中输入要共享的 TOML 配置，保存后对所有 Kimi Code 供应商生效"
+    },
     "form": {
       "baseUrl": "API 端点",
       "baseUrlHint": "供应商的 API 端点地址。",
@@ -2139,32 +2151,6 @@
       "providerAdvanced": "供应商高级选项",
       "rateLimitDelay": "请求间隔（秒）",
       "rateLimitDelayHint": "连续请求间的最小间隔秒数（可选）。留空表示无限制。"
-    },
-    "webui": {
-      "open": "打开 Hermes Web UI",
-      "offline": "Hermes Web UI 未启动，请先运行 `hermes dashboard` 启动服务。",
-      "openFailed": "打开 Hermes Web UI 失败",
-      "launchConfirmTitle": "Hermes Dashboard 未启动",
-      "launchConfirmMessage": "是否打开终端并运行 `hermes dashboard` 启动服务？\n\n启动完成后会自动打开浏览器。\n\n若终端提示找不到 hermes 或缺少 web 依赖，请先运行：\npip install hermes-agent[web]",
-      "launchConfirmAction": "打开终端并启动",
-      "launching": "已在终端启动 hermes dashboard",
-      "launchFailed": "打开终端失败"
-    },
-    "memory": {
-      "title": "记忆管理",
-      "agentTab": "Agent 记忆 (MEMORY.md)",
-      "userTab": "用户画像 (USER.md)",
-      "usage": "已用 {{current}} / {{limit}} 字符",
-      "overLimit": "已超过上限，Hermes 下次加载时会截断",
-      "enableOn": "已启用",
-      "enableOff": "已禁用",
-      "disabledHint": "在重新启用前 Hermes 会跳过此记忆",
-      "toggleFailed": "切换记忆状态失败",
-      "saveSuccess": "记忆已保存",
-      "saveFailed": "保存记忆失败",
-      "loadFailed": "读取记忆文件失败",
-      "openConfig": "在 Hermes Web UI 调整上限",
-      "runtimeNote": "更改将在 Hermes 下次启动或新建会话时生效。"
     }
   },
   "env": {
@@ -2733,7 +2719,7 @@
     "duplicatedAndSynced": "统一供应商已复制并同步",
     "duplicateError": "复制统一供应商失败",
     "title": "统一供应商",
-    "description": "统一供应商可以同时管理 Claude、Codex 和 Gemini 的配置。修改后会自动同步到所有启用的应用。",
+    "description": "统一供应商可以同时管理 Claude、Codex、Gemini 和 Kimi Code 的配置。修改后会自动同步到所有启用的应用。",
     "add": "添加统一供应商",
     "edit": "编辑统一供应商",
     "empty": "还没有统一供应商",
@@ -2750,6 +2736,8 @@
     "enabledApps": "启用的应用",
     "modelConfig": "模型配置",
     "model": "模型",
+    "kimiProviderType": "协议类型",
+    "maxContextSize": "上下文长度",
     "sync": "同步到应用",
     "synced": "已同步到所有应用",
     "syncError": "同步失败",
@@ -2760,7 +2748,7 @@
     "updated": "统一供应商已更新",
     "deleted": "统一供应商已删除",
     "addFailed": "统一供应商添加失败",
-    "hint": "跨应用统一配置，自动同步到 Claude/Codex/Gemini",
+    "hint": "跨应用统一配置，自动同步到 Claude/Codex/Gemini/Kimi Code",
     "manage": "管理",
     "loadError": "加载统一供应商失败",
     "saveError": "保存统一供应商失败",
@@ -2768,7 +2756,7 @@
     "deleteConfirmTitle": "删除统一供应商",
     "deleteConfirmDescription": "确定要删除 \"{{name}}\" 吗？这将同时删除它在各应用中生成的供应商配置。",
     "syncConfirmTitle": "同步统一供应商",
-    "syncConfirmDescription": "同步 \"{{name}}\" 将会覆盖 Claude、Codex 和 Gemini 中关联的供应商配置。确定要继续吗？",
+    "syncConfirmDescription": "同步 \"{{name}}\" 将会覆盖 Claude、Codex、Gemini 和 Kimi Code 中关联的供应商配置。确定要继续吗？",
     "syncConfirm": "同步",
     "saveAndSync": "保存并同步",
     "savedAndSynced": "已保存并同步到所有应用",

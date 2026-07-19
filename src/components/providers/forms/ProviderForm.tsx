@@ -70,6 +70,7 @@ import { isNonNegativeDecimalString } from "@/types/usage";
 import { getCodexCustomTemplate } from "@/config/codexTemplates";
 import CodexConfigEditor from "./CodexConfigEditor";
 import { CommonConfigEditor } from "./CommonConfigEditor";
+import { KimiCommonConfigModal } from "./KimiCommonConfigModal";
 import GeminiConfigEditor from "./GeminiConfigEditor";
 import JsonEditor from "@/components/JsonEditor";
 import { Label } from "@/components/ui/label";
@@ -105,6 +106,7 @@ import {
   useOmoDraftState,
   useOpenclawFormState,
   useHermesFormState,
+  useKimiCommonConfig,
   useCopilotAuth,
   useCodexOauth,
 } from "./hooks";
@@ -899,6 +901,16 @@ function ProviderFormFull({
     onSettingsConfigChange: (config) => form.setValue("settingsConfig", config),
     getSettingsConfig: () => form.getValues("settingsConfig"),
   });
+  const {
+    commonConfigSnippet: kimiCommonConfigSnippet,
+    commonConfigError: kimiCommonConfigError,
+    handleCommonConfigSnippetChange: handleKimiCommonConfigSnippetChange,
+    clearCommonConfigError: clearKimiCommonConfigError,
+  } = useKimiCommonConfig({
+    enabled: appId === "kimicode",
+  });
+  const [isKimiCommonConfigModalOpen, setIsKimiCommonConfigModalOpen] =
+    useState(false);
   const {
     data: hermesLiveProviderIds = [],
     isLoading: isHermesLiveProviderIdsLoading,
@@ -2492,6 +2504,29 @@ function ProviderFormFull({
                   darkMode={isDarkMode}
                 />
               </div>
+              {appId === "kimicode" && (
+                <>
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setIsKimiCommonConfigModalOpen(true)}
+                      className="text-xs text-blue-500 dark:text-blue-400 hover:underline"
+                    >
+                      {t("codexConfig.editCommonConfig")}
+                    </button>
+                  </div>
+                  <KimiCommonConfigModal
+                    isOpen={isKimiCommonConfigModalOpen}
+                    onClose={() => {
+                      clearKimiCommonConfigError();
+                      setIsKimiCommonConfigModalOpen(false);
+                    }}
+                    value={kimiCommonConfigSnippet}
+                    onSave={handleKimiCommonConfigSnippetChange}
+                    error={kimiCommonConfigError}
+                  />
+                </>
+              )}
               <FormField
                 control={form.control}
                 name="settingsConfig"

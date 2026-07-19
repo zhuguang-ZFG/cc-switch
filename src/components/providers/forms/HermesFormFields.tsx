@@ -30,6 +30,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  Zap,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -40,6 +41,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ApiKeySection } from "./shared";
+import EndpointSpeedTest from "./EndpointSpeedTest";
 import {
   fetchModelsForConfig,
   showFetchModelsError,
@@ -50,7 +52,7 @@ import {
   type KimiModel,
   type KimiProviderType,
 } from "@/config/kimiProviderPresets";
-import type { ProviderCategory } from "@/types";
+import type { EndpointCandidate, ProviderCategory } from "@/types";
 
 interface HermesFormFieldsProps {
   baseUrl: string;
@@ -166,6 +168,8 @@ export function HermesFormFields({
   const [providerAdvancedOpen, setProviderAdvancedOpen] = useState(
     rateLimitDelay !== undefined,
   );
+  const [isEndpointModalOpen, setIsEndpointModalOpen] = useState(false);
+  const [endpointAutoSelect, setEndpointAutoSelect] = useState(true);
 
   // Auto-expand when a preset switch brings in a value so the user sees it;
   // don't force-collapse on clear, to avoid yanking the panel shut mid-edit.
@@ -180,6 +184,13 @@ export function HermesFormFields({
   const baseUrlErrorMessage = baseUrlErrorCode
     ? t(BASE_URL_ERROR_I18N_KEY[baseUrlErrorCode])
     : "";
+
+  // 端点测速候选：kimi 预设没有 endpointCandidates，以当前 baseUrl 为测速目标
+  // （与 useSpeedTestEndpoints 对 claude/codex 的"当前 Base URL"条目一致，isCustom=false）。
+  const speedTestEndpoints = useMemo<EndpointCandidate[]>(
+    () => (baseUrl.trim() ? [{ url: baseUrl, isCustom: false }] : []),
+    [baseUrl],
+  );
 
   // Stable list keys: a manual ref rather than UUID-in-state so adding/removing
   // rows doesn't re-mount unrelated inputs (would drop focus mid-typing).
@@ -300,9 +311,21 @@ export function HermesFormFields({
       </div>
 
       <div className="space-y-2">
-        <FormLabel htmlFor="hermes-baseurl">
-          {t("kimicode.form.baseUrl", { defaultValue: "API endpoint" })}
-        </FormLabel>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <FormLabel htmlFor="hermes-baseurl">
+            {t("kimicode.form.baseUrl", { defaultValue: "API endpoint" })}
+          </FormLabel>
+          <button
+            type="button"
+            onClick={() => setIsEndpointModalOpen(true)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Zap className="h-3.5 w-3.5" />
+            {t("providerForm.manageAndTest", {
+              defaultValue: "管理和测速",
+            })}
+          </button>
+        </div>
         <Input
           id="hermes-baseurl"
           value={baseUrl}
@@ -577,6 +600,20 @@ export function HermesFormFields({
           </p>
         </div>
       </AdvancedSection>
+
+      {/* 端点测速弹窗 - Kimi（与 claude/codex 表单内测速一致） */}
+      {isEndpointModalOpen && (
+        <EndpointSpeedTest
+          appId="kimicode"
+          value={baseUrl}
+          onChange={onBaseUrlChange}
+          initialEndpoints={speedTestEndpoints}
+          visible={isEndpointModalOpen}
+          onClose={() => setIsEndpointModalOpen(false)}
+          autoSelect={endpointAutoSelect}
+          onAutoSelectChange={setEndpointAutoSelect}
+        />
+      )}
     </>
   );
 }

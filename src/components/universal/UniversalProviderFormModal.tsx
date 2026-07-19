@@ -6,6 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ProviderIcon } from "@/components/ProviderIcon";
@@ -16,6 +23,7 @@ import {
   createUniversalProviderFromPreset,
   type UniversalProviderPreset,
 } from "@/config/universalProviderPresets";
+import { KIMI_PROVIDER_TYPES } from "@/config/kimiProviderPresets";
 import { deepClone } from "@/utils/deepClone";
 
 interface UniversalProviderFormModalProps {
@@ -53,6 +61,7 @@ export function UniversalProviderFormModal({
   const [claudeEnabled, setClaudeEnabled] = useState(true);
   const [codexEnabled, setCodexEnabled] = useState(true);
   const [geminiEnabled, setGeminiEnabled] = useState(true);
+  const [kimiEnabled, setKimiEnabled] = useState(false);
 
   // 模型配置
   const [models, setModels] = useState<UniversalProviderModels>({});
@@ -74,6 +83,7 @@ export function UniversalProviderFormModal({
       setClaudeEnabled(!!editingProvider.apps.claude);
       setCodexEnabled(!!editingProvider.apps.codex);
       setGeminiEnabled(!!editingProvider.apps.gemini);
+      setKimiEnabled(!!editingProvider.apps.kimicode);
       setModels(editingProvider.models || {});
 
       // 尝试匹配预设
@@ -93,6 +103,7 @@ export function UniversalProviderFormModal({
       setClaudeEnabled(!!defaultPreset.defaultApps.claude);
       setCodexEnabled(!!defaultPreset.defaultApps.codex);
       setGeminiEnabled(!!defaultPreset.defaultApps.gemini);
+      setKimiEnabled(!!defaultPreset.defaultApps.kimicode);
       setModels(deepClone(defaultPreset.defaultModels));
     }
   }, [editingProvider, initialPreset, isOpen]);
@@ -106,6 +117,7 @@ export function UniversalProviderFormModal({
         setClaudeEnabled(!!preset.defaultApps.claude);
         setCodexEnabled(!!preset.defaultApps.codex);
         setGeminiEnabled(!!preset.defaultApps.gemini);
+        setKimiEnabled(!!preset.defaultApps.kimicode);
         setModels(deepClone(preset.defaultModels));
       }
     },
@@ -114,7 +126,11 @@ export function UniversalProviderFormModal({
 
   // 更新模型配置
   const updateModel = useCallback(
-    (app: "claude" | "codex" | "gemini", field: string, value: string) => {
+    (
+      app: "claude" | "codex" | "gemini" | "kimicode",
+      field: string,
+      value: string | number | undefined,
+    ) => {
       setModels((prev) => ({
         ...prev,
         [app]: {
@@ -185,6 +201,23 @@ requires_openai_auth = true`;
     };
   }, [geminiEnabled, baseUrl, apiKey, models.gemini]);
 
+  // 计算 Kimi Code 配置 JSON 预览（与后端 to_kimi_provider 生成的结构一致）
+  const kimiConfigJson = useMemo(() => {
+    if (!kimiEnabled) return null;
+    const providerType = models.kimicode?.providerType || "openai";
+    const model = models.kimicode?.model || "gpt-5.5";
+    const modelEntry: Record<string, unknown> = { id: model, name: model };
+    if (models.kimicode?.maxContextSize) {
+      modelEntry.max_context_size = models.kimicode.maxContextSize;
+    }
+    return {
+      type: providerType,
+      base_url: baseUrl.replace(/\/+$/, ""),
+      api_key: apiKey,
+      models: [modelEntry],
+    };
+  }, [kimiEnabled, baseUrl, apiKey, models.kimicode]);
+
   // 提交表单
   const handleSubmit = useCallback(() => {
     if (!name.trim() || !baseUrl.trim() || !apiKey.trim()) {
@@ -203,6 +236,7 @@ requires_openai_auth = true`;
             claude: claudeEnabled,
             codex: codexEnabled,
             gemini: geminiEnabled,
+            kimicode: kimiEnabled,
           },
           models,
         }
@@ -220,6 +254,7 @@ requires_openai_auth = true`;
         claude: claudeEnabled,
         codex: codexEnabled,
         gemini: geminiEnabled,
+        kimicode: kimiEnabled,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -238,6 +273,7 @@ requires_openai_auth = true`;
     claudeEnabled,
     codexEnabled,
     geminiEnabled,
+    kimiEnabled,
     models,
     selectedPreset,
     onSave,
@@ -262,6 +298,7 @@ requires_openai_auth = true`;
             claude: claudeEnabled,
             codex: codexEnabled,
             gemini: geminiEnabled,
+            kimicode: kimiEnabled,
           },
           models,
         }
@@ -279,6 +316,7 @@ requires_openai_auth = true`;
         claude: claudeEnabled,
         codex: codexEnabled,
         gemini: geminiEnabled,
+        kimicode: kimiEnabled,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -296,6 +334,7 @@ requires_openai_auth = true`;
     claudeEnabled,
     codexEnabled,
     geminiEnabled,
+    kimiEnabled,
     models,
     selectedPreset,
   ]);
@@ -514,6 +553,13 @@ requires_openai_auth = true`;
                 onCheckedChange={setGeminiEnabled}
               />
             </div>
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="flex items-center gap-2">
+                <ProviderIcon icon="kimi" name="Kimi Code" size={20} />
+                <span className="font-medium">Kimi Code</span>
+              </div>
+              <Switch checked={kimiEnabled} onCheckedChange={setKimiEnabled} />
+            </div>
           </div>
         </div>
 
@@ -632,72 +678,158 @@ requires_openai_auth = true`;
               </div>
             </div>
           )}
+
+          {/* Kimi Code 模型 */}
+          {kimiEnabled && (
+            <div className="space-y-3 rounded-lg border p-4">
+              <div className="flex items-center gap-2 font-medium">
+                <ProviderIcon icon="kimi" name="Kimi Code" size={16} />
+                Kimi Code
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    {t("universalProvider.kimiProviderType", {
+                      defaultValue: "协议类型",
+                    })}
+                  </Label>
+                  <Select
+                    value={models.kimicode?.providerType || "openai"}
+                    onValueChange={(v) =>
+                      updateModel("kimicode", "providerType", v)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {KIMI_PROVIDER_TYPES.map((mode) => (
+                        <SelectItem key={mode.value} value={mode.value}>
+                          {t(mode.labelKey)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    {t("universalProvider.model", { defaultValue: "模型" })}
+                  </Label>
+                  <Input
+                    value={models.kimicode?.model || ""}
+                    onChange={(e) =>
+                      updateModel("kimicode", "model", e.target.value)
+                    }
+                    placeholder="gpt-5.5"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    {t("universalProvider.maxContextSize", {
+                      defaultValue: "上下文长度",
+                    })}
+                  </Label>
+                  <Input
+                    type="number"
+                    value={models.kimicode?.maxContextSize ?? ""}
+                    onChange={(e) =>
+                      updateModel(
+                        "kimicode",
+                        "maxContextSize",
+                        e.target.value
+                          ? parseInt(e.target.value, 10)
+                          : undefined,
+                      )
+                    }
+                    placeholder="262144"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 配置 JSON 预览 */}
-        {isEditMode && (claudeEnabled || codexEnabled || geminiEnabled) && (
-          <div className="space-y-4">
-            <Label>
-              {t("universalProvider.configJsonPreview", {
-                defaultValue: "配置 JSON 预览",
-              })}
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              {t("universalProvider.configJsonPreviewHint", {
-                defaultValue:
-                  "以下是将要同步到各应用的配置内容（仅覆盖显示的字段，保留其他自定义配置）",
-              })}
-            </p>
+        {isEditMode &&
+          (claudeEnabled || codexEnabled || geminiEnabled || kimiEnabled) && (
+            <div className="space-y-4">
+              <Label>
+                {t("universalProvider.configJsonPreview", {
+                  defaultValue: "配置 JSON 预览",
+                })}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t("universalProvider.configJsonPreviewHint", {
+                  defaultValue:
+                    "以下是将要同步到各应用的配置内容（仅覆盖显示的字段，保留其他自定义配置）",
+                })}
+              </p>
 
-            {/* Claude JSON */}
-            {claudeConfigJson && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <ProviderIcon icon="claude" name="Claude" size={16} />
-                  Claude
+              {/* Claude JSON */}
+              {claudeConfigJson && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <ProviderIcon icon="claude" name="Claude" size={16} />
+                    Claude
+                  </div>
+                  <JsonEditor
+                    value={JSON.stringify(claudeConfigJson, null, 2)}
+                    onChange={() => {}}
+                    height={180}
+                    darkMode={isDarkMode}
+                  />
                 </div>
-                <JsonEditor
-                  value={JSON.stringify(claudeConfigJson, null, 2)}
-                  onChange={() => {}}
-                  height={180}
-                  darkMode={isDarkMode}
-                />
-              </div>
-            )}
+              )}
 
-            {/* Codex JSON */}
-            {codexConfigJson && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <ProviderIcon icon="openai" name="Codex" size={16} />
-                  Codex
+              {/* Codex JSON */}
+              {codexConfigJson && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <ProviderIcon icon="openai" name="Codex" size={16} />
+                    Codex
+                  </div>
+                  <JsonEditor
+                    value={JSON.stringify(codexConfigJson, null, 2)}
+                    onChange={() => {}}
+                    height={280}
+                    darkMode={isDarkMode}
+                  />
                 </div>
-                <JsonEditor
-                  value={JSON.stringify(codexConfigJson, null, 2)}
-                  onChange={() => {}}
-                  height={280}
-                  darkMode={isDarkMode}
-                />
-              </div>
-            )}
+              )}
 
-            {/* Gemini JSON */}
-            {geminiConfigJson && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <ProviderIcon icon="gemini" name="Gemini" size={16} />
-                  Gemini
+              {/* Gemini JSON */}
+              {geminiConfigJson && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <ProviderIcon icon="gemini" name="Gemini" size={16} />
+                    Gemini
+                  </div>
+                  <JsonEditor
+                    value={JSON.stringify(geminiConfigJson, null, 2)}
+                    onChange={() => {}}
+                    height={140}
+                    darkMode={isDarkMode}
+                  />
                 </div>
-                <JsonEditor
-                  value={JSON.stringify(geminiConfigJson, null, 2)}
-                  onChange={() => {}}
-                  height={140}
-                  darkMode={isDarkMode}
-                />
-              </div>
-            )}
-          </div>
-        )}
+              )}
+
+              {/* Kimi Code JSON */}
+              {kimiConfigJson && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <ProviderIcon icon="kimi" name="Kimi Code" size={16} />
+                    Kimi Code
+                  </div>
+                  <JsonEditor
+                    value={JSON.stringify(kimiConfigJson, null, 2)}
+                    onChange={() => {}}
+                    height={180}
+                    darkMode={isDarkMode}
+                  />
+                </div>
+              )}
+            </div>
+          )}
       </div>
 
       {/* 保存并同步确认弹窗 */}
@@ -707,7 +839,7 @@ requires_openai_auth = true`;
           defaultValue: "同步统一供应商",
         })}
         message={t("universalProvider.syncConfirmDescription", {
-          defaultValue: `同步 "${name}" 将会覆盖 Claude、Codex 和 Gemini 中关联的供应商配置。确定要继续吗？`,
+          defaultValue: `同步 "${name}" 将会覆盖 Claude、Codex、Gemini 和 Kimi Code 中关联的供应商配置。确定要继续吗？`,
           name: name,
         })}
         confirmText={t("universalProvider.saveAndSync", {
