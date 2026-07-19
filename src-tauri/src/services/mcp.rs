@@ -67,6 +67,11 @@ impl McpService {
     }
 
     /// 切换指定应用的启用状态
+    ///
+    /// 顺序：先写 live 配置，成功后再持久化 DB 标志（与 SkillService::toggle_app
+    /// 一致）。反过来写会在 live 写失败（文件只读/被锁）时留下 DB 已翻转的
+    /// 状态：profile apply 按 DB 标志算差量，重复 apply 得到空差量，live
+    /// 文件永远修不回来。
     pub fn toggle_app(
         state: &AppState,
         server_id: &str,
@@ -77,14 +82,15 @@ impl McpService {
 
         if let Some(server) = servers.get_mut(server_id) {
             server.apps.set_enabled_for(&app, enabled);
-            state.db.save_mcp_server(server)?;
 
-            // 同步到对应应用
+            // 先同步 live；失败直接返回，不落 DB
             if enabled {
                 Self::sync_server_to_app(state, server, &app)?;
             } else {
                 Self::remove_server_from_app(state, server_id, &app)?;
             }
+
+            state.db.save_mcp_server(server)?;
         }
 
         Ok(())

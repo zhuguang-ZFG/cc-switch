@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced. A second comparative audit against the vendored Kimi Code CLI 0.27 source (OAuth lifecycle, config.toml contract, usage/wire.jsonl contract) then verified the shared-file token format, refresh threshold, provider-type schema, alias derivation, per-call usage semantics, and session layout all match the official implementation, and landed the interop fixes below. A third audit round (adversarial re-review of the fixes themselves, proxy streaming hot path, failover concurrency, and a whole-app performance sweep) landed the resilience and performance work below.
+Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced. A second comparative audit against the vendored Kimi Code CLI 0.27 source (OAuth lifecycle, config.toml contract, usage/wire.jsonl contract) then verified the shared-file token format, refresh threshold, provider-type schema, alias derivation, per-call usage semantics, and session layout all match the official implementation, and landed the interop fixes below. A third audit round (adversarial re-review of the fixes themselves, proxy streaming hot path, failover concurrency, and a whole-app performance sweep) landed the resilience and performance work below. A fourth round audited the external-input security surface (deep-link import), cloud-sync/secrets handling, and the project-profile system, plus an adversarial re-review of round three.
+
+### Security (audit round 4 — external input, sync, secrets)
+
+- **Deep-link MCP import now shows the full command line, args, and env** in the confirmation dialog and warns that stdio servers execute on the target CLI's next launch — previously only the bare `command` was shown (`bash` for a `bash -c "curl … | sh"` payload), turning consent into a rubber stamp.
+- **Deep-link prompt import shows the full content** (was truncated at 500 chars, hiding injected instructions past the fold) and warns it overwrites the app's live prompt file.
+- **Cloud-sync endpoints reject plain `http://` for public hosts** (WebDAV and S3): the sync payload is a plaintext SQL dump of every provider API key, so http is allowed only for loopback / private-LAN / `.local` hosts.
+- **`settings.json` gets an owner-only ACL on Windows** on creation — it stores S3/WebDAV credentials in plaintext and previously only inherited the parent directory ACL.
+- **Deep-link skill `repo` and zip extraction reject `..`/absolute path segments** (zip-slip hardening) and base64 payloads are capped at 512 KB.
+- **Config-payload-sourced endpoint/homepage URLs are re-validated** as http(s) (they bypassed the parse-time scheme check).
+
+### Fixed (audit round 4 — profiles, streaming, resilience)
+
+- **MCP per-app toggle writes the live config before flipping the DB flag** (matching the skill toggle): a failed live write no longer leaves the DB claiming a state the app never sees, which a profile re-apply couldn't repair (empty diff).
+- **Profile apply is serialized by a global lock**, and Kimi provider snapshots taken under proxy takeover fall back to the DB current provider instead of erasing the old profile's provider slot.
+- **Chat→Responses JSON fallback no longer discards a mixed JSON-then-SSE response** (falls through to SSE parsing on JSON-parse failure) and caps the JSON buffer at 8 MB.
+- **Gemini streaming maps a missing `finishReason` to incomplete** instead of `end_turn` (silent truncation was presented as a clean completion) and emits a structured Anthropic `error` event on mid-stream failure instead of a raw connection abort.
+- **Circuit-breaker stale-probe timestamp is cleared on release and half-open transitions**, closing a race that could admit a second concurrent probe; the wire.jsonl legacy-layout accept is re-anchored to the exact `sessions/<bucket>/<session>` depth (the round-3 broadening reopened the hash-as-session-id bug for stray files); the OAuth revoked-tombstone write now logs inner save errors instead of discarding them; device-flow auto-renewal is guarded against a double-fire that could kill the renewed flow.
 
 ### Fixed (audit round 3 — failover/streaming/OAuth resilience)
 

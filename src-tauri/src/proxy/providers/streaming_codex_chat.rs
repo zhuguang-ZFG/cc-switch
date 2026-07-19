@@ -753,14 +753,18 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
 
                     // Compatible gateways may ignore stream:true and return one
                     // JSON document; hold it intact until EOF then convert via
-                    // the non-stream Chat→Responses transformer.
+                    // the non-stream Chat→Responses transformer. Cap the buffer
+                    // so a never-closing "{" can't grow unbounded; past the cap
+                    // we give up the JSON guess and fall through to SSE parsing.
+                    const MAX_JSON_DOC_BYTES: usize = 8 * 1024 * 1024;
                     let looks_like_json = matches!(
                         buffer
                             .trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
                             .as_bytes()
                             .first(),
                         Some(b'{') | Some(b'[')
-                    ) && !state.response_started;
+                    ) && !state.response_started
+                        && buffer.len() <= MAX_JSON_DOC_BYTES;
                     if looks_like_json && !is_eof {
                         continue;
                     }
@@ -777,19 +781,17 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
                             Ok(response) => {
                                 yield Ok(sse::response_created(&response));
                                 yield Ok(sse::response_completed(&response));
+                                buffer.clear();
+                                stream_failed = true; // terminal event already emitted
+                                break;
                             }
-                            Err(error) => {
-                                yield Ok(state.failed_event(
-                                    format!(
-                                        "Upstream returned a JSON document that is not a valid chat completion: {error}"
-                                    ),
-                                    Some("response_parse_error".to_string()),
-                                ));
+                            Err(_) => {
+                                // Not a standalone JSON completion after all
+                                // (e.g. a bare metadata/error line preceding
+                                // real SSE events): fall through to SSE parsing
+                                // rather than discarding the whole response.
                             }
                         }
-                        buffer.clear();
-                        stream_failed = true; // terminal event already emitted
-                        break;
                     }
 
                     if is_eof && !buffer.trim().is_empty() {

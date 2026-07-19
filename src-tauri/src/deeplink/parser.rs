@@ -350,8 +350,19 @@ fn parse_skill_deeplink(
         .ok_or_else(|| AppError::InvalidInput("Missing 'repo' parameter for skill".to_string()))?
         .clone();
 
-    // Validate repo format (should be "owner/name")
-    if !repo.contains('/') || repo.split('/').count() != 2 {
+    // Validate repo format (should be "owner/name"): both segments must be
+    // plain GitHub identifiers — dot segments or metacharacters would later
+    // be interpolated into the archive-download URL path.
+    let repo_segments_valid = repo.split('/').count() == 2
+        && repo.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment != "."
+                && segment != ".."
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        });
+    if !repo_segments_valid {
         return Err(AppError::InvalidInput(format!(
             "Invalid repo format: expected 'owner/name', got '{repo}'"
         )));

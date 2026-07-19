@@ -44,7 +44,7 @@ pub fn init(handle: AppHandle) {
 /// 通知前端有新的使用日志写入。
 ///
 /// 调用方**不**需要持有 AppHandle，可以从任意线程/任意写入路径调用。
-/// 内部 200ms 防抖合并，绝不阻塞调用线程。
+/// 内部按 `DEBOUNCE_WINDOW` 防抖合并，绝不阻塞调用线程。
 pub fn notify_log_recorded() {
     // AppHandle 未注入（典型出现在单元测试或 setup 之前）：直接放弃。
     let Some(handle) = APP_HANDLE.get() else {

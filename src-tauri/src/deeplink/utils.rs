@@ -28,6 +28,17 @@ pub fn validate_url(url_str: &str, field_name: &str) -> Result<(), AppError> {
 /// - Missing padding `=`
 /// - Both standard and URL-safe Base64 variants
 pub fn decode_base64_param(field: &str, raw: &str) -> Result<Vec<u8>, AppError> {
+    // Deep-link payloads come from arbitrary external URLs. A legitimate
+    // provider/MCP/prompt config is a few KB; cap well above that so a
+    // hostile mega-payload can't balloon memory across the candidate
+    // permutations below (each clones the input).
+    const MAX_BASE64_PARAM_BYTES: usize = 512 * 1024;
+    if raw.len() > MAX_BASE64_PARAM_BYTES {
+        return Err(AppError::InvalidInput(format!(
+            "{field} 参数过大（{} 字节，上限 {MAX_BASE64_PARAM_BYTES}）",
+            raw.len()
+        )));
+    }
     let mut candidates: Vec<String> = Vec::new();
     // Keep spaces (to restore `+`), but remove newlines
     let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n');

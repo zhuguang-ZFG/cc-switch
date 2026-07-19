@@ -57,6 +57,31 @@ fn split_scheme_host(endpoint: &str) -> (&str, &str) {
     }
 }
 
+/// Reject plain-http endpoints outside loopback/private LAN: the sync payload
+/// is a plaintext SQL dump of every provider api_key, and SigV4 does not
+/// encrypt the body. Mirrors the WebDAV-side rule.
+pub(crate) fn validate_endpoint_security(endpoint: &str) -> Result<(), AppError> {
+    let (scheme, _) = split_scheme_host(endpoint);
+    if scheme != "http" {
+        return Ok(());
+    }
+    let parsed = url::Url::parse(endpoint).map_err(|e| {
+        AppError::localized(
+            "s3.endpoint.invalid",
+            format!("S3 端点无效: {e}"),
+            format!("Invalid S3 endpoint: {e}"),
+        )
+    })?;
+    if crate::services::webdav::url_host_is_private(&parsed) {
+        return Ok(());
+    }
+    Err(AppError::localized(
+        "s3.endpoint.insecure",
+        "S3 http 端点仅支持局域网/回环主机；公网请使用 https（同步内容含明文 API 密钥）",
+        "Plain-http S3 endpoints are only allowed for loopback/private-LAN hosts; use https for public endpoints (the sync payload contains plaintext API keys).",
+    ))
+}
+
 /// Build the full URL for an S3 object.
 ///
 /// - AWS endpoints use virtual-hosted style: `https://{bucket}.s3.{region}.amazonaws.com/{key}`

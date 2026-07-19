@@ -2280,6 +2280,19 @@ impl SkillService {
                 continue;
             }
 
+            // Zip-slip 防护：条目名来自不可信压缩包，`root/../../evil` 或
+            // 绝对路径/盘符会逃出 dest。逐段校验，拒绝任何非普通段。
+            let escapes_dest = Path::new(relative_path)
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)));
+            if escapes_dest {
+                return Err(anyhow::anyhow!(format_skill_error(
+                    "UNSAFE_ARCHIVE_PATH",
+                    &[("entry", &file_path)],
+                    Some("checkRepoUrl"),
+                )));
+            }
+
             let outpath = dest.join(relative_path);
 
             if file.is_symlink() {

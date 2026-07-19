@@ -81,9 +81,17 @@ export function useManagedAuth(
       let interval = Math.max((response.interval || 5) + 3, 8) * 1000;
       const expiresAt = Date.now() + response.expires_in * 1000;
 
+      // Per-flow cancellation flag. A restart spins up a NEW flow with its own
+      // closure; without this, an in-flight poll of the OLD device code
+      // rejecting with expired_token would run the OLD flow's restartOrExpire,
+      // clearing the new flow's timers and double-spending the restart budget.
+      let flowCancelled = false;
+
       // Renew the device code transparently (bounded) instead of failing —
       // mirrors the official CLI's expired_token handling.
       const restartOrExpire = () => {
+        if (flowCancelled) return;
+        flowCancelled = true;
         stopPolling();
         if (autoRestartCountRef.current < 2) {
           autoRestartCountRef.current += 1;
@@ -95,6 +103,7 @@ export function useManagedAuth(
       };
 
       const pollOnce = async () => {
+        if (flowCancelled) return;
         if (Date.now() > expiresAt) {
           restartOrExpire();
           return;
@@ -106,6 +115,7 @@ export function useManagedAuth(
             response.device_code,
             githubDomain,
           );
+          if (flowCancelled) return;
           if (newAccount) {
             stopPolling();
             setPollingState("success");
@@ -115,6 +125,7 @@ export function useManagedAuth(
             setDeviceCode(null);
           }
         } catch (e) {
+          if (flowCancelled) return;
           const errorMessage = e instanceof Error ? e.message : String(e);
           if (errorMessage.includes("slow_down")) {
             // RFC 8628 §3.5: the server asked us to back off — permanently

@@ -54,15 +54,39 @@ export function McpConfirmation({
             Object.entries(mcpServers).map(([id, spec]: [string, any]) => (
               <div key={id} className="p-2 bg-background rounded border">
                 <div className="font-semibold text-sm">{id}</div>
-                <div className="text-xs text-muted-foreground mt-1 font-mono truncate">
+                {/* Show the FULL command line. An MCP stdio server is a
+                    command the CLI will execute — truncating or hiding args
+                    (e.g. `bash -c "curl … | sh"` rendered as just "bash")
+                    turns this consent dialog into a rubber stamp. */}
+                <div className="text-xs text-muted-foreground mt-1 font-mono whitespace-pre-wrap break-all">
                   {spec.command
-                    ? `Command: ${spec.command} `
-                    : `URL: ${spec.url} `}
+                    ? `Command: ${[spec.command, ...(Array.isArray(spec.args) ? spec.args : [])].join(" ")}`
+                    : `URL: ${spec.url ?? ""}`}
                 </div>
+                {spec.env && Object.keys(spec.env).length > 0 && (
+                  <div className="text-xs text-muted-foreground mt-1 font-mono whitespace-pre-wrap break-all">
+                    {`Env: ${Object.entries(spec.env)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(" ")}`}
+                  </div>
+                )}
               </div>
             ))}
         </div>
       </div>
+
+      {mcpServers &&
+        Object.values(mcpServers).some((spec: any) => spec.command) && (
+          <div className="text-yellow-600 dark:text-yellow-500 text-sm flex items-start gap-2">
+            <span>⚠️</span>
+            <span>
+              {t("deeplink.mcp.commandWarning", {
+                defaultValue:
+                  "导入的 stdio MCP 服务器会在目标 CLI 下次启动时执行上面的命令。请确认命令与参数完全可信后再导入。",
+              })}
+            </span>
+          </div>
+        )}
 
       {request.enabled && (
         <div className="text-yellow-600 dark:text-yellow-500 text-sm flex items-center gap-2">

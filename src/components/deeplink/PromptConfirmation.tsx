@@ -46,16 +46,28 @@ export function PromptConfirmation({
         <label className="block text-sm font-medium text-muted-foreground">
           {t("deeplink.prompt.contentPreview")}
         </label>
+        {/* Full content, scrollable. A 500-char cut let payloads hide injected
+            instructions past the fold while the user approved "the preview". */}
         <pre className="mt-1 max-h-48 overflow-auto bg-muted/50 p-2 rounded text-xs whitespace-pre-wrap border">
-          {decodedContent.substring(0, 500)}
-          {decodedContent.length > 500 && "..."}
+          {decodedContent}
         </pre>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {t("deeplink.prompt.contentLength", {
+            defaultValue: "共 {{count}} 字符，可滚动查看全文",
+            count: decodedContent.length,
+          })}
+        </div>
       </div>
 
       {request.enabled && (
         <div className="text-yellow-600 dark:text-yellow-500 text-sm flex items-center gap-2">
           <span>⚠️</span>
-          <span>{t("deeplink.prompt.enabledWarning")}</span>
+          <span>
+            {t("deeplink.prompt.enabledOverwriteWarning", {
+              defaultValue:
+                "导入后将立即启用，并覆盖该应用当前生效的提示词文件（如 CLAUDE.md）。",
+            })}
+          </span>
         </div>
       )}
     </div>

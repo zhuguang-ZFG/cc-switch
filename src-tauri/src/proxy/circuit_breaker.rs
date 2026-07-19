@@ -400,7 +400,17 @@ impl CircuitBreaker {
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             ) {
-                Ok(_) => return,
+                Ok(_) => {
+                    // Clear the probe start marker once no permit is
+                    // outstanding, so a finished probe's stamp can't trigger a
+                    // spurious stale-reclaim of the next epoch's live probe.
+                    if current - 1 == 0 {
+                        if let Ok(mut started) = self.half_open_probe_started_at.lock() {
+                            *started = None;
+                        }
+                    }
+                    return;
+                }
                 Err(actual) => current = actual,
             }
         }
@@ -425,6 +435,11 @@ impl CircuitBreaker {
         self.consecutive_successes.store(0, Ordering::SeqCst);
         // 重置半开状态的请求限流计数
         self.half_open_requests.store(0, Ordering::SeqCst);
+        // 清除上一轮探测的开始时间戳，否则新一轮 HalfOpen 的活探测会被
+        // 上一轮的陈旧时间戳误判为可回收（finding #4 竞态）。
+        if let Ok(mut started) = self.half_open_probe_started_at.lock() {
+            *started = None;
+        }
     }
 
     /// 转换到关闭状态

@@ -403,7 +403,18 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
                     }
                 }
                 Err(error) => {
-                    yield Err(std::io::Error::other(error.to_string()));
+                    // Emit a structured Anthropic error event instead of
+                    // aborting the body with a raw connection error: Claude
+                    // clients get a diagnostic, and the Codex chain's
+                    // converter maps `error` events to response.failed.
+                    let error_event = json!({
+                        "type": "error",
+                        "error": {
+                            "type": "api_error",
+                            "message": format!("Gemini upstream stream error: {error}")
+                        }
+                    });
+                    yield Ok(encode_sse("error", &error_event));
                     return;
                 }
             }
@@ -552,11 +563,23 @@ pub fn create_anthropic_sse_stream_from_gemini<E: std::error::Error + Send + 'st
             yield Ok(encode_sse("content_block_stop", &stop_event));
         }
 
-        let stop_reason = map_finish_reason(
-            latest_finish_reason.as_deref(),
-            !tool_calls.is_empty(),
-            blocked_text.is_some(),
-        );
+        // A clean EOF without any finishReason is a silent truncation (proxy
+        // dropped the tail, upstream died between chunks): reporting it as
+        // end_turn would present partial text as a normal completion. Map it
+        // to max_tokens so clients surface the turn as incomplete. Tool-call
+        // and blocked outcomes keep their existing mapping.
+        let stop_reason = if latest_finish_reason.is_none()
+            && blocked_text.is_none()
+            && tool_calls.is_empty()
+        {
+            "max_tokens"
+        } else {
+            map_finish_reason(
+                latest_finish_reason.as_deref(),
+                !tool_calls.is_empty(),
+                blocked_text.is_some(),
+            )
+        };
         let usage = build_anthropic_usage(latest_usage.as_ref());
         let message_delta = json!({
             "type": "message_delta",
@@ -642,6 +665,43 @@ mod tests {
         assert!(output.contains("\"text\":\"lo\""));
         assert!(output.contains("\"stop_reason\":\"end_turn\""));
         assert!(output.contains("event: message_stop"));
+    }
+
+    #[test]
+    fn missing_finish_reason_maps_to_incomplete_not_end_turn() {
+        // Clean EOF without finishReason = silent truncation; presenting it as
+        // end_turn would hide the data loss from the client.
+        let output = collect_stream_output(vec![
+            "data: {\"responseId\":\"resp_t\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}],\"usageMetadata\":{\"promptTokenCount\":10,\"totalTokenCount\":12}}\n\n",
+        ]);
+
+        assert!(output.contains("\"stop_reason\":\"max_tokens\""));
+        assert!(!output.contains("\"stop_reason\":\"end_turn\""));
+    }
+
+    #[test]
+    fn mid_stream_error_emits_structured_error_event() {
+        let stream = futures::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(
+                "data: {\"responseId\":\"resp_e\",\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}]}\n\n"
+                .to_string(),
+            )),
+            Err(std::io::Error::other("connection reset")),
+        ]);
+        let converted = create_anthropic_sse_stream_from_gemini(stream, None, None, None, None);
+        let output = futures::executor::block_on(async move {
+            converted
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .filter_map(|item| item.ok())
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .collect::<String>()
+        });
+
+        assert!(output.contains("event: error"));
+        assert!(output.contains("connection reset"));
+        assert!(!output.contains("event: message_stop"));
     }
 
     #[test]

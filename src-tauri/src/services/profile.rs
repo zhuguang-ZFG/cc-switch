@@ -211,6 +211,14 @@ impl ProfileService {
         app: &AppType,
     ) -> Result<Option<String>, AppError> {
         if matches!(app, AppType::KimiCode) {
+            // Under proxy takeover the live default_model points at the
+            // cc-switch-proxy placeholder (not a DB provider). Snapshotting
+            // through the live file would resolve to None and the autosave
+            // in apply() would permanently erase the old profile's provider
+            // slot. Fall back to the logical current provider instead.
+            if crate::kimi_config::is_proxy_takeover_active().unwrap_or(false) {
+                return Ok(state.db.get_current_provider(app.as_str()).ok().flatten());
+            }
             let Some(provider_id) = crate::kimi_config::get_default_provider()? else {
                 return Ok(None);
             };
@@ -360,6 +368,16 @@ impl ProfileService {
         profile_id: &str,
         scope: ProfileScope,
     ) -> Result<(Vec<String>, bool), AppError> {
+        // Profile apply is a multi-step, multi-file operation with only
+        // per-step locks inside; two concurrent applies (tray + window,
+        // double-click) or an apply racing another apply's autosave would
+        // interleave toggles and last-writer-win the current marker and the
+        // shared profile row. Serialize the whole operation.
+        static APPLY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _apply_guard = APPLY_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let mut warnings = Vec::new();
 
         // 自动保存旧项目当前状态（仅当前分组），失败不阻塞切换

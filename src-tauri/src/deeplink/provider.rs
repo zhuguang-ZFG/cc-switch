@@ -634,6 +634,16 @@ pub fn parse_and_merge_config(
         }
     }
 
+    // URL params are scheme-validated at parse time, but values sourced from
+    // the base64 config payload bypass that path — re-enforce the http(s)
+    // invariant on everything that ends up in endpoint/homepage.
+    if let Some(endpoint) = merged.endpoint.as_deref().filter(|s| !s.is_empty()) {
+        crate::deeplink::utils::validate_url(endpoint, "endpoint")?;
+    }
+    if let Some(homepage) = merged.homepage.as_deref().filter(|s| !s.is_empty()) {
+        crate::deeplink::utils::validate_url(homepage, "homepage")?;
+    }
+
     Ok(merged)
 }
 

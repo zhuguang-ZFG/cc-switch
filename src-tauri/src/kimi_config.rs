@@ -1135,7 +1135,7 @@ fn try_acquire_oauth_refresh_file_lock() -> Result<OAuthRefreshFileLock, AppErro
 /// Uses `icacls` which is present on all supported Windows builds. Failure is
 /// logged by the caller as non-fatal so login still succeeds offline.
 #[cfg(windows)]
-fn restrict_path_to_current_user(path: &Path) -> Result<(), String> {
+pub(crate) fn restrict_path_to_current_user(path: &Path) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
 
@@ -1351,10 +1351,14 @@ async fn ensure_fresh_oauth_token_with_expected(
                 token_type: "Bearer".to_string(),
                 expires_in: 0,
             };
-            if let Err(error) =
-                tokio::task::spawn_blocking(move || save_oauth_token(&tombstone)).await
-            {
-                log::warn!("Failed to write Kimi OAuth revoked tombstone: {error}");
+            match tokio::task::spawn_blocking(move || save_oauth_token(&tombstone)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    log::warn!("Failed to write Kimi OAuth revoked tombstone: {error}")
+                }
+                Err(error) => {
+                    log::warn!("Kimi OAuth tombstone task failed to join: {error}")
+                }
             }
         }
         let detail = payload

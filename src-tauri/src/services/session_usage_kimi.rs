@@ -137,9 +137,11 @@ fn wire_file_identity(file_path: &Path) -> (Option<String>, Option<String>) {
         return (session, agent);
     }
 
-    // legacy v1：wire.jsonl 直接位于会话目录下（其父链上没有 agents 段）。
-    // 排除恰好命中 v2 中间层的路径（session 目录本身不会叫 agents）。
-    if parent_name(0).is_some_and(|name| name != "agents" && name != "sessions") {
+    // legacy v1：wire.jsonl 直接位于会话目录下。锚定到精确深度
+    // `sessions/<bucket>/<session>/wire.jsonl`（祖父目录必须是 sessions 根），
+    // 否则 bucket 级杂散文件会把哈希误标成 session_id——官方扫描器只按
+    // 会话索引取文件，从不按路径形状猜测。
+    if parent_name(2) == Some("sessions") && parent_name(0).is_some_and(|name| name != "agents") {
         return (parent_name(0).map(str::to_string), None);
     }
 

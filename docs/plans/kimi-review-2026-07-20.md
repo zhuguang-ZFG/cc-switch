@@ -95,6 +95,32 @@
 - 性能后续：启动阻塞的 rollup/vacuum 挪后台（可挂 24h 维护定时器）；会话同步按字节 offset Seek 而非行数重读；前端零代码分割（recharts/CodeMirror 全量进首包）；2s 代理状态轮询三连可合并。
 - vertexai/google-genai 仍无 custom_headers 表单字段。
 
+## 第四轮：外部输入安全 + 同步/密钥 + profile 系统 + 对抗复审
+
+四路并行：deeplink 导入攻击面、S3/WebDAV 同步与密钥处理、profile 跨应用同步、对抗复审第三轮修复。
+
+### 已修复（第四轮）
+
+安全面：
+- **[blocker] deeplink MCP 导入 = 命令执行但确认框不完整**：原先只显示 `command`（`bash -c "curl|sh"` 只显示 "bash"）。现在完整展示 command+args+env，并对 stdio 服务器加执行警告。
+- **deeplink 提示词导入**：预览不再截断 500 字符（藏匿注入指令），并警告会覆盖 live 提示词文件。
+- **[HIGH] 同步端点拒绝公网 http**：同步产物是含全量 API key 的明文 SQL 转储，WebDAV/S3 的 http 仅放行回环/私网/.local。
+- **settings.json Windows ACL**：首次创建时设为当前用户独占（存着 S3/WebDAV 明文凭据）。
+- **zip-slip / 路径穿越**：skill `repo` 段与压缩包条目拒绝 `..`/绝对路径；base64 载荷上限 512KB；config 载荷里的 endpoint/homepage 补 http(s) 校验。
+
+profile/流式/韧性：
+- **[blocker] MCP toggle 先写 live 后落 DB**（对齐 skill）：live 写失败不再留下 DB 已翻转、profile 重复 apply 修不回来的状态。
+- profile apply 加全局串行锁；Kimi 接管期间快照回退到 DB 当前供应商（否则永久抹除旧 profile 的供应商槽）。
+- 对抗复审抓到的第三轮问题：Chat→Responses JSON 回退不再吞掉 JSON+SSE 混合响应（解析失败回落 SSE）+ 8MB 上限；Gemini 无 finishReason 映射为 incomplete + 中途错误发结构化 error 事件；熔断器陈旧探测时间戳在释放/转半开时清除（消除并发第二探测竞态）；wire.jsonl legacy 布局重新锚定精确深度（第三轮放宽重开了 hash-as-session-id）；OAuth 墓碑写入错误不再静默丢弃；设备码续期防双触发。
+
+### 已知未修（需产品决策/较大工作量）
+
+- 同步无客户端加密选项 + 恢复无 provider/base_url diff 预览（MITM/被篡改的 bucket 可劫持 base_url 偷密钥）——建议后续加 diff 确认与可选 passphrase 加密。
+- profile：部分失败仍无条件设 current marker（无 dirty 标记）；profile 级别无 MCP live-file 写锁（apply 与另一窗口 MCP toggle 可丢更新）；前端编辑对话框 RMW 可回写陈旧 apps 标志。
+- 熔断器：僵尸探测（>300s 存活探测在回收后仍能影响熔断状态 / 双减名额）为有界的接受取舍，若要彻底解决需给 permit 打 epoch 标记。
+- deeplink：CSP `connect-src` 放行任意 http(s) 主机（XSS 时的外泄通道）；`deplink.html` 建议排除出发布产物。
+- 故障转移无退避/抖动；`TransformError` 一刀切 Retryable（畸形客户端请求可毒化全部熔断器，需拆错误类型）——第三轮已记录，仍未做。
+
 ## 后续跟进
 
 - `deeplink/tests.rs` 的 `TestHomeGuard` 改 `HOME`/`USERPROFILE` 但 31 测试仅 1 个 `#[serial]`——目前未见失败，若出现随机失败按 kimi_config 同法处理。

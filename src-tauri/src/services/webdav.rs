@@ -47,12 +47,34 @@ pub fn parse_base_url(raw: &str) -> Result<Url, AppError> {
         )
     })?;
     match url.scheme() {
-        "http" | "https" => Ok(url),
+        "https" => Ok(url),
+        // 同步产物包含全量供应商 API key 的明文 SQL 转储，Basic-Auth 也随
+        // 请求明文传输：公网 http 等于把所有密钥交给路径上的任何观察者。
+        // 仅放行回环 / RFC1918 私网 / .local（NAS 场景）。
+        "http" if url_host_is_private(&url) => Ok(url),
+        "http" => Err(AppError::localized(
+            "webdav.base_url.insecure",
+            "WebDAV http 地址仅支持局域网/回环主机；公网请使用 https（同步内容含明文 API 密钥）",
+            "Plain-http WebDAV is only allowed for loopback/private-LAN hosts; use https for public endpoints (the sync payload contains plaintext API keys).",
+        )),
         _ => Err(AppError::localized(
             "webdav.base_url.scheme_invalid",
             "WebDAV 仅支持 http/https 地址",
             "WebDAV URL must use http or https.",
         )),
+    }
+}
+
+/// Loopback / RFC1918 / link-local / `.local` hosts are considered private.
+pub(crate) fn url_host_is_private(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback() || (ip.segments()[0] & 0xfe00) == 0xfc00,
+        Some(url::Host::Domain(host)) => {
+            let host = host.to_ascii_lowercase();
+            host == "localhost" || host.ends_with(".local") || host.ends_with(".lan")
+        }
+        None => false,
     }
 }
 

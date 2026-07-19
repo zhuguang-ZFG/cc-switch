@@ -257,6 +257,8 @@ impl S3SyncSettings {
                 "S3 Secret Access Key is required.",
             ));
         }
+        // 同步产物是含全量 API key 的明文 SQL 转储；公网 http 端点直接拒绝。
+        crate::services::s3::validate_endpoint_security(self.endpoint.trim())?;
         Ok(())
     }
 
@@ -714,7 +716,19 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
 
     #[cfg(not(unix))]
     {
+        // settings.json holds S3/WebDAV credentials in plaintext; restrict
+        // the ACL to the current user on first creation (fs::write keeps the
+        // same file object afterwards, so the ACL persists across saves).
+        let created = !path.exists();
         fs::write(&path, json).map_err(|e| AppError::io(&path, e))?;
+        #[cfg(windows)]
+        if created {
+            if let Err(error) = crate::kimi_config::restrict_path_to_current_user(&path) {
+                log::warn!("Failed to restrict settings.json ACL: {error}");
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = created;
     }
 
     Ok(())
