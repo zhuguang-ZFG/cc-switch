@@ -1817,8 +1817,10 @@ impl Database {
         // 1. 历史 Codex/Gemini 行只包含 cache read；新 total 行还包含 cache write。
         // 2. Claude/Anthropic 的 input_tokens 已经是 fresh input，不能再次扣减
         // 3. 各项成本是基础成本（不含倍率），倍率只作用于最终总价
-        let cache_inclusive_app =
-            matches!(log.app_type.as_str(), "codex" | "gemini" | "grokbuild" | "kimicode");
+        let cache_inclusive_app = matches!(
+            log.app_type.as_str(),
+            "codex" | "gemini" | "grokbuild" | "kimicode"
+        );
         let billable_input_tokens =
             if !cache_inclusive_app || log.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH {
                 log.input_tokens as u64
@@ -4141,9 +4143,13 @@ mod tests {
             "缺少专门 effort 价格时应回退到 gpt-5.4 基础模型定价"
         );
 
-        // Kimi Code 是订阅/额度模型，不应伪装成公开按 token 计费模型
+        // Kimi Code 订阅模型现以开放平台 K2.7 Code 价目作估算价播种
+        // （见 schema.rs 定价种子的 ESTIMATE ONLY 注释），应能查到。
         let result = find_model_pricing_row(&conn, "kimi-for-coding")?;
-        assert!(result.is_none(), "kimi-for-coding 没有固定 token 单价");
+        assert!(
+            result.is_some(),
+            "kimi-for-coding 应命中播种的估算单价，避免会话成本静默归零"
+        );
 
         // 测试不存在的模型
         let result = find_model_pricing_row(&conn, "unknown-model-123")?;

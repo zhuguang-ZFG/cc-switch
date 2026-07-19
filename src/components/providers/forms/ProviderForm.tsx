@@ -33,10 +33,6 @@ import {
   type CodexProviderPreset,
 } from "@/config/codexProviderPresets";
 import {
-  geminiProviderPresets,
-  type GeminiProviderPreset,
-} from "@/config/geminiProviderPresets";
-import {
   opencodeProviderPresets,
   type OpenCodeProviderPreset,
 } from "@/config/opencodeProviderPresets";
@@ -71,7 +67,6 @@ import { getCodexCustomTemplate } from "@/config/codexTemplates";
 import CodexConfigEditor from "./CodexConfigEditor";
 import { CommonConfigEditor } from "./CommonConfigEditor";
 import { KimiCommonConfigModal } from "./KimiCommonConfigModal";
-import GeminiConfigEditor from "./GeminiConfigEditor";
 import JsonEditor from "@/components/JsonEditor";
 import { Label } from "@/components/ui/label";
 import { ProviderPresetSelector } from "./ProviderPresetSelector";
@@ -80,7 +75,6 @@ import { ClaudeFormFields } from "./ClaudeFormFields";
 import { ClaudeDesktopProviderForm } from "./ClaudeDesktopProviderForm";
 import { GrokBuildProviderForm } from "./GrokBuildProviderForm";
 import { CodexFormFields } from "./CodexFormFields";
-import { GeminiFormFields } from "./GeminiFormFields";
 import { OmoFormFields } from "./OmoFormFields";
 import { parseOmoOtherFieldsObject } from "@/types/omo";
 import {
@@ -99,8 +93,6 @@ import {
   useCodexCommonConfig,
   useSpeedTestEndpoints,
   useCodexTomlValidation,
-  useGeminiConfigState,
-  useGeminiCommonConfig,
   useOmoModelSource,
   useOpencodeFormState,
   useOmoDraftState,
@@ -115,7 +107,6 @@ import { useSettingsQuery } from "@/lib/query";
 import {
   CLAUDE_DEFAULT_CONFIG,
   CODEX_DEFAULT_CONFIG,
-  GEMINI_DEFAULT_CONFIG,
   OPENCODE_DEFAULT_CONFIG,
   OPENCLAW_DEFAULT_CONFIG,
   normalizePricingSource,
@@ -130,7 +121,6 @@ type PresetEntry = {
   preset:
     | ProviderPreset
     | CodexProviderPreset
-    | GeminiProviderPreset
     | OpenCodeProviderPreset
     | OpenClawProviderPreset
     | KimiProviderPreset;
@@ -387,15 +377,13 @@ function ProviderFormFull({
         ? JSON.stringify(initialData.settingsConfig, null, 2)
         : appId === "codex"
           ? CODEX_DEFAULT_CONFIG
-          : (appId as string) === "gemini"
-            ? GEMINI_DEFAULT_CONFIG
-            : appId === "opencode"
-              ? OPENCODE_DEFAULT_CONFIG
-              : appId === "openclaw"
-                ? OPENCLAW_DEFAULT_CONFIG
-                : appId === "kimicode"
-                  ? HERMES_DEFAULT_CONFIG
-                  : CLAUDE_DEFAULT_CONFIG,
+          : appId === "opencode"
+            ? OPENCODE_DEFAULT_CONFIG
+            : appId === "openclaw"
+              ? OPENCLAW_DEFAULT_CONFIG
+              : appId === "kimicode"
+                ? HERMES_DEFAULT_CONFIG
+                : CLAUDE_DEFAULT_CONFIG,
       icon: initialData?.icon ?? "",
       iconColor: initialData?.iconColor ?? "",
     }),
@@ -677,11 +665,6 @@ function ProviderFormFull({
         id: `codex-${index}`,
         preset,
       }));
-    } else if ((appId as string) === "gemini") {
-      return geminiProviderPresets.map<PresetEntry>((preset, index) => ({
-        id: `gemini-${index}`,
-        preset,
-      }));
     } else if (appId === "opencode") {
       return opencodeProviderPresets.map<PresetEntry>((preset, index) => ({
         id: `opencode-${index}`,
@@ -752,94 +735,6 @@ function ProviderFormFull({
     initialData: appId === "codex" ? initialData : undefined,
     initialEnabled:
       appId === "codex" ? initialData?.meta?.commonConfigEnabled : undefined,
-    selectedPresetId: selectedPresetId ?? undefined,
-  });
-
-  const {
-    geminiEnv,
-    geminiConfig,
-    geminiApiKey,
-    geminiBaseUrl,
-    geminiModel,
-    envError,
-    configError: geminiConfigError,
-    handleGeminiApiKeyChange: originalHandleGeminiApiKeyChange,
-    handleGeminiBaseUrlChange: originalHandleGeminiBaseUrlChange,
-    handleGeminiModelChange: originalHandleGeminiModelChange,
-    handleGeminiEnvChange,
-    handleGeminiConfigChange,
-    resetGeminiConfig,
-    envStringToObj,
-    envObjToString,
-  } = useGeminiConfigState({
-    initialData: (appId as string) === "gemini" ? initialData : undefined,
-  });
-
-  const updateGeminiEnvField = useCallback(
-    (
-      key: "GEMINI_API_KEY" | "GOOGLE_GEMINI_BASE_URL" | "GEMINI_MODEL",
-      value: string,
-    ) => {
-      try {
-        const config = JSON.parse(form.getValues("settingsConfig") || "{}") as {
-          env?: Record<string, unknown>;
-        };
-        if (!config.env || typeof config.env !== "object") {
-          config.env = {};
-        }
-        config.env[key] = value;
-        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
-      } catch {}
-    },
-    [form],
-  );
-
-  const handleGeminiApiKeyChange = useCallback(
-    (key: string) => {
-      originalHandleGeminiApiKeyChange(key);
-      updateGeminiEnvField("GEMINI_API_KEY", key.trim());
-    },
-    [originalHandleGeminiApiKeyChange, updateGeminiEnvField],
-  );
-
-  const handleGeminiBaseUrlChange = useCallback(
-    (url: string) => {
-      originalHandleGeminiBaseUrlChange(url);
-      updateGeminiEnvField(
-        "GOOGLE_GEMINI_BASE_URL",
-        url.trim().replace(/\/+$/, ""),
-      );
-    },
-    [originalHandleGeminiBaseUrlChange, updateGeminiEnvField],
-  );
-
-  const handleGeminiModelChange = useCallback(
-    (model: string) => {
-      originalHandleGeminiModelChange(model);
-      updateGeminiEnvField("GEMINI_MODEL", model.trim());
-    },
-    [originalHandleGeminiModelChange, updateGeminiEnvField],
-  );
-
-  const {
-    useCommonConfig: useGeminiCommonConfigFlag,
-    commonConfigSnippet: geminiCommonConfigSnippet,
-    commonConfigError: geminiCommonConfigError,
-    handleCommonConfigToggle: handleGeminiCommonConfigToggle,
-    handleCommonConfigSnippetChange: handleGeminiCommonConfigSnippetChange,
-    isExtracting: isGeminiExtracting,
-    handleExtract: handleGeminiExtract,
-    clearCommonConfigError: clearGeminiCommonConfigError,
-  } = useGeminiCommonConfig({
-    envValue: geminiEnv,
-    onEnvChange: handleGeminiEnvChange,
-    envStringToObj,
-    envObjToString,
-    initialData: (appId as string) === "gemini" ? initialData : undefined,
-    initialEnabled:
-      (appId as string) === "gemini"
-        ? initialData?.meta?.commonConfigEnabled
-        : undefined,
     selectedPresetId: selectedPresetId ?? undefined,
   });
 
@@ -1282,21 +1177,6 @@ function ProviderFormFull({
             }),
           );
         }
-      } else if ((appId as string) === "gemini") {
-        if (!geminiBaseUrl.trim()) {
-          issues.push(
-            t("providerForm.endpointRequired", {
-              defaultValue: "非官方供应商请填写 API 端点",
-            }),
-          );
-        }
-        if (!geminiApiKey.trim()) {
-          issues.push(
-            t("providerForm.apiKeyRequired", {
-              defaultValue: "非官方供应商请填写 API Key",
-            }),
-          );
-        }
       }
     }
 
@@ -1374,18 +1254,6 @@ function ProviderFormFull({
           configObj.modelCatalog = { models: normalizedCatalogModels };
         }
         settingsConfig = JSON.stringify(configObj);
-      } catch (err) {
-        settingsConfig = values.settingsConfig.trim();
-      }
-    } else if ((appId as string) === "gemini") {
-      try {
-        const envObj = envStringToObj(geminiEnv);
-        const configObj = geminiConfig.trim() ? JSON.parse(geminiConfig) : {};
-        const combined = {
-          env: envObj,
-          config: configObj,
-        };
-        settingsConfig = JSON.stringify(combined);
       } catch (err) {
         settingsConfig = values.settingsConfig.trim();
       }
@@ -1519,9 +1387,7 @@ function ProviderFormFull({
           ? useCommonConfig
           : appId === "codex"
             ? useCodexCommonConfigFlag
-            : (appId as string) === "gemini"
-              ? useGeminiCommonConfigFlag
-              : undefined,
+            : undefined,
       endpointAutoSelect,
       claudeDesktopMode: undefined,
       // 保存 providerType（用于识别 Copilot / Codex OAuth 等特殊供应商）
@@ -1652,19 +1518,6 @@ function ProviderFormFull({
   });
 
   const {
-    shouldShowApiKeyLink: shouldShowGeminiApiKeyLink,
-    websiteUrl: geminiWebsiteUrl,
-    isPartner: isGeminiPartner,
-    partnerPromotionKey: geminiPartnerPromotionKey,
-  } = useApiKeyLink({
-    appId: "claude" /* was gemini form helper */,
-    category,
-    selectedPresetId,
-    presetEntries,
-    formWebsiteUrl: form.watch("websiteUrl") || "",
-  });
-
-  const {
     shouldShowApiKeyLink: shouldShowOpencodeApiKeyLink,
     websiteUrl: opencodeWebsiteUrl,
     isPartner: isOpencodePartner,
@@ -1731,9 +1584,6 @@ function ProviderFormFull({
             "openai_responses",
         );
       }
-      if ((appId as string) === "gemini") {
-        resetGeminiConfig({}, {});
-      }
       if (appId === "opencode") {
         opencodeForm.resetOpencodeState();
         omoDraft.resetOmoDraftState();
@@ -1778,23 +1628,6 @@ function ProviderFormFull({
         name: preset.nameKey ? t(preset.nameKey) : preset.name,
         websiteUrl: preset.websiteUrl ?? "",
         settingsConfig: JSON.stringify({ auth, config }, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    if ((appId as string) === "gemini") {
-      const preset = entry.preset as GeminiProviderPreset;
-      const env = (preset.settingsConfig as any)?.env ?? {};
-      const config = (preset.settingsConfig as any)?.config ?? {};
-
-      resetGeminiConfig(env, config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(preset.settingsConfig, null, 2),
         icon: preset.icon ?? "",
         iconColor: preset.iconColor ?? "",
       });
@@ -2272,35 +2105,6 @@ function ProviderFormFull({
             />
           )}
 
-          {(appId as string) === "gemini" && (
-            <GeminiFormFields
-              providerId={providerId}
-              shouldShowApiKey={shouldShowApiKey(
-                form.getValues("settingsConfig"),
-                isEditMode,
-              )}
-              apiKey={geminiApiKey}
-              onApiKeyChange={handleGeminiApiKeyChange}
-              category={category}
-              shouldShowApiKeyLink={shouldShowGeminiApiKeyLink}
-              websiteUrl={geminiWebsiteUrl}
-              isPartner={isGeminiPartner}
-              partnerPromotionKey={geminiPartnerPromotionKey}
-              shouldShowSpeedTest={shouldShowSpeedTest}
-              baseUrl={geminiBaseUrl}
-              onBaseUrlChange={handleGeminiBaseUrlChange}
-              isEndpointModalOpen={isEndpointModalOpen}
-              onEndpointModalToggle={setIsEndpointModalOpen}
-              onCustomEndpointsChange={setDraftCustomEndpoints}
-              autoSelect={endpointAutoSelect}
-              onAutoSelectChange={setEndpointAutoSelect}
-              shouldShowModelField={true}
-              model={geminiModel}
-              onModelChange={handleGeminiModelChange}
-              speedTestEndpoints={speedTestEndpoints}
-            />
-          )}
-
           {appId === "opencode" && !isAnyOmoCategory && (
             <OpenCodeFormFields
               npm={opencodeForm.opencodeNpm}
@@ -2401,7 +2205,7 @@ function ProviderFormFull({
             />
           )}
 
-          {/* 配置编辑器：Codex、Claude、Gemini 分别使用不同的编辑器 */}
+          {/* 配置编辑器：Codex、Claude 分别使用不同的编辑器 */}
           {appId === "codex" ? (
             <>
               <CodexConfigEditor
@@ -2424,28 +2228,6 @@ function ProviderFormFull({
                 configError={codexConfigError}
                 onExtract={handleCodexExtract}
                 isExtracting={isCodexExtracting}
-              />
-              {settingsConfigErrorField}
-            </>
-          ) : (appId as string) === "gemini" ? (
-            <>
-              <GeminiConfigEditor
-                envValue={geminiEnv}
-                configValue={geminiConfig}
-                onEnvChange={handleGeminiEnvChange}
-                onConfigChange={handleGeminiConfigChange}
-                useCommonConfig={useGeminiCommonConfigFlag}
-                onCommonConfigToggle={handleGeminiCommonConfigToggle}
-                commonConfigSnippet={geminiCommonConfigSnippet}
-                onCommonConfigSnippetChange={
-                  handleGeminiCommonConfigSnippetChange
-                }
-                onCommonConfigErrorClear={clearGeminiCommonConfigError}
-                commonConfigError={geminiCommonConfigError}
-                envError={envError}
-                configError={geminiConfigError}
-                onExtract={handleGeminiExtract}
-                isExtracting={isGeminiExtracting}
               />
               {settingsConfigErrorField}
             </>

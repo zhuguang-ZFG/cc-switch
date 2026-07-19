@@ -3127,8 +3127,10 @@ fn rewrite_codex_responses_endpoint_to_gemini(
     provider: &Provider,
 ) -> Result<(String, Option<String>), ProxyError> {
     let (_, query) = split_endpoint_and_query(endpoint);
-    let model = super::gemini_url::normalize_gemini_model_id(
-        super::providers::transform_gemini::extract_gemini_model(body).unwrap_or("unknown"),
+    let model = super::gemini_url::sanitize_gemini_model_for_path(
+        super::gemini_url::normalize_gemini_model_id(
+            super::providers::transform_gemini::extract_gemini_model(body).unwrap_or("unknown"),
+        ),
     );
     let is_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let target_path = if vertex {
@@ -3193,7 +3195,9 @@ fn rewrite_claude_transform_endpoint(
         // Accept both bare ids (`gemini-2.5-pro`) and the resource-name
         // form (`models/gemini-2.5-pro`) that Gemini SDKs emit. See
         // `normalize_gemini_model_id` for rationale.
-        let model = super::gemini_url::normalize_gemini_model_id(model);
+        let model = super::gemini_url::sanitize_gemini_model_for_path(
+            super::gemini_url::normalize_gemini_model_id(model),
+        );
         let is_stream = body
             .get("stream")
             .and_then(|value| value.as_bool())

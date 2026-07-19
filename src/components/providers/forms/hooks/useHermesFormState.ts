@@ -73,6 +73,38 @@ function parseRateLimitDelay(raw: unknown): number | undefined {
     : undefined;
 }
 
+// Legacy Hermes configs stored the protocol as `api_mode`; map it to the
+// Kimi-native `type` so editing an old provider doesn't reset the protocol.
+function legacyApiModeToType(mode: unknown): KimiProviderType | "" {
+  switch (mode) {
+    case "anthropic_messages":
+      return "anthropic";
+    case "codex_responses":
+      return "openai_responses";
+    case "chat_completions":
+      return "openai";
+    default:
+      return "";
+  }
+}
+
+// Legacy Hermes models carried `context_length`; Kimi uses `max_context_size`.
+function normalizeLegacyModels(models: KimiModel[]): KimiModel[] {
+  return models.map((model) => {
+    const legacy = (model as KimiModel & { context_length?: unknown })
+      .context_length;
+    if (
+      model.max_context_size === undefined &&
+      typeof legacy === "number" &&
+      Number.isFinite(legacy) &&
+      legacy > 0
+    ) {
+      return { ...model, max_context_size: legacy };
+    }
+    return model;
+  });
+}
+
 export function useHermesFormState({
   initialData,
   appId,
@@ -110,12 +142,18 @@ export function useHermesFormState({
       "type",
       "",
     );
-    return stored || KIMI_DEFAULT_PROVIDER_TYPE;
+    return (
+      stored ||
+      legacyApiModeToType(initialData?.settingsConfig?.api_mode) ||
+      KIMI_DEFAULT_PROVIDER_TYPE
+    );
   });
 
   const [hermesModels, setHermesModels] = useState<KimiModel[]>(() => {
     if (appId !== "kimicode") return [];
-    return parseHermesField<KimiModel[]>(initialData, "models", []);
+    return normalizeLegacyModels(
+      parseHermesField<KimiModel[]>(initialData, "models", []),
+    );
   });
 
   const [hermesRateLimitDelay, setHermesRateLimitDelay] = useState<

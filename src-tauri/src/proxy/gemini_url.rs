@@ -19,6 +19,25 @@ pub fn normalize_gemini_model_id(model: &str) -> &str {
     trimmed.strip_prefix("models/").unwrap_or(trimmed)
 }
 
+/// Validate a client-supplied model id before interpolating it into an
+/// upstream URL path. Model ids may contain `/` (tuned models like
+/// `tunedModels/my-tuned`), but a `..`/`.` segment or URL metacharacters
+/// (`:`, `?`, `#`, whitespace, `\`) would let a request body rewrite the
+/// upstream path. Returns `"unknown"` for invalid input, matching the
+/// existing fallback for a missing model (upstream rejects it cleanly).
+pub fn sanitize_gemini_model_for_path(model: &str) -> &str {
+    let valid = !model.is_empty()
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+        && model.split('/').all(|seg| !matches!(seg, "" | "." | ".."));
+    if valid {
+        model
+    } else {
+        "unknown"
+    }
+}
+
 pub fn resolve_gemini_native_url(base_url: &str, endpoint: &str, is_full_url: bool) -> String {
     if !is_full_url || should_normalize_gemini_full_url(base_url) {
         return build_gemini_native_url(base_url, endpoint);
@@ -700,5 +719,28 @@ mod tests {
         // surfaces at the request layer rather than producing a misleading
         // empty segment here.
         assert_eq!(normalize_gemini_model_id(""), "");
+    }
+
+    #[test]
+    fn sanitize_model_accepts_valid_ids() {
+        use super::sanitize_gemini_model_for_path as sanitize;
+        assert_eq!(sanitize("gemini-2.5-pro"), "gemini-2.5-pro");
+        assert_eq!(sanitize("tunedModels/my-tuned"), "tunedModels/my-tuned");
+        assert_eq!(sanitize("gemini_exp.1206"), "gemini_exp.1206");
+    }
+
+    #[test]
+    fn sanitize_model_rejects_path_traversal_and_metacharacters() {
+        use super::sanitize_gemini_model_for_path as sanitize;
+        assert_eq!(sanitize("../operations"), "unknown");
+        assert_eq!(sanitize("a/../b"), "unknown");
+        assert_eq!(sanitize("a//b"), "unknown");
+        assert_eq!(sanitize("."), "unknown");
+        assert_eq!(sanitize("model:embedContent"), "unknown");
+        assert_eq!(sanitize("model?key=x"), "unknown");
+        assert_eq!(sanitize("model#frag"), "unknown");
+        assert_eq!(sanitize("model name"), "unknown");
+        assert_eq!(sanitize("model\\x"), "unknown");
+        assert_eq!(sanitize(""), "unknown");
     }
 }

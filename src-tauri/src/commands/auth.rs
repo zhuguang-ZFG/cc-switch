@@ -26,6 +26,8 @@ struct KimiDeviceAuthorization {
     user_code: String,
     #[serde(default)]
     verification_uri: String,
+    // Optional per RFC 8628; fall back to verification_uri when absent.
+    #[serde(default)]
     verification_uri_complete: String,
     expires_in: Option<u64>,
     #[serde(default = "default_poll_interval")]

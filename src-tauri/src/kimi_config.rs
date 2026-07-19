@@ -204,9 +204,7 @@ pub fn is_proxy_takeover_active() -> Result<bool, AppError> {
         // named cc-switch-proxy is not treated as proxy takeover.
         table_str(table, "api_key").as_deref() == Some("PROXY_MANAGED")
             && table_str(table, "base_url").is_some_and(|url| {
-                url.contains("/kimicode/")
-                    || url.contains("127.0.0.1")
-                    || url.contains("localhost")
+                url.contains("/kimicode/") || url.contains("127.0.0.1") || url.contains("localhost")
             })
     }))
 }
@@ -938,13 +936,14 @@ struct OAuthRefreshFileLock {
     #[allow(dead_code)]
     file: fs::File,
     heartbeat: Option<std::thread::JoinHandle<()>>,
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Dropping the sender disconnects the channel and wakes the heartbeat
+    /// thread immediately, so Drop never blocks a tokio worker on a sleep.
+    stop_tx: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Drop for OAuthRefreshFileLock {
     fn drop(&mut self) {
-        self.stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(self.stop_tx.take());
         if let Some(handle) = self.heartbeat.take() {
             let _ = handle.join();
         }
@@ -984,23 +983,18 @@ fn try_acquire_oauth_refresh_file_lock() -> Result<OAuthRefreshFileLock, AppErro
     }
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
                 let _ = writeln!(file, "{}", std::process::id());
                 let _ = file.flush();
-                let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
                 let heartbeat_path = path.clone();
-                let stop_flag = stop.clone();
                 let heartbeat = std::thread::spawn(move || {
-                    while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        std::thread::sleep(Duration::from_secs(15));
-                        if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                            break;
-                        }
+                    // recv_timeout returns Err(Disconnected) as soon as the
+                    // lock drops its sender, so shutdown is immediate.
+                    while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                        stop_rx.recv_timeout(Duration::from_secs(15))
+                    {
                         touch_lock_file(&heartbeat_path);
                     }
                 });
@@ -1008,7 +1002,7 @@ fn try_acquire_oauth_refresh_file_lock() -> Result<OAuthRefreshFileLock, AppErro
                     path,
                     file,
                     heartbeat: Some(heartbeat),
-                    stop,
+                    stop_tx: Some(stop_tx),
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1212,7 +1206,12 @@ async fn ensure_fresh_oauth_token_with_expected(
             .to_string(),
         expires_in,
     };
-    save_oauth_token(&refreshed)?;
+    // save_oauth_token shells out to icacls on Windows; keep it off the
+    // async worker since this runs on the proxy request hot path.
+    let to_save = refreshed.clone();
+    tokio::task::spawn_blocking(move || save_oauth_token(&to_save))
+        .await
+        .map_err(|e| AppError::Message(format!("OAuth token save task failed: {e}")))??;
     Ok(Some(refreshed.access_token))
 }
 
@@ -1470,12 +1469,11 @@ mod tests {
     };
     use futures::future::join_all;
     use serde_json::json;
+    use serial_test::serial;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     };
-
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Default)]
     struct MockOAuthState {
@@ -1531,7 +1529,6 @@ mod tests {
     }
 
     fn with_temp_home<F: FnOnce(&Path)>(f: F) {
-        let _g = TEST_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         fs::create_dir_all(home.join(".kimi-code")).unwrap();
@@ -1552,6 +1549,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_document_writes_only_when_mutator_reports_change() {
         with_temp_home(|_home| {
             let path = get_kimi_config_path();
@@ -1591,6 +1589,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_provider_writes_providers_and_models() {
         with_temp_home(|_home| {
             let settings = json!({
@@ -1647,6 +1646,7 @@ model = "model"
     }
 
     #[test]
+    #[serial]
     fn apply_switch_sets_default_model_and_preserves_other_tables() {
         with_temp_home(|_home| {
             let path = get_kimi_config_path();
@@ -1681,6 +1681,7 @@ api_key = "x"
     }
 
     #[test]
+    #[serial]
     fn proxy_takeover_preserves_unrelated_toml_and_restores_exact_snapshot() {
         with_temp_home(|_home| {
             let original = r#"default_model = "demo/model"
@@ -1711,6 +1712,7 @@ model = "model"
     }
 
     #[test]
+    #[serial]
     fn remove_provider_cleans_models_and_default() {
         with_temp_home(|_home| {
             let settings = json!({
@@ -1727,6 +1729,7 @@ model = "model"
     }
 
     #[test]
+    #[serial]
     fn managed_provider_cannot_be_overwritten_or_removed() {
         with_temp_home(|_home| {
             fs::write(
@@ -1747,6 +1750,7 @@ model = "kimi-for-coding"
     }
 
     #[test]
+    #[serial]
     fn reserved_managed_name_without_live_table_is_not_reported_as_managed() {
         with_temp_home(|_home| {
             assert!(!is_managed_provider(MANAGED_KIMI_PROVIDER).unwrap());
@@ -1755,6 +1759,7 @@ model = "kimi-for-coding"
     }
 
     #[test]
+    #[serial]
     fn managed_provider_switch_updates_default_without_rewriting_oauth_table() {
         with_temp_home(|_home| {
             fs::write(
@@ -1793,6 +1798,7 @@ model = "kimi-for-coding"
     }
 
     #[test]
+    #[serial]
     fn logout_managed_provider_falls_back_to_remaining_model() {
         with_temp_home(|_home| {
             fs::write(
@@ -1830,6 +1836,7 @@ model = "kimi-for-coding"
     }
 
     #[test]
+    #[serial]
     fn oauth_refresh_file_lock_is_exclusive_and_releases() {
         with_temp_home(|home| {
             let lock_path = home.join(".kimi-code").join(".oauth-refresh.lock");
@@ -1856,14 +1863,12 @@ model = "kimi-for-coding"
 
             let second = try_acquire_oauth_refresh_file_lock().expect("re-acquire");
             drop(second);
-            assert!(
-                !lock_path.exists(),
-                "lock file must be removed on Drop"
-            );
+            assert!(!lock_path.exists(), "lock file must be removed on Drop");
         });
     }
 
     #[test]
+    #[serial]
     fn empty_credentials_clear_existing_values() {
         with_temp_home(|_home| {
             fs::write(
@@ -1891,6 +1896,7 @@ base_url = "https://old.example/v1"
     }
 
     #[test]
+    #[serial]
     fn default_provider_resolves_from_model_reference() {
         with_temp_home(|_home| {
             fs::write(
@@ -1911,6 +1917,7 @@ model = "real-model"
     }
 
     #[test]
+    #[serial]
     fn oauth_token_uses_official_wire_format() {
         with_temp_home(|_home| {
             let token = KimiOAuthToken {
@@ -1931,6 +1938,7 @@ model = "real-model"
     }
 
     #[test]
+    #[serial]
     fn oauth_refresh_mock_covers_rotation_coalescing_and_rejection() {
         with_temp_home(|_home| {
             let runtime = tokio::runtime::Builder::new_current_thread()

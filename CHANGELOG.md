@@ -5,6 +5,25 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced.
+
+### Fixed
+
+- **OAuth refresh no longer stalls tokio workers**: the cross-process refresh lock's heartbeat thread now wakes immediately on drop (mpsc `recv_timeout` instead of an uninterruptible 15s sleep), and the post-refresh credentials write — which shells out to `icacls` on Windows — moved into `spawn_blocking`, keeping both off the proxy request hot path.
+- **Kimi device-flow login tolerates a missing `verification_uri_complete`** (optional per RFC 8628) instead of failing deserialization.
+- **Gemini model ids from proxied request bodies are validated before URL-path interpolation** (`sanitize_gemini_model_for_path`): traversal segments and URL metacharacters fall back to `unknown` rather than rewriting the upstream path.
+- **Editing a legacy Hermes provider no longer silently resets its protocol**: the form now maps old `api_mode` → `type` and per-model `context_length` → `max_context_size` keys.
+- **Kimi session import stats no longer over-count** when a concurrent writer wins the `INSERT OR IGNORE` race.
+- **`pnpm test:unit` is scoped to `tests/`** — it previously collected third-party test suites under `.vendor/` and crashed on their missing dev-dependencies.
+- **Parallel `cargo test --lib` is deterministic again**: `kimi_config` tests now share the global `#[serial]` lock used by every other test that mutates `KIMI_CODE_HOME`, replacing a module-private mutex that raced against them and cascaded `PoisonError`s on first failure.
+
+### Changed
+
+- Removed dead Gemini-CLI branches from `ProviderForm.tsx` (unreachable since `gemini` left the `AppId` union) and the stale `gemini` entry from proxy startup app types.
+- `test_model_pricing_matching` now asserts `kimi-for-coding` resolves to its seeded estimate pricing (the seed was added so session costs don't silently drop to $0; the stale assertion predated it).
+
 ## [3.17.0] - 2026-07-13
 
 Development since v3.16.5 is headlined by project profiles — named snapshots of provider/MCP/Skills/prompt state, switchable per scope from a new header switcher or the tray (schema v12) — and a deep Codex push: official ChatGPT-subscription sessions can now route through the local proxy takeover with a corrected client identity, gpt-5.6 lands across context-window injection and Sol/Terra/Luna pricing with 1.25× cache-write rates, and a native Anthropic Messages upstream joins the Codex format options. A proxy-correctness wave makes the Responses↔Anthropic bridges fail closed and round-trip reasoning/tool results losslessly, strengthens prompt-cache breakpoint injection, and fixes cache-write accounting across historical token semantics (schema v13); a config.toml hardening batch stops deleted MCP servers from resurrecting, fails MCP sync closed on unparseable files, extends switch-time common-config autosync to Codex, and moves the common-config merge to backend toml_edit. Usage tooling gains Zhipu team-plan quota queries, Codex sub-agent and free-plan accounting, and transient-failure retry, while Kimi For Coding's 256K window finally takes effect — rounded out by a Codex default-model form field, renamed-session titles, OpenCode form and live-sync fixes, and preset updates (SudoCode sponsorship, LongCat-2.0, GPT-5.6 defaults, Hunyuan Hy3 pricing).

@@ -1757,8 +1757,7 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 // Must include every app that supports proxy takeover. Omitting an app means
 // its `proxy_config.enabled=true` survives a restart without re-takeover
 // (Kimi would keep a dead local route in config.toml).
-const PROXY_STARTUP_APP_TYPES: [&str; 5] =
-    ["claude", "codex", "gemini", "grokbuild", "kimicode"];
+const PROXY_STARTUP_APP_TYPES: [&str; 4] = ["claude", "codex", "grokbuild", "kimicode"];
 
 async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static str> {
     let mut apps = Vec::new();

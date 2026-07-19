@@ -461,7 +461,7 @@ fn insert_kimi_session_entry(
         crate::usage_events::notify_log_recorded();
     }
 
-    Ok(true)
+    Ok(inserted_rows > 0)
 }
 
 /// 查找 Kimi 模型定价（带归一化）
@@ -502,9 +502,7 @@ fn find_kimi_pricing(conn: &rusqlite::Connection, model_id: &str) -> Option<Mode
 
 fn is_moonshot_family_model(normalized: &str) -> bool {
     // `kimi-for-coding*` is covered by `starts_with("kimi")`.
-    normalized == "k3"
-        || normalized.starts_with("kimi")
-        || normalized.starts_with("moonshot")
+    normalized == "k3" || normalized.starts_with("kimi") || normalized.starts_with("moonshot")
 }
 
 #[cfg(test)]
@@ -525,7 +523,12 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
-    fn turn_record(input_other: u64, cache_read: u64, cache_creation: u64, output: u64) -> serde_json::Value {
+    fn turn_record(
+        input_other: u64,
+        cache_read: u64,
+        cache_creation: u64,
+        output: u64,
+    ) -> serde_json::Value {
         serde_json::json!({
             "type": "usage.record",
             "model": "kimi-code/k3",
@@ -540,7 +543,12 @@ mod tests {
         })
     }
 
-    fn session_record(input_other: u64, cache_read: u64, cache_creation: u64, output: u64) -> serde_json::Value {
+    fn session_record(
+        input_other: u64,
+        cache_read: u64,
+        cache_creation: u64,
+        output: u64,
+    ) -> serde_json::Value {
         serde_json::json!({
             "type": "usage.record",
             "model": "kimi-code/k3",
@@ -647,7 +655,9 @@ mod tests {
 
     #[test]
     fn test_wire_file_identity() {
-        let path = Path::new("/home/u/.kimi-code/sessions/wd_proj_ab12/session_xyz/agents/agent-0/wire.jsonl");
+        let path = Path::new(
+            "/home/u/.kimi-code/sessions/wd_proj_ab12/session_xyz/agents/agent-0/wire.jsonl",
+        );
         let (session, agent) = wire_file_identity(path);
         assert_eq!(session.as_deref(), Some("session_xyz"));
         assert_eq!(agent.as_deref(), Some("agent-0"));
@@ -663,18 +673,9 @@ mod tests {
     fn test_collect_kimi_wire_files_finds_nested_agents() {
         let temp = tempdir().unwrap();
         let root = temp.path().join("sessions");
-        write_wire(
-            &root.join("wd_a/session_1/agents/main/wire.jsonl"),
-            &[],
-        );
-        write_wire(
-            &root.join("wd_a/session_1/agents/agent-0/wire.jsonl"),
-            &[],
-        );
-        write_wire(
-            &root.join("wd_b/session_2/agents/main/wire.jsonl"),
-            &[],
-        );
+        write_wire(&root.join("wd_a/session_1/agents/main/wire.jsonl"), &[]);
+        write_wire(&root.join("wd_a/session_1/agents/agent-0/wire.jsonl"), &[]);
+        write_wire(&root.join("wd_b/session_2/agents/main/wire.jsonl"), &[]);
         // 非 wire.jsonl 文件不应被收集
         write_wire(&root.join("wd_b/session_2/state.json"), &[]);
 
@@ -690,9 +691,7 @@ mod tests {
     fn test_sync_single_kimi_file_imports_turn_and_session_scopes() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().unwrap();
-        let wire = temp
-            .path()
-            .join("wd_a/session_1/agents/main/wire.jsonl");
+        let wire = temp.path().join("wd_a/session_1/agents/main/wire.jsonl");
         write_wire(
             &wire,
             &[
@@ -746,9 +745,7 @@ mod tests {
     fn test_sync_single_kimi_file_missing_scope_imported_as_session() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().unwrap();
-        let wire = temp
-            .path()
-            .join("wd_a/session_1/agents/main/wire.jsonl");
+        let wire = temp.path().join("wd_a/session_1/agents/main/wire.jsonl");
         let mut scopeless = session_record(1181, 0, 0, 8);
         scopeless.as_object_mut().unwrap().remove("usageScope");
         write_wire(&wire, &[scopeless]);
@@ -773,9 +770,7 @@ mod tests {
     fn test_sync_single_kimi_file_mixed_scopes_have_stable_distinct_ids() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().unwrap();
-        let wire = temp
-            .path()
-            .join("wd_a/session_1/agents/main/wire.jsonl");
+        let wire = temp.path().join("wd_a/session_1/agents/main/wire.jsonl");
         write_wire(
             &wire,
             &[
@@ -817,9 +812,7 @@ mod tests {
     fn test_sync_single_kimi_file_is_incremental() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().unwrap();
-        let wire = temp
-            .path()
-            .join("wd_a/session_1/agents/main/wire.jsonl");
+        let wire = temp.path().join("wd_a/session_1/agents/main/wire.jsonl");
         write_wire(&wire, &[turn_record(100, 50, 0, 10)]);
 
         assert_eq!(sync_single_kimi_file(&db, &wire)?, (1, 0));
@@ -849,12 +842,8 @@ mod tests {
     fn test_agents_under_same_session_use_distinct_request_ids() -> Result<(), AppError> {
         let db = Database::memory()?;
         let temp = tempdir().unwrap();
-        let main_wire = temp
-            .path()
-            .join("wd_a/session_1/agents/main/wire.jsonl");
-        let sub_wire = temp
-            .path()
-            .join("wd_a/session_1/agents/agent-0/wire.jsonl");
+        let main_wire = temp.path().join("wd_a/session_1/agents/main/wire.jsonl");
+        let sub_wire = temp.path().join("wd_a/session_1/agents/agent-0/wire.jsonl");
         write_wire(&main_wire, &[turn_record(100, 50, 0, 10)]);
         write_wire(&sub_wire, &[turn_record(200, 100, 0, 20)]);
 
