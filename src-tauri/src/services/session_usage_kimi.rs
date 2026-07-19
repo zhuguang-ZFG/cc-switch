@@ -501,10 +501,10 @@ fn find_kimi_pricing(conn: &rusqlite::Connection, model_id: &str) -> Option<Mode
 }
 
 fn is_moonshot_family_model(normalized: &str) -> bool {
+    // `kimi-for-coding*` is covered by `starts_with("kimi")`.
     normalized == "k3"
         || normalized.starts_with("kimi")
         || normalized.starts_with("moonshot")
-        || normalized.contains("kimi-for-coding")
 }
 
 #[cfg(test)]

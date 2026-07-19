@@ -2483,12 +2483,13 @@ impl Database {
             ),
             // Kimi Code CLI 0.27 managed catalog aliases (wire.jsonl model field
             // after normalize_kimi_model strips the `kimi-code/` provider prefix).
-            // Coding Plan models are subscription-billed on the platform; rates
-            // mirror open-platform K2.7 Code so session-log cost estimates stay
-            // non-zero instead of silently dropping to $0.
+            // ESTIMATE ONLY: Coding Plan / managed subscription billing is not
+            // per-token; rates mirror open-platform K2.7 Code so session-log cost
+            // estimates stay non-zero instead of silently dropping to $0. Replace
+            // when Moonshot publishes distinct list prices.
             (
                 "kimi-for-coding",
-                "Kimi For Coding",
+                "Kimi For Coding (est.)",
                 "0.95",
                 "4.00",
                 "0.19",
@@ -2496,15 +2497,14 @@ impl Database {
             ),
             (
                 "kimi-for-coding-highspeed",
-                "Kimi For Coding Highspeed",
+                "Kimi For Coding Highspeed (est.)",
                 "0.95",
                 "4.00",
                 "0.19",
                 "0",
             ),
-            // K3 (1M context managed model) — provisional open-platform rate until
-            // Moonshot publishes a distinct list price; same base as K2.7 Code.
-            ("k3", "Kimi K3", "0.95", "4.00", "0.19", "0"),
+            // K3 (1M context managed model) — provisional estimate.
+            ("k3", "Kimi K3 (est.)", "0.95", "4.00", "0.19", "0"),
             // 腾讯混元 (Tencent Hunyuan)（官方 CNY 1/4/0.25 按 1 USD ≈ 7.14 折算；Hy3 阶梯计价取最低档）
             ("hunyuan-hy3", "Hunyuan Hy3", "0.14", "0.56", "0.035", "0"),
             ("hy3", "Hunyuan Hy3", "0.14", "0.56", "0.035", "0"),

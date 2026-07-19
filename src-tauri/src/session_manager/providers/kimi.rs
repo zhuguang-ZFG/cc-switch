@@ -227,9 +227,10 @@ pub fn delete_session(root: &Path, source_path: &Path, session_id: &str) -> Resu
 }
 
 /// 与官方一致的删除语义（session-store.ts delete）：
-/// rm 会话目录 + 向 session_index.jsonl 追加 {sessionId, deleted:true} 墓碑行
-/// （O_APPEND），永不物理删行。read-modify-write 整文件重写会覆盖
-/// kimi CLI 运行期间并发追加的行，故此处只做追加。
+/// 向 session_index.jsonl 追加 {sessionId, deleted:true} 墓碑（O_APPEND）后
+/// 再 rm 会话目录。先写墓碑再删目录：崩溃时至多多一条 tombstone，不会把已删
+/// 会话复活。read-modify-write 整文件重写会覆盖 kimi CLI 并发追加行，故索引
+/// 只做追加。
 fn delete_session_in(
     root: &Path,
     source_path: &Path,
@@ -238,10 +239,10 @@ fn delete_session_in(
 ) -> Result<bool, String> {
     let resolved = resolve_indexed_session_dir(root, source_path, session_id)
         .ok_or_else(|| format!("Invalid Kimi session directory: {}", source_path.display()))?;
+    // Tombstone first so a crash mid-delete never re-lists the session.
+    append_index_tombstone(index_path, session_id)?;
     fs::remove_dir_all(&resolved)
         .map_err(|e| format!("Failed to delete Kimi session directory: {e}"))?;
-
-    append_index_tombstone(index_path, session_id)?;
     Ok(true)
 }
 

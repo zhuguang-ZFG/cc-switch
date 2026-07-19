@@ -1248,7 +1248,9 @@ impl RequestForwarder {
         if matches!(app_type, AppType::GrokBuild) {
             super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
         } else if matches!(app_type, AppType::KimiCode) {
-            super::providers::apply_kimi_upstream_model(provider, &mut mapped_body);
+            // Fail closed on unmapped proxy placeholders (ConfigError → retryable
+            // → failover can try the next queue member instead of 404 upstream).
+            super::providers::apply_kimi_upstream_model(provider, &mut mapped_body)?;
         }
 
         if is_copilot {

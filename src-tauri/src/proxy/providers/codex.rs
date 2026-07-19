@@ -6,12 +6,15 @@
 //! 支持检测官方 Codex 客户端 (codex_vscode, codex_cli_rs)
 
 use super::{AuthInfo, AuthStrategy, ProviderAdapter};
+use crate::kimi_config::{KIMI_OAUTH_KEY, MANAGED_KIMI_PROVIDER};
 use crate::provider::{CodexChatReasoningConfig, Provider};
 use crate::proxy::error::ProxyError;
 use regex::Regex;
-use serde_json::Value as JsonValue;
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashSet;
-use std::sync::LazyLock;
+use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 use toml::Value as TomlValue;
 
 /// 官方 Codex 客户端 User-Agent 正则
@@ -389,6 +392,64 @@ fn kimi_style_model_entries_from_value(settings: &JsonValue) -> Vec<KimiStyleMod
         .unwrap_or_default()
 }
 
+/// Only official/managed Kimi projections may fall back to live config.toml.
+/// Do not trigger a live read for arbitrary third-party providers that happen
+/// to carry an `oauth` object.
+fn is_managed_kimi_for_model_catalog(provider: &Provider) -> bool {
+    provider.id == MANAGED_KIMI_PROVIDER
+        || provider.id.starts_with("managed:kimi")
+        || provider
+            .settings_config
+            .get("_cc_managed")
+            .and_then(JsonValue::as_bool)
+            == Some(true)
+        || provider
+            .settings_config
+            .get("oauth")
+            .and_then(|oauth| oauth.get("key"))
+            .and_then(JsonValue::as_str)
+            == Some(KIMI_OAUTH_KEY)
+}
+
+/// Short-TTL cache of live Kimi providers so managed failover attempts do not
+/// re-parse config.toml on every request (review W2).
+struct LiveKimiProvidersCache {
+    path: PathBuf,
+    mtime: Option<SystemTime>,
+    loaded_at: Instant,
+    providers: JsonMap<String, JsonValue>,
+}
+
+const LIVE_KIMI_CACHE_TTL: Duration = Duration::from_secs(2);
+
+fn live_kimi_providers_cached() -> Option<JsonMap<String, JsonValue>> {
+    static CACHE: OnceLock<Mutex<Option<LiveKimiProvidersCache>>> = OnceLock::new();
+    let path = crate::kimi_config::get_kimi_config_path();
+    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let now = Instant::now();
+
+    let lock = CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+
+    if let Some(cache) = guard.as_ref() {
+        let fresh = cache.path == path
+            && cache.mtime == mtime
+            && now.duration_since(cache.loaded_at) < LIVE_KIMI_CACHE_TTL;
+        if fresh {
+            return Some(cache.providers.clone());
+        }
+    }
+
+    let providers = crate::kimi_config::get_providers().ok()?;
+    *guard = Some(LiveKimiProvidersCache {
+        path,
+        mtime,
+        loaded_at: now,
+        providers: providers.clone(),
+    });
+    Some(providers)
+}
+
 fn kimi_style_model_entries(provider: &Provider) -> Vec<KimiStyleModelEntry> {
     let from_db = kimi_style_model_entries_from_value(&provider.settings_config);
     if !from_db.is_empty() {
@@ -396,17 +457,10 @@ fn kimi_style_model_entries(provider: &Provider) -> Vec<KimiStyleModelEntry> {
     }
 
     // Managed OAuth providers keep the editable projection sparse (oauth +
-    // base_url only). Models live in config.toml; pull them for routing so
-    // failover does not forward `cc-switch-proxy-default` upstream.
-    if provider.id.starts_with("managed:")
-        || provider.settings_config.get("oauth").is_some()
-        || provider
-            .settings_config
-            .get("_cc_managed")
-            .and_then(JsonValue::as_bool)
-            == Some(true)
-    {
-        if let Ok(live) = crate::kimi_config::get_providers() {
+    // base_url only). Models live in config.toml; pull them (cached) for
+    // routing so failover does not forward `cc-switch-proxy-default` upstream.
+    if is_managed_kimi_for_model_catalog(provider) {
+        if let Some(live) = live_kimi_providers_cached() {
             if let Some(live_cfg) = live.get(&provider.id) {
                 return kimi_style_model_entries_from_value(live_cfg);
             }
@@ -531,7 +585,15 @@ pub fn apply_codex_upstream_model(provider: &Provider, body: &mut JsonValue) -> 
 /// `cc-switch-proxy-default`). Each failover attempt must map that placeholder
 /// (or a real alias) onto the selected provider's upstream wire id from
 /// `settings_config.models[]` — never leave the placeholder for the upstream.
-pub fn apply_kimi_upstream_model(provider: &Provider, body: &mut JsonValue) -> Option<String> {
+///
+/// Returns:
+/// - `Ok(Some(id))` when the body was mapped or already carries a usable id
+/// - `Err(ConfigError)` when a proxy placeholder cannot be mapped (fail closed;
+///   categorized as retryable so failover can try the next provider)
+pub fn apply_kimi_upstream_model(
+    provider: &Provider,
+    body: &mut JsonValue,
+) -> Result<Option<String>, ProxyError> {
     let request_model = body
         .get("model")
         .and_then(|value| value.as_str())
@@ -540,31 +602,29 @@ pub fn apply_kimi_upstream_model(provider: &Provider, body: &mut JsonValue) -> O
         .map(ToString::to_string);
 
     let Some(upstream) = resolve_kimi_upstream_model(provider, request_model.as_deref()) else {
-        // No catalog and no match: if the client still carries a proxy
-        // placeholder, refuse to forward it (forces a clear routing error
-        // instead of a cryptic 404 from the upstream).
+        // Fail closed for proxy placeholders: never forward the local alias.
+        // ConfigError is retryable → failover tries the next queue member.
         if request_model
             .as_deref()
             .is_some_and(is_cc_switch_proxy_model)
         {
-            log::warn!(
-                "[Kimi] cannot map proxy placeholder {:?} for provider {} — missing models[] catalog",
-                request_model,
-                provider.id
-            );
+            return Err(ProxyError::ConfigError(format!(
+                "Kimi provider '{}' has no models[] catalog to map proxy placeholder '{}'",
+                provider.id,
+                request_model.as_deref().unwrap_or("")
+            )));
         }
-        return request_model;
+        // Unknown non-placeholder model: pass through for upstream rejection.
+        return Ok(request_model);
     };
 
-    let needs_rewrite = request_model
-        .as_deref()
-        .is_none_or(|request| {
-            is_cc_switch_proxy_model(request) || !request.eq_ignore_ascii_case(&upstream)
-        });
+    let needs_rewrite = request_model.as_deref().is_none_or(|request| {
+        is_cc_switch_proxy_model(request) || !request.eq_ignore_ascii_case(&upstream)
+    });
     if needs_rewrite {
         body["model"] = JsonValue::String(upstream.clone());
     }
-    Some(upstream)
+    Ok(Some(upstream))
 }
 
 pub fn resolve_codex_chat_reasoning_config(
@@ -1367,7 +1427,8 @@ wire_api = "anthropic"
             "cc-switch-proxy-default",
         ] {
             let mut body = json!({ "model": placeholder, "input": "ping" });
-            let upstream = apply_kimi_upstream_model(&provider, &mut body);
+            let upstream = apply_kimi_upstream_model(&provider, &mut body)
+                .expect("placeholder must map");
             assert_eq!(
                 upstream.as_deref(),
                 Some("claude-opus-4-8"),
@@ -1395,7 +1456,8 @@ wire_api = "anthropic"
             "model": "kimi-code/kimi-for-coding",
             "input": "ping"
         });
-        let upstream = apply_kimi_upstream_model(&provider, &mut body);
+        let upstream =
+            apply_kimi_upstream_model(&provider, &mut body).expect("alias must map");
         assert_eq!(upstream.as_deref(), Some("kimi-for-coding"));
         assert_eq!(
             body.get("model").and_then(|v| v.as_str()),
@@ -1414,7 +1476,8 @@ wire_api = "anthropic"
         }));
 
         let mut body = json!({ "model": "k3", "input": "ping" });
-        let upstream = apply_kimi_upstream_model(&provider, &mut body);
+        let upstream =
+            apply_kimi_upstream_model(&provider, &mut body).expect("bare id must map");
         assert_eq!(upstream.as_deref(), Some("k3"));
         assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("k3"));
     }
@@ -1426,13 +1489,57 @@ wire_api = "anthropic"
             "models": [{ "id": "gpt-5.6-sol", "alias": "wuming/gpt-5.6-sol" }]
         }));
         let mut body = json!({ "model": "totally-unknown-model", "input": "ping" });
-        let upstream = apply_kimi_upstream_model(&provider, &mut body);
+        let upstream =
+            apply_kimi_upstream_model(&provider, &mut body).expect("pass-through ok");
         // Pass through unknown model; do not force first catalog entry.
         assert_eq!(upstream.as_deref(), Some("totally-unknown-model"));
         assert_eq!(
             body.get("model").and_then(|v| v.as_str()),
             Some("totally-unknown-model")
         );
+    }
+
+    #[test]
+    fn kimi_unmapped_proxy_placeholder_fails_closed() {
+        // No models[] and no live managed catalog → refuse to forward placeholder.
+        let provider = create_provider(json!({
+            "type": "openai",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "sk-test"
+        }));
+        let mut body = json!({ "model": "cc-switch-proxy/default", "input": "ping" });
+        let err = apply_kimi_upstream_model(&provider, &mut body)
+            .expect_err("unmapped placeholder must fail closed");
+        assert!(
+            matches!(err, ProxyError::ConfigError(_)),
+            "expected ConfigError (retryable for failover), got {err:?}"
+        );
+        // Body must remain the placeholder (not rewritten to garbage).
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("cc-switch-proxy/default")
+        );
+    }
+
+    #[test]
+    fn managed_kimi_catalog_detects_official_markers_only() {
+        let managed = create_provider(json!({
+            "type": "kimi",
+            "oauth": { "storage": "file", "key": "oauth/kimi-code" }
+        }));
+        assert!(is_managed_kimi_for_model_catalog(&managed));
+
+        let mut managed_id = create_provider(json!({ "type": "kimi" }));
+        managed_id.id = "managed:kimi-code".to_string();
+        assert!(is_managed_kimi_for_model_catalog(&managed_id));
+
+        // Third-party with an unrelated oauth blob must NOT trigger live reads.
+        let third_party = create_provider(json!({
+            "type": "openai",
+            "oauth": { "storage": "file", "key": "oauth/other-provider" },
+            "models": [{ "id": "m1" }]
+        }));
+        assert!(!is_managed_kimi_for_model_catalog(&third_party));
     }
 
     #[test]
