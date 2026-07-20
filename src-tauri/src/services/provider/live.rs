@@ -767,11 +767,50 @@ pub(crate) fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppE
     Ok(())
 }
 
+/// Keys always treated as CC Switch–managed on restore reconcile (thinking UI).
+const KIMI_MANAGED_COMMON_KEYS: &[&str] = &["thinking"];
+
+/// Build a value-match strip snippet for restore reconcile.
+///
+/// Includes:
+/// - always-managed keys present on live (currently `thinking`)
+/// - live copies of keys that appear in the DB snippet (full replace those tables)
+///
+/// Does **not** strip unrelated user tables (e.g. hand-edited `[hooks]` not in DB).
+fn build_kimi_reconcile_strip_snippet(
+    live_common: &str,
+    new_snippet: &str,
+) -> Result<String, AppError> {
+    if live_common.trim().is_empty() {
+        return Ok(String::new());
+    }
+    let live_doc = live_common.parse::<DocumentMut>().map_err(|e| {
+        AppError::Message(format!("Invalid live common extract for reconcile: {e}"))
+    })?;
+    let new_doc = if new_snippet.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        new_snippet.parse::<DocumentMut>().map_err(|e| {
+            AppError::Message(format!("Invalid DB common snippet for reconcile: {e}"))
+        })?
+    };
+
+    let mut strip = DocumentMut::new();
+    for (key, item) in live_doc.as_table().iter() {
+        let managed = KIMI_MANAGED_COMMON_KEYS.iter().any(|k| *k == key);
+        let in_new = new_doc.as_table().contains_key(key);
+        if managed || in_new {
+            strip.as_table_mut().insert(key, item.clone());
+        }
+    }
+    Ok(strip.to_string().trim().to_string())
+}
+
 /// After takeover restore: reconcile live common tables with the DB snippet.
 ///
-/// Strips the common-config projection currently on live (value-matched), then
-/// merges the DB snippet — so cleared thinking/hooks keys do not survive restore
-/// when the DB snippet no longer contains them. Routine sync should keep using
+/// Strips a **narrow** projection (managed keys + keys present in the DB snippet),
+/// then merges the DB snippet — so cleared `thinking` does not stick, without
+/// wiping hand-edited unrelated tables. Routine sync keeps using
 /// [`apply_kimi_common_config_to_live`] (merge-only).
 pub(crate) fn reconcile_kimi_common_config_on_live(db: &Database) -> Result<(), AppError> {
     let new_snippet = db
@@ -781,7 +820,8 @@ pub(crate) fn reconcile_kimi_common_config_on_live(db: &Database) -> Result<(), 
     crate::kimi_config::update_document(|doc| {
         let before = doc.to_string();
         let live_common = extract_kimi_common_config_from_toml(&before)?;
-        let old = (!live_common.trim().is_empty()).then_some(live_common);
+        let strip_snippet = build_kimi_reconcile_strip_snippet(&live_common, &new_snippet)?;
+        let old = (!strip_snippet.trim().is_empty()).then_some(strip_snippet);
         let new = (!new_snippet.trim().is_empty()).then_some(new_snippet.as_str());
         if old.is_none() && new.is_none() {
             return Ok(false);
@@ -1501,20 +1541,14 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
     let providers = state.db.get_all_providers(app_type.as_str())?;
     let mut synced_count = 0usize;
 
+    // Detect live proxy projection only — stale backup must not divert sync
+    // into backup-only writes while live is already restored.
     let takeover_owns_live = match app_type {
         AppType::KimiCode => {
-            futures::executor::block_on(state.db.get_live_backup(AppType::KimiCode.as_str()))
-                .ok()
-                .flatten()
-                .is_some()
-                || crate::kimi_config::is_proxy_takeover_active().unwrap_or(false)
+            crate::kimi_config::is_proxy_takeover_active().unwrap_or(false)
         }
         AppType::Reasonix => {
-            futures::executor::block_on(state.db.get_live_backup(AppType::Reasonix.as_str()))
-                .ok()
-                .flatten()
-                .is_some()
-                || crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false)
+            crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false)
         }
         _ => false,
     };
@@ -2165,12 +2199,8 @@ pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, Ap
     let mut imported = 0;
     let mut updated = 0;
     let existing_ids = state.db.get_provider_ids("kimicode")?;
-    // Prefer backup presence (authoritative SSOT ownership) over live heuristics.
-    let proxy_owns_live = futures::executor::block_on(state.db.get_live_backup("kimicode"))
-        .ok()
-        .flatten()
-        .is_some()
-        || kimi_config::is_proxy_takeover_active().unwrap_or(false);
+    // Live detect only — stale backup must not block live→DB import forever.
+    let proxy_owns_live = kimi_config::is_proxy_takeover_active().unwrap_or(false);
 
     for (name, config) in providers {
         // Validate: skip entries with empty name
@@ -2351,12 +2381,8 @@ pub fn import_reasonix_providers_from_live(state: &AppState) -> Result<usize, Ap
     let mut imported = 0;
     let mut updated = 0;
     let existing_ids = state.db.get_provider_ids("reasonix")?;
-    // Prefer backup presence (authoritative SSOT ownership) over live heuristics.
-    let proxy_owns_live = futures::executor::block_on(state.db.get_live_backup("reasonix"))
-        .ok()
-        .flatten()
-        .is_some()
-        || reasonix_config::is_proxy_takeover_active().unwrap_or(false);
+    // Live detect only — stale backup must not block live→DB import forever.
+    let proxy_owns_live = reasonix_config::is_proxy_takeover_active().unwrap_or(false);
 
     for (name, mut config) in providers {
         if name.trim().is_empty() {
@@ -2585,6 +2611,41 @@ type = "openai"
         );
         assert!(updated.contains("[providers.demo]"));
         assert!(updated.contains("default_model = \"demo/model\""));
+    }
+
+    #[test]
+    fn reconcile_strip_snippet_keeps_unrelated_hooks_when_db_only_has_thinking() {
+        let live_common = r#"[thinking]
+effort = "low"
+
+[hooks]
+pre_tool = "echo hi"
+"#;
+        let new_snippet = "[thinking]\neffort = \"max\"\n";
+        let strip =
+            build_kimi_reconcile_strip_snippet(live_common, new_snippet).expect("strip");
+        assert!(
+            strip.contains("[thinking]"),
+            "managed thinking must be stripped: {strip}"
+        );
+        assert!(
+            !strip.contains("[hooks]"),
+            "hand-edited hooks not in DB snippet must not be stripped: {strip}"
+        );
+
+        // Apply strip+merge onto a full document shape
+        let full = format!(
+            "default_model = \"demo\"\n\n{live_common}\n[providers.demo]\ntype = \"openai\"\n"
+        );
+        let updated =
+            replace_kimi_common_config_in_text(&full, Some(&strip), Some(new_snippet))
+                .expect("reconcile");
+        assert!(updated.contains("effort = \"max\""));
+        assert!(
+            updated.contains("[hooks]"),
+            "hooks must survive reconcile: {updated}"
+        );
+        assert!(updated.contains("pre_tool"));
     }
 
     #[test]

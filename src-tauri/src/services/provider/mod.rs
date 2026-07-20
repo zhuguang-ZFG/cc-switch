@@ -2425,27 +2425,21 @@ impl ProviderService {
             .live_config_managed = Some(managed);
     }
 
-    /// True when Kimi live is owned by proxy takeover (backup present or live
-    /// has the cc-switch-proxy projection). During takeover, CRUD must update
-    /// the restore backup — never the live proxy ingress (PRD R5 / Claude parity).
+    /// True when live is currently the proxy projection (detect).
+    ///
+    /// A leftover restore backup alone does **not** mean live is owned — after a
+    /// failed cleanup, backup may remain while live is already normal; treating
+    /// backup-only as owns-live would starve live writes (common-config / CRUD).
     fn kimi_proxy_owns_live(state: &AppState) -> bool {
-        futures::executor::block_on(state.db.get_live_backup(AppType::KimiCode.as_str()))
-            .ok()
-            .flatten()
-            .is_some()
-            || state
-                .proxy_service
-                .detect_takeover_in_live_config_for_app(&AppType::KimiCode)
+        state
+            .proxy_service
+            .detect_takeover_in_live_config_for_app(&AppType::KimiCode)
     }
 
     fn reasonix_proxy_owns_live(state: &AppState) -> bool {
-        futures::executor::block_on(state.db.get_live_backup(AppType::Reasonix.as_str()))
-            .ok()
-            .flatten()
-            .is_some()
-            || state
-                .proxy_service
-                .detect_takeover_in_live_config_for_app(&AppType::Reasonix)
+        state
+            .proxy_service
+            .detect_takeover_in_live_config_for_app(&AppType::Reasonix)
     }
 
     /// Project a Kimi provider into the restore backup while live stays on
