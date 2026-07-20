@@ -20,20 +20,24 @@ pub async fn start_proxy_server(
 #[tauri::command]
 pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let takeover = state.proxy_service.get_takeover_status().await?;
-    if takeover.claude
-        || takeover.codex
-        || takeover.gemini
-        || takeover.grokbuild
-        || takeover.kimicode
-        || takeover.opencode
-        || takeover.openclaw
-    {
+    if takeover_blocks_proxy_stop(&takeover) {
         return Err(
             "仍有应用处于代理接管状态，请先在设置中关闭对应应用接管后再停止本地路由。".to_string(),
         );
     }
 
     state.proxy_service.stop().await
+}
+
+fn takeover_blocks_proxy_stop(takeover: &ProxyTakeoverStatus) -> bool {
+    takeover.claude
+        || takeover.codex
+        || takeover.gemini
+        || takeover.grokbuild
+        || takeover.kimicode
+        || takeover.reasonix
+        || takeover.opencode
+        || takeover.openclaw
 }
 
 /// 停止代理服务器（恢复 Live 配置）
@@ -453,4 +457,29 @@ pub async fn get_circuit_breaker_stats(
     // 目前先返回 None，后续可以通过 ProxyService 暴露接口来实现
     let _ = (state, provider_id, app_type);
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasonix_only_takeover_blocks_proxy_stop() {
+        let mut takeover = ProxyTakeoverStatus {
+            claude: false,
+            codex: false,
+            gemini: false,
+            grokbuild: false,
+            kimicode: false,
+            reasonix: false,
+            opencode: false,
+            openclaw: false,
+        };
+        assert!(!takeover_blocks_proxy_stop(&takeover));
+        takeover.reasonix = true;
+        assert!(
+            takeover_blocks_proxy_stop(&takeover),
+            "reasonix-only takeover must block stop_proxy_server"
+        );
+    }
 }

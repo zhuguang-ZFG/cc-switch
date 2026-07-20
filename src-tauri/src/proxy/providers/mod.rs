@@ -30,11 +30,13 @@ pub mod streaming;
 pub mod streaming_codex_anthropic;
 pub mod streaming_codex_chat;
 pub mod streaming_gemini;
+pub mod streaming_reasonix_anthropic;
 pub mod streaming_responses;
 pub mod transform;
 pub mod transform_codex_anthropic;
 pub mod transform_codex_chat;
 pub mod transform_gemini;
+pub mod transform_reasonix_anthropic;
 pub mod transform_responses;
 
 use crate::app_config::AppType;
@@ -54,10 +56,15 @@ pub use claude::{
 pub use codex::CodexAdapter;
 pub use codex::{
     apply_codex_chat_upstream_model, apply_codex_upstream_model, apply_kimi_upstream_model,
-    codex_provider_upstream_model, inject_codex_chat_prompt_cache_key, is_codex_official_provider,
-    kimi_wire_protocol, resolve_codex_catalog_tool_profile, resolve_codex_chat_reasoning_config,
+    apply_reasonix_upstream_model, codex_provider_upstream_model,
+    inject_codex_chat_prompt_cache_key, is_codex_official_provider, kimi_wire_protocol,
+    reasonix_provider_is_anthropic,
+    resolve_codex_catalog_tool_profile, resolve_codex_chat_reasoning_config,
     should_convert_codex_responses_to_anthropic, should_convert_codex_responses_to_chat,
     should_convert_codex_responses_to_gemini, KimiWireProtocol,
+};
+pub use transform_reasonix_anthropic::{
+    anthropic_message_response_to_openai_chat, openai_chat_request_to_anthropic,
 };
 pub use gemini::GeminiAdapter;
 
@@ -180,7 +187,9 @@ impl ProviderType {
             // Gemini CLI app removed; Gemini protocol still selected via settings
             // when a Gemini-shaped provider is used under other apps.
             AppType::GrokBuild => ProviderType::Codex,
-            AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode => ProviderType::Codex,
+            AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix => {
+                ProviderType::Codex
+            }
         }
     }
 
@@ -231,7 +240,9 @@ pub fn get_adapter(app_type: &AppType) -> Box<dyn ProviderAdapter> {
         AppType::Claude | AppType::ClaudeDesktop => Box::new(ClaudeAdapter::new()),
         AppType::Codex => Box::new(CodexAdapter::new()),
         AppType::GrokBuild => Box::new(CodexAdapter::new()),
-        AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode => Box::new(CodexAdapter::new()),
+        AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix => {
+            Box::new(CodexAdapter::new())
+        }
     }
 }
 

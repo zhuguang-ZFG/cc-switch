@@ -137,6 +137,9 @@ impl ConfigService {
             AppType::KimiCode => {
                 crate::kimi_config::apply_switch_defaults(&current_id, &provider.settings_config)?;
             }
+            AppType::Reasonix => {
+                crate::reasonix_config::apply_switch_defaults(&current_id, &provider.settings_config)?;
+            }
         }
 
         Ok(())

@@ -709,6 +709,12 @@ impl ProxyService {
             .await
             .map(|c| c.enabled)
             .unwrap_or(false);
+        let reasonix_enabled = self
+            .db
+            .get_proxy_config_for_app("reasonix")
+            .await
+            .map(|c| c.enabled)
+            .unwrap_or(false);
         // OpenCode and OpenClaw don't support proxy features, always return false
         let opencode_enabled = false;
         let openclaw_enabled = false;
@@ -721,6 +727,7 @@ impl ProxyService {
             opencode: opencode_enabled,
             openclaw: openclaw_enabled,
             kimicode: kimicode_enabled,
+            reasonix: reasonix_enabled,
         })
     }
 
@@ -981,7 +988,7 @@ impl ProxyService {
             AppType::Claude => self.read_claude_live()?,
             AppType::Codex => self.read_codex_live()?,
             AppType::GrokBuild => self.read_grok_live()?,
-            AppType::KimiCode => return Ok(()),
+            AppType::KimiCode | AppType::Reasonix => return Ok(()),
             _ => return Err("该应用不支持代理功能".to_string()),
         };
 
@@ -1267,7 +1274,7 @@ impl ProxyService {
             .map_err(|e| format!("清除接管状态失败: {e}"))?;
 
         // 4. 清除所有应用的 enabled 状态（用户手动关闭，不需要下次自动恢复）
-        for app_type in ["claude", "codex", "gemini", "grokbuild", "kimicode"] {
+        for app_type in ["claude", "codex", "gemini", "grokbuild", "kimicode", "reasonix"] {
             if let Ok(mut config) = self.db.get_proxy_config_for_app(app_type).await {
                 if config.enabled {
                     config.enabled = false;
@@ -1390,6 +1397,18 @@ impl ProxyService {
             }
         }
 
+        // Reasonix uses a lossless TOML snapshot rather than a JSON projection.
+        if let Ok(text) = crate::reasonix_config::read_config_text() {
+            if !text.trim().is_empty()
+                && !crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false)
+            {
+                self.db
+                    .save_live_backup("reasonix", &text)
+                    .await
+                    .map_err(|e| format!("备份 Reasonix 配置失败: {e}"))?;
+            }
+        }
+
         log::info!("已备份所有应用的 Live 配置");
         Ok(())
     }
@@ -1407,6 +1426,20 @@ impl ProxyService {
                     .save_live_backup("kimicode", &text)
                     .await
                     .map_err(|e| format!("备份 Kimi Code 配置失败: {e}"))?;
+            }
+            return Ok(());
+        }
+        if matches!(app_type, AppType::Reasonix) {
+            let text = crate::reasonix_config::read_config_text()
+                .map_err(|e| format!("读取 Reasonix 配置失败: {e}"))?;
+            if text.trim().is_empty() {
+                return Err("Reasonix config.toml 不存在或为空".to_string());
+            }
+            if !crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false) {
+                self.db
+                    .save_live_backup("reasonix", &text)
+                    .await
+                    .map_err(|e| format!("备份 Reasonix 配置失败: {e}"))?;
             }
             return Ok(());
         }
@@ -1547,6 +1580,17 @@ impl ProxyService {
             log::info!("Kimi Code Live 配置已接管，代理地址: {proxy_url}/kimicode/v1");
         }
 
+        if crate::reasonix_config::read_config_text()
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(false)
+        {
+            crate::reasonix_config::apply_proxy_takeover(&format!(
+                "{proxy_url}/reasonix/v1"
+            ))
+            .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
+            log::info!("Reasonix Live 配置已接管，代理地址: {proxy_url}/reasonix/v1");
+        }
+
         Ok(())
     }
 
@@ -1594,6 +1638,13 @@ impl ProxyService {
                 )
                 .map_err(|e| format!("更新 Kimi Code 接管配置失败: {e}"))?;
                 log::info!("Kimi Code Live 配置已接管，代理地址: {proxy_url}/kimicode/v1");
+            }
+            AppType::Reasonix => {
+                crate::reasonix_config::apply_proxy_takeover(&format!(
+                    "{proxy_url}/reasonix/v1"
+                ))
+                .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
+                log::info!("Reasonix Live 配置已接管，代理地址: {proxy_url}/reasonix/v1");
             }
             _ => return Err("该应用不支持代理功能".to_string()),
         }
@@ -1662,6 +1713,16 @@ impl ProxyService {
                 )
                 .map_err(|e| format!("更新 Kimi Code 接管配置失败: {e}"))?;
             }
+            AppType::Reasonix
+                if crate::reasonix_config::read_config_text()
+                    .map(|text| !text.trim().is_empty())
+                    .unwrap_or(false) =>
+            {
+                crate::reasonix_config::apply_proxy_takeover(&format!(
+                    "{proxy_url}/reasonix/v1"
+                ))
+                .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
+            }
             _ => {}
         }
 
@@ -1701,6 +1762,14 @@ impl ProxyService {
                     log::info!("Kimi Code Live 配置已恢复");
                 }
             }
+            AppType::Reasonix => {
+                if let Ok(Some(backup)) = self.db.get_live_backup("reasonix").await {
+                    crate::reasonix_config::write_config_text(&backup.original_config)
+                        .map_err(|e| format!("恢复 Reasonix 配置失败: {e}"))?;
+                    let _ = crate::reasonix_config::clear_proxy_env_placeholder();
+                    log::info!("Reasonix Live 配置已恢复");
+                }
+            }
             _ => {}
         }
 
@@ -1716,6 +1785,7 @@ impl ProxyService {
             AppType::Codex,
             AppType::GrokBuild,
             AppType::KimiCode,
+            AppType::Reasonix,
         ] {
             if let Err(e) = self
                 .restore_live_config_for_app_with_fallback(&app_type)
@@ -1754,7 +1824,7 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取 {app_type_str} Live 备份失败: {e}"))?;
         if let Some(backup) = backup {
-            if matches!(app_type, AppType::KimiCode) {
+            if matches!(app_type, AppType::KimiCode | AppType::Reasonix) {
                 // Same polluted-backup guard as Claude/Codex: never write a
                 // proxy placeholder snapshot back as "original" live.
                 let placeholder_probe = json!({ "config": backup.original_config });
@@ -1762,9 +1832,15 @@ impl ProxyService {
                     log::warn!(
                         "{app_type_str} 备份本身已是代理占位符（异常历史状态），跳过备份，改走 SSOT 重建 Live"
                     );
-                } else {
+                } else if matches!(app_type, AppType::KimiCode) {
                     crate::kimi_config::write_config_text(&backup.original_config)
                         .map_err(|e| format!("恢复 Kimi Code 配置失败: {e}"))?;
+                    log::info!("{app_type_str} Live 配置已从备份恢复");
+                    return Ok(());
+                } else {
+                    crate::reasonix_config::write_config_text(&backup.original_config)
+                        .map_err(|e| format!("恢复 Reasonix 配置失败: {e}"))?;
+                    let _ = crate::reasonix_config::clear_proxy_env_placeholder();
                     log::info!("{app_type_str} Live 配置已从备份恢复");
                     return Ok(());
                 }
@@ -1822,6 +1898,7 @@ impl ProxyService {
             AppType::Codex => self.write_codex_live(config),
             AppType::GrokBuild => self.write_grok_live(config),
             AppType::KimiCode => Err("Kimi Code 必须从原始 TOML 快照恢复".to_string()),
+            AppType::Reasonix => Err("Reasonix 必须从原始 TOML 快照恢复".to_string()),
             _ => Err("该应用不支持代理功能".to_string()),
         }
     }
@@ -1841,6 +1918,7 @@ impl ProxyService {
                 Err(_) => false,
             },
             AppType::KimiCode => crate::kimi_config::is_proxy_takeover_active().unwrap_or(false),
+            AppType::Reasonix => crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false),
             _ => false,
         }
     }
@@ -1887,6 +1965,13 @@ impl ProxyService {
                 .map_err(|e| format!("从 SSOT 恢复 Kimi Code Live 失败: {e}"))?;
             return Ok(true);
         }
+        if matches!(app_type, AppType::Reasonix) {
+            crate::reasonix_config::clear_proxy_takeover()
+                .map_err(|e| format!("清理 Reasonix 接管占位失败: {e}"))?;
+            crate::reasonix_config::apply_switch_defaults(&provider.id, &provider.settings_config)
+                .map_err(|e| format!("从 SSOT 恢复 Reasonix Live 失败: {e}"))?;
+            return Ok(true);
+        }
 
         write_live_with_common_config(self.db.as_ref(), app_type, provider)
             .map_err(|e| format!("写入 {app_type:?} Live 配置失败: {e}"))?;
@@ -1905,6 +1990,9 @@ impl ProxyService {
             AppType::KimiCode => crate::kimi_config::clear_proxy_takeover()
                 .map(|_| ())
                 .map_err(|e| format!("清理 Kimi Code 接管配置失败: {e}")),
+            AppType::Reasonix => crate::reasonix_config::clear_proxy_takeover()
+                .map(|_| ())
+                .map_err(|e| format!("清理 Reasonix 接管配置失败: {e}")),
             _ => Ok(()),
         }
     }
@@ -2017,6 +2105,13 @@ impl ProxyService {
                         && actual.is_some_and(|url| Self::proxy_urls_match(url, &expected)),
                 )
             }
+            AppType::Reasonix => {
+                let expected = format!("{proxy_url}/reasonix/v1");
+                Ok(crate::reasonix_config::is_proxy_takeover_active_for_url(Some(
+                    &expected,
+                ))
+                .unwrap_or(false))
+            }
             _ => Ok(false),
         }
     }
@@ -2103,7 +2198,7 @@ impl ProxyService {
     /// 检查是否处于 Live 接管模式
     pub async fn is_takeover_active(&self) -> Result<bool, String> {
         let status = self.get_takeover_status().await?;
-        Ok(status.claude || status.codex || status.grokbuild || status.kimicode)
+        Ok(status.claude || status.codex || status.grokbuild || status.kimicode || status.reasonix)
     }
 
     /// 从异常退出中恢复（启动时调用）
@@ -2154,6 +2249,10 @@ impl ProxyService {
         }
 
         if crate::kimi_config::is_proxy_takeover_active().unwrap_or(false) {
+            return true;
+        }
+
+        if crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false) {
             return true;
         }
 
@@ -2240,6 +2339,18 @@ impl ProxyService {
                         || text.contains(PROXY_TOKEN_PLACEHOLDER)
                         || text.contains("/kimicode/v1"))
             }
+            AppType::Reasonix => {
+                let text = config
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .or_else(|| config.as_str())
+                    .unwrap_or("");
+                // Require managed provider + reasonix ingress path together.
+                // Do not treat a reused env var name alone as polluted backup.
+                !text.trim().is_empty()
+                    && text.contains("name = \"cc-switch-proxy\"")
+                    && text.contains("/reasonix/v1")
+            }
             _ => false,
         }
     }
@@ -2264,9 +2375,9 @@ impl ProxyService {
         app_type: &str,
         provider: &Provider,
     ) -> Result<(), String> {
-        if app_type == "kimicode" {
-            // Kimi takeover owns a full TOML snapshot. Live stays on the fixed
-            // local `cc-switch-proxy` projection, but the restore backup must
+        if app_type == "kimicode" || app_type == "reasonix" {
+            // Kimi / Reasonix takeover owns a full TOML snapshot. Live stays on the
+            // fixed local `cc-switch-proxy` projection, but the restore backup must
             // track the newly selected provider's default_model (and custom
             // provider projection) — same SSOT discipline as Claude/Codex
             // backup updates during hot-switch (design §4 / stage E).
@@ -2274,18 +2385,27 @@ impl ProxyService {
                 .db
                 .get_live_backup(app_type)
                 .await
-                .map_err(|e| format!("读取 Kimi Code 备份失败: {e}"))?
+                .map_err(|e| format!("读取 {app_type} 备份失败: {e}"))?
             {
-                let updated = crate::kimi_config::apply_switch_defaults_to_text(
-                    &backup.original_config,
-                    &provider.id,
-                    &provider.settings_config,
-                )
-                .map_err(|e| format!("更新 Kimi Code 备份投影失败: {e}"))?;
+                let updated = match app_type {
+                    "kimicode" => crate::kimi_config::apply_switch_defaults_to_text(
+                        &backup.original_config,
+                        &provider.id,
+                        &provider.settings_config,
+                    )
+                    .map_err(|e| format!("更新 Kimi Code 备份投影失败: {e}"))?,
+                    "reasonix" => crate::reasonix_config::apply_switch_defaults_to_text(
+                        &backup.original_config,
+                        &provider.id,
+                        &provider.settings_config,
+                    )
+                    .map_err(|e| format!("更新 Reasonix 备份投影失败: {e}"))?,
+                    _ => unreachable!(),
+                };
                 self.db
                     .save_live_backup(app_type, &updated)
                     .await
-                    .map_err(|e| format!("保留 Kimi Code 备份失败: {e}"))?;
+                    .map_err(|e| format!("保留 {app_type} 备份失败: {e}"))?;
             }
             return Ok(());
         }
@@ -3096,6 +3216,11 @@ impl ProxyService {
                         .await?;
                     updated_any = true;
                 }
+                if takeover.reasonix {
+                    self.takeover_live_config_best_effort(&AppType::Reasonix)
+                        .await?;
+                    updated_any = true;
+                }
 
                 if updated_any {
                     log::info!("已同步更新 Live 配置中的代理地址");
@@ -3516,6 +3641,310 @@ model = "model"
             "restore must use updated backup, got:\n{restored}"
         );
         env::remove_var("KIMI_CODE_HOME");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn reasonix_takeover_smoke_is_lossless_and_reports_status() {
+        let home = TempHome::new();
+        let reasonix_home = home.dir.path().join("reasonix-home");
+        std::fs::create_dir_all(&reasonix_home).expect("create reasonix home");
+        env::set_var("REASONIX_HOME", &reasonix_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        let original = r#"default_model = "demo-model"
+
+[thinking]
+enabled = true
+
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#;
+        std::fs::write(crate::reasonix_config::get_reasonix_config_path(), original)
+            .expect("seed reasonix config");
+        crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret").expect("seed env");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+        let provider = Provider::with_id(
+            "demo".to_string(),
+            "Demo".to_string(),
+            json!({
+                "kind": "openai",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "models": ["demo-model"],
+                "default": "demo-model"
+            }),
+            None,
+        );
+        db.save_provider("reasonix", &provider)
+            .expect("save provider");
+        db.set_current_provider("reasonix", "demo")
+            .expect("set current provider");
+        crate::settings::set_current_provider(&AppType::Reasonix, Some("demo"))
+            .expect("set local current provider");
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", true)
+            .await
+            .expect("enable reasonix takeover");
+        let status = state
+            .proxy_service
+            .get_takeover_status()
+            .await
+            .expect("get takeover status");
+        assert!(status.reasonix);
+        let taken = crate::reasonix_config::read_config_text().expect("read takeover config");
+        assert!(taken.contains("name = \"cc-switch-proxy\""));
+        assert!(taken.contains("[thinking]"));
+        let env_taken = std::fs::read_to_string(crate::reasonix_config::get_reasonix_env_path())
+            .expect("read env during takeover");
+        assert!(
+            env_taken.contains("CC_SWITCH_PROXY_API_KEY=PROXY_MANAGED"),
+            "takeover must write managed env placeholder"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", false)
+            .await
+            .expect("disable reasonix takeover");
+        assert_eq!(
+            crate::reasonix_config::read_config_text().expect("read restored config"),
+            original
+        );
+        let env_restored = std::fs::read_to_string(crate::reasonix_config::get_reasonix_env_path())
+            .expect("read env after restore");
+        assert!(
+            !env_restored.contains("PROXY_MANAGED"),
+            "disable must clear managed proxy env key, got:\n{env_restored}"
+        );
+        assert!(
+            env_restored.contains("DEMO_API_KEY=secret"),
+            "user env keys must survive restore"
+        );
+        env::remove_var("REASONIX_HOME");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn is_takeover_active_includes_reasonix_only_takeover() {
+        let home = TempHome::new();
+        let reasonix_home = home.dir.path().join("reasonix-home");
+        std::fs::create_dir_all(&reasonix_home).expect("create reasonix home");
+        env::set_var("REASONIX_HOME", &reasonix_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        std::fs::write(
+            crate::reasonix_config::get_reasonix_config_path(),
+            r#"default_model = "demo-model"
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#,
+        )
+        .expect("seed reasonix");
+        crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret")
+            .expect("seed env");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+        let provider = Provider::with_id(
+            "demo".into(),
+            "Demo".into(),
+            json!({
+                "kind": "openai",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "models": ["demo-model"],
+                "default": "demo-model"
+            }),
+            None,
+        );
+        db.save_provider("reasonix", &provider).expect("save");
+        db.set_current_provider("reasonix", "demo")
+            .expect("current");
+        crate::settings::set_current_provider(&AppType::Reasonix, Some("demo"))
+            .expect("local current");
+
+        assert!(
+            !state
+                .proxy_service
+                .is_takeover_active()
+                .await
+                .expect("status"),
+            "no takeover yet"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", true)
+            .await
+            .expect("enable reasonix");
+        assert!(
+            state
+                .proxy_service
+                .is_takeover_active()
+                .await
+                .expect("status"),
+            "reasonix-only takeover must count as active"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", false)
+            .await
+            .expect("disable");
+        env::remove_var("REASONIX_HOME");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn reasonix_hot_switch_updates_backup_default_model_not_live_proxy() {
+        let home = TempHome::new();
+        let reasonix_home = home.dir.path().join("reasonix-home");
+        std::fs::create_dir_all(&reasonix_home).expect("create reasonix home");
+        env::set_var("REASONIX_HOME", &reasonix_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        let original = r#"default_model = "demo-model"
+
+[thinking]
+enabled = true
+
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#;
+        std::fs::write(crate::reasonix_config::get_reasonix_config_path(), original)
+            .expect("seed reasonix config");
+        crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret").expect("seed env");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+
+        let demo = Provider::with_id(
+            "demo".to_string(),
+            "Demo".to_string(),
+            json!({
+                "kind": "openai",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "models": ["demo-model"],
+                "default": "demo-model"
+            }),
+            None,
+        );
+        let other = Provider::with_id(
+            "other".to_string(),
+            "Other".to_string(),
+            json!({
+                "kind": "openai",
+                "base_url": "https://other.test/v1",
+                "api_key": "other-secret",
+                "models": ["other-model"],
+                "default": "other-model"
+            }),
+            None,
+        );
+        db.save_provider("reasonix", &demo).expect("save demo");
+        db.save_provider("reasonix", &other).expect("save other");
+        db.set_current_provider("reasonix", "demo")
+            .expect("set current");
+        crate::settings::set_current_provider(&AppType::Reasonix, Some("demo"))
+            .expect("set local current");
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", true)
+            .await
+            .expect("enable reasonix takeover");
+
+        let live_before = crate::reasonix_config::read_config_text().expect("read live");
+        assert!(live_before.contains("cc-switch-proxy"));
+
+        {
+            let _guard = state.proxy_service.lock_switch_for_app("reasonix").await;
+            state
+                .proxy_service
+                .hot_switch_provider_inner("reasonix", "other")
+                .await
+                .expect("hot switch to other");
+        }
+
+        assert_eq!(
+            crate::settings::get_current_provider(&AppType::Reasonix).as_deref(),
+            Some("other")
+        );
+        assert_eq!(
+            db.get_current_provider("reasonix")
+                .expect("db current")
+                .as_deref(),
+            Some("other")
+        );
+
+        let live_after = crate::reasonix_config::read_config_text().expect("read live after");
+        assert!(
+            live_after.contains("cc-switch-proxy"),
+            "live must remain on proxy projection during takeover"
+        );
+        assert!(
+            live_after.contains("default_model = \"cc-switch-proxy\"")
+                || live_after.contains("default_model = 'cc-switch-proxy'")
+                || live_after.contains("default_model = \"cc-switch-proxy-default\""),
+            "live default_model must stay on proxy provider/model, got:\n{live_after}"
+        );
+
+        let backup = db
+            .get_live_backup("reasonix")
+            .await
+            .expect("read backup")
+            .expect("backup exists");
+        assert!(
+            backup.original_config.contains("default_model = \"other\"")
+                || backup.original_config.contains("default_model = 'other'"),
+            "backup default_model must be provider id, got:\n{}",
+            backup.original_config
+        );
+        assert!(
+            backup.original_config.contains("other-model"),
+            "backup must still project the switched provider models, got:\n{}",
+            backup.original_config
+        );
+        assert!(
+            backup.original_config.contains("name = \"other\""),
+            "backup must include the switched custom provider projection"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", false)
+            .await
+            .expect("disable reasonix takeover");
+        let restored = crate::reasonix_config::read_config_text().expect("restored");
+        assert!(
+            restored.contains("other-model") || restored.contains("default_model"),
+            "restore must use updated backup, got:\n{restored}"
+        );
+        env::remove_var("REASONIX_HOME");
     }
 
     async fn running_codex_base_url(service: &ProxyService) -> String {

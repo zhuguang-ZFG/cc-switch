@@ -25,6 +25,10 @@ use super::{
             create_responses_sse_stream_from_anthropic_with_context,
             responses_sse_events_from_anthropic_message,
         },
+        streaming_reasonix_anthropic::{
+            chat_sse_events_from_anthropic_message,
+            create_openai_chat_sse_stream_from_anthropic,
+        },
         streaming_codex_chat::create_responses_sse_stream_from_chat_with_context,
         streaming_gemini::create_anthropic_sse_stream_from_gemini,
         streaming_responses::create_anthropic_sse_stream_from_responses,
@@ -693,6 +697,25 @@ pub async fn handle_chat_completions(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::Codex, "Codex", "codex").await
+}
+
+/// Reasonix always enters through the local OpenAI Chat Completions boundary.
+pub async fn handle_reasonix_chat_completions(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::Reasonix, "Reasonix", "reasonix")
+        .await
+}
+
+async fn handle_chat_completions_for_app(
+    state: ProxyState,
+    request: axum::extract::Request,
+    app_type: AppType,
+    tag: &'static str,
+    app_type_str: &'static str,
+) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
     let uri = parts.uri;
@@ -708,10 +731,10 @@ pub async fn handle_chat_completions(
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
     let mut ctx =
-        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
+        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
     let endpoint = endpoint_with_query(&uri, "/chat/completions");
 
-    let is_stream = body
+    let client_wants_stream = body
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
@@ -719,7 +742,7 @@ pub async fn handle_chat_completions(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &AppType::Codex,
+            &app_type,
             method,
             &endpoint,
             body,
@@ -734,7 +757,7 @@ pub async fn handle_chat_completions(
             if let Some(provider) = err.provider.take() {
                 ctx.provider = provider;
             }
-            log_forward_error(&state, &ctx, is_stream, &err.error);
+            log_forward_error(&state, &ctx, client_wants_stream, &err.error);
             return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
         }
     };
@@ -744,6 +767,19 @@ pub async fn handle_chat_completions(
     ctx.provider = result.provider;
     let response = result.response;
 
+    if matches!(app_type, AppType::Reasonix)
+        && super::providers::reasonix_provider_is_anthropic(&ctx.provider)
+    {
+        return handle_reasonix_anthropic_to_chat(
+            response,
+            &ctx,
+            &state,
+            client_wants_stream,
+            connection_guard,
+        )
+        .await;
+    }
+
     process_response(
         response,
         &ctx,
@@ -752,6 +788,349 @@ pub async fn handle_chat_completions(
         connection_guard,
     )
     .await
+}
+
+async fn handle_reasonix_anthropic_to_chat(
+    response: super::hyper_client::ProxyResponse,
+    ctx: &RequestContext,
+    state: &ProxyState,
+    client_wants_stream: bool,
+    connection_guard: Option<ActiveConnectionGuard>,
+) -> Result<axum::response::Response, ProxyError> {
+    let status = response.status();
+
+    if !status.is_success() {
+        return process_response(
+            response,
+            ctx,
+            state,
+            &OPENAI_PARSER_CONFIG,
+            connection_guard,
+        )
+        .await;
+    }
+
+    if response.is_sse() || (client_wants_stream && !response.is_json()) {
+        let stream = response.bytes_stream();
+        let sse_stream = create_openai_chat_sse_stream_from_anthropic(stream);
+        return build_reasonix_anthropic_chat_sse_response(
+            sse_stream,
+            ctx,
+            state,
+            status,
+            connection_guard,
+        );
+    }
+
+    let body_timeout =
+        if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
+            std::time::Duration::from_secs(ctx.app_config.non_streaming_timeout as u64)
+        } else {
+            std::time::Duration::ZERO
+        };
+    let (mut response_headers, status, body_bytes) =
+        read_decoded_body(response, ctx.tag, body_timeout).await?;
+    let body_str = String::from_utf8_lossy(&body_bytes);
+    let anthropic_response: Value = match serde_json::from_slice(&body_bytes) {
+        Ok(value) => value,
+        Err(_) if body_looks_like_sse(&body_str) => {
+            log::warn!(
+                "[Reasonix] Upstream returned an unmarked Anthropic SSE body, falling back to aggregation"
+            );
+            transform_codex_anthropic::anthropic_sse_to_message_value(&body_str).map_err(|e| {
+                log::error!("[Reasonix] Failed to aggregate Anthropic SSE body: {e}");
+                e
+            })?
+        }
+        Err(e) => {
+            return Err(upstream_body_parse_error(
+                "Failed to parse upstream anthropic response",
+                &e,
+                &response_headers,
+                &body_str,
+            ));
+        }
+    };
+
+    if client_wants_stream {
+        let events = chat_sse_events_from_anthropic_message(&anthropic_response);
+        let sse_stream = futures::stream::iter(events.into_iter().map(Ok::<Bytes, std::io::Error>));
+        return build_reasonix_anthropic_chat_sse_response(
+            sse_stream,
+            ctx,
+            state,
+            status,
+            connection_guard,
+        );
+    }
+
+    let chat_value =
+        super::providers::anthropic_message_response_to_openai_chat(anthropic_response)?;
+    let chat_bytes = Bytes::from(
+        serde_json::to_vec(&chat_value)
+            .map_err(|e| ProxyError::Internal(format!("Serialize chat response failed: {e}")))?,
+    );
+
+    strip_entity_headers_for_rebuilt_body(&mut response_headers);
+    strip_hop_by_hop_response_headers(&mut response_headers);
+    response_headers.remove(axum::http::header::CONTENT_TYPE);
+
+    let _connection_guard = connection_guard;
+    if let Some(usage) = TokenUsage::from_openai_response(&chat_value)
+        .filter(TokenUsage::has_billable_tokens)
+    {
+        let model = chat_value
+            .get("model")
+            .and_then(|m| m.as_str())
+            .filter(|m| !m.is_empty())
+            .map(str::to_string)
+            .or_else(|| ctx.outbound_model.clone())
+            .unwrap_or_else(|| ctx.request_model.clone());
+        let request_model = ctx.request_model.clone();
+        let outbound_model = ctx
+            .outbound_model
+            .clone()
+            .unwrap_or_else(|| ctx.request_model.clone());
+        let app_type_str = ctx.app_type_str;
+        tokio::spawn({
+            let state = state.clone();
+            let provider_id = ctx.provider.id.clone();
+            let session_id = ctx.session_id.clone();
+            let latency_ms = ctx.latency_ms();
+            async move {
+                log_usage(
+                    &state,
+                    &provider_id,
+                    app_type_str,
+                    &model,
+                    &request_model,
+                    &outbound_model,
+                    usage,
+                    latency_ms,
+                    None,
+                    false,
+                    status.as_u16(),
+                    Some(session_id),
+                )
+                .await;
+            }
+        });
+    }
+
+    let mut builder = axum::response::Response::builder().status(status);
+    for (key, value) in response_headers.iter() {
+        builder = builder.header(key, value);
+    }
+    builder = builder.header(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+
+    builder
+        .body(axum::body::Body::from(chat_bytes))
+        .map_err(|e| ProxyError::Internal(format!("Build chat response failed: {e}")))
+}
+
+fn build_reasonix_anthropic_chat_sse_response(
+    sse_stream: impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    ctx: &RequestContext,
+    state: &ProxyState,
+    status: StatusCode,
+    connection_guard: Option<ActiveConnectionGuard>,
+) -> Result<axum::response::Response, ProxyError> {
+    let usage_collector = if usage_logging_enabled(state) {
+        let state = state.clone();
+        let provider_id = ctx.provider.id.clone();
+        let request_model = ctx.request_model.clone();
+        let fallback_model = ctx
+            .outbound_model
+            .clone()
+            .unwrap_or_else(|| ctx.request_model.clone());
+        let app_type_str = ctx.app_type_str;
+        let start_time = ctx.start_time;
+        let session_id = ctx.session_id.clone();
+
+        Some(SseUsageCollector::new(
+            start_time,
+            OPENAI_PARSER_CONFIG.stream_event_filter,
+            move |events, first_token_ms| {
+                let usage =
+                    TokenUsage::from_openai_stream_events(&events).unwrap_or_default();
+                if !usage.has_billable_tokens() {
+                    log::debug!(
+                        "[Reasonix] Anthropic streaming response usage is all-zero or missing, skipping usage recording"
+                    );
+                    return;
+                }
+                let model = usage
+                    .model
+                    .clone()
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| fallback_model.clone());
+                let latency_ms = start_time.elapsed().as_millis() as u64;
+
+                let state = state.clone();
+                let provider_id = provider_id.clone();
+                let request_model = request_model.clone();
+                let outbound_model = fallback_model.clone();
+                let session_id = session_id.clone();
+
+                tokio::spawn(async move {
+                    log_usage(
+                        &state,
+                        &provider_id,
+                        app_type_str,
+                        &model,
+                        &request_model,
+                        &outbound_model,
+                        usage,
+                        latency_ms,
+                        first_token_ms,
+                        true,
+                        status.as_u16(),
+                        Some(session_id),
+                    )
+                    .await;
+                });
+            },
+        ))
+    } else {
+        None
+    };
+
+    let logged_stream = create_logged_passthrough_stream(
+        sse_stream,
+        ctx.tag,
+        usage_collector,
+        ctx.streaming_timeout_config(),
+        connection_guard,
+    );
+
+    let mut builder = axum::response::Response::builder().status(status);
+    builder = builder.header(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/event-stream"),
+    );
+    builder = builder.header(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+
+    builder
+        .body(axum::body::Body::from_stream(logged_stream))
+        .map_err(|e| ProxyError::Internal(format!("Build SSE response failed: {e}")))
+}
+
+fn reasonix_models_from_db_providers(providers: &[crate::provider::Provider]) -> Vec<Value> {
+    let mut data = Vec::new();
+    for provider in providers {
+        if provider.id == crate::reasonix_config::REASONIX_PROXY_PROVIDER
+            || provider.id.starts_with("cc-switch-")
+        {
+            continue;
+        }
+        let models = provider
+            .settings_config
+            .get("models")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for model in models {
+            let id = model
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| {
+                    model
+                        .get("id")
+                        .or_else(|| model.get("model"))
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            if id.is_empty() || id == crate::reasonix_config::REASONIX_PROXY_MODEL {
+                continue;
+            }
+            data.push(json!({
+                "id": id,
+                "object": "model",
+                "owned_by": provider.id,
+            }));
+        }
+    }
+    if data.is_empty() {
+        data.push(json!({
+            "id": crate::reasonix_config::REASONIX_PROXY_MODEL,
+            "object": "model",
+            "owned_by": "cc-switch",
+        }));
+    }
+    data
+}
+
+/// GET /reasonix/v1/models — stable catalog for the local Reasonix proxy ingress.
+///
+/// Prefer DB `proxy_config.reasonix.enabled` over Live file heuristics so a
+/// stale/local proxy-shaped provider does not flip the catalog source.
+pub async fn handle_reasonix_models(
+    State(state): State<ProxyState>,
+) -> Result<Json<Value>, ProxyError> {
+    let takeover = state
+        .db
+        .get_proxy_config_for_app("reasonix")
+        .await
+        .map(|c| c.enabled)
+        .unwrap_or(false);
+    let data = if takeover {
+        let routed = state
+            .provider_router
+            .select_providers("reasonix")
+            .await
+            .unwrap_or_default();
+        let providers = if routed.is_empty() {
+            state
+                .db
+                .get_all_providers("reasonix")
+                .map_err(|e| ProxyError::Internal(format!("读取 Reasonix 供应商失败: {e}")))?
+                .into_values()
+                .collect::<Vec<_>>()
+        } else {
+            routed
+        };
+        reasonix_models_from_db_providers(&providers)
+    } else {
+        let providers = crate::reasonix_config::get_providers()
+            .map_err(|e| ProxyError::Internal(format!("读取 Reasonix 模型目录失败: {e}")))?;
+        let mut data = Vec::new();
+        for (name, value) in providers {
+            if name == crate::reasonix_config::REASONIX_PROXY_PROVIDER
+                || name.starts_with("cc-switch-")
+            {
+                continue;
+            }
+            if let Some(models) = value.get("models").and_then(Value::as_array) {
+                for model in models {
+                    let id = model
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| {
+                            model
+                                .get("id")
+                                .or_else(|| model.get("model"))
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_default();
+                    if id.is_empty() {
+                        continue;
+                    }
+                    data.push(json!({"id": id, "object": "model", "owned_by": name}));
+                }
+            }
+        }
+        data
+    };
+
+    Ok(Json(json!({"object": "list", "data": data})))
 }
 
 /// 处理 /v1/responses 请求（OpenAI Responses API - Codex CLI 透传）

@@ -54,6 +54,8 @@ export interface ProxyTakeoverStatus {
   hermes?: boolean;
   /** Kimi Code local proxy takeover (same class as Claude/Codex/Grok). */
   kimicode?: boolean;
+  /** Reasonix local proxy takeover */
+  reasonix?: boolean;
 }
 
 export interface ProviderHealth {

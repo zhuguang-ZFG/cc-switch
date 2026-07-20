@@ -783,7 +783,7 @@ fn tool_result_content_from_responses_item(item: &Value) -> ToolResultContent {
 /// Ensures the first message is a user: compacted/resumed sessions may start with
 /// assistant or function_call, but Anthropic requires the first to be user, else 400.
 /// An empty array is not handled (the caller decides whether to error).
-fn ensure_leading_user_message(messages: &mut Vec<Value>) {
+pub(crate) fn ensure_leading_user_message(messages: &mut Vec<Value>) {
     let leads_with_user = messages
         .first()
         .and_then(|m| m.get("role"))
@@ -805,7 +805,7 @@ fn ensure_leading_user_message(messages: &mut Vec<Value>) {
 /// call in an assistant turn to be answered together in the immediately following
 /// user turn. Dropping the whole incomplete assistant turn also avoids modifying a
 /// subset of a signed thinking/tool-use response.
-fn drop_incomplete_tool_turns(messages: &mut Vec<Value>) {
+pub(crate) fn drop_incomplete_tool_turns(messages: &mut Vec<Value>) {
     let original = std::mem::take(messages);
     let mut sanitized = Vec::with_capacity(original.len());
     let mut index = 0;
@@ -954,7 +954,7 @@ fn trailing_turn_supports_thinking(messages: &[Value]) -> bool {
 /// Removes whitespace-only assistant prefills and trims trailing whitespace from a
 /// real prefill. Anthropic rejects an assistant prefill whose final text ends in
 /// whitespace, and Codex may replay an empty assistant text beside a tool call.
-fn trim_trailing_assistant_text(messages: &mut [Value]) {
+pub(crate) fn trim_trailing_assistant_text(messages: &mut [Value]) {
     let Some(last) = messages.last_mut() else {
         return;
     };
@@ -991,7 +991,7 @@ fn is_meaningful_text(text: &str) -> bool {
 
 /// Removes messages whose content array ended up empty (e.g. a turn that carried
 /// only empty text that was filtered out). Anthropic 400s on empty content.
-fn drop_empty_messages(messages: &mut Vec<Value>) {
+pub(crate) fn drop_empty_messages(messages: &mut Vec<Value>) {
     messages.retain(|msg| {
         msg.get("content")
             .and_then(|c| c.as_array())

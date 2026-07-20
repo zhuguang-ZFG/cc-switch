@@ -51,7 +51,8 @@
   "apiKeyInput": {
     "placeholder": "請輸入 API Key",
     "show": "顯示 API Key",
-    "hide": "隱藏 API Key"
+    "hide": "隱藏 API Key",
+    "decodeBase64": "Base64 解碼"
   },
   "jsonEditor": {
     "mustBeObject": "設定必須是 JSON 物件，不能是陣列或其他類型",
@@ -862,7 +863,8 @@
     "opencode": "OpenCode",
     "openclaw": "OpenClaw",
     "kimicode": "Kimi Code",
-    "hermes": "Hermes"
+    "hermes": "Hermes",
+    "reasonix": "Reasonix"
   },
   "grokBuild": {
     "apiBackend": "API Backend",
@@ -1455,6 +1457,7 @@
       "gemini": "Gemini",
       "grokbuild": "Grok Build",
       "kimicode": "Kimi Code",
+      "reasonix": "Reasonix",
       "opencode": "OpenCode"
     },
     "rawInputLabel": "原始",
@@ -1718,7 +1721,8 @@
         "grokbuild": "Grok Build",
         "opencode": "OpenCode",
         "openclaw": "OpenClaw",
-        "kimicode": "Kimi Code"
+        "kimicode": "Kimi Code",
+        "reasonix": "Reasonix"
       }
     },
     "userLevelPath": "使用者級 MCP 設定路徑",
@@ -2123,6 +2127,40 @@
       "providerAdvanced": "供應商進階選項",
       "rateLimitDelay": "請求間隔（秒）",
       "rateLimitDelayHint": "連續請求間的最小間隔秒數（選填）。留空表示無限制。"
+    }
+  },
+  "reasonix": {
+    "presets": {
+      "deepseekOfficial": "DeepSeek 官方",
+      "custom": "自訂"
+    },
+    "form": {
+      "providerName": "供應商識別",
+      "providerNamePlaceholder": "deepseek",
+      "providerNameHint": "只能使用小寫字母、數字和連字符。寫入 Reasonix config.toml 的 providers.name。",
+      "providerNameLockedHint": "編輯模式下供應商識別不可修改。",
+      "providerNameRequired": "供應商識別不能為空",
+      "providerNameInvalid": "供應商識別只能包含小寫字母、數字和連字符",
+      "providerNameDuplicate": "該供應商識別已存在",
+      "kind": "API 協議",
+      "kindOpenai": "OpenAI",
+      "kindAnthropic": "Anthropic",
+      "kindHint": "選擇供應商 API 協議（OpenAI 或 Anthropic）。",
+      "baseUrl": "API 端點",
+      "baseUrlHint": "Reasonix 供應商的 API 端點地址。",
+      "baseUrlRequired": "API 端點不能為空",
+      "baseUrlScheme": "請使用 http:// 或 https:// 開頭的地址",
+      "baseUrlInvalid": "API 端點不是有效的 URL",
+      "apiKeyRequired": "請填寫 API Key",
+      "models": "模型列表",
+      "addModel": "新增模型",
+      "noModels": "暫無模型。請至少新增一個模型 ID。",
+      "modelIdPlaceholder": "deepseek-v4-flash",
+      "modelsHint": "模型 ID 列表，寫入 Reasonix live 設定的 models 欄位。",
+      "modelsRequired": "請至少新增一個模型",
+      "default": "預設模型",
+      "defaultPlaceholder": "選擇預設模型",
+      "defaultHint": "切換到此供應商時寫入 default_model；留空則取 models 第一項。"
     }
   },
   "env": {

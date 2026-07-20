@@ -178,6 +178,7 @@ export type AppType =
   | "gemini"
   | "grokbuild"
   | "kimicode"
+  | "reasonix"
   | "opencode";
 
 export type AppTypeFilter = "all" | AppType;
@@ -188,6 +189,7 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
   "gemini",
   "grokbuild",
   "kimicode",
+  "reasonix",
   "opencode",
 ];
 
@@ -210,6 +212,8 @@ export const CACHE_INCLUSIVE_APP_TYPES: ReadonlySet<string> = new Set([
   // Kimi local ingress is OpenAI Responses; upstream Chat/Responses paths
   // report input tokens that already include cached tokens.
   "kimicode",
+  // Reasonix local ingress is OpenAI Chat (same cache-inclusive semantics as Codex).
+  "reasonix",
 ]);
 
 /** Subset of request-log fields needed to derive cache-normalized input. */

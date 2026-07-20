@@ -221,6 +221,7 @@ export function useProxyStatus() {
       takeoverStatus?.gemini ||
       takeoverStatus?.grokbuild ||
       takeoverStatus?.kimicode ||
+      takeoverStatus?.reasonix ||
       false,
 
     // 启动/停止（总开关）

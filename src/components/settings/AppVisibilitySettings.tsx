@@ -56,6 +56,12 @@ const APP_CONFIG: Array<{
     nameKey: "apps.kimicode",
     defaultName: "Kimi Code",
   },
+  {
+    id: "reasonix",
+    icon: "deepseek",
+    nameKey: "apps.reasonix",
+    defaultName: "Reasonix",
+  },
 ];
 
 function isAppVisible(visibleApps: VisibleApps, appId: AppId): boolean {
@@ -80,6 +86,7 @@ export function AppVisibilitySettings({
     opencode: true,
     openclaw: true,
     kimicode: true,
+    reasonix: true,
   };
 
   const visibleCount = APP_CONFIG.filter((app) =>

@@ -168,6 +168,10 @@ impl Provider {
                 str_at(settings.get("base_url")),
                 str_at(settings.get("api_key")),
             ),
+            AppType::Reasonix => (
+                str_at(settings.get("base_url")),
+                str_at(settings.get("api_key")),
+            ),
             // OpenClaw (openclaw.json) flattens credentials at the top level, camelCase.
             AppType::OpenClaw => (
                 str_at(settings.get("baseUrl")),

@@ -46,9 +46,14 @@ import {
   kimiProviderPresets,
   type KimiProviderPreset,
 } from "@/config/kimiProviderPresets";
+import {
+  reasonixProviderPresets,
+  type ReasonixProviderPreset,
+} from "@/config/reasonixProviderPresets";
 import { OpenCodeFormFields } from "./OpenCodeFormFields";
 import { OpenClawFormFields } from "./OpenClawFormFields";
 import { HermesFormFields } from "./HermesFormFields";
+import { ReasonixFormFields } from "./ReasonixFormFields";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
 import {
   applyTemplateValues,
@@ -98,6 +103,7 @@ import {
   useOmoDraftState,
   useOpenclawFormState,
   useHermesFormState,
+  useReasonixFormState,
   useKimiCommonConfig,
   useCopilotAuth,
   useCodexOauth,
@@ -112,6 +118,7 @@ import {
   normalizePricingSource,
 } from "./helpers/opencodeFormUtils";
 import { HERMES_DEFAULT_CONFIG } from "./hooks/useHermesFormState";
+import { REASONIX_DEFAULT_CONFIG } from "./hooks/useReasonixFormState";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import { useOpenClawLiveProviderIds } from "@/hooks/useOpenClaw";
 import { useHermesLiveProviderIds } from "@/hooks/useHermes";
@@ -123,7 +130,8 @@ type PresetEntry = {
     | CodexProviderPreset
     | OpenCodeProviderPreset
     | OpenClawProviderPreset
-    | KimiProviderPreset;
+    | KimiProviderPreset
+    | ReasonixProviderPreset;
 };
 
 export const normalizeCodexCatalogModelsForSave = (
@@ -383,7 +391,9 @@ function ProviderFormFull({
               ? OPENCLAW_DEFAULT_CONFIG
               : appId === "kimicode"
                 ? HERMES_DEFAULT_CONFIG
-                : CLAUDE_DEFAULT_CONFIG,
+                : appId === "reasonix"
+                  ? REASONIX_DEFAULT_CONFIG
+                  : CLAUDE_DEFAULT_CONFIG,
       icon: initialData?.icon ?? "",
       iconColor: initialData?.iconColor ?? "",
     }),
@@ -682,6 +692,11 @@ function ProviderFormFull({
         id: `kimicode-${index}`,
         preset,
       }));
+    } else if (appId === "reasonix") {
+      return reasonixProviderPresets.map<PresetEntry>((preset, index) => ({
+        id: `reasonix-${index}`,
+        preset,
+      }));
     }
     return providerPresets
       .filter((p) => !p.hidden)
@@ -813,6 +828,14 @@ function ProviderFormFull({
     isLoading: isHermesLiveProviderIdsLoading,
   } = useHermesLiveProviderIds(appId === "kimicode");
 
+  const reasonixForm = useReasonixFormState({
+    initialData,
+    appId,
+    providerId,
+    onSettingsConfigChange: (config) => form.setValue("settingsConfig", config),
+    getSettingsConfig: () => form.getValues("settingsConfig"),
+  });
+
   const additiveExistingProviderKeys = useMemo(() => {
     if (appId === "opencode" && !isAnyOmoCategory) {
       return Array.from(
@@ -845,6 +868,10 @@ function ProviderFormFull({
       );
     }
 
+    if (appId === "reasonix") {
+      return reasonixForm.existingReasonixKeys.filter((key) => key !== providerId);
+    }
+
     return [];
   }, [
     appId,
@@ -856,6 +883,7 @@ function ProviderFormFull({
     openclawLiveProviderIds,
     opencodeLiveProviderIds,
     providerId,
+    reasonixForm.existingReasonixKeys,
   ]);
 
   const isProviderKeyLockStateLoading = useMemo(() => {
@@ -1090,6 +1118,47 @@ function ProviderFormFull({
       }
     }
 
+    if (appId === "reasonix") {
+      if (!reasonixForm.reasonixProviderName.trim()) {
+        toast.error(t("reasonix.form.providerNameRequired"));
+        return;
+      }
+      if (!keyPattern.test(reasonixForm.reasonixProviderName)) {
+        toast.error(t("reasonix.form.providerNameInvalid"));
+        return;
+      }
+      if (
+        additiveExistingProviderKeys.includes(reasonixForm.reasonixProviderName)
+      ) {
+        toast.error(t("reasonix.form.providerNameDuplicate"));
+        return;
+      }
+
+      const reasonixBaseUrl = reasonixForm.reasonixBaseUrl.trim();
+      if (!reasonixBaseUrl) {
+        toast.error(t("reasonix.form.baseUrlRequired"));
+        return;
+      }
+      try {
+        const parsed = new URL(reasonixBaseUrl);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          toast.error(t("reasonix.form.baseUrlScheme"));
+          return;
+        }
+      } catch {
+        toast.error(t("reasonix.form.baseUrlInvalid"));
+        return;
+      }
+      if (!reasonixForm.reasonixApiKey.trim()) {
+        toast.error(t("reasonix.form.apiKeyRequired"));
+        return;
+      }
+      if (reasonixForm.reasonixModels.filter((m) => m.trim()).length === 0) {
+        toast.error(t("reasonix.form.modelsRequired"));
+        return;
+      }
+    }
+
     // OAuth 未登录：B 类（token 根本不存在，保存了也没法建立）
     const isCopilotProvider =
       templatePreset?.providerType === "github_copilot" ||
@@ -1319,6 +1388,8 @@ function ProviderFormFull({
       payload.providerKey = openclawForm.openclawProviderKey;
     } else if (appId === "kimicode") {
       payload.providerKey = hermesForm.hermesProviderKey;
+    } else if (appId === "reasonix") {
+      payload.providerKey = reasonixForm.reasonixProviderName;
     }
 
     if (isAnyOmoCategory && !payload.presetCategory) {
@@ -1572,6 +1643,19 @@ function ProviderFormFull({
     formWebsiteUrl: form.watch("websiteUrl") || "",
   });
 
+  const {
+    shouldShowApiKeyLink: shouldShowReasonixApiKeyLink,
+    websiteUrl: reasonixWebsiteUrl,
+    isPartner: isReasonixPartner,
+    partnerPromotionKey: reasonixPartnerPromotionKey,
+  } = useApiKeyLink({
+    appId: "reasonix",
+    category,
+    selectedPresetId,
+    presetEntries,
+    formWebsiteUrl: form.watch("websiteUrl") || "",
+  });
+
   // 使用端点测速候选 hook
   const speedTestEndpoints = useSpeedTestEndpoints({
     appId,
@@ -1608,6 +1692,9 @@ function ProviderFormFull({
       }
       if (appId === "kimicode") {
         hermesForm.resetHermesState();
+      }
+      if (appId === "reasonix") {
+        reasonixForm.resetReasonixState();
       }
       return;
     }
@@ -1709,6 +1796,23 @@ function ProviderFormFull({
       const config = preset.settingsConfig;
 
       hermesForm.resetHermesState(config);
+
+      form.reset({
+        name: preset.nameKey ? t(preset.nameKey) : preset.name,
+        websiteUrl: preset.websiteUrl ?? "",
+        settingsConfig: JSON.stringify(config, null, 2),
+        icon: preset.icon ?? "",
+        iconColor: preset.iconColor ?? "",
+      });
+      return;
+    }
+
+    if (appId === "reasonix") {
+      const preset = entry.preset as ReasonixProviderPreset;
+      const config = preset.settingsConfig;
+
+      reasonixForm.resetReasonixState(config);
+      reasonixForm.setReasonixProviderName(config.name ?? "");
 
       form.reset({
         name: preset.nameKey ? t(preset.nameKey) : preset.name,
@@ -1984,6 +2088,77 @@ function ProviderFormFull({
                       </p>
                     )}
                 </div>
+              ) : appId === "reasonix" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="reasonix-name">
+                    {t("reasonix.form.providerName", {
+                      defaultValue: "供应商标识",
+                    })}
+                    <span className="text-destructive ml-1">*</span>
+                  </Label>
+                  <Input
+                    id="reasonix-name"
+                    value={reasonixForm.reasonixProviderName}
+                    onChange={(e) =>
+                      reasonixForm.setReasonixProviderName(
+                        e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                      )
+                    }
+                    placeholder={t("reasonix.form.providerNamePlaceholder", {
+                      defaultValue: "deepseek",
+                    })}
+                    disabled={isEditMode}
+                    className={
+                      (additiveExistingProviderKeys.includes(
+                        reasonixForm.reasonixProviderName,
+                      ) &&
+                        !isEditMode) ||
+                      (reasonixForm.reasonixProviderName.trim() !== "" &&
+                        !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
+                          reasonixForm.reasonixProviderName,
+                        ))
+                        ? "border-destructive"
+                        : ""
+                    }
+                  />
+                  {additiveExistingProviderKeys.includes(
+                    reasonixForm.reasonixProviderName,
+                  ) &&
+                    !isEditMode && (
+                      <p className="text-xs text-destructive">
+                        {t("reasonix.form.providerNameDuplicate")}
+                      </p>
+                    )}
+                  {reasonixForm.reasonixProviderName.trim() !== "" &&
+                    !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(
+                      reasonixForm.reasonixProviderName,
+                    ) && (
+                      <p className="text-xs text-destructive">
+                        {t("reasonix.form.providerNameInvalid")}
+                      </p>
+                    )}
+                  {!(
+                    additiveExistingProviderKeys.includes(
+                      reasonixForm.reasonixProviderName,
+                    ) && !isEditMode
+                  ) &&
+                    (reasonixForm.reasonixProviderName.trim() === "" ||
+                      /^[a-z0-9]+(-[a-z0-9]+)*$/.test(
+                        reasonixForm.reasonixProviderName,
+                      )) && (
+                      <p className="text-xs text-muted-foreground">
+                        {isEditMode
+                          ? t("reasonix.form.providerNameLockedHint", {
+                              defaultValue:
+                                "编辑模式下供应商标识不可修改。",
+                            })
+                          : t("reasonix.form.providerNameHint", {
+                              defaultValue:
+                                "只能使用小写字母、数字和连字符。写入 Reasonix config.toml 的 providers.name。",
+                            })}
+                      </p>
+                    )}
+                </div>
               ) : undefined
             }
           />
@@ -2184,7 +2359,6 @@ function ProviderFormFull({
             />
           )}
 
-          {/* Hermes 专属字段 */}
           {appId === "kimicode" && (
             <HermesFormFields
               providerId={providerId}
@@ -2218,6 +2392,26 @@ function ProviderFormFull({
               onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
               localProxyBodyOverride={localProxyBodyOverride}
               onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
+            />
+          )}
+
+          {appId === "reasonix" && (
+            <ReasonixFormFields
+              kind={reasonixForm.reasonixKind}
+              onKindChange={reasonixForm.handleReasonixKindChange}
+              baseUrl={reasonixForm.reasonixBaseUrl}
+              onBaseUrlChange={reasonixForm.handleReasonixBaseUrlChange}
+              apiKey={reasonixForm.reasonixApiKey}
+              onApiKeyChange={reasonixForm.handleReasonixApiKeyChange}
+              category={category}
+              shouldShowApiKeyLink={shouldShowReasonixApiKeyLink}
+              websiteUrl={reasonixWebsiteUrl}
+              isPartner={isReasonixPartner}
+              partnerPromotionKey={reasonixPartnerPromotionKey}
+              models={reasonixForm.reasonixModels}
+              onModelsChange={reasonixForm.handleReasonixModelsChange}
+              defaultModel={reasonixForm.reasonixDefault}
+              onDefaultModelChange={reasonixForm.handleReasonixDefaultChange}
             />
           )}
 
@@ -2287,7 +2481,7 @@ function ProviderFormFull({
               </div>
               {settingsConfigErrorField}
             </>
-          ) : appId === "openclaw" || appId === "kimicode" ? (
+          ) : appId === "openclaw" || appId === "kimicode" || appId === "reasonix" ? (
             <>
               <div className="space-y-2">
                 <Label htmlFor="settingsConfig">
@@ -2303,7 +2497,16 @@ function ProviderFormFull({
   "base_url": "https://api.example.com/v1",
   "api_key": ""
 }`
-                      : `{
+                      : appId === "reasonix"
+                        ? `{
+  "name": "deepseek",
+  "kind": "openai",
+  "base_url": "https://api.deepseek.com",
+  "api_key": "",
+  "models": ["deepseek-v4-flash"],
+  "default": "deepseek-v4-flash"
+}`
+                        : `{
   "baseUrl": "https://api.example.com/v1",
   "apiKey": "your-api-key-here",
   "api": "openai-completions",
@@ -2371,7 +2574,8 @@ function ProviderFormFull({
 
           {!isAnyOmoCategory &&
             appId !== "opencode" &&
-            appId !== "openclaw" && (
+            appId !== "openclaw" &&
+            appId !== "reasonix" && (
               <ProviderAdvancedConfig
                 pricingConfig={pricingConfig}
                 onPricingConfigChange={setPricingConfig}

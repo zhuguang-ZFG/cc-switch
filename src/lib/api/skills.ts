@@ -9,7 +9,8 @@ export type AppType =
   | "grokbuild"
   | "opencode"
   | "openclaw"
-  | "kimicode";
+  | "kimicode"
+  | "reasonix";
 
 /** Skill 应用启用状态 */
 export interface SkillApps {
@@ -25,6 +26,8 @@ export interface SkillApps {
   hermes?: boolean;
   /** Kimi Code skills */
   kimicode?: boolean;
+  /** Reasonix skills */
+  reasonix?: boolean;
 }
 
 /** 已安装的 Skill（v3.10.0+ 统一结构） */

@@ -26,6 +26,7 @@ const ALL_APPS: AppId[] = [
   "opencode",
   "openclaw",
   "kimicode",
+  "reasonix",
 ];
 const STORAGE_KEY = "cc-switch-last-app";
 
@@ -58,6 +59,7 @@ export function AppSwitcher({
     opencode: "opencode",
     openclaw: "openclaw",
     kimicode: "kimi",
+    reasonix: "deepseek",
   };
   const appDisplayName: Record<AppId, string> = {
     claude: "Claude Code",
@@ -67,6 +69,7 @@ export function AppSwitcher({
     opencode: "OpenCode",
     openclaw: "OpenClaw",
     kimicode: "Kimi Code",
+    reasonix: "Reasonix",
   };
 
   const appsToShow = ALL_APPS.filter((app) => isAppVisible(app, visibleApps));

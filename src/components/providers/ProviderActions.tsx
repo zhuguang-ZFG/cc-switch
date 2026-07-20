@@ -84,35 +84,37 @@ export function ProviderActions({
   const { t } = useTranslation();
   const iconButtonClass = "h-8 w-8 p-1";
 
-  // Kimi 仅在「已接管 + 自动故障转移」时主按钮走队列语义（加入/已加入），
+  // Kimi / Reasonix：仅在「已接管 + 自动故障转移」时主按钮走队列语义（加入/已加入），
   // 与 Claude/Codex 一致。必须同时要求 isProxyTakeover：否则仅开故障转移开关
   // （或测试传入 isAutoFailoverEnabled）会把累加模式误判成队列模式，
   // 导致非接管下无法添加/移除供应商。
-  const isKimiFailover =
-    appId === "kimicode" &&
+  const isHybridProxyApp = appId === "kimicode" || appId === "reasonix";
+  const isHybridFailover =
+    isHybridProxyApp &&
     isProxyTakeover &&
     isAutoFailoverEnabled &&
     Boolean(onToggleFailover);
 
-  // 代理接管下的 Kimi：live 被代理冻结，isInConfig（由 live 推导）不再随操作变化，
+  // 代理接管下的 Kimi / Reasonix：live 被代理冻结，isInConfig（由 live 推导）不再随操作变化，
   // 累加语义失效。主按钮退化为 isCurrent 驱动的切换语义（与 Claude/Codex 接管一致：
   // 启用/已在用），热切换后 DB is_current 即时可见。
-  const isKimiTakeoverSwitch =
-    appId === "kimicode" && isProxyTakeover && !isKimiFailover;
+  const isHybridTakeoverSwitch =
+    isHybridProxyApp && isProxyTakeover && !isHybridFailover;
 
-  // 累加模式应用（OpenCode 非 OMO / OpenClaw / Hermes）
+  // 累加模式应用（OpenCode 非 OMO / OpenClaw / Kimi / Reasonix）
   const isAdditiveMode =
-    !isKimiTakeoverSwitch &&
-    !isKimiFailover &&
+    !isHybridTakeoverSwitch &&
+    !isHybridFailover &&
     ((appId === "opencode" && !isOmo) ||
       appId === "openclaw" ||
-      appId === "kimicode");
+      appId === "kimicode" ||
+      appId === "reasonix");
 
-  // 故障转移模式下的按钮逻辑（累加模式、OMO 应用和 Kimi 接管切换不支持故障转移；
-  // Kimi 故障转移由上面的 isKimiFailover 单独放行）
+  // 故障转移模式下的按钮逻辑（累加模式、OMO 应用和 hybrid 接管切换不支持故障转移；
+  // hybrid 故障转移由上面的 isHybridFailover 单独放行）
   const isFailoverMode =
-    isKimiFailover ||
-    (!isKimiTakeoverSwitch &&
+    isHybridFailover ||
+    (!isHybridTakeoverSwitch &&
       !isAdditiveMode &&
       !isOmo &&
       isAutoFailoverEnabled &&
@@ -255,20 +257,22 @@ export function ProviderActions({
 
   return (
     <div className="flex items-center gap-1.5">
-      {/* Kimi 接管下隐藏「设为默认」：默认模型由代理备份管理， additive Zap 会误导 */}
-      {(appId === "openclaw" || appId === "kimicode") &&
+      {/* Kimi / Reasonix 接管下隐藏「设为默认」：默认模型由代理备份管理， additive Zap 会误导 */}
+      {(appId === "openclaw" ||
+        appId === "kimicode" ||
+        appId === "reasonix") &&
         isInConfig &&
         onSetAsDefault &&
-        !isKimiTakeoverSwitch &&
+        !isHybridTakeoverSwitch &&
         (() => {
           const activeLabel =
-            appId === "kimicode"
-              ? t("provider.inUse", { defaultValue: "已在用" })
-              : t("provider.isDefault", { defaultValue: "当前默认" });
+            appId === "openclaw"
+              ? t("provider.isDefault", { defaultValue: "当前默认" })
+              : t("provider.inUse", { defaultValue: "已在用" });
           const inactiveLabel =
-            appId === "kimicode"
-              ? t("provider.enable", { defaultValue: "启用" })
-              : t("provider.setAsDefault", { defaultValue: "设为默认" });
+            appId === "openclaw"
+              ? t("provider.setAsDefault", { defaultValue: "设为默认" })
+              : t("provider.enable", { defaultValue: "启用" });
           return (
             <Button
               size="sm"

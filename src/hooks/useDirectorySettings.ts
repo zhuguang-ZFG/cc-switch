@@ -12,7 +12,8 @@ type AppDirectoryKey =
   | "grokbuild"
   | "opencode"
   | "openclaw"
-  | "kimicode";
+  | "kimicode"
+  | "reasonix";
 type DirectoryKey = "appConfig" | AppDirectoryKey;
 
 export interface ResolvedDirectories {
@@ -23,6 +24,7 @@ export interface ResolvedDirectories {
   opencode: string;
   openclaw: string;
   kimicode: string;
+  reasonix: string;
 }
 
 // Single source of truth for per-app directory metadata.
@@ -36,6 +38,7 @@ const APP_DIRECTORY_META: Record<
   opencode: { key: "opencode", defaultFolder: ".config/opencode" },
   openclaw: { key: "openclaw", defaultFolder: ".openclaw" },
   kimicode: { key: "kimicode", defaultFolder: ".kimi-code" },
+  reasonix: { key: "reasonix", defaultFolder: ".reasonix" },
 };
 
 const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
@@ -48,6 +51,7 @@ const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
   opencode: "opencodeConfigDir",
   openclaw: "openclawConfigDir",
   kimicode: "kimiConfigDir",
+  reasonix: "reasonixConfigDir",
 };
 
 const sanitizeDir = (value?: string | null): string | undefined => {
@@ -133,6 +137,7 @@ export function useDirectorySettings({
     opencode: "",
     openclaw: "",
     kimicode: "",
+    reasonix: "",
   });
   const [isLoading, setIsLoading] = useState(true);
 
@@ -144,6 +149,7 @@ export function useDirectorySettings({
     opencode: "",
     openclaw: "",
     kimicode: "",
+    reasonix: "",
   });
   const initialAppConfigDirRef = useRef<string | undefined>(undefined);
 
@@ -162,6 +168,7 @@ export function useDirectorySettings({
           opencodeDir,
           openclawDir,
           kimiDir,
+          reasonixDir,
           defaultAppConfig,
           defaultClaudeDir,
           defaultCodexDir,
@@ -169,6 +176,7 @@ export function useDirectorySettings({
           defaultOpencodeDir,
           defaultOpenclawDir,
           defaultKimiDir,
+          defaultReasonixDir,
         ] = await Promise.all([
           settingsApi.getAppConfigDirOverride(),
           settingsApi.getConfigDir("claude"),
@@ -177,6 +185,7 @@ export function useDirectorySettings({
           settingsApi.getConfigDir("opencode"),
           settingsApi.getConfigDir("openclaw"),
           settingsApi.getConfigDir("kimicode"),
+          settingsApi.getConfigDir("reasonix"),
           computeDefaultAppConfigDir(),
           computeDefaultConfigDir("claude"),
           computeDefaultConfigDir("codex"),
@@ -184,6 +193,7 @@ export function useDirectorySettings({
           computeDefaultConfigDir("opencode"),
           computeDefaultConfigDir("openclaw"),
           computeDefaultConfigDir("kimicode"),
+          computeDefaultConfigDir("reasonix"),
         ]);
 
         if (!active) return;
@@ -198,6 +208,7 @@ export function useDirectorySettings({
           opencode: defaultOpencodeDir ?? "",
           openclaw: defaultOpenclawDir ?? "",
           kimicode: defaultKimiDir ?? "",
+          reasonix: defaultReasonixDir ?? "",
         };
 
         setAppConfigDir(normalizedOverride);
@@ -211,6 +222,7 @@ export function useDirectorySettings({
           opencode: opencodeDir || defaultsRef.current.opencode,
           openclaw: openclawDir || defaultsRef.current.openclaw,
           kimicode: kimiDir || defaultsRef.current.kimicode,
+          reasonix: reasonixDir || defaultsRef.current.reasonix,
         });
       } catch (error) {
         console.error(
@@ -352,6 +364,7 @@ export function useDirectorySettings({
         opencode: overrides?.opencode ?? defaultsRef.current.opencode,
         openclaw: overrides?.openclaw ?? defaultsRef.current.openclaw,
         kimicode: overrides?.kimicode ?? defaultsRef.current.kimicode,
+        reasonix: overrides?.reasonix ?? defaultsRef.current.reasonix,
       });
     },
     [],

@@ -1,0 +1,273 @@
+import { useState, useCallback, useMemo } from "react";
+import type { AppId } from "@/lib/api";
+import { useProvidersQuery } from "@/lib/query/queries";
+import {
+  type ReasonixProviderKind,
+  type ReasonixProviderSettingsConfig,
+} from "@/config/reasonixProviderPresets";
+
+export const REASONIX_DEFAULT_KIND: ReasonixProviderKind = "openai";
+
+const REASONIX_DEFAULT_CONFIG_OBJ = {
+  name: "",
+  kind: REASONIX_DEFAULT_KIND,
+  base_url: "",
+  api_key: "",
+  models: [] as string[],
+  default: "",
+} as const;
+
+export const REASONIX_DEFAULT_CONFIG = JSON.stringify(
+  REASONIX_DEFAULT_CONFIG_OBJ,
+  null,
+  2,
+);
+
+interface UseReasonixFormStateParams {
+  initialData?: {
+    settingsConfig?: Record<string, unknown>;
+  };
+  appId: AppId;
+  providerId?: string;
+  onSettingsConfigChange: (config: string) => void;
+  getSettingsConfig: () => string;
+}
+
+export interface ReasonixFormState {
+  reasonixProviderName: string;
+  setReasonixProviderName: (name: string) => void;
+  reasonixKind: ReasonixProviderKind;
+  reasonixBaseUrl: string;
+  reasonixApiKey: string;
+  reasonixModels: string[];
+  reasonixDefault: string;
+  existingReasonixKeys: string[];
+  handleReasonixKindChange: (kind: ReasonixProviderKind) => void;
+  handleReasonixBaseUrlChange: (baseUrl: string) => void;
+  handleReasonixApiKeyChange: (apiKey: string) => void;
+  handleReasonixModelsChange: (models: string[]) => void;
+  handleReasonixDefaultChange: (model: string) => void;
+  resetReasonixState: (config?: Partial<ReasonixProviderSettingsConfig>) => void;
+}
+
+function parseReasonixField<T>(
+  initialData: UseReasonixFormStateParams["initialData"],
+  field: string,
+  fallback: T,
+): T {
+  try {
+    if (initialData?.settingsConfig) {
+      return (initialData.settingsConfig[field] as T) ?? fallback;
+    }
+    return (
+      ((REASONIX_DEFAULT_CONFIG_OBJ as Record<string, unknown>)[field] as T) ??
+      fallback
+    );
+  } catch {
+    return fallback;
+  }
+}
+
+function parseModels(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+}
+
+function normalizeDefaultModel(
+  models: string[],
+  currentDefault: string,
+): string {
+  const trimmed = currentDefault.trim();
+  if (trimmed && models.includes(trimmed)) return trimmed;
+  return models[0] ?? "";
+}
+
+export function useReasonixFormState({
+  initialData,
+  appId,
+  providerId,
+  onSettingsConfigChange,
+  getSettingsConfig,
+}: UseReasonixFormStateParams): ReasonixFormState {
+  const { data: reasonixProvidersData } = useProvidersQuery("reasonix");
+  const existingReasonixKeys = useMemo(() => {
+    if (!reasonixProvidersData?.providers) return [];
+    return Object.keys(reasonixProvidersData.providers).filter(
+      (k) => k !== providerId,
+    );
+  }, [reasonixProvidersData?.providers, providerId]);
+
+  const initialModels = useMemo(
+    () =>
+      appId === "reasonix"
+        ? parseModels(parseReasonixField(initialData, "models", []))
+        : [],
+    [appId, initialData],
+  );
+
+  const [reasonixProviderName, setReasonixProviderNameState] =
+    useState<string>(() => {
+      if (appId !== "reasonix") return "";
+      return (
+        providerId ||
+        parseReasonixField<string>(initialData, "name", "")
+      );
+    });
+
+  const [reasonixKind, setReasonixKind] = useState<ReasonixProviderKind>(() => {
+    if (appId !== "reasonix") return REASONIX_DEFAULT_KIND;
+    const stored = parseReasonixField<string>(initialData, "kind", "");
+    return stored === "anthropic" ? "anthropic" : REASONIX_DEFAULT_KIND;
+  });
+
+  const [reasonixBaseUrl, setReasonixBaseUrl] = useState<string>(() => {
+    if (appId !== "reasonix") return "";
+    return parseReasonixField(initialData, "base_url", "");
+  });
+
+  const [reasonixApiKey, setReasonixApiKey] = useState<string>(() => {
+    if (appId !== "reasonix") return "";
+    return parseReasonixField(initialData, "api_key", "");
+  });
+
+  const [reasonixModels, setReasonixModels] =
+    useState<string[]>(initialModels);
+
+  const [reasonixDefault, setReasonixDefault] = useState<string>(() => {
+    if (appId !== "reasonix") return "";
+    const parsedDefault = parseReasonixField<string>(initialData, "default", "");
+    return normalizeDefaultModel(initialModels, parsedDefault);
+  });
+
+  const updateReasonixConfig = useCallback(
+    (updater: (config: Record<string, unknown>) => void) => {
+      try {
+        const config = JSON.parse(getSettingsConfig() || REASONIX_DEFAULT_CONFIG);
+        updater(config);
+        onSettingsConfigChange(JSON.stringify(config, null, 2));
+      } catch {
+        // ignore parse errors during editing
+      }
+    },
+    [getSettingsConfig, onSettingsConfigChange],
+  );
+
+  const setReasonixProviderName = useCallback(
+    (name: string) => {
+      setReasonixProviderNameState(name);
+      updateReasonixConfig((config) => {
+        config.name = name;
+      });
+    },
+    [updateReasonixConfig],
+  );
+
+  const handleReasonixKindChange = useCallback(
+    (kind: ReasonixProviderKind) => {
+      setReasonixKind(kind);
+      updateReasonixConfig((config) => {
+        config.kind = kind;
+      });
+    },
+    [updateReasonixConfig],
+  );
+
+  const handleReasonixBaseUrlChange = useCallback(
+    (baseUrl: string) => {
+      setReasonixBaseUrl(baseUrl);
+      updateReasonixConfig((config) => {
+        config.base_url = baseUrl.trim().replace(/\/+$/, "");
+      });
+    },
+    [updateReasonixConfig],
+  );
+
+  const handleReasonixApiKeyChange = useCallback(
+    (apiKey: string) => {
+      setReasonixApiKey(apiKey);
+      updateReasonixConfig((config) => {
+        config.api_key = apiKey;
+      });
+    },
+    [updateReasonixConfig],
+  );
+
+  const handleReasonixModelsChange = useCallback(
+    (models: string[]) => {
+      const normalized = models.map((m) => m.trim()).filter(Boolean);
+      setReasonixModels(normalized);
+      setReasonixDefault((prev) => normalizeDefaultModel(normalized, prev));
+      updateReasonixConfig((config) => {
+        if (normalized.length === 0) {
+          delete config.models;
+          delete config.default;
+        } else {
+          config.models = normalized;
+          const nextDefault = normalizeDefaultModel(
+            normalized,
+            typeof config.default === "string" ? config.default : "",
+          );
+          if (nextDefault) {
+            config.default = nextDefault;
+          } else {
+            delete config.default;
+          }
+        }
+      });
+    },
+    [updateReasonixConfig],
+  );
+
+  const handleReasonixDefaultChange = useCallback(
+    (model: string) => {
+      const trimmed = model.trim();
+      setReasonixDefault(trimmed);
+      updateReasonixConfig((config) => {
+        if (!trimmed) {
+          delete config.default;
+        } else {
+          config.default = trimmed;
+        }
+      });
+    },
+    [updateReasonixConfig],
+  );
+
+  const resetReasonixState = useCallback(
+    (config?: Partial<ReasonixProviderSettingsConfig>) => {
+      const nextName = config?.name ?? "";
+      const nextModels = parseModels(config?.models);
+      const nextDefault = normalizeDefaultModel(
+        nextModels,
+        config?.default ?? "",
+      );
+
+      setReasonixProviderNameState(nextName);
+      setReasonixKind(config?.kind ?? REASONIX_DEFAULT_KIND);
+      setReasonixBaseUrl(config?.base_url ?? "");
+      setReasonixApiKey(config?.api_key ?? "");
+      setReasonixModels(nextModels);
+      setReasonixDefault(nextDefault);
+    },
+    [],
+  );
+
+  return {
+    reasonixProviderName,
+    setReasonixProviderName,
+    reasonixKind,
+    reasonixBaseUrl,
+    reasonixApiKey,
+    reasonixModels,
+    reasonixDefault,
+    existingReasonixKeys,
+    handleReasonixKindChange,
+    handleReasonixBaseUrlChange,
+    handleReasonixApiKeyChange,
+    handleReasonixModelsChange,
+    handleReasonixDefaultChange,
+    resetReasonixState,
+  };
+}

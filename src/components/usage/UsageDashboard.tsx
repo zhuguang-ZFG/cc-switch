@@ -65,6 +65,7 @@ const APP_FILTER_ICON: Record<AppType, string> = {
   gemini: "gemini",
   grokbuild: "grok",
   kimicode: "kimi-code",
+  reasonix: "deepseek",
   opencode: "opencode",
 };
 

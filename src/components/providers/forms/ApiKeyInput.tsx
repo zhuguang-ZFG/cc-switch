@@ -1,6 +1,7 @@
-import React, { useState } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { Eye, EyeOff, Binary } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { tryDecodeBase64Key } from "@/utils/base64Key";
 
 interface ApiKeyInputProps {
   value: string;
@@ -28,7 +29,16 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
     setShowKey(!showKey);
   };
 
-  const inputClass = `w-full px-3 py-2 pr-10 border rounded-lg text-sm transition-colors ${
+  // 输入内容可按 Base64 解码为合法 Key 时，显示一键解码按钮
+  const decodedKey = useMemo(() => tryDecodeBase64Key(value), [value]);
+
+  const handleDecode = () => {
+    if (decodedKey) {
+      onChange(decodedKey);
+    }
+  };
+
+  const inputClass = `w-full px-3 py-2 ${decodedKey ? "pr-16" : "pr-10"} border rounded-lg text-sm transition-colors ${
     disabled
       ? "bg-muted border-border-default text-muted-foreground cursor-not-allowed"
       : "border-border-default bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20"
@@ -52,14 +62,27 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
           className={inputClass}
         />
         {!disabled && value && (
-          <button
-            type="button"
-            onClick={toggleShowKey}
-            className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground transition-colors"
-            aria-label={showKey ? t("apiKeyInput.hide") : t("apiKeyInput.show")}
-          >
-            {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
+          <div className="absolute inset-y-0 right-0 flex items-center gap-2 pr-3">
+            {decodedKey && (
+              <button
+                type="button"
+                onClick={handleDecode}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+                title={t("apiKeyInput.decodeBase64")}
+                aria-label={t("apiKeyInput.decodeBase64")}
+              >
+                <Binary size={16} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={toggleShowKey}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              aria-label={showKey ? t("apiKeyInput.hide") : t("apiKeyInput.show")}
+            >
+              {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
         )}
       </div>
     </div>

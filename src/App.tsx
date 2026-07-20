@@ -985,7 +985,8 @@ function App() {
                       onRemoveFromConfig={
                         activeApp === "opencode" ||
                         activeApp === "openclaw" ||
-                        activeApp === "kimicode"
+                        activeApp === "kimicode" ||
+                        activeApp === "reasonix"
                           ? (provider) =>
                               setConfirmAction({ provider, action: "remove" })
                           : undefined
@@ -1008,7 +1009,8 @@ function App() {
                       onSetAsDefault={
                         activeApp === "openclaw"
                           ? setAsDefaultModel
-                          : activeApp === "kimicode"
+                          : activeApp === "kimicode" ||
+                              activeApp === "reasonix"
                             ? switchProvider
                             : undefined
                       }

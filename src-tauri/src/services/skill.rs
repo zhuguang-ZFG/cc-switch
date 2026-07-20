@@ -526,6 +526,11 @@ impl SkillService {
                     return Ok(custom.join("skills"));
                 }
             }
+            AppType::Reasonix => {
+                if let Some(custom) = crate::settings::get_reasonix_override_dir() {
+                    return Ok(custom.join("skills"));
+                }
+            }
         }
 
         // 默认路径：回退到用户主目录下的标准位置。
@@ -541,6 +546,7 @@ impl SkillService {
             AppType::OpenCode => home.join(".config").join("opencode").join("skills"),
             AppType::OpenClaw => home.join(".openclaw").join("skills"),
             AppType::KimiCode => crate::kimi_config::get_kimi_dir().join("skills"),
+            AppType::Reasonix => crate::reasonix_config::get_reasonix_dir().join("skills"),
         })
     }
 

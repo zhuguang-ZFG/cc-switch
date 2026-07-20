@@ -39,8 +39,10 @@ export function ProxyToggle({ className, activeApp }: ProxyToggleProps) {
         ? "Codex"
         : activeApp === "grokbuild"
           ? "Grok Build"
-          : activeApp === "kimicode"
-            ? "Kimi Code"
+        : activeApp === "kimicode"
+          ? "Kimi Code"
+          : activeApp === "reasonix"
+            ? "Reasonix"
             : "OpenCode";
 
   const tooltipText = takeoverEnabled

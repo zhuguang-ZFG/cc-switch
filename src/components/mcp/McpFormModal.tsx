@@ -42,7 +42,7 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
   onClose,
   existingIds = [],
   defaultFormat = "json",
-  defaultEnabledApps = ["claude", "codex", "grokbuild", "kimicode"],
+  defaultEnabledApps = ["claude", "codex", "grokbuild", "kimicode", "reasonix"],
 }) => {
   const { t } = useTranslation();
   const { formatTomlError, validateTomlConfig, validateJsonConfig } =
@@ -74,6 +74,7 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
             .kimicode ??
           (initialData.apps as { kimicode?: boolean; hermes?: boolean }).hermes
         ),
+        reasonix: !!initialData.apps.reasonix,
       };
     }
     return {
@@ -82,6 +83,7 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
       grokbuild: defaultEnabledApps.includes("grokbuild"),
       opencode: defaultEnabledApps.includes("opencode"),
       kimicode: defaultEnabledApps.includes("kimicode"),
+      reasonix: defaultEnabledApps.includes("reasonix"),
     };
   });
 
@@ -599,6 +601,24 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
                   >
                     {t("mcp.unifiedPanel.apps.kimicode", {
                       defaultValue: "Kimi Code",
+                    })}
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="enable-reasonix"
+                    checked={enabledApps.reasonix}
+                    onCheckedChange={(checked: boolean) =>
+                      setEnabledApps({ ...enabledApps, reasonix: checked })
+                    }
+                  />
+                  <label
+                    htmlFor="enable-reasonix"
+                    className="text-sm text-foreground cursor-pointer select-none"
+                  >
+                    {t("mcp.unifiedPanel.apps.reasonix", {
+                      defaultValue: "Reasonix",
                     })}
                   </label>
                 </div>

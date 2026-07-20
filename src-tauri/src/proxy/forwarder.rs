@@ -1178,13 +1178,18 @@ impl RequestForwarder {
         // 使用适配器提取 base_url
         let kimi_wire_protocol = matches!(app_type, AppType::KimiCode)
             .then(|| super::providers::kimi_wire_protocol(provider));
-        let kimi_adapter = match kimi_wire_protocol {
+        let reasonix_chat_to_anthropic_early = matches!(app_type, AppType::Reasonix)
+            && super::providers::reasonix_provider_is_anthropic(provider);
+        let protocol_override_adapter = match kimi_wire_protocol {
             Some(KimiWireProtocol::GoogleGenAi | KimiWireProtocol::VertexAi) => {
                 Some(get_adapter_for_provider_type(&ProviderType::Gemini))
             }
+            _ if reasonix_chat_to_anthropic_early => {
+                Some(get_adapter_for_provider_type(&ProviderType::Claude))
+            }
             _ => None,
         };
-        let adapter = kimi_adapter.as_deref().unwrap_or(adapter);
+        let adapter = protocol_override_adapter.as_deref().unwrap_or(adapter);
         let mut base_url = adapter.extract_base_url(provider)?;
 
         let is_full_url = provider
@@ -1214,6 +1219,10 @@ impl RequestForwarder {
             AppType::Codex | AppType::GrokBuild | AppType::KimiCode
         )
             && super::providers::should_convert_codex_responses_to_anthropic(provider, endpoint);
+        let reasonix_chat_to_anthropic = matches!(app_type, AppType::Reasonix)
+            && super::providers::reasonix_provider_is_anthropic(provider)
+            && endpoint.contains("chat/completions");
+        let anthropic_upstream_bridge = codex_responses_to_anthropic || reasonix_chat_to_anthropic;
         let codex_responses_to_gemini = matches!(app_type, AppType::KimiCode)
             && super::providers::should_convert_codex_responses_to_gemini(provider, endpoint);
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
@@ -1251,6 +1260,8 @@ impl RequestForwarder {
             // Fail closed on unmapped proxy placeholders (ConfigError → retryable
             // → failover can try the next queue member instead of 404 upstream).
             super::providers::apply_kimi_upstream_model(provider, &mut mapped_body)?;
+        } else if matches!(app_type, AppType::Reasonix) {
+            super::providers::apply_reasonix_upstream_model(provider, &mut mapped_body)?;
         }
 
         if is_copilot {
@@ -1258,7 +1269,7 @@ impl RequestForwarder {
                 super::providers::copilot_model_map::apply_copilot_model_normalization(mapped_body);
             self.apply_copilot_live_model_resolution(provider, &mut mapped_body)
                 .await;
-        } else if !codex_responses_to_anthropic && !codex_responses_to_gemini {
+        } else if !anthropic_upstream_bridge && !codex_responses_to_gemini {
             // Skip on the Codex→Anthropic path: stripping [1m] here would break both the
             // model-catalog match (apply_codex_upstream_model) and the transform's own
             // strip+`context-1m` beta detection. The marker is stripped later, on the
@@ -1434,7 +1445,7 @@ impl RequestForwarder {
                 == Some(true);
         let (effective_endpoint, passthrough_query) = if codex_responses_to_chat {
             rewrite_codex_responses_endpoint_to_chat(endpoint)
-        } else if codex_responses_to_anthropic {
+        } else if anthropic_upstream_bridge {
             rewrite_codex_responses_endpoint_to_anthropic(endpoint)
         } else if codex_responses_to_gemini {
             rewrite_codex_responses_endpoint_to_gemini(
@@ -1466,7 +1477,7 @@ impl RequestForwarder {
         // `/v1/messages` (→ `.../v1/messages/v1/messages`, a non-retryable 400). Matches the
         // exact endpoint suffix, so prefixed gateways like `.../api/v1/messages` are covered.
         let codex_anthropic_base_is_full_endpoint =
-            codex_responses_to_anthropic && base_url_is_full_endpoint(&base_url, "/v1/messages");
+            anthropic_upstream_bridge && base_url_is_full_endpoint(&base_url, "/v1/messages");
 
         let url = if codex_responses_to_gemini
             || matches!(resolved_claude_api_format.as_deref(), Some("gemini_native"))
@@ -1585,6 +1596,16 @@ impl RequestForwarder {
                 &codex_anthropic_cache_config(&self.optimizer_config),
             );
             anthropic_body
+        } else if reasonix_chat_to_anthropic {
+            const DEFAULT_REASONIX_ANTHROPIC_MAX_TOKENS: u64 = 8192;
+            let mut anthropic_body = super::providers::openai_chat_request_to_anthropic(
+                mapped_body,
+                DEFAULT_REASONIX_ANTHROPIC_MAX_TOKENS,
+            )?;
+            if !anthropic_body.get("max_tokens").is_some() {
+                anthropic_body["max_tokens"] = Value::from(DEFAULT_REASONIX_ANTHROPIC_MAX_TOKENS);
+            }
+            anthropic_body
         } else if codex_responses_to_gemini {
             const DEFAULT_CODEX_GEMINI_MAX_TOKENS: u64 = 8192;
             let anthropic_body =
@@ -1657,7 +1678,7 @@ impl RequestForwarder {
             is_streaming_request(&effective_endpoint, &filtered_body, headers);
         let force_identity_encoding = needs_transform
             || codex_responses_to_chat
-            || codex_responses_to_anthropic
+            || anthropic_upstream_bridge
             || codex_responses_to_gemini
             || request_is_streaming;
 
@@ -2025,7 +2046,7 @@ impl RequestForwarder {
             // can defeat strict gateway fingerprint checks.
             // The full set lives in `is_codex_client_fingerprint_header` so it stays in one
             // place. (HeaderName is lowercased by the http crate, so a direct match is safe.)
-            if codex_responses_to_anthropic && is_codex_client_fingerprint_header(key_str) {
+            if anthropic_upstream_bridge && is_codex_client_fingerprint_header(key_str) {
                 continue;
             }
 
@@ -2034,7 +2055,7 @@ impl RequestForwarder {
             // Anthropic client sends `application/json` (streaming is driven by
             // the body's stream:true). Strict Anthropic gateways return 406 Not
             // Acceptable for an event-stream Accept, so normalize it here.
-            if codex_responses_to_anthropic && key_str.eq_ignore_ascii_case("accept") {
+            if anthropic_upstream_bridge && key_str.eq_ignore_ascii_case("accept") {
                 if !saw_accept {
                     saw_accept = true;
                     ordered_headers.append(
@@ -2124,7 +2145,7 @@ impl RequestForwarder {
         }
 
         // On the Codex→Anthropic path, add application/json when Accept is missing (matching a native Anthropic client).
-        if codex_responses_to_anthropic && !saw_accept {
+        if anthropic_upstream_bridge && !saw_accept {
             ordered_headers.append(
                 http::header::ACCEPT,
                 http::HeaderValue::from_static("application/json"),
@@ -2156,7 +2177,7 @@ impl RequestForwarder {
         // of anthropic-beta: the Claude Code-specific beta is only sent when
         // impersonation is on (handled above); on the plain Codex→Anthropic path
         // (impersonation off) anthropic-version is still required but no beta is sent.
-        if (should_send_anthropic_headers || codex_responses_to_anthropic) && !saw_anthropic_version
+        if (should_send_anthropic_headers || anthropic_upstream_bridge) && !saw_anthropic_version
         {
             ordered_headers.append(
                 "anthropic-version",
@@ -2307,7 +2328,7 @@ impl RequestForwarder {
             // explicitly returns JSON instead, buffer and validate it inside the retry
             // loop as well so a 2xx Anthropic error envelope can still fail over. Do
             // not buffer unknown content types: some gateways omit the SSE header.
-            if codex_responses_to_anthropic && (!request_is_streaming || response.is_json()) {
+            if anthropic_upstream_bridge && (!request_is_streaming || response.is_json()) {
                 response = self
                     .validate_codex_anthropic_success_response(response)
                     .await?;

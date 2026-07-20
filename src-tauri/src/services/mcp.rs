@@ -148,6 +148,13 @@ impl McpService {
             AppType::KimiCode => {
                 mcp::sync_single_server_to_kimi(&Default::default(), &server.id, &server.server)?;
             }
+            AppType::Reasonix => {
+                mcp::sync_single_server_to_reasonix(
+                    &Default::default(),
+                    &server.id,
+                    &server.server,
+                )?;
+            }
         }
         Ok(())
     }
@@ -182,6 +189,9 @@ impl McpService {
             }
             AppType::KimiCode => {
                 mcp::remove_server_from_kimi(id)?;
+            }
+            AppType::Reasonix => {
+                mcp::remove_server_from_reasonix(id)?;
             }
         }
         Ok(())
@@ -492,6 +502,30 @@ impl McpService {
         Ok(new_count)
     }
 
+    pub fn import_from_reasonix(state: &AppState) -> Result<usize, AppError> {
+        let mut temp_config = crate::app_config::MultiAppConfig::default();
+        let count = crate::mcp::import_from_reasonix(&mut temp_config)?;
+        let mut new_count = 0;
+        if count > 0 {
+            if let Some(servers) = &temp_config.mcp.servers {
+                let mut existing = state.db.get_all_mcp_servers()?;
+                for server in servers.values() {
+                    let to_save = if let Some(existing_server) = existing.get(&server.id) {
+                        let mut merged = existing_server.clone();
+                        merged.apps.reasonix = true;
+                        merged
+                    } else {
+                        new_count += 1;
+                        server.clone()
+                    };
+                    state.db.save_mcp_server(&to_save)?;
+                    existing.insert(to_save.id.clone(), to_save);
+                }
+            }
+        }
+        Ok(new_count)
+    }
+
     /// 从所有支持 MCP 的应用导入服务器，返回新导入的数量。
     ///
     /// Best-effort：单个应用导入失败（如坏 config.toml）不阻断其余应用；
@@ -504,12 +538,13 @@ impl McpService {
         let mut total = 0;
         let mut failures: Vec<String> = Vec::new();
 
-        let results: [(&str, Result<usize, AppError>); 5] = [
+        let results: [(&str, Result<usize, AppError>); 6] = [
             ("claude", Self::import_from_claude(state)),
             ("codex", Self::import_from_codex(state)),
             ("grokbuild", Self::import_from_grokbuild(state)),
             ("opencode", Self::import_from_opencode(state)),
             ("kimicode", Self::import_from_kimi(state)),
+            ("reasonix", Self::import_from_reasonix(state)),
         ];
         for (app, result) in results {
             match result {

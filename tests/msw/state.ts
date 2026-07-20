@@ -72,6 +72,7 @@ const createDefaultProviders = (): ProvidersByApp => ({
   grokbuild: {},
   opencode: {},
   openclaw: {},
+  reasonix: {},
 });
 
 const createDefaultCurrent = (): CurrentProviderState => ({
@@ -82,6 +83,7 @@ const createDefaultCurrent = (): CurrentProviderState => ({
   grokbuild: "",
   opencode: "",
   openclaw: "",
+  reasonix: "",
 });
 
 let providers = createDefaultProviders();
@@ -192,6 +194,7 @@ let mcpConfigs: McpConfigState = {
   grokbuild: {},
   opencode: {},
   openclaw: {},
+  reasonix: {},
 };
 
 const cloneProviders = (value: ProvidersByApp) =>
@@ -258,6 +261,7 @@ export const resetProviderState = () => {
     grokbuild: {},
     opencode: {},
     openclaw: {},
+    reasonix: {},
   };
 };
 

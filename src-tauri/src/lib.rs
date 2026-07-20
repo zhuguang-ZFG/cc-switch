@@ -17,6 +17,7 @@ mod gemini_mcp;
 mod grok_config;
 mod init_status;
 pub mod kimi_config;
+pub mod reasonix_config;
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
@@ -801,6 +802,14 @@ pub fn run() {
                     Ok(_) => log::debug!("○ No Kimi Code MCP servers found to import"),
                     Err(e) => log::warn!("✗ Failed to import Kimi Code MCP: {e}"),
                 }
+
+                match crate::services::mcp::McpService::import_from_reasonix(&app_state) {
+                    Ok(count) if count > 0 => {
+                        log::info!("✓ Imported {count} MCP server(s) from Reasonix");
+                    }
+                    Ok(_) => log::debug!("○ No Reasonix MCP servers found to import"),
+                    Err(e) => log::warn!("✗ Failed to import Reasonix MCP: {e}"),
+                }
             }
 
             // 4. 导入提示词文件（表空时触发）
@@ -814,6 +823,7 @@ pub fn run() {
                     crate::app_config::AppType::OpenCode,
                     crate::app_config::AppType::OpenClaw,
                     crate::app_config::AppType::KimiCode,
+                    crate::app_config::AppType::Reasonix,
                 ] {
                     match crate::services::prompt::PromptService::import_from_file_on_first_launch(
                         &app_state,
@@ -1758,7 +1768,7 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 // Must include every app that supports proxy takeover. Omitting an app means
 // its `proxy_config.enabled=true` survives a restart without re-takeover
 // (Kimi would keep a dead local route in config.toml).
-const PROXY_STARTUP_APP_TYPES: [&str; 4] = ["claude", "codex", "grokbuild", "kimicode"];
+const PROXY_STARTUP_APP_TYPES: [&str; 5] = ["claude", "codex", "grokbuild", "kimicode", "reasonix"];
 
 async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static str> {
     let mut apps = Vec::new();
@@ -1777,12 +1787,16 @@ async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static 
 #[cfg(test)]
 mod proxy_startup_tests {
     #[test]
-    fn proxy_startup_app_types_include_kimicode() {
+    fn proxy_startup_app_types_include_kimicode_and_reasonix() {
         assert!(
             super::PROXY_STARTUP_APP_TYPES.contains(&"kimicode"),
             "startup restore must re-takeover Kimi when enabled=true"
         );
-        for required in ["claude", "codex", "grokbuild", "kimicode"] {
+        assert!(
+            super::PROXY_STARTUP_APP_TYPES.contains(&"reasonix"),
+            "startup restore must re-takeover Reasonix when enabled=true"
+        );
+        for required in ["claude", "codex", "grokbuild", "kimicode", "reasonix"] {
             assert!(
                 super::PROXY_STARTUP_APP_TYPES.contains(&required),
                 "{required} missing from PROXY_STARTUP_APP_TYPES"

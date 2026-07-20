@@ -39,6 +39,7 @@ const PRICING_APPS = [
   "gemini",
   "grokbuild",
   "kimicode",
+  "reasonix",
 ] as const;
 type PricingApp = (typeof PRICING_APPS)[number];
 type PricingModelSource = "request" | "response";
@@ -65,6 +66,7 @@ export function PricingConfigPanel() {
     gemini: { multiplier: "1", source: "response" },
     grokbuild: { multiplier: "1", source: "response" },
     kimicode: { multiplier: "1", source: "response" },
+    reasonix: { multiplier: "1", source: "response" },
   });
   const [originalConfigs, setOriginalConfigs] = useState<AppConfigState | null>(
     null,
@@ -112,6 +114,7 @@ export function PricingConfigPanel() {
           gemini: { multiplier: "1", source: "response" },
           grokbuild: { multiplier: "1", source: "response" },
           kimicode: { multiplier: "1", source: "response" },
+          reasonix: { multiplier: "1", source: "response" },
         };
         for (const result of results) {
           newState[result.app] = {

@@ -187,6 +187,8 @@ pub(crate) fn provider_exists_in_live_config(
         AppType::KimiCode => {
             crate::kimi_config::get_providers().map(|providers| providers.contains_key(provider_id))
         }
+        AppType::Reasonix => crate::reasonix_config::get_providers()
+            .map(|providers| providers.contains_key(provider_id)),
         _ => Ok(false),
     }
 }
@@ -515,6 +517,7 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
         | AppType::OpenCode
         | AppType::OpenClaw
         | AppType::KimiCode
+        | AppType::Reasonix
         | AppType::ClaudeDesktop => false,
     }
 }
@@ -580,6 +583,7 @@ pub(crate) fn remove_common_config_from_settings(
         | AppType::OpenCode
         | AppType::OpenClaw
         | AppType::KimiCode
+        | AppType::Reasonix
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
@@ -628,6 +632,7 @@ fn apply_common_config_to_settings(
         | AppType::OpenCode
         | AppType::OpenClaw
         | AppType::KimiCode
+        | AppType::Reasonix
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
@@ -1222,6 +1227,13 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
                 provider.id
             );
         }
+        AppType::Reasonix => {
+            crate::reasonix_config::set_provider(&provider.id, provider.settings_config.clone())?;
+            log::debug!(
+                "Reasonix provider '{}' written to live config",
+                provider.id
+            );
+        }
     }
     Ok(())
 }
@@ -1479,6 +1491,19 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
                 .map_err(|e| AppError::io(&config_path, e))?;
             Ok(serde_json::json!({ "config": text }))
         }
+        AppType::Reasonix => {
+            let config_path = crate::reasonix_config::get_reasonix_config_path();
+            if !config_path.exists() {
+                return Err(AppError::localized(
+                    "reasonix.config.missing",
+                    "Reasonix 配置文件不存在",
+                    "Reasonix configuration file not found",
+                ));
+            }
+            let text = std::fs::read_to_string(&config_path)
+                .map_err(|e| AppError::io(&config_path, e))?;
+            Ok(serde_json::json!({ "config": text }))
+        }
     }
 }
 
@@ -1545,7 +1570,7 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
             ));
         }
         // OpenCode, OpenClaw and Hermes use additive mode and are handled by early return above
-        AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode => {
+        AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix => {
             unreachable!("additive mode apps are handled by early return")
         }
     };
@@ -1995,6 +2020,20 @@ pub fn remove_kimicode_provider_from_live(provider_id: &str) -> Result<(), AppEr
     kimi_config::remove_provider(provider_id)?;
     log::info!("Kimi Code provider '{provider_id}' removed from live config");
 
+    Ok(())
+}
+
+/// Remove a Reasonix provider from the live configuration
+pub fn remove_reasonix_provider_from_live(provider_id: &str) -> Result<(), AppError> {
+    if !crate::reasonix_config::get_reasonix_dir().exists() {
+        log::debug!(
+            "Reasonix config directory doesn't exist, skipping removal of '{provider_id}'"
+        );
+        return Ok(());
+    }
+
+    crate::reasonix_config::remove_provider(provider_id)?;
+    log::info!("Reasonix provider '{provider_id}' removed from live config");
     Ok(())
 }
 

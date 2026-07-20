@@ -342,6 +342,11 @@ impl ProxyServer {
                 post(handlers::handle_kimicode_responses_compact),
             )
             .route("/kimicode/v1/models", get(handlers::handle_kimicode_models))
+            .route(
+                "/reasonix/v1/chat/completions",
+                post(handlers::handle_reasonix_chat_completions),
+            )
+            .route("/reasonix/v1/models", get(handlers::handle_reasonix_models))
             // OpenAI Responses Compact API (Codex CLI 远程压缩，透传)
             .route(
                 "/responses/compact",

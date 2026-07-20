@@ -288,6 +288,8 @@ export interface VisibleApps {
   kimicode?: boolean;
   /** @deprecated use kimicode */
   hermes?: boolean;
+  /** Reasonix CLI */
+  reasonix?: boolean;
 }
 
 // WebDAV 同步状态
@@ -409,6 +411,8 @@ export interface Settings {
   kimiConfigDir?: string;
   // 覆盖 Hermes 配置目录（可选，已废弃，读兼容）
   hermesConfigDir?: string;
+  // 覆盖 Reasonix 配置目录（可选）
+  reasonixConfigDir?: string;
 
   // ===== 当前供应商 ID（设备级）=====
   // 当前 Claude 供应商 ID（优先于数据库 is_current）
@@ -505,6 +509,8 @@ export interface McpApps {
   hermes?: boolean;
   /** Kimi Code MCP */
   kimicode?: boolean;
+  /** Reasonix MCP */
+  reasonix?: boolean;
 }
 
 // MCP 服务器条目（v3.7.0 统一结构）
@@ -551,6 +557,8 @@ export interface UniversalProviderApps {
   gemini?: boolean;
   /** Kimi Code */
   kimicode?: boolean;
+  /** Reasonix */
+  reasonix?: boolean;
 }
 
 // Claude 模型配置
@@ -581,12 +589,20 @@ export interface KimiCodeModelConfig {
   maxContextSize?: number;
 }
 
+// Reasonix 模型配置
+export interface ReasonixModelConfig {
+  /** 供应商协议类型（openai / anthropic） */
+  kind?: string;
+  model?: string;
+}
+
 // 各应用的模型配置
 export interface UniversalProviderModels {
   claude?: ClaudeModelConfig;
   codex?: CodexModelConfig;
   gemini?: GeminiModelConfig;
   kimicode?: KimiCodeModelConfig;
+  reasonix?: ReasonixModelConfig;
 }
 
 // 统一供应商（跨应用共享配置）

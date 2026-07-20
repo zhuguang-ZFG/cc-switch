@@ -73,6 +73,7 @@ export function ProxyPanel({
   const { data: codexQueue = [] } = useFailoverQueue("codex");
   const { data: grokQueue = [] } = useFailoverQueue("grokbuild");
   const { data: kimiQueue = [] } = useFailoverQueue("kimicode");
+  const { data: reasonixQueue = [] } = useFailoverQueue("reasonix");
 
   const handleTakeoverChange = async (appType: string, enabled: boolean) => {
     try {
@@ -273,9 +274,15 @@ export function ProxyPanel({
                     defaultValue: "应用接管",
                   })}
                 </p>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
                   {(
-                    ["claude", "codex", "grokbuild", "kimicode"] as const
+                    [
+                      "claude",
+                      "codex",
+                      "grokbuild",
+                      "kimicode",
+                      "reasonix",
+                    ] as const
                   ).map((appType) => {
                     const isEnabled =
                       takeoverStatus?.[
@@ -291,7 +298,9 @@ export function ProxyPanel({
                             ? "Grok Build"
                             : appType === "kimicode"
                               ? "Kimi Code"
-                              : appType}
+                              : appType === "reasonix"
+                                ? "Reasonix"
+                                : appType}
                         </span>
                         <Switch
                           checked={isEnabled}
@@ -423,7 +432,8 @@ export function ProxyPanel({
               {(claudeQueue.length > 0 ||
                 codexQueue.length > 0 ||
                 grokQueue.length > 0 ||
-                kimiQueue.length > 0) && (
+                kimiQueue.length > 0 ||
+                reasonixQueue.length > 0) && (
                 <div className="pt-3 border-t border-border space-y-3">
                   <div className="flex items-center gap-2">
                     <ListOrdered className="h-3.5 w-3.5 text-muted-foreground" />
@@ -473,6 +483,18 @@ export function ProxyPanel({
                       appType="kimicode"
                       appLabel="Kimi Code"
                       targets={kimiQueue.map((item) => ({
+                        id: item.providerId,
+                        name: item.providerName,
+                      }))}
+                      status={status}
+                    />
+                  )}
+
+                  {reasonixQueue.length > 0 && (
+                    <ProviderQueueGroup
+                      appType="reasonix"
+                      appLabel="Reasonix"
+                      targets={reasonixQueue.map((item) => ({
                         id: item.providerId,
                         name: item.providerName,
                       }))}

@@ -51,7 +51,8 @@
   "apiKeyInput": {
     "placeholder": "Enter API Key",
     "show": "Show API Key",
-    "hide": "Hide API Key"
+    "hide": "Hide API Key",
+    "decodeBase64": "Decode Base64"
   },
   "jsonEditor": {
     "mustBeObject": "Configuration must be a JSON object, not an array or other type",
@@ -891,7 +892,8 @@
     "opencode": "OpenCode",
     "openclaw": "OpenClaw",
     "kimicode": "Kimi Code",
-    "hermes": "Hermes"
+    "hermes": "Hermes",
+    "reasonix": "Reasonix"
   },
   "grokBuild": {
     "apiBackend": "API backend",
@@ -1483,6 +1485,7 @@
       "gemini": "Gemini",
       "grokbuild": "Grok Build",
       "kimicode": "Kimi Code",
+      "reasonix": "Reasonix",
       "opencode": "OpenCode"
     },
     "rawInputLabel": "Raw",
@@ -1746,7 +1749,8 @@
         "grokbuild": "Grok Build",
         "opencode": "OpenCode",
         "openclaw": "OpenClaw",
-        "kimicode": "Kimi Code"
+        "kimicode": "Kimi Code",
+        "reasonix": "Reasonix"
       }
     },
     "userLevelPath": "User-level MCP path",
@@ -2151,6 +2155,40 @@
       "providerAdvanced": "Provider advanced options",
       "rateLimitDelay": "Rate limit delay (seconds)",
       "rateLimitDelayHint": "Minimum delay in seconds between consecutive requests (optional). Leave empty for no limit."
+    }
+  },
+  "reasonix": {
+    "presets": {
+      "deepseekOfficial": "DeepSeek Official",
+      "custom": "Custom"
+    },
+    "form": {
+      "providerName": "Provider ID",
+      "providerNamePlaceholder": "deepseek",
+      "providerNameHint": "Lowercase letters, numbers, and hyphens only. Written to providers.name in Reasonix config.toml.",
+      "providerNameLockedHint": "Provider ID cannot be changed in edit mode.",
+      "providerNameRequired": "Provider ID is required",
+      "providerNameInvalid": "Provider ID may only contain lowercase letters, numbers, and hyphens",
+      "providerNameDuplicate": "This provider ID already exists",
+      "kind": "API protocol",
+      "kindOpenai": "OpenAI",
+      "kindAnthropic": "Anthropic",
+      "kindHint": "Select the provider API protocol (OpenAI or Anthropic).",
+      "baseUrl": "API endpoint",
+      "baseUrlHint": "Base URL for the Reasonix provider API.",
+      "baseUrlRequired": "API endpoint is required",
+      "baseUrlScheme": "URL must start with http:// or https://",
+      "baseUrlInvalid": "API endpoint is not a valid URL",
+      "apiKeyRequired": "API Key is required",
+      "models": "Models",
+      "addModel": "Add model",
+      "noModels": "No models configured. Add at least one model ID.",
+      "modelIdPlaceholder": "deepseek-v4-flash",
+      "modelsHint": "Model ID list written to the models field in Reasonix live config.",
+      "modelsRequired": "Add at least one model",
+      "default": "Default model",
+      "defaultPlaceholder": "Select default model",
+      "defaultHint": "Written to default_model when switching to this provider; falls back to the first model if empty."
     }
   },
   "env": {

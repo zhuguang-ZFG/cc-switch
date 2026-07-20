@@ -298,10 +298,11 @@ export function useProviderActions(
           } else if (
             activeApp === "opencode" ||
             activeApp === "openclaw" ||
-            (activeApp === "kimicode" && !isProxyTakeover)
+            ((activeApp === "kimicode" || activeApp === "reasonix") &&
+              !isProxyTakeover)
           ) {
             // 累加模式（非接管）：主按钮是「添加」语义。
-            // Kimi 接管下主按钮是切换语义（热切换），保持「切换成功！」。
+            // Kimi / Reasonix 接管下主按钮是切换语义（热切换），保持「切换成功！」。
             messageKey = "notifications.addToConfigSuccess";
             defaultMessage = "已添加到配置";
           }

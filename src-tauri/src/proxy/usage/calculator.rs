@@ -60,7 +60,7 @@ impl CostCalculator {
         cost_multiplier: Decimal,
     ) -> CostBreakdown {
         let input_includes_cache_read =
-            matches!(app_type, "codex" | "gemini" | "grokbuild" | "kimicode");
+            matches!(app_type, "codex" | "gemini" | "grokbuild" | "kimicode" | "reasonix");
         Self::calculate_with_cache_semantics(
             usage,
             pricing,

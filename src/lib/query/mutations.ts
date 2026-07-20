@@ -58,7 +58,8 @@ export const useAddProviderMutation = (appId: AppId) => {
       if (
         appId === "opencode" ||
         appId === "openclaw" ||
-        appId === "kimicode"
+        appId === "kimicode" ||
+        appId === "reasonix"
       ) {
         if (
           providerInput.category === "omo" ||

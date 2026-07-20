@@ -17,6 +17,7 @@ mod gemini;
 mod grokbuild;
 mod kimi;
 mod opencode;
+mod reasonix;
 mod validation;
 
 // 重新导出公共 API
@@ -37,4 +38,7 @@ pub use grokbuild::{
 pub use kimi::{import_from_kimi, remove_server_from_kimi, sync_single_server_to_kimi};
 pub use opencode::{
     import_from_opencode, remove_server_from_opencode, sync_single_server_to_opencode,
+};
+pub use reasonix::{
+    import_from_reasonix, remove_server_from_reasonix, sync_single_server_to_reasonix,
 };

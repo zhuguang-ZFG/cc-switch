@@ -6,4 +6,5 @@ export type AppId =
   | "grokbuild"
   | "opencode"
   | "openclaw"
-  | "kimicode";
+  | "kimicode"
+  | "reasonix";

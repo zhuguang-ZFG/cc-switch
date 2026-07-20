@@ -67,7 +67,8 @@ impl Database {
             enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0,
             enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
-            enabled_hermes BOOLEAN NOT NULL DEFAULT 0
+            enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
+            enabled_reasonix BOOLEAN NOT NULL DEFAULT 0
         )",
             [],
         )
@@ -97,6 +98,7 @@ impl Database {
             enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
+            enabled_reasonix BOOLEAN NOT NULL DEFAULT 0,
             installed_at INTEGER NOT NULL DEFAULT 0,
             content_hash TEXT,
             updated_at INTEGER NOT NULL DEFAULT 0
@@ -124,7 +126,7 @@ impl Database {
 
         // 8. Proxy Config 表（每应用一行，app_type 主键）
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode')),
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -191,6 +193,17 @@ impl Database {
                     circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                     circuit_error_rate_threshold, circuit_min_requests)
                     VALUES ('kimicode', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                    [],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            }
+            if Self::proxy_config_supports_reasonix(conn)? {
+                conn.execute(
+                    "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                    streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                    circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                    circuit_error_rate_threshold, circuit_min_requests)
+                    VALUES ('reasonix', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
                     [],
                 )
                 .map_err(|e| AppError::Database(e.to_string()))?;
@@ -521,6 +534,11 @@ impl Database {
                         Self::migrate_v14_to_v15(conn)?;
                         Self::set_user_version(conn, 15)?;
                     }
+                    15 => {
+                        log::info!("迁移数据库从 v15 到 v16（Skills/MCP 添加 Reasonix 支持）");
+                        Self::migrate_v15_to_v16(conn)?;
+                        Self::set_user_version(conn, 16)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -552,7 +570,8 @@ impl Database {
     pub(crate) fn apply_fork_data_migrations(&self) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         Self::apply_kimicode_data_migration(&conn)?;
-        Self::apply_kimicode_proxy_migration(&conn)
+        Self::apply_kimicode_proxy_migration(&conn)?;
+        Self::apply_reasonix_proxy_migration(&conn)
     }
 
     /// Whether both fork data migrations have already run. Used before
@@ -569,7 +588,9 @@ impl Database {
             .as_deref()
                 == Some("done")
         };
-        marked("fork_migration_kimicode_v1") && marked("fork_migration_kimicode_proxy_v1")
+        marked("fork_migration_kimicode_v1")
+            && marked("fork_migration_kimicode_proxy_v1")
+            && marked("fork_migration_reasonix_proxy_v1")
     }
 
     fn apply_kimicode_data_migration(conn: &Connection) -> Result<(), AppError> {
@@ -822,7 +843,7 @@ impl Database {
                 conn.execute("DROP TABLE IF EXISTS proxy_config_kimicode", [])?;
                 conn.execute(
                     "CREATE TABLE proxy_config_kimicode (
-                        app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode')),
+                        app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
                         proxy_enabled INTEGER NOT NULL DEFAULT 0,
                         listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
                         listen_port INTEGER NOT NULL DEFAULT 15721,
@@ -915,6 +936,127 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?
             .flatten();
         Ok(table_sql.is_some_and(|sql| sql.contains("'kimicode'")))
+    }
+
+    fn proxy_config_supports_reasonix(conn: &Connection) -> Result<bool, AppError> {
+        let table_sql = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .flatten();
+        Ok(table_sql.is_some_and(|sql| sql.contains("'reasonix'")))
+    }
+
+    fn apply_reasonix_proxy_migration(conn: &Connection) -> Result<(), AppError> {
+        const MARKER: &str = "fork_migration_reasonix_proxy_v1";
+        let applied = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [MARKER],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        if applied.as_deref() == Some("done") {
+            return Ok(());
+        }
+
+        let needs_rebuild = Self::table_exists(conn, "proxy_config")?
+            && !Self::proxy_config_supports_reasonix(conn)?;
+
+        conn.execute_batch(
+            "SAVEPOINT fork_reasonix_proxy_migration; PRAGMA defer_foreign_keys = ON;",
+        )
+        .map_err(|e| AppError::Database(format!("开启 Reasonix 代理配置迁移失败: {e}")))?;
+        let result = (|| {
+            if needs_rebuild {
+                conn.execute("DROP TABLE IF EXISTS proxy_config_reasonix", [])?;
+                conn.execute(
+                    "CREATE TABLE proxy_config_reasonix (
+                        app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
+                        proxy_enabled INTEGER NOT NULL DEFAULT 0,
+                        listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+                        listen_port INTEGER NOT NULL DEFAULT 15721,
+                        enable_logging INTEGER NOT NULL DEFAULT 1,
+                        enabled INTEGER NOT NULL DEFAULT 0,
+                        auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                        max_retries INTEGER NOT NULL DEFAULT 3,
+                        streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+                        streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
+                        non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+                        circuit_failure_threshold INTEGER NOT NULL DEFAULT 4,
+                        circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+                        circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+                        circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+                        circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+                        default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                        pricing_model_source TEXT NOT NULL DEFAULT 'response',
+                        live_takeover_active INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO proxy_config_reasonix (
+                        app_type, proxy_enabled, listen_address, listen_port, enable_logging,
+                        enabled, auto_failover_enabled, max_retries,
+                        streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                        circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                        circuit_error_rate_threshold, circuit_min_requests,
+                        default_cost_multiplier, pricing_model_source, live_takeover_active,
+                        created_at, updated_at
+                    )
+                    SELECT app_type, proxy_enabled, listen_address, listen_port, enable_logging,
+                           enabled, auto_failover_enabled, max_retries,
+                           streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                           circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                           circuit_error_rate_threshold, circuit_min_requests,
+                           default_cost_multiplier, pricing_model_source, live_takeover_active,
+                           created_at, updated_at
+                    FROM proxy_config",
+                    [],
+                )?;
+                conn.execute("DROP TABLE proxy_config", [])?;
+                conn.execute(
+                    "ALTER TABLE proxy_config_reasonix RENAME TO proxy_config",
+                    [],
+                )?;
+            }
+
+            conn.execute(
+                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                    streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                    circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                    circuit_error_rate_threshold, circuit_min_requests)
+                 VALUES ('reasonix', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, 'done')",
+                [MARKER],
+            )?;
+            Ok::<(), rusqlite::Error>(())
+        })();
+
+        match result {
+            Ok(()) => conn
+                .execute_batch("RELEASE fork_reasonix_proxy_migration;")
+                .map_err(|e| AppError::Database(format!("提交 Reasonix 代理配置迁移失败: {e}"))),
+            Err(error) => {
+                conn.execute_batch(
+                    "ROLLBACK TO fork_reasonix_proxy_migration; RELEASE fork_reasonix_proxy_migration;",
+                )
+                .ok();
+                Err(AppError::Database(format!(
+                    "Reasonix 代理配置迁移失败: {error}"
+                )))
+            }
+        }
     }
 
     /// v0 -> v1 迁移：补齐所有缺失列
@@ -1236,7 +1378,7 @@ impl Database {
         // 创建新表
         conn.execute("DROP TABLE IF EXISTS proxy_config_new", [])?;
         conn.execute("CREATE TABLE proxy_config_new (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode')),
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -1798,7 +1940,7 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
             "CREATE TABLE proxy_config_v14 (
-                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode')),
+                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
                 proxy_enabled INTEGER NOT NULL DEFAULT 0,
                 listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
                 listen_port INTEGER NOT NULL DEFAULT 15721,
@@ -1903,6 +2045,27 @@ impl Database {
                 conn,
                 "skills",
                 "enabled_grokbuild",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// v15 -> v16: persist Reasonix enablement for unified Skills and MCP.
+    fn migrate_v15_to_v16(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "mcp_servers")? {
+            Self::add_column_if_missing(
+                conn,
+                "mcp_servers",
+                "enabled_reasonix",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
+        if Self::table_exists(conn, "skills")? {
+            Self::add_column_if_missing(
+                conn,
+                "skills",
+                "enabled_reasonix",
                 "BOOLEAN NOT NULL DEFAULT 0",
             )?;
         }
@@ -3445,6 +3608,56 @@ mod tests {
         )?;
         assert_eq!(mcp_values, (1, 0));
         assert_eq!(skill_values, (1, 0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v15_to_v16_adds_reasonix_flags() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE mcp_servers (
+                id TEXT PRIMARY KEY,
+                enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+                enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0
+            );
+            CREATE TABLE skills (
+                id TEXT PRIMARY KEY,
+                enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+                enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0
+            );",
+        )?;
+        conn.execute(
+            "INSERT INTO mcp_servers (id, enabled_codex, enabled_grokbuild) VALUES ('mcp-1', 1, 1)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO skills (id, enabled_codex, enabled_grokbuild) VALUES ('skill-1', 1, 0)",
+            [],
+        )?;
+        Database::set_user_version(&conn, 15)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        assert!(Database::has_column(
+            &conn,
+            "mcp_servers",
+            "enabled_reasonix"
+        )?);
+        assert!(Database::has_column(&conn, "skills", "enabled_reasonix")?);
+        let mcp_values: (i64, i64, i64) = conn.query_row(
+            "SELECT enabled_codex, enabled_grokbuild, enabled_reasonix FROM mcp_servers WHERE id = 'mcp-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let skill_values: (i64, i64, i64) = conn.query_row(
+            "SELECT enabled_codex, enabled_grokbuild, enabled_reasonix FROM skills WHERE id = 'skill-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(mcp_values, (1, 1, 0));
+        assert_eq!(skill_values, (1, 0, 0));
 
         Ok(())
     }

@@ -24,6 +24,8 @@ pub struct McpApps {
     /// Kimi Code flag; the legacy database column is still named Hermes.
     #[serde(default, rename = "kimicode", alias = "hermes")]
     pub hermes: bool,
+    #[serde(default)]
+    pub reasonix: bool,
 }
 
 impl McpApps {
@@ -36,6 +38,7 @@ impl McpApps {
             AppType::OpenCode => self.opencode,
             AppType::OpenClaw => false, // OpenClaw doesn't support MCP
             AppType::KimiCode => self.hermes,
+            AppType::Reasonix => self.reasonix,
             AppType::ClaudeDesktop => false,
         }
     }
@@ -49,6 +52,7 @@ impl McpApps {
             AppType::OpenCode => self.opencode = enabled,
             AppType::OpenClaw => {} // OpenClaw doesn't support MCP, ignore
             AppType::KimiCode => self.hermes = enabled,
+            AppType::Reasonix => self.reasonix = enabled,
             AppType::ClaudeDesktop => {} // Claude Desktop 3P provider config doesn't support MCP here
         }
     }
@@ -71,12 +75,20 @@ impl McpApps {
         if self.hermes {
             apps.push(AppType::KimiCode);
         }
+        if self.reasonix {
+            apps.push(AppType::Reasonix);
+        }
         apps
     }
 
     /// 检查是否所有应用都未启用
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.grokbuild && !self.opencode && !self.hermes
+        !self.claude
+            && !self.codex
+            && !self.grokbuild
+            && !self.opencode
+            && !self.hermes
+            && !self.reasonix
     }
 }
 
@@ -97,6 +109,8 @@ pub struct SkillApps {
     /// Kimi Code flag; the legacy database column is still named Hermes.
     #[serde(default, rename = "kimicode", alias = "hermes")]
     pub hermes: bool,
+    #[serde(default)]
+    pub reasonix: bool,
 }
 
 impl SkillApps {
@@ -108,6 +122,7 @@ impl SkillApps {
             AppType::GrokBuild => self.grokbuild,
             AppType::OpenCode => self.opencode,
             AppType::KimiCode => self.hermes,
+            AppType::Reasonix => self.reasonix,
             AppType::OpenClaw => false, // OpenClaw doesn't support Skills
             AppType::ClaudeDesktop => false,
         }
@@ -121,6 +136,7 @@ impl SkillApps {
             AppType::GrokBuild => self.grokbuild = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::KimiCode => self.hermes = enabled,
+            AppType::Reasonix => self.reasonix = enabled,
             AppType::OpenClaw => {} // OpenClaw doesn't support Skills, ignore
             AppType::ClaudeDesktop => {} // Claude Desktop 3P profiles don't use CC Switch skill sync
         }
@@ -144,12 +160,20 @@ impl SkillApps {
         if self.hermes {
             apps.push(AppType::KimiCode);
         }
+        if self.reasonix {
+            apps.push(AppType::Reasonix);
+        }
         apps
     }
 
     /// 检查是否所有应用都未启用
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.grokbuild && !self.opencode && !self.hermes
+        !self.claude
+            && !self.codex
+            && !self.grokbuild
+            && !self.opencode
+            && !self.hermes
+            && !self.reasonix
     }
 
     /// 仅启用指定应用（其他应用设为禁用）
@@ -299,6 +323,8 @@ pub struct McpRoot {
         alias = "hermes"
     )]
     pub hermes: McpConfig,
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
+    pub reasonix: McpConfig,
 }
 
 impl Default for McpRoot {
@@ -315,6 +341,7 @@ impl Default for McpRoot {
             opencode: McpConfig::default(),
             openclaw: McpConfig::default(),
             hermes: McpConfig::default(),
+            reasonix: McpConfig::default(),
         }
     }
 }
@@ -357,6 +384,8 @@ pub struct PromptRoot {
         alias = "kimi_code"
     )]
     pub kimicode: PromptConfig,
+    #[serde(default)]
+    pub reasonix: PromptConfig,
 }
 
 impl PromptConfig {
@@ -394,6 +423,9 @@ pub enum AppType {
         alias = "hermes"
     )]
     KimiCode,
+    /// Reasonix CLI (DeepSeek-native terminal coding agent).
+    #[serde(rename = "reasonix", alias = "reasonix-cli")]
+    Reasonix,
 }
 
 impl AppType {
@@ -406,6 +438,7 @@ impl AppType {
             AppType::OpenCode => "opencode",
             AppType::OpenClaw => "openclaw",
             AppType::KimiCode => "kimicode",
+            AppType::Reasonix => "reasonix",
         }
     }
 
@@ -416,7 +449,7 @@ impl AppType {
     pub fn is_additive_mode(&self) -> bool {
         matches!(
             self,
-            AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode
+            AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix
         )
     }
 
@@ -430,6 +463,7 @@ impl AppType {
             AppType::OpenCode,
             AppType::OpenClaw,
             AppType::KimiCode,
+            AppType::Reasonix,
         ]
         .into_iter()
     }
@@ -448,6 +482,7 @@ impl FromStr for AppType {
             "opencode" => Ok(AppType::OpenCode),
             "openclaw" => Ok(AppType::OpenClaw),
             "kimicode" | "kimi-code" | "kimi_code" | "kimi" | "hermes" => Ok(AppType::KimiCode),
+            "reasonix" | "reasonix-cli" => Ok(AppType::Reasonix),
             // Gemini CLI app support was removed; reject explicitly with guidance.
             "gemini" => Err(AppError::localized(
                 "unsupported_app_gemini_removed",
@@ -456,8 +491,8 @@ impl FromStr for AppType {
             )),
             other => Err(AppError::localized(
                 "unsupported_app",
-                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode。"),
-                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode."),
+                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode, reasonix。"),
+                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode, reasonix."),
             )),
         }
     }
@@ -502,6 +537,7 @@ impl CommonConfigSnippets {
             AppType::OpenCode => self.opencode.as_ref(),
             AppType::OpenClaw => self.openclaw.as_ref(),
             AppType::KimiCode => self.kimicode.as_ref(),
+            AppType::Reasonix => None,
         }
     }
 
@@ -515,6 +551,7 @@ impl CommonConfigSnippets {
             AppType::OpenCode => self.opencode = snippet,
             AppType::OpenClaw => self.openclaw = snippet,
             AppType::KimiCode => self.kimicode = snippet,
+            AppType::Reasonix => {}
         }
     }
 }
@@ -739,6 +776,7 @@ impl MultiAppConfig {
             AppType::OpenClaw => &self.mcp.openclaw,
             // The storage field keeps its legacy name for database compatibility.
             AppType::KimiCode => &self.mcp.hermes,
+            AppType::Reasonix => &self.mcp.reasonix,
         }
     }
 
@@ -752,6 +790,7 @@ impl MultiAppConfig {
             AppType::OpenCode => &mut self.mcp.opencode,
             AppType::OpenClaw => &mut self.mcp.openclaw,
             AppType::KimiCode => &mut self.mcp.hermes,
+            AppType::Reasonix => &mut self.mcp.reasonix,
         }
     }
 
@@ -878,6 +917,7 @@ impl MultiAppConfig {
             AppType::OpenCode => &mut config.prompts.opencode.prompts,
             AppType::OpenClaw => &mut config.prompts.openclaw.prompts,
             AppType::KimiCode => &mut config.prompts.kimicode.prompts,
+            AppType::Reasonix => &mut config.prompts.reasonix.prompts,
         };
 
         prompts.insert(id, prompt);
@@ -920,6 +960,7 @@ impl MultiAppConfig {
                 AppType::OpenCode => &self.mcp.opencode.servers,
                 AppType::OpenClaw => continue, // OpenClaw MCP is still in development, skip
                 AppType::KimiCode => &self.mcp.hermes.servers,
+                AppType::Reasonix => continue, // New app type; no legacy per-app MCP data to migrate
             };
 
             for (id, entry) in old_servers {

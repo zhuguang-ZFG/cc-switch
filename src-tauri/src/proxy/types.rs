@@ -117,6 +117,7 @@ pub struct ProxyTakeoverStatus {
     pub opencode: bool,
     pub openclaw: bool,
     pub kimicode: bool,
+    pub reasonix: bool,
 }
 
 /// API 格式类型（预留，当前不需要格式转换）

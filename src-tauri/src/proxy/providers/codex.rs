@@ -624,6 +624,137 @@ pub fn apply_kimi_upstream_model(
     Ok(Some(upstream))
 }
 
+/// Whether a Reasonix provider speaks Anthropic Messages upstream (`kind=anthropic`).
+pub fn reasonix_provider_is_anthropic(provider: &Provider) -> bool {
+    let kind = provider
+        .settings_config
+        .get("kind")
+        .or_else(|| provider.settings_config.get("type"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .unwrap_or("openai");
+    kind.eq_ignore_ascii_case("anthropic")
+}
+
+fn reasonix_model_catalog(provider: &Provider) -> Vec<String> {
+    let mut models = Vec::new();
+    if let Some(arr) = provider
+        .settings_config
+        .get("models")
+        .and_then(|value| value.as_array())
+    {
+        for entry in arr {
+            if let Some(id) = entry.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                models.push(id.to_string());
+                continue;
+            }
+            if let Some(id) = entry
+                .get("id")
+                .or_else(|| entry.get("model"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                models.push(id.to_string());
+            }
+        }
+    }
+    if models.is_empty() {
+        if let Some(single) = provider
+            .settings_config
+            .get("model")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            models.push(single.to_string());
+        }
+    }
+    models
+}
+
+fn resolve_reasonix_upstream_model(
+    provider: &Provider,
+    request_model: Option<&str>,
+) -> Option<String> {
+    let catalog = reasonix_model_catalog(provider);
+    let default = provider
+        .settings_config
+        .get("default")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| catalog.first().cloned());
+
+    let Some(request_model) = request_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    else {
+        return default;
+    };
+
+    if is_cc_switch_proxy_model(request_model) {
+        return default;
+    }
+
+    if catalog
+        .iter()
+        .any(|id| id.eq_ignore_ascii_case(request_model))
+    {
+        return Some(request_model.to_string());
+    }
+
+    if let Some((_, suffix)) = request_model.rsplit_once('/') {
+        if catalog
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(suffix))
+        {
+            return Some(suffix.to_string());
+        }
+    }
+
+    // Unknown non-placeholder: pass through for upstream rejection.
+    None
+}
+
+/// Map Reasonix proxy placeholders onto the selected attempt's real model id.
+///
+/// Fail closed when a placeholder cannot be mapped (ConfigError → retryable failover).
+pub fn apply_reasonix_upstream_model(
+    provider: &Provider,
+    body: &mut JsonValue,
+) -> Result<Option<String>, ProxyError> {
+    let request_model = body
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToString::to_string);
+
+    let Some(upstream) = resolve_reasonix_upstream_model(provider, request_model.as_deref()) else {
+        if request_model
+            .as_deref()
+            .is_some_and(is_cc_switch_proxy_model)
+        {
+            return Err(ProxyError::ConfigError(format!(
+                "Reasonix provider '{}' has no models/default to map proxy placeholder '{}'",
+                provider.id,
+                request_model.as_deref().unwrap_or("")
+            )));
+        }
+        return Ok(request_model);
+    };
+
+    let needs_rewrite = request_model.as_deref().is_none_or(|request| {
+        is_cc_switch_proxy_model(request) || !request.eq_ignore_ascii_case(&upstream)
+    });
+    if needs_rewrite {
+        body["model"] = JsonValue::String(upstream.clone());
+    }
+    Ok(Some(upstream))
+}
+
 pub fn resolve_codex_chat_reasoning_config(
     provider: &Provider,
     body: &JsonValue,
@@ -1510,6 +1641,41 @@ wire_api = "anthropic"
             body.get("model").and_then(|v| v.as_str()),
             Some("cc-switch-proxy/default")
         );
+    }
+
+    #[test]
+    fn reasonix_string_models_map_proxy_placeholder_to_default() {
+        let provider = create_provider(json!({
+            "kind": "openai",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "sk-test",
+            "models": ["model-a", "model-b"],
+            "default": "model-b"
+        }));
+        for placeholder in ["cc-switch-proxy-default", "cc-switch-proxy/default"] {
+            let mut body = json!({ "model": placeholder, "messages": [] });
+            let upstream =
+                apply_reasonix_upstream_model(&provider, &mut body).expect("placeholder must map");
+            assert_eq!(upstream.as_deref(), Some("model-b"), "placeholder {placeholder}");
+            assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("model-b"));
+        }
+        assert!(reasonix_provider_is_anthropic(&create_provider(json!({
+            "kind": "anthropic"
+        }))));
+        assert!(!reasonix_provider_is_anthropic(&provider));
+    }
+
+    #[test]
+    fn reasonix_unmapped_proxy_placeholder_fails_closed() {
+        let provider = create_provider(json!({
+            "kind": "openai",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "sk-test"
+        }));
+        let mut body = json!({ "model": "cc-switch-proxy-default", "messages": [] });
+        let err = apply_reasonix_upstream_model(&provider, &mut body)
+            .expect_err("unmapped placeholder must fail closed");
+        assert!(matches!(err, ProxyError::ConfigError(_)));
     }
 
     #[test]

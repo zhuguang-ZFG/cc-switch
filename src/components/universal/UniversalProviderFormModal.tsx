@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { useTranslation } from "react-i18next";
-import { Eye, EyeOff, RefreshCw } from "lucide-react";
+import { Eye, EyeOff, RefreshCw, Binary } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +25,7 @@ import {
 } from "@/config/universalProviderPresets";
 import { KIMI_PROVIDER_TYPES } from "@/config/kimiProviderPresets";
 import { deepClone } from "@/utils/deepClone";
+import { tryDecodeBase64Key } from "@/utils/base64Key";
 
 interface UniversalProviderFormModalProps {
   isOpen: boolean;
@@ -54,6 +55,8 @@ export function UniversalProviderFormModal({
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+  // 输入内容可按 Base64 解码为合法 Key 时，显示一键解码按钮
+  const decodedApiKey = useMemo(() => tryDecodeBase64Key(apiKey), [apiKey]);
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -470,8 +473,21 @@ requires_openai_auth = true`;
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="sk-..."
-                className="pr-10"
+                className={decodedApiKey ? "pr-20" : "pr-10"}
               />
+              {decodedApiKey && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-10 top-0 h-full px-3"
+                  onClick={() => setApiKey(decodedApiKey)}
+                  title={t("apiKeyInput.decodeBase64")}
+                  aria-label={t("apiKeyInput.decodeBase64")}
+                >
+                  <Binary className="h-4 w-4" />
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"

@@ -231,7 +231,9 @@ export function useSetAutoFailoverEnabled() {
               ? "Grok Build"
               : variables.appType === "kimicode"
                 ? "Kimi Code"
-                : "Gemini";
+                : variables.appType === "reasonix"
+                  ? "Reasonix"
+                  : "Gemini";
 
       toast.success(
         variables.enabled
