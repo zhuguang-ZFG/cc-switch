@@ -13,6 +13,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SIGNED_UPDATES_ENABLED } from "@/lib/updater";
 
 const RELEASES_URL = "https://github.com/farion1231/cc-switch/releases";
 
@@ -61,6 +62,13 @@ export function DatabaseUpgrade({ payload }: DatabaseUpgradeProps) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // 本 fork 未发布签名更新产物：应用内升级恒定失败，直接进入
+      // incompatible 态（提供"打开发布页"手动升级入口），而不是把用户
+      // 引向一个必然 404 的"升级应用"按钮。
+      if (!SIGNED_UPDATES_ENABLED) {
+        if (!cancelled) setPhase("incompatible");
+        return;
+      }
       try {
         const version = await invoke<string | null>(
           "check_app_update_available",

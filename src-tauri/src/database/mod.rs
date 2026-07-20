@@ -133,22 +133,42 @@ impl Database {
         let db = Self {
             conn: Mutex::new(conn),
         };
-        db.create_tables()?;
 
-        // Pre-migration backup: only when upgrading from an existing database
-        {
+        // Read the on-disk version BEFORE any schema mutation. create_tables()
+        // is not read-only for legacy DBs (ALTER/DROP/rebuild steps), so both
+        // the future-version refusal and the pre-migration backup must happen
+        // first, otherwise an older build mutates a newer DB and the "backup"
+        // captures an already-partially-migrated schema.
+        let on_disk_version = {
             let conn = lock_conn!(db.conn);
-            let version = Self::get_user_version(&conn)?;
-            drop(conn);
-            if version > 0 && version < SCHEMA_VERSION {
-                log::info!(
-                    "Creating pre-migration database backup (v{version} → v{SCHEMA_VERSION})"
-                );
-                if let Err(e) = db.backup_database_file() {
-                    log::warn!("Pre-migration backup failed, continuing migration: {e}");
-                }
+            Self::get_user_version(&conn)?
+        };
+
+        // Fail closed on a DB written by a newer build: never mutate it.
+        if on_disk_version > SCHEMA_VERSION {
+            return Err(AppError::Database(format!(
+                "数据库版本 v{on_disk_version} 高于本应用支持的 v{SCHEMA_VERSION}；请升级应用后再打开"
+            )));
+        }
+
+        // Pre-migration backup: before create_tables touches anything. Also
+        // back up when a fork data migration has not yet run (an upstream DB
+        // already at the current schema version still gets destructive retags).
+        if db_exists
+            && (on_disk_version == 0 || on_disk_version < SCHEMA_VERSION || {
+                let conn = lock_conn!(db.conn);
+                !Self::fork_migrations_marked(&conn)
+            })
+        {
+            log::info!(
+                "Creating pre-migration database backup (v{on_disk_version} → v{SCHEMA_VERSION})"
+            );
+            if let Err(e) = db.backup_database_file() {
+                log::warn!("Pre-migration backup failed, continuing migration: {e}");
             }
         }
+
+        db.create_tables()?;
 
         db.apply_schema_migrations()?;
         db.apply_fork_data_migrations()?;

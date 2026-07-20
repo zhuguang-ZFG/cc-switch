@@ -10,6 +10,23 @@ pub fn launch_terminal(
         return Err("Resume command is empty".to_string());
     }
 
+    // The resume command embeds a session id read from untrusted session-file
+    // content (which can arrive via S3/WebDAV sync). It is executed as a SHELL
+    // string (osascript `do script`, `sh -c`), so a metacharacter in the id
+    // (`;`, `$(...)`, backtick, `|`, …) would inject arbitrary commands.
+    // A legitimate resume command is only `<cli> <flags> <session-id>` — reject
+    // anything carrying shell-dangerous characters.
+    if let Some(bad) = command.chars().find(|c| {
+        matches!(
+            c,
+            ';' | '|' | '&' | '$' | '`' | '(' | ')' | '<' | '>' | '\n' | '\r' | '\\' | '"' | '\''
+        )
+    }) {
+        return Err(format!(
+            "Resume command contains an unsafe character ({bad:?}); refusing to execute"
+        ));
+    }
+
     if !cfg!(target_os = "macos") {
         return Err("Terminal resume is only supported on macOS".to_string());
     }
@@ -316,8 +333,12 @@ fn build_shell_command(command: &str, cwd: Option<&str>) -> String {
 }
 
 fn shell_escape(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+    // POSIX single-quote quoting: inside '...' NOTHING is special (no $(),
+    // no backticks, no \ ). Double-quote quoting was unsafe — cwd comes from
+    // untrusted session-file content and `cd "$(rm -rf ~)"` would execute the
+    // substitution. Close an embedded ' as '\''.
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
 }
 
 fn escape_osascript(value: &str) -> String {
@@ -377,6 +398,31 @@ mod tests {
         );
 
         // Verify shell_escape works correctly for paths with spaces
-        assert_eq!(shell_escape(cwd), "\"/tmp/project dir\"");
+        assert_eq!(shell_escape(cwd), "'/tmp/project dir'");
+    }
+
+    #[test]
+    fn shell_escape_neutralizes_command_substitution() {
+        // Double-quote quoting would let $(...) / backticks expand; single
+        // quotes must not.
+        assert_eq!(shell_escape("/tmp/$(rm -rf ~)"), "'/tmp/$(rm -rf ~)'");
+        assert_eq!(shell_escape("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn launch_terminal_rejects_shell_metacharacters_in_command() {
+        // Simulates a poisoned session id reaching the resume command.
+        for cmd in [
+            "claude --resume x; rm -rf ~",
+            "kimi --session $(rm -rf ~)",
+            "codex resume `id`",
+            "grok --resume a|b",
+        ] {
+            let result = launch_terminal("terminal", cmd, None, None);
+            assert!(
+                result.is_err(),
+                "expected rejection for injected command: {cmd}"
+            );
+        }
     }
 }

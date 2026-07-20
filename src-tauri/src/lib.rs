@@ -140,7 +140,8 @@ fn handle_deeplink_url(
 
     let redacted_url = redact_url_for_log(url_str);
     log::info!("✓ Deep link URL detected from {source}: {redacted_url}");
-    log::debug!("Deep link URL (raw) from {source}: {url_str}");
+    // Deep links carry provider configs including API keys in the base64
+    // payload — never log the raw URL, even at debug level.
 
     match crate::deeplink::parse_deeplink_url(url_str) {
         Ok(request) => {

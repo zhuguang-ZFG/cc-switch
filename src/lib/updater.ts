@@ -16,7 +16,7 @@ export interface CheckOptions {
 
 // The fork does not publish signed updater artifacts yet. Keep update checks
 // dormant until its own signing key and latest.json pipeline are configured.
-const SIGNED_UPDATES_ENABLED = false;
+export const SIGNED_UPDATES_ENABLED = false;
 
 export async function getCurrentVersion(): Promise<string> {
   try {

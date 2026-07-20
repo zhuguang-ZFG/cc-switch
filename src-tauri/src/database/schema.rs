@@ -555,6 +555,23 @@ impl Database {
         Self::apply_kimicode_proxy_migration(&conn)
     }
 
+    /// Whether both fork data migrations have already run. Used before
+    /// create_tables to decide if a pre-migration backup is warranted, so it
+    /// must tolerate a missing `settings` table (treated as "not marked").
+    pub(crate) fn fork_migrations_marked(conn: &Connection) -> bool {
+        let marked = |key: &str| -> bool {
+            conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()
+            .ok()
+            .flatten()
+            .as_deref()
+                == Some("done")
+        };
+        marked("fork_migration_kimicode_v1") && marked("fork_migration_kimicode_proxy_v1")
+    }
+
     fn apply_kimicode_data_migration(conn: &Connection) -> Result<(), AppError> {
         const MARKER: &str = "fork_migration_kimicode_v1";
         let applied = conn
