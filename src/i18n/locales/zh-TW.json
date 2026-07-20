@@ -2587,6 +2587,7 @@
     "switchFailed": "切換失敗：{{error}}",
     "takeover": {
       "hint": "選擇要路由的應用程式，啟用後該應用程式的請求將透過本地路由轉發",
+      "reasonixNoProxyHint": "Reasonix：若 config.toml 中 network.proxy_mode = \"custom\"，provider 的 no_proxy 可能被忽略，127.0.0.1 本地路由有被系統代理拐走的風險；請將 loopback 加入 network.no_proxy，或改用非 custom 模式。",
       "enabled": "{{app}} 路由已啟用",
       "disabled": "{{app}} 路由已關閉",
       "failed": "切換路由狀態失敗：{{detail}}",

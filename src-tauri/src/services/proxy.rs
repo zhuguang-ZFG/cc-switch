@@ -3947,6 +3947,178 @@ api_key_env = "DEMO_API_KEY"
         env::remove_var("REASONIX_HOME");
     }
 
+    #[tokio::test]
+    #[serial]
+    async fn reasonix_port_change_rebuilds_live_proxy_url() {
+        let home = TempHome::new();
+        let reasonix_home = home.dir.path().join("reasonix-home");
+        std::fs::create_dir_all(&reasonix_home).expect("create reasonix home");
+        env::set_var("REASONIX_HOME", &reasonix_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        std::fs::write(
+            crate::reasonix_config::get_reasonix_config_path(),
+            r#"default_model = "demo-model"
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#,
+        )
+        .expect("seed reasonix");
+        crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret").expect("seed env");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+        let provider = Provider::with_id(
+            "demo".into(),
+            "Demo".into(),
+            json!({
+                "kind": "openai",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "models": ["demo-model"],
+                "default": "demo-model"
+            }),
+            None,
+        );
+        db.save_provider("reasonix", &provider).expect("save");
+        db.set_current_provider("reasonix", "demo")
+            .expect("set current");
+        crate::settings::set_current_provider(&AppType::Reasonix, Some("demo"))
+            .expect("set local current");
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", true)
+            .await
+            .expect("enable takeover");
+        let first_port = state
+            .proxy_service
+            .get_status()
+            .await
+            .expect("status")
+            .port;
+        let live_first = crate::reasonix_config::read_config_text().expect("live first");
+        assert!(
+            live_first.contains(&format!(":{first_port}/reasonix/v1")),
+            "live must point at first port, got:\n{live_first}"
+        );
+
+        let mut config = state.proxy_service.get_config().await.expect("config");
+        config.listen_port = 0; // force restart onto a new ephemeral port
+        state
+            .proxy_service
+            .update_config(&config)
+            .await
+            .expect("update port");
+        let second_port = state
+            .proxy_service
+            .get_status()
+            .await
+            .expect("status after")
+            .port;
+        assert_ne!(first_port, second_port, "ephemeral restart should pick a new port");
+
+        let live_second = crate::reasonix_config::read_config_text().expect("live second");
+        assert!(
+            live_second.contains(&format!(":{second_port}/reasonix/v1")),
+            "live must rebuild to new port, got:\n{live_second}"
+        );
+        assert!(
+            !live_second.contains(&format!(":{first_port}/reasonix/v1")),
+            "old port must not remain in live config"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", false)
+            .await
+            .expect("disable");
+        env::remove_var("REASONIX_HOME");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn reasonix_crash_recovery_clears_half_takeover_live() {
+        let home = TempHome::new();
+        let reasonix_home = home.dir.path().join("reasonix-home");
+        std::fs::create_dir_all(&reasonix_home).expect("create reasonix home");
+        env::set_var("REASONIX_HOME", &reasonix_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        let original = r#"default_model = "demo-model"
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#;
+        std::fs::write(crate::reasonix_config::get_reasonix_config_path(), original)
+            .expect("seed");
+        crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret").expect("seed env");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+        let provider = Provider::with_id(
+            "demo".into(),
+            "Demo".into(),
+            json!({
+                "kind": "openai",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "models": ["demo-model"],
+                "default": "demo-model"
+            }),
+            None,
+        );
+        db.save_provider("reasonix", &provider).expect("save");
+        db.set_current_provider("reasonix", "demo").expect("current");
+        crate::settings::set_current_provider(&AppType::Reasonix, Some("demo"))
+            .expect("local current");
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", true)
+            .await
+            .expect("enable");
+        assert!(crate::reasonix_config::is_proxy_takeover_active().unwrap());
+        assert!(
+            state.proxy_service.detect_takeover_in_live_configs(),
+            "half-takeover detector must see reasonix proxy live"
+        );
+
+        // Simulate crash: stop server without orderly disable, then recover.
+        let _ = state.proxy_service.stop().await;
+        state
+            .proxy_service
+            .recover_from_crash()
+            .await
+            .expect("recover");
+
+        assert!(
+            !crate::reasonix_config::is_proxy_takeover_active().unwrap_or(true),
+            "recovery must clear proxy placeholder"
+        );
+        let restored = crate::reasonix_config::read_config_text().expect("restored");
+        assert!(
+            restored.contains("name = \"demo\""),
+            "recovery must restore original provider, got:\n{restored}"
+        );
+        assert!(
+            !restored.contains("name = \"cc-switch-proxy\""),
+            "recovery must not leave dead proxy provider"
+        );
+        env::remove_var("REASONIX_HOME");
+    }
+
     async fn running_codex_base_url(service: &ProxyService) -> String {
         let status = service.get_status().await.expect("get proxy status");
         format!("http://127.0.0.1:{}/v1", status.port)

@@ -786,6 +786,7 @@ pub fn apply_proxy_takeover(proxy_base_url: &str) -> Result<ReasonixWriteOutcome
     doc["default_model"] = Item::Value(TomlEditValue::from(REASONIX_PROXY_PROVIDER));
 
     let outcome = write_document(&doc)?;
+    stash_proxy_env_previous_if_needed()?;
     upsert_env_key(REASONIX_PROXY_API_KEY_ENV, "PROXY_MANAGED")?;
     Ok(outcome)
 }
@@ -829,8 +830,52 @@ pub fn is_proxy_takeover_active_for_url(expected_base_url: Option<&str>) -> Resu
     )
 }
 
-/// Clear the managed proxy env placeholder after restoring a pre-takeover snapshot.
+/// Clear or restore the managed proxy env placeholder after restoring a
+/// pre-takeover snapshot. Prefer [`restore_proxy_env_placeholder`].
 pub fn clear_proxy_env_placeholder() -> Result<(), AppError> {
+    restore_proxy_env_placeholder()
+}
+
+const PROXY_ENV_ABSENT_MARKER: &str = "__ABSENT__";
+const PROXY_ENV_BACKUP_FILENAME: &str = ".cc-switch-proxy-api-key.bak";
+
+fn proxy_env_backup_path() -> PathBuf {
+    get_reasonix_dir().join(PROXY_ENV_BACKUP_FILENAME)
+}
+
+/// Snapshot the previous `CC_SWITCH_PROXY_API_KEY` value once per takeover
+/// session so disable can restore it (PRD R2). Idempotent: does not overwrite
+/// an existing stash while takeover remains active.
+fn stash_proxy_env_previous_if_needed() -> Result<(), AppError> {
+    let backup_path = proxy_env_backup_path();
+    if backup_path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = backup_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+    }
+    let previous = read_env_map()?
+        .get(REASONIX_PROXY_API_KEY_ENV)
+        .cloned()
+        .filter(|value| value != "PROXY_MANAGED");
+    let content = previous.unwrap_or_else(|| PROXY_ENV_ABSENT_MARKER.to_string());
+    atomic_write(&backup_path, content.as_bytes())
+}
+
+/// Restore the pre-takeover env key (or remove it if it was absent).
+pub fn restore_proxy_env_placeholder() -> Result<(), AppError> {
+    let backup_path = proxy_env_backup_path();
+    if backup_path.exists() {
+        let content = fs::read_to_string(&backup_path).map_err(|e| AppError::io(&backup_path, e))?;
+        let trimmed = content.trim();
+        if trimmed.is_empty() || trimmed == PROXY_ENV_ABSENT_MARKER {
+            clear_env_key(REASONIX_PROXY_API_KEY_ENV)?;
+        } else {
+            upsert_env_key(REASONIX_PROXY_API_KEY_ENV, trimmed)?;
+        }
+        let _ = fs::remove_file(&backup_path);
+        return Ok(());
+    }
     clear_env_key(REASONIX_PROXY_API_KEY_ENV)
 }
 
@@ -868,9 +913,13 @@ pub fn clear_proxy_takeover() -> Result<ReasonixWriteOutcome, AppError> {
 
     if changed {
         let outcome = write_document(&doc)?;
-        let _ = clear_env_key(REASONIX_PROXY_API_KEY_ENV);
+        let _ = restore_proxy_env_placeholder();
         Ok(outcome)
     } else {
+        // Partial failure: stash may exist without a live proxy provider.
+        if proxy_env_backup_path().exists() {
+            let _ = restore_proxy_env_placeholder();
+        }
         Ok(ReasonixWriteOutcome::default())
     }
 }
@@ -1143,6 +1192,41 @@ api_key_env = "DEMO_API_KEY"
             let restored = fs::read_to_string(get_reasonix_config_path()).unwrap();
             assert!(!restored.contains("name = \"cc-switch-proxy\""));
             assert!(restored.contains("name = \"demo\""));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn proxy_takeover_restores_previous_env_key_value() {
+        with_temp_home(|| {
+            fs::write(
+                get_reasonix_config_path(),
+                r#"default_model = "demo-model"
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#,
+            )
+            .unwrap();
+            upsert_env_key("DEMO_API_KEY", "secret").unwrap();
+            upsert_env_key(REASONIX_PROXY_API_KEY_ENV, "user-owned-secret").unwrap();
+
+            apply_proxy_takeover("http://127.0.0.1:15721/reasonix/v1").unwrap();
+            let env_taken = fs::read_to_string(get_reasonix_env_path()).unwrap();
+            assert!(env_taken.contains("CC_SWITCH_PROXY_API_KEY=PROXY_MANAGED"));
+
+            // Simulate backup restore path used by ProxyService disable.
+            restore_proxy_env_placeholder().unwrap();
+            let env_restored = fs::read_to_string(get_reasonix_env_path()).unwrap();
+            assert!(
+                env_restored.contains("CC_SWITCH_PROXY_API_KEY=user-owned-secret"),
+                "previous env value must be restored, got:\n{env_restored}"
+            );
+            assert!(!proxy_env_backup_path().exists());
         });
     }
 

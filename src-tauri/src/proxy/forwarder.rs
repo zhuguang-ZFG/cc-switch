@@ -5157,4 +5157,143 @@ mod tests {
         let body = body_with_image("any-model");
         assert!(fwd.media_retry_should_trigger("Claude", false, &body, &image_unsupported_error()));
     }
+
+    async fn spawn_status_upstream(
+        status: axum::http::StatusCode,
+        captured: Arc<tokio::sync::Mutex<Option<(String, Value)>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use axum::routing::any;
+        use http_body_util::BodyExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind status upstream");
+        let address = listener.local_addr().expect("status upstream address");
+        let app = axum::Router::new().fallback(any(move |request: axum::extract::Request| {
+            let captured = captured.clone();
+            async move {
+                let path = request.uri().path().to_string();
+                let body = request
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("read status request")
+                    .to_bytes();
+                let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                *captured.lock().await = Some((path, value));
+                (
+                    status,
+                    axum::Json(json!({
+                        "id": "msg_reasonix_failover",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-test",
+                        "content": [{ "type": "text", "text": "failover-ok" }],
+                        "stop_reason": "end_turn",
+                        "usage": { "input_tokens": 3, "output_tokens": 2 }
+                    })),
+                )
+            }
+        }));
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve status upstream");
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[tokio::test]
+    async fn reasonix_failover_openai_to_anthropic_converts_protocol() {
+        use http::HeaderMap;
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let openai_captured = Arc::new(tokio::sync::Mutex::new(None));
+        let anthropic_captured = Arc::new(tokio::sync::Mutex::new(None));
+        let (openai_base, openai_handle) =
+            spawn_status_upstream(axum::http::StatusCode::INTERNAL_SERVER_ERROR, openai_captured)
+                .await;
+        let (anthropic_base, anthropic_handle) =
+            spawn_status_upstream(axum::http::StatusCode::OK, anthropic_captured.clone()).await;
+
+        let mut openai = test_provider_with_type(None);
+        openai.id = "reasonix-openai".into();
+        openai.name = "Reasonix OpenAI".into();
+        openai.settings_config = json!({
+            "kind": "openai",
+            "base_url": openai_base,
+            "api_key": "sk-openai-fail",
+            "models": ["gpt-fail"],
+            "default": "gpt-fail"
+        });
+
+        let mut anthropic = test_provider_with_type(None);
+        anthropic.id = "reasonix-anthropic".into();
+        anthropic.name = "Reasonix Anthropic".into();
+        anthropic.settings_config = json!({
+            "kind": "anthropic",
+            "base_url": anthropic_base,
+            "api_key": "sk-anthropic-ok",
+            "models": ["claude-test"],
+            "default": "claude-test"
+        });
+
+        let mut forwarder = test_forwarder(Duration::from_secs(5), Duration::from_secs(5));
+        forwarder.max_attempts = 2;
+
+        let result = match forwarder
+            .forward_with_retry(
+                &AppType::Reasonix,
+                http::Method::POST,
+                "/chat/completions",
+                json!({
+                    "model": "cc-switch-proxy-default",
+                    "stream": false,
+                    "messages": [
+                        { "role": "system", "content": "be brief" },
+                        { "role": "user", "content": "hi" }
+                    ]
+                }),
+                HeaderMap::new(),
+                http::Extensions::new(),
+                vec![openai, anthropic],
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => panic!(
+                "openai→anthropic failover must succeed: {} (provider={:?})",
+                err.error,
+                err.provider.as_ref().map(|p| p.id.as_str())
+            ),
+        };
+
+        assert_eq!(result.provider.id, "reasonix-anthropic");
+        assert_eq!(result.response.status(), 200);
+
+        let captured = anthropic_captured.lock().await.clone().expect("anthropic request");
+        assert!(
+            captured.0.contains("messages"),
+            "anthropic attempt must hit Messages path, got {}",
+            captured.0
+        );
+        assert!(
+            captured.1.get("messages").is_some(),
+            "body must be Anthropic Messages shape, got {}",
+            captured.1
+        );
+        assert_eq!(
+            captured.1.get("model").and_then(|v| v.as_str()),
+            Some("claude-test"),
+            "placeholder must remap to anthropic default model"
+        );
+        assert!(
+            captured.1.get("messages").is_some() && captured.1.get("system").is_some(),
+            "chat system+user must convert into anthropic system+messages"
+        );
+
+        openai_handle.abort();
+        anthropic_handle.abort();
+    }
 }

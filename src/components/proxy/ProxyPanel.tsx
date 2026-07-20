@@ -319,6 +319,14 @@ export function ProxyPanel({
                       "选择要接管的应用，启用后该应用的请求将通过本地代理转发",
                   })}
                 </p>
+                {takeoverStatus?.reasonix ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    {t("proxy.takeover.reasonixNoProxyHint", {
+                      defaultValue:
+                        "Reasonix：若 config.toml 中 network.proxy_mode = \"custom\"，provider 的 no_proxy 可能被忽略，127.0.0.1 本地路由有被系统代理拐走的风险；请将 loopback 加入 network.no_proxy，或改用非 custom 模式。",
+                    })}
+                  </p>
+                ) : null}
               </div>
             </motion.div>
           )}
