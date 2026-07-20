@@ -64,8 +64,10 @@
 - [x] `cargo test --lib reasonix_` + migration / forwarder failover
 - [x] `cargo check --lib`
 - [x] `pnpm typecheck`
-- [ ] **可选手动**：本机安装 Reasonix CLI 后跑一条真实 chat（自动化已覆盖协议与恢复路径）
+- [x] **真实 CLI**：`reasonix_cli_run_hits_local_proxy_chat_ingress` — 本机 `reasonix run` → `/reasonix/v1` → remap → mock upstream（流式 SSE）
 - [x] Claude/Codex/Kimi/Grok 既有路径未改契约（Reasonix 独立 namespace）
+
+> 说明：当前 **已安装的** `cc-switch.exe` 尚无 `/reasonix/v1`（404）；真实入口需用本分支构建启动。上述 e2e 用本分支 in-process 代理 + 系统 PATH 上的 Reasonix CLI 验证。
 
 ## 8. 明确非目标（已跳过）
 

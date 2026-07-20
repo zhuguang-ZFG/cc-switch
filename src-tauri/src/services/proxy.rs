@@ -4119,6 +4119,266 @@ api_key_env = "DEMO_API_KEY"
         env::remove_var("REASONIX_HOME");
     }
 
+    /// End-to-end: real Reasonix CLI (`reasonix run`) → local `/reasonix/v1` ingress
+    /// → remapped upstream chat completion. Skips when the `reasonix` binary is absent.
+    #[tokio::test]
+    #[serial]
+    async fn reasonix_cli_run_hits_local_proxy_chat_ingress() {
+        let reasonix_bin = which_reasonix_cli();
+        let Some(reasonix_bin) = reasonix_bin else {
+            eprintln!("skip: reasonix CLI not on PATH");
+            return;
+        };
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let home = TempHome::new();
+        let reasonix_home = home.dir.path().join("reasonix-home");
+        std::fs::create_dir_all(&reasonix_home).expect("create reasonix home");
+        env::set_var("REASONIX_HOME", &reasonix_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        let captured = Arc::new(tokio::sync::Mutex::new(None::<(String, Value)>));
+        let (upstream_base, upstream_handle) =
+            spawn_openai_chat_upstream(captured.clone()).await;
+
+        std::fs::write(
+            crate::reasonix_config::get_reasonix_config_path(),
+            r#"default_model = "demo-model"
+
+[network]
+proxy_mode = "off"
+
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.invalid/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#,
+        )
+        .expect("seed reasonix");
+        crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret").expect("seed env");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+        let provider = Provider::with_id(
+            "demo".into(),
+            "Demo".into(),
+            json!({
+                "kind": "openai",
+                "base_url": upstream_base,
+                "api_key": "sk-mock",
+                "models": ["demo-model"],
+                "default": "demo-model"
+            }),
+            None,
+        );
+        db.save_provider("reasonix", &provider).expect("save");
+        db.set_current_provider("reasonix", "demo")
+            .expect("set current");
+        crate::settings::set_current_provider(&AppType::Reasonix, Some("demo"))
+            .expect("set local current");
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", true)
+            .await
+            .expect("enable takeover");
+
+        let port = state
+            .proxy_service
+            .get_status()
+            .await
+            .expect("proxy status")
+            .port;
+        let live = crate::reasonix_config::read_config_text().expect("live");
+        assert!(
+            live.contains(&format!(":{port}/reasonix/v1")),
+            "takeover live must point at local ingress:\n{live}"
+        );
+
+        // Probe ingress the same way Reasonix would discover models.
+        let models_url = format!("http://127.0.0.1:{port}/reasonix/v1/models");
+        let models_status = reqwest::Client::new()
+            .get(&models_url)
+            .send()
+            .await
+            .expect("GET /models")
+            .status();
+        assert_eq!(
+            models_status,
+            reqwest::StatusCode::OK,
+            "feat-branch proxy must expose /reasonix/v1/models"
+        );
+
+        let reasonix_home_for_cli = reasonix_home.clone();
+        let reasonix_bin_for_cli = reasonix_bin.clone();
+        let output = tokio::task::spawn_blocking(move || {
+            std::process::Command::new(&reasonix_bin_for_cli)
+                .env("REASONIX_HOME", &reasonix_home_for_cli)
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .env("no_proxy", "127.0.0.1,localhost")
+                .args([
+                    "run",
+                    "--max-steps",
+                    "1",
+                    "Reply with exactly one word: pong",
+                ])
+                .output()
+        })
+        .await
+        .expect("join reasonix")
+        .expect("spawn reasonix");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "reasonix run failed (code={:?})\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status.code()
+        );
+
+        let hit = captured.lock().await.clone();
+        assert!(
+            hit.as_ref()
+                .is_some_and(|(path, body)| path.contains("chat/completions")
+                    && body.get("model").and_then(|v| v.as_str()) == Some("demo-model")),
+            "upstream must receive remapped chat/completions, got: {hit:?}\ncli stdout:\n{stdout}"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("reasonix", false)
+            .await
+            .expect("disable");
+        upstream_handle.abort();
+        env::remove_var("REASONIX_HOME");
+    }
+
+    fn which_reasonix_cli() -> Option<std::path::PathBuf> {
+        // Prefer the Windows npm shim; fall back to PATH lookup via `where`.
+        if let Ok(appdata) = env::var("APPDATA") {
+            let shim = std::path::PathBuf::from(appdata)
+                .join("npm")
+                .join("reasonix.cmd");
+            if shim.exists() {
+                return Some(shim);
+            }
+        }
+        if let Ok(output) = std::process::Command::new("where.exe")
+            .arg("reasonix.cmd")
+            .output()
+        {
+            if output.status.success() {
+                if let Some(line) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                    let path = std::path::PathBuf::from(line.trim());
+                    if path.exists() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+        if let Ok(output) = std::process::Command::new("where.exe")
+            .arg("reasonix")
+            .output()
+        {
+            if output.status.success() {
+                if let Some(line) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                    let path = std::path::PathBuf::from(line.trim());
+                    if path.exists() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    async fn spawn_openai_chat_upstream(
+        captured: Arc<tokio::sync::Mutex<Option<(String, Value)>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use axum::response::IntoResponse;
+        use axum::routing::any;
+        use http_body_util::BodyExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind openai mock");
+        let address = listener.local_addr().expect("mock addr");
+        let app = axum::Router::new().fallback(any(move |request: axum::extract::Request| {
+            let captured = captured.clone();
+            async move {
+                let path = request.uri().path().to_string();
+                let body = request
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("read body")
+                    .to_bytes();
+                let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let wants_stream = value
+                    .get("stream")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                *captured.lock().await = Some((path, value));
+
+                if wants_stream {
+                    let chunk1 = json!({
+                        "id": "chatcmpl-reasonix-e2e",
+                        "object": "chat.completion.chunk",
+                        "model": "demo-model",
+                        "choices": [{
+                            "index": 0,
+                            "delta": { "role": "assistant", "content": "pong" },
+                            "finish_reason": null
+                        }]
+                    });
+                    let chunk2 = json!({
+                        "id": "chatcmpl-reasonix-e2e",
+                        "object": "chat.completion.chunk",
+                        "model": "demo-model",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop"
+                        }]
+                    });
+                    let sse = format!(
+                        "data: {chunk1}\n\ndata: {chunk2}\n\ndata: [DONE]\n\n"
+                    );
+                    (
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "text/event-stream; charset=utf-8",
+                        )],
+                        sse,
+                    )
+                        .into_response()
+                } else {
+                    axum::Json(json!({
+                        "id": "chatcmpl-reasonix-e2e",
+                        "object": "chat.completion",
+                        "model": "demo-model",
+                        "choices": [{
+                            "index": 0,
+                            "message": { "role": "assistant", "content": "pong" },
+                            "finish_reason": "stop"
+                        }],
+                        "usage": { "prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5 }
+                    }))
+                    .into_response()
+                }
+            }
+        }));
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve openai mock");
+        });
+        (format!("http://{address}"), handle)
+    }
+
     async fn running_codex_base_url(service: &ProxyService) -> String {
         let status = service.get_status().await.expect("get proxy status");
         format!("http://127.0.0.1:{}/v1", status.port)
