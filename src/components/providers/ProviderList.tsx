@@ -422,6 +422,12 @@ export function ProviderList({
               !currentProviderId &&
               hermesCurrentProviderId === provider.id;
             const isKimiCurrent = isKimiSSotCurrent || isKimiLiveCurrent;
+            // Reasonix is hybrid like Kimi: exclusive SSOT current + additive live.
+            // Prefer backend currentProviderId (stable under proxy takeover).
+            const isReasonixCurrent =
+              appId === "reasonix" &&
+              Boolean(currentProviderId) &&
+              provider.id === currentProviderId;
             return (
               <SortableProviderCard
                 key={provider.id}
@@ -433,7 +439,9 @@ export function ProviderList({
                       ? isOmoSlimCurrent
                       : appId === "kimicode"
                         ? isKimiCurrent
-                        : provider.id === currentProviderId
+                        : appId === "reasonix"
+                          ? isReasonixCurrent
+                          : provider.id === currentProviderId
                 }
                 appId={appId}
                 isInConfig={isProviderInConfig(provider.id)}
@@ -464,7 +472,9 @@ export function ProviderList({
                 isDefaultModel={
                   appId === "kimicode"
                     ? isKimiCurrent
-                    : isProviderDefaultModel(provider.id)
+                    : appId === "reasonix"
+                      ? isReasonixCurrent
+                      : isProviderDefaultModel(provider.id)
                 }
                 onSetAsDefault={
                   onSetAsDefault ? () => onSetAsDefault(provider) : undefined

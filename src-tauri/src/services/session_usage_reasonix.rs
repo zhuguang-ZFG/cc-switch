@@ -49,8 +49,7 @@ impl UsageTokens {
 
 /// 同步 Reasonix 会话用量
 pub fn sync_reasonix_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
-    let sessions_dir = crate::reasonix_config::get_reasonix_dir().join("sessions");
-    let files = collect_events_files(&sessions_dir);
+    let files = collect_all_events_files();
 
     let mut result = SessionSyncResult {
         imported: 0,
@@ -92,9 +91,21 @@ pub fn sync_reasonix_usage(db: &Database) -> Result<SessionSyncResult, AppError>
     Ok(result)
 }
 
-fn collect_events_files(sessions_dir: &Path) -> Vec<PathBuf> {
+/// Global `sessions/` plus desktop `projects/<slug>/sessions/`.
+fn collect_all_events_files() -> Vec<PathBuf> {
+    let home = crate::reasonix_config::get_reasonix_dir();
     let mut files = Vec::new();
-    collect_events_recursive(sessions_dir, &mut files, 0, 2);
+    collect_events_recursive(&home.join("sessions"), &mut files, 0, 2);
+    let projects = home.join("projects");
+    if let Ok(entries) = fs::read_dir(&projects) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // projects/<slug>/sessions — one level of files, no nested slugs
+                collect_events_recursive(&path.join("sessions"), &mut files, 0, 1);
+            }
+        }
+    }
     files
 }
 

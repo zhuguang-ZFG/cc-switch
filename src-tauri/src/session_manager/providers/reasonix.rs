@@ -1,8 +1,9 @@
 //! Reasonix session scanner.
 //!
-//! Layout (from DeepSeek-Reasonix `config.SessionDir`):
+//! Layout (from DeepSeek-Reasonix `config.SessionDir` / `ProjectSessionDir`):
 //!   `<reasonix home>/sessions/*.jsonl`
 //!   `<reasonix home>/sessions/<workspace-slug>/*.jsonl`
+//!   `<reasonix home>/projects/<slug>/sessions/*.jsonl`  (desktop multi-workspace)
 //!
 //! Each line is a `{"role","content",...}` message. Sidecars
 //! (`.events.jsonl`, `.meta.json`, `.bak`, …) are ignored for listing.
@@ -38,17 +39,33 @@ pub fn session_root() -> PathBuf {
     crate::reasonix_config::get_reasonix_dir().join("sessions")
 }
 
+/// Global sessions + per-project `projects/<slug>/sessions` roots.
 pub fn session_roots() -> Vec<PathBuf> {
-    vec![session_root()]
+    let mut roots = vec![session_root()];
+    let projects = crate::reasonix_config::get_reasonix_dir().join("projects");
+    if let Ok(entries) = fs::read_dir(&projects) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let sessions = path.join("sessions");
+            if sessions.is_dir() {
+                roots.push(sessions);
+            }
+        }
+    }
+    roots
 }
 
 pub fn scan_sessions() -> Vec<SessionMeta> {
-    let root = session_root();
-    if !root.is_dir() {
-        return Vec::new();
-    }
     let mut out = Vec::new();
-    collect_jsonl_sessions(&root, &root, &mut out);
+    for root in session_roots() {
+        if !root.is_dir() {
+            continue;
+        }
+        collect_jsonl_sessions(&root, &root, &mut out);
+    }
     out
 }
 
@@ -59,7 +76,8 @@ fn collect_jsonl_sessions(root: &Path, dir: &Path, out: &mut Vec<SessionMeta>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            // One level of workspace-slug subdirs (e.g. C_Users_zhugu).
+            // One level of workspace-slug subdirs under the global sessions root
+            // (e.g. C_Users_zhugu). Project roots are already .../sessions.
             if path.parent() == Some(root) {
                 collect_jsonl_sessions(root, &path, out);
             }
@@ -302,6 +320,18 @@ mod tests {
             let mut f = File::create(&nested).unwrap();
             writeln!(f, r#"{{"role":"user","content":"nested prompt"}}"#).unwrap();
         }
+        // Desktop multi-workspace layout
+        let project_sessions = dir
+            .path()
+            .join("projects")
+            .join("c--users-demo")
+            .join("sessions");
+        fs::create_dir_all(&project_sessions).unwrap();
+        let project_path = project_sessions.join("proj-chat.jsonl");
+        {
+            let mut f = File::create(&project_path).unwrap();
+            writeln!(f, r#"{{"role":"user","content":"project workspace chat"}}"#).unwrap();
+        }
 
         let previous = std::env::var_os("REASONIX_HOME");
         std::env::set_var("REASONIX_HOME", dir.path());
@@ -311,13 +341,17 @@ mod tests {
             None => std::env::remove_var("REASONIX_HOME"),
         }
 
-        assert_eq!(scanned.len(), 2);
+        assert_eq!(scanned.len(), 3);
         let demo = scanned
             .iter()
             .find(|s| s.session_id == "demo")
             .expect("demo session");
         assert_eq!(demo.provider_id, "reasonix");
         assert!(demo.title.as_deref().unwrap_or("").contains("hello"));
+        assert!(
+            scanned.iter().any(|s| s.session_id == "proj-chat"),
+            "project workspace session must be listed"
+        );
 
         let messages = load_messages(&path).unwrap();
         assert_eq!(messages.len(), 2);
