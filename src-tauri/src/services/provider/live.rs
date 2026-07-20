@@ -781,10 +781,29 @@ fn replace_kimi_common_config_in_doc(
     Ok(doc.to_string() != before)
 }
 
+/// Apply strip/merge of Kimi common-config snippets to an in-memory TOML text
+/// (used for restore-backup RMW under proxy takeover).
+pub(crate) fn replace_kimi_common_config_in_text(
+    text: &str,
+    old_snippet: Option<&str>,
+    new_snippet: Option<&str>,
+) -> Result<String, AppError> {
+    let old_has = old_snippet.is_some_and(|s| !s.trim().is_empty());
+    let new_has = new_snippet.is_some_and(|s| !s.trim().is_empty());
+    if !old_has && !new_has {
+        return Ok(text.to_string());
+    }
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| {
+        AppError::Message(format!("Failed to parse Kimi common-config target: {e}"))
+    })?;
+    replace_kimi_common_config_in_doc(&mut doc, old_snippet, new_snippet)?;
+    Ok(doc.to_string())
+}
+
 /// 保存 Kimi Code 通用配置片段时更新 live：剥离旧片段 + 合并新片段在
 /// kimi_config write_lock 内一次 RMW 完成（单次落盘，失败不留"无片段"
-/// 中间态）。代理接管期间 live 归代理所有，跳过写入——片段已落库，
-/// 接管结束后随下次 live 同步应用。
+/// 中间态）。代理接管期间 live 归代理所有，调用方应改写 restore backup
+/// （见 [`replace_kimi_common_config_in_text`]）而不是跳过。
 pub(crate) fn replace_kimi_common_config_in_live(
     old_snippet: Option<&str>,
     new_snippet: Option<&str>,
@@ -2484,6 +2503,39 @@ pre_tool = "echo hi"
         assert!(!extracted.contains("models"));
         assert!(!extracted.contains("default_model"));
         assert!(!extracted.contains("moonshot"));
+    }
+
+    #[test]
+    fn replace_kimi_common_config_in_text_updates_thinking_without_touching_providers() {
+        let original = r#"default_model = "demo/model"
+
+[thinking]
+effort = "low"
+
+[providers.demo]
+type = "openai"
+base_url = "https://example.test/v1"
+"#;
+        let old = "[thinking]\neffort = \"low\"\n";
+        let new = "[thinking]\neffort = \"max\"\nenabled = true\n";
+        let updated =
+            replace_kimi_common_config_in_text(original, Some(old), Some(new)).expect("replace");
+        assert!(
+            updated.contains("effort = \"max\""),
+            "thinking effort should update: {updated}"
+        );
+        assert!(
+            updated.contains("enabled = true"),
+            "thinking enabled should be set: {updated}"
+        );
+        assert!(
+            updated.contains("[providers.demo]"),
+            "providers must be preserved: {updated}"
+        );
+        assert!(
+            updated.contains("default_model = \"demo/model\""),
+            "default_model must be preserved: {updated}"
+        );
     }
 
     #[test]

@@ -345,17 +345,36 @@ pub async fn set_common_config_snippet(
 
     // Kimi Code 的 live 是所有供应商共享的 additive TOML 文档：旧片段剥离与
     // 新片段合并在 kimi_config write_lock 内一次 RMW 完成（单次落盘，中间
-    // 失败不会留下"无片段"中间态；值匹配剥离，用户改过的值保留）。代理接管
-    // 期间 live 归代理所有，片段只落库，接管结束后随下次 live 同步应用。
-    let kimi_live_owned_by_proxy =
-        app_type == "kimicode" && crate::kimi_config::is_proxy_takeover_active().unwrap_or(false);
+    // 失败不会留下"无片段"中间态；值匹配剥离，用户改过的值保留）。
+    // 代理接管期间 live 归代理所有：把 strip/merge 写进 restore backup，
+    // 关接管恢复后 live 即带上最新片段（并在 restore 路径 re-apply DB 片段）。
+    let kimi_backup = if app_type == "kimicode" {
+        futures::executor::block_on(state.db.get_live_backup("kimicode"))
+            .map_err(|e| e.to_string())?
+    } else {
+        None
+    };
+    let kimi_live_owned_by_proxy = app_type == "kimicode"
+        && (kimi_backup.is_some()
+            || crate::kimi_config::is_proxy_takeover_active().unwrap_or(false));
     if app_type == "kimicode" {
-        crate::services::provider::replace_kimi_common_config_in_live(
-            old_snippet.as_deref(),
-            value.as_deref(),
-            kimi_live_owned_by_proxy,
-        )
-        .map_err(|e| e.to_string())?;
+        if let Some(backup) = kimi_backup.as_ref() {
+            let updated = crate::services::provider::replace_kimi_common_config_in_text(
+                &backup.original_config,
+                old_snippet.as_deref(),
+                value.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
+            futures::executor::block_on(state.db.save_live_backup("kimicode", &updated))
+                .map_err(|e| format!("写入 Kimi Code 接管备份失败: {e}"))?;
+        } else {
+            crate::services::provider::replace_kimi_common_config_in_live(
+                old_snippet.as_deref(),
+                value.as_deref(),
+                false,
+            )
+            .map_err(|e| e.to_string())?;
+        }
     }
 
     if matches!(app_type.as_str(), "claude" | "codex" | "gemini")
