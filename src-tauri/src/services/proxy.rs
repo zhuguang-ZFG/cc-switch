@@ -3881,14 +3881,10 @@ api_key_env = "DEMO_API_KEY"
         let live_before = crate::reasonix_config::read_config_text().expect("read live");
         assert!(live_before.contains("cc-switch-proxy"));
 
-        {
-            let _guard = state.proxy_service.lock_switch_for_app("reasonix").await;
-            state
-                .proxy_service
-                .hot_switch_provider_inner("reasonix", "other")
-                .await
-                .expect("hot switch to other");
-        }
+        // Production path: ProviderService::switch must hold the same per-app
+        // lock as takeover disable / port rebuild (regression for missing Reasonix).
+        crate::services::provider::ProviderService::switch(&state, AppType::Reasonix, "other")
+            .expect("switch via ProviderService under takeover");
 
         assert_eq!(
             crate::settings::get_current_provider(&AppType::Reasonix).as_deref(),

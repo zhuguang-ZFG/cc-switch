@@ -3061,10 +3061,16 @@ impl ProviderService {
         // restore backup. Serialize them per app, then decide from the locked
         // current state so a just-started takeover cannot be overwritten by a
         // normal live write.
-        // Kimi Code uses the same per-app lock + hot-switch path as Claude/Codex/Grok.
+        // Kimi Code / Reasonix use the same per-app lock + hot-switch path as
+        // Claude/Codex/Grok so takeover disable / port rebuild cannot race a
+        // provider switch that mutates the restore backup.
         let _switch_guard = if matches!(
             app_type,
-            AppType::Claude | AppType::Codex | AppType::GrokBuild | AppType::KimiCode
+            AppType::Claude
+                | AppType::Codex
+                | AppType::GrokBuild
+                | AppType::KimiCode
+                | AppType::Reasonix
         ) {
             Some(futures::executor::block_on(
                 state.proxy_service.lock_switch_for_app(app_type.as_str()),
