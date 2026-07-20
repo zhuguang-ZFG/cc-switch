@@ -7,6 +7,7 @@ import { Provider, UsageScript, UsageData, createUsageScript } from "@/types";
 import { usageApi, settingsApi, type AppId } from "@/lib/api";
 import { copilotGetUsage, copilotGetUsageForAccount } from "@/lib/api/copilot";
 import { useSettingsQuery } from "@/lib/query";
+import { usageKeys } from "@/lib/query/usage";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -549,7 +550,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             duration: 3000,
             closeButton: true,
           });
-          queryClient.setQueryData(["usage", provider.id, appId], result);
+          queryClient.setQueryData(usageKeys.script(provider.id, appId), result);
         } else {
           toast.error(
             `${t("usageScript.testFailed")}: ${result.error || t("endpointTest.noResult")}`,
@@ -598,7 +599,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             used: tier.utilization,
             unit: "%",
           }));
-          queryClient.setQueryData(["usage", provider.id, appId], {
+          queryClient.setQueryData(usageKeys.script(provider.id, appId), {
             success: true,
             data: usageData,
           });
@@ -628,7 +629,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
           closeButton: true,
         });
         // 更新缓存
-        queryClient.setQueryData(["usage", provider.id, appId], {
+        queryClient.setQueryData(usageKeys.script(provider.id, appId), {
           success: true,
           data: [
             {
@@ -670,7 +671,7 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
         });
 
         // 🔧 测试成功后，更新主界面列表的用量查询缓存
-        queryClient.setQueryData(["usage", provider.id, appId], result);
+        queryClient.setQueryData(usageKeys.script(provider.id, appId), result);
       } else {
         toast.error(
           `${t("usageScript.testFailed")}: ${result.error || t("endpointTest.noResult")}`,

@@ -908,6 +908,17 @@ pub fn remove_provider_from_text(text: &str, name: &str) -> Result<String, AppEr
     Ok(doc.to_string())
 }
 
+/// Whether a `[providers.<name>]` table exists in the given config text.
+/// Used to gate a provider-key rename against the takeover restore backup
+/// (during takeover a provider added "to config" lives only in the backup).
+pub fn provider_exists_in_text(text: &str, name: &str) -> Result<bool, AppError> {
+    let doc = parse_document_text(text)?;
+    Ok(doc
+        .get("providers")
+        .and_then(|item| item.as_table())
+        .is_some_and(|providers| providers.contains_key(name)))
+}
+
 /// Remove a provider and all models that point at it.
 pub fn remove_provider(name: &str) -> Result<KimiWriteOutcome, AppError> {
     let _guard = write_lock()

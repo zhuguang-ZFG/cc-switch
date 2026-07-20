@@ -437,6 +437,7 @@ function ProviderFormFull({
     showApiKey: shouldShowApiKey,
   } = useApiKeyState({
     initialConfig: form.getValues("settingsConfig"),
+    getLatestConfig: () => form.getValues("settingsConfig"),
     onConfigChange: handleSettingsConfigChange,
     selectedPresetId,
     category,
@@ -448,6 +449,7 @@ function ProviderFormFull({
     appType: appId,
     category,
     settingsConfig: form.getValues("settingsConfig"),
+    getLatestSettingsConfig: () => form.getValues("settingsConfig"),
     codexConfig: "",
     onSettingsConfigChange: handleSettingsConfigChange,
     onCodexConfigChange: () => {},

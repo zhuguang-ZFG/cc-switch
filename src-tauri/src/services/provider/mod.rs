@@ -2561,6 +2561,31 @@ impl ProviderService {
                 ));
             }
 
+            // During Kimi proxy takeover, a provider added "to config" is
+            // projected into the restore BACKUP, not live — so check_live_config_exists
+            // (live-only) misses it and the rename would orphan the old key in
+            // the backup. Block the rename if the original id is in the backup.
+            if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
+                let backup = futures::executor::block_on(
+                    state.db.get_live_backup(AppType::KimiCode.as_str()),
+                )
+                .ok()
+                .flatten();
+                if let Some(backup) = backup {
+                    if crate::kimi_config::provider_exists_in_text(
+                        &backup.original_config,
+                        &original_id,
+                    )
+                    .unwrap_or(false)
+                    {
+                        return Err(AppError::Message(
+                            "Provider key cannot be changed after the provider has been added to the app config"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+
             let next_id_in_live = Self::check_live_config_exists(
                 &app_type,
                 &provider.id,

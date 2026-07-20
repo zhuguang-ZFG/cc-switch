@@ -11,6 +11,12 @@ interface UseBaseUrlStateProps {
   category: ProviderCategory | undefined;
   settingsConfig: string;
   codexConfig?: string;
+  /**
+   * Returns the freshest settingsConfig at call time (form.getValues). Needed
+   * because raw-JSON edits (form.setValue) don't re-render the parent, so the
+   * `settingsConfig` prop snapshot goes stale; falls back to it when omitted.
+   */
+  getLatestSettingsConfig?: () => string | undefined;
   onSettingsConfigChange: (config: string) => void;
   onCodexConfigChange?: (config: string) => void;
 }
@@ -24,6 +30,7 @@ export function useBaseUrlState({
   category,
   settingsConfig,
   codexConfig,
+  getLatestSettingsConfig,
   onSettingsConfigChange,
   onCodexConfigChange,
 }: UseBaseUrlStateProps) {
@@ -32,12 +39,14 @@ export function useBaseUrlState({
   const [geminiBaseUrl, setGeminiBaseUrl] = useState("");
   const isUpdatingRef = useRef(false);
 
-  // Track the freshest config props. The change handlers below merge the new
-  // base URL into the current config; reading the captured prop would revert a
-  // raw-JSON edit made via form.setValue that didn't re-render this parent
-  // (mirrors useModelState / useApiKeyState).
-  const latestSettingsConfigRef = useRef(settingsConfig);
-  latestSettingsConfigRef.current = settingsConfig;
+  // Getter reads the freshest config outside React's render cycle (sees
+  // raw-JSON edits that never re-rendered the parent). codexConfig has no
+  // getter today (Codex base-url edits go through a dedicated editor), so it
+  // keeps the prop-ref which is refreshed each render.
+  const getLatestSettingsConfigRef = useRef(getLatestSettingsConfig);
+  getLatestSettingsConfigRef.current = getLatestSettingsConfig;
+  const readSettings = () =>
+    getLatestSettingsConfigRef.current?.() ?? settingsConfig ?? "{}";
   const latestCodexConfigRef = useRef(codexConfig);
   latestCodexConfigRef.current = codexConfig;
 
@@ -100,7 +109,7 @@ export function useBaseUrlState({
       isUpdatingRef.current = true;
 
       try {
-        const config = JSON.parse(latestSettingsConfigRef.current || "{}");
+        const config = JSON.parse(readSettings());
         if (!config.env) {
           config.env = {};
         }
@@ -150,7 +159,7 @@ export function useBaseUrlState({
       isUpdatingRef.current = true;
 
       try {
-        const config = JSON.parse(latestSettingsConfigRef.current || "{}");
+        const config = JSON.parse(readSettings());
         if (!config.env) {
           config.env = {};
         }
