@@ -122,6 +122,7 @@ import { REASONIX_DEFAULT_CONFIG } from "./hooks/useReasonixFormState";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import { useOpenClawLiveProviderIds } from "@/hooks/useOpenClaw";
 import { useHermesLiveProviderIds } from "@/hooks/useHermes";
+import { useReasonixLiveProviderIds } from "@/hooks/useReasonix";
 
 type PresetEntry = {
   id: string;
@@ -835,6 +836,10 @@ function ProviderFormFull({
     onSettingsConfigChange: (config) => form.setValue("settingsConfig", config),
     getSettingsConfig: () => form.getValues("settingsConfig"),
   });
+  const {
+    data: reasonixLiveProviderIds = [],
+    isLoading: isReasonixLiveProviderIdsLoading,
+  } = useReasonixLiveProviderIds(appId === "reasonix");
 
   const additiveExistingProviderKeys = useMemo(() => {
     if (appId === "opencode" && !isAnyOmoCategory) {
@@ -869,7 +874,14 @@ function ProviderFormFull({
     }
 
     if (appId === "reasonix") {
-      return reasonixForm.existingReasonixKeys.filter((key) => key !== providerId);
+      return Array.from(
+        new Set(
+          [
+            ...reasonixForm.existingReasonixKeys,
+            ...reasonixLiveProviderIds,
+          ].filter((key) => key !== providerId),
+        ),
+      );
     }
 
     return [];
@@ -884,6 +896,7 @@ function ProviderFormFull({
     opencodeLiveProviderIds,
     providerId,
     reasonixForm.existingReasonixKeys,
+    reasonixLiveProviderIds,
   ]);
 
   const isProviderKeyLockStateLoading = useMemo(() => {
@@ -897,6 +910,9 @@ function ProviderFormFull({
     if (appId === "kimicode") {
       return isHermesLiveProviderIdsLoading;
     }
+    if (appId === "reasonix") {
+      return isReasonixLiveProviderIdsLoading;
+    }
     return false;
   }, [
     appId,
@@ -905,6 +921,7 @@ function ProviderFormFull({
     isHermesLiveProviderIdsLoading,
     isOpenclawLiveProviderIdsLoading,
     isOpencodeLiveProviderIdsLoading,
+    isReasonixLiveProviderIdsLoading,
   ]);
 
   const isProviderKeyLocked = useMemo(() => {
@@ -918,6 +935,9 @@ function ProviderFormFull({
     if (appId === "kimicode") {
       return hermesLiveProviderIds.includes(providerId);
     }
+    if (appId === "reasonix") {
+      return reasonixLiveProviderIds.includes(providerId);
+    }
     return false;
   }, [
     appId,
@@ -927,6 +947,7 @@ function ProviderFormFull({
     openclawLiveProviderIds,
     opencodeLiveProviderIds,
     providerId,
+    reasonixLiveProviderIds,
   ]);
 
   const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
@@ -1367,6 +1388,83 @@ function ProviderFormFull({
         }
       }
       settingsConfig = JSON.stringify(omoConfig);
+    } else if (appId === "reasonix") {
+      // Rebuild from field-local state so RHF/settingsConfig cannot diverge
+      // after form.reset or any partial merge (same idea as OMO).
+      const models = reasonixForm.reasonixModels
+        .map((m) => m.trim())
+        .filter(Boolean);
+      const defaultModel =
+        reasonixForm.reasonixDefault.trim() &&
+        models.includes(reasonixForm.reasonixDefault.trim())
+          ? reasonixForm.reasonixDefault.trim()
+          : (models[0] ?? "");
+      const reasonixConfig: Record<string, unknown> = {
+        name: reasonixForm.reasonixProviderName.trim(),
+        kind: reasonixForm.reasonixKind,
+        base_url: reasonixForm.reasonixBaseUrl.trim().replace(/\/+$/, ""),
+        api_key: reasonixForm.reasonixApiKey,
+      };
+      const chatUrl = reasonixForm.reasonixChatUrl.trim();
+      if (chatUrl) reasonixConfig.chat_url = chatUrl;
+      const modelsUrl = reasonixForm.reasonixModelsUrl.trim();
+      if (modelsUrl) reasonixConfig.models_url = modelsUrl;
+      if (models.length > 0) {
+        reasonixConfig.models = models;
+        if (defaultModel) reasonixConfig.default = defaultModel;
+      }
+      // Preserve unknown keys (local proxy overrides, future fields).
+      try {
+        const existing = JSON.parse(
+          values.settingsConfig.trim() || REASONIX_DEFAULT_CONFIG,
+        ) as Record<string, unknown>;
+        for (const [key, value] of Object.entries(existing)) {
+          if (!(key in reasonixConfig) && value !== undefined) {
+            reasonixConfig[key] = value;
+          }
+        }
+      } catch {
+        // ignore corrupt RHF blob; field state is authoritative
+      }
+      settingsConfig = JSON.stringify(reasonixConfig);
+    } else if (appId === "kimicode") {
+      // Rebuild from Kimi field state; providerKey is applied separately.
+      let existing: Record<string, unknown> = {};
+      try {
+        existing = JSON.parse(
+          values.settingsConfig.trim() || HERMES_DEFAULT_CONFIG,
+        ) as Record<string, unknown>;
+      } catch {
+        existing = {};
+      }
+      const kimiConfig: Record<string, unknown> = {
+        ...existing,
+        name: hermesForm.hermesProviderKey.trim(),
+        type: hermesForm.hermesApiMode,
+        base_url: hermesForm.hermesBaseUrl.trim().replace(/\/+$/, ""),
+        api_key: hermesForm.hermesApiKey,
+      };
+      if (hermesForm.hermesModels.length > 0) {
+        kimiConfig.models = hermesForm.hermesModels;
+      } else {
+        delete kimiConfig.models;
+      }
+      if (hermesForm.hermesRateLimitDelay !== undefined) {
+        kimiConfig.rate_limit_delay = hermesForm.hermesRateLimitDelay;
+      } else {
+        delete kimiConfig.rate_limit_delay;
+      }
+      if (Object.keys(hermesForm.hermesEnv).length > 0) {
+        kimiConfig.env = hermesForm.hermesEnv;
+      } else {
+        delete kimiConfig.env;
+      }
+      if (Object.keys(hermesForm.hermesCustomHeaders).length > 0) {
+        kimiConfig.custom_headers = hermesForm.hermesCustomHeaders;
+      } else {
+        delete kimiConfig.custom_headers;
+      }
+      settingsConfig = JSON.stringify(kimiConfig);
     } else {
       settingsConfig = values.settingsConfig.trim();
     }

@@ -37,7 +37,11 @@ import {
 import { checkAllEnvConflicts, checkEnvConflicts } from "@/lib/api/env";
 import { useProviderActions } from "@/hooks/useProviderActions";
 import { openclawKeys, useOpenClawHealth } from "@/hooks/useOpenClaw";
-import { hermesKeys } from "@/hooks/useHermes";
+import { hermesKeys, invalidateHermesProviderCaches } from "@/hooks/useHermes";
+import {
+  reasonixKeys,
+  invalidateReasonixProviderCaches,
+} from "@/hooks/useReasonix";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { useAutoCompact } from "@/hooks/useAutoCompact";
 import { useUsageCacheBridge } from "@/hooks/useUsageCacheBridge";
@@ -385,13 +389,16 @@ function App() {
 
   // 应用项目后刷新相关缓存（providers 由既有 provider-switched 监听承接；
   // proxy 状态由后端直接改 DB，不走 mutation，必须显式刷新）
+  // Additive live membership (Kimi/Reasonix isInConfig + fallback current) also
+  // changes when a profile rewrites live config — invalidate those caches too.
   useTauriEvent("profile-applied", async () => {
     await queryClient.invalidateQueries({ queryKey: ["profiles"] });
     await queryClient.invalidateQueries({ queryKey: ["mcp", "all"] });
     await queryClient.invalidateQueries({ queryKey: ["skills"] });
     await queryClient.invalidateQueries({ queryKey: ["proxyTakeoverStatus"] });
     await queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
-    await queryClient.invalidateQueries({ queryKey: hermesKeys.modelConfig });
+    await invalidateHermesProviderCaches(queryClient);
+    await invalidateReasonixProviderCaches(queryClient);
     await queryClient.invalidateQueries({
       queryKey: ["providers", "claude-desktop"],
     });
@@ -666,13 +673,9 @@ function App() {
           queryKey: openclawKeys.health,
         });
       } else if (activeApp === "kimicode") {
-        await queryClient.invalidateQueries({
-          queryKey: hermesKeys.liveProviderIds,
-        });
+        await invalidateHermesProviderCaches(queryClient);
       } else if (activeApp === "reasonix") {
-        await queryClient.invalidateQueries({
-          queryKey: ["reasonixLiveProviderIds"],
-        });
+        await invalidateReasonixProviderCaches(queryClient);
       }
       toast.success(
         t("notifications.removeFromConfigSuccess", {
@@ -742,7 +745,7 @@ function App() {
                 })
               : activeApp === "reasonix"
                 ? await queryClient.ensureQueryData({
-                    queryKey: ["reasonixLiveProviderIds"],
+                    queryKey: reasonixKeys.liveProviderIds,
                     queryFn: () => providersApi.getReasonixLiveProviderIds(),
                   })
                 : await queryClient.ensureQueryData({

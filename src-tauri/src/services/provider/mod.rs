@@ -2885,15 +2885,57 @@ impl ProviderService {
                 }
                 return Ok(true);
             }
-            let live_config_managed = Self::check_live_config_exists(
-                &app_type,
-                &provider.id,
-                Self::provider_live_config_managed(&provider).or_else(|| {
-                    existing_provider
-                        .as_ref()
-                        .and_then(Self::provider_live_config_managed)
-                }),
-            )?;
+            let flagged_managed = Self::provider_live_config_managed(&provider).or_else(|| {
+                existing_provider
+                    .as_ref()
+                    .and_then(Self::provider_live_config_managed)
+            });
+            let mut live_config_managed =
+                Self::check_live_config_exists(&app_type, &provider.id, flagged_managed)?;
+
+            // Under takeover, providers added "to config" land in the restore
+            // backup only — live has no matching table. check_live_config_exists
+            // would clear the managed flag and skip the backup update path.
+            // Prefer explicit flag or backup membership.
+            if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
+                if flagged_managed == Some(true) {
+                    live_config_managed = true;
+                } else if let Some(backup) = futures::executor::block_on(
+                    state.db.get_live_backup(AppType::KimiCode.as_str()),
+                )
+                .ok()
+                .flatten()
+                {
+                    if crate::kimi_config::provider_exists_in_text(
+                        &backup.original_config,
+                        &provider.id,
+                    )
+                    .unwrap_or(false)
+                    {
+                        live_config_managed = true;
+                    }
+                }
+            }
+            if matches!(app_type, AppType::Reasonix) && Self::reasonix_proxy_owns_live(state) {
+                if flagged_managed == Some(true) {
+                    live_config_managed = true;
+                } else if let Some(backup) = futures::executor::block_on(
+                    state.db.get_live_backup(AppType::Reasonix.as_str()),
+                )
+                .ok()
+                .flatten()
+                {
+                    if crate::reasonix_config::provider_exists_in_text(
+                        &backup.original_config,
+                        &provider.id,
+                    )
+                    .unwrap_or(false)
+                    {
+                        live_config_managed = true;
+                    }
+                }
+            }
+
             Self::set_provider_live_config_managed(&mut provider, live_config_managed);
 
             // Save to database after live-config presence is resolved so parse errors
@@ -3042,9 +3084,9 @@ impl ProviderService {
                 .as_ref()
                 .and_then(Self::provider_live_config_managed);
 
-            // Kimi/Reasonix under takeover: remove from restore backup only, never live.
-            // Refuse deleting the routing SSOT target (Claude/Codex parity).
-            if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
+            // Kimi/Reasonix are hybrid additive + exclusive current (Claude/Codex
+            // parity for routing SSOT). Always refuse deleting the current target.
+            if matches!(app_type, AppType::KimiCode | AppType::Reasonix) {
                 let local_current = crate::settings::get_current_provider(&app_type);
                 let db_current = state.db.get_current_provider(app_type.as_str())?;
                 if local_current.as_deref() == Some(id) || db_current.as_deref() == Some(id) {
@@ -3052,18 +3094,15 @@ impl ProviderService {
                         "无法删除当前正在使用的供应商".to_string(),
                     ));
                 }
+            }
+
+            // Kimi/Reasonix under takeover: remove from restore backup only, never live.
+            if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
                 Self::kimi_remove_from_takeover_backup(state, id)?;
                 state.db.delete_provider(app_type.as_str(), id)?;
                 return Ok(());
             }
             if matches!(app_type, AppType::Reasonix) && Self::reasonix_proxy_owns_live(state) {
-                let local_current = crate::settings::get_current_provider(&app_type);
-                let db_current = state.db.get_current_provider(app_type.as_str())?;
-                if local_current.as_deref() == Some(id) || db_current.as_deref() == Some(id) {
-                    return Err(AppError::Message(
-                        "无法删除当前正在使用的供应商".to_string(),
-                    ));
-                }
                 Self::reasonix_remove_from_takeover_backup(state, id)?;
                 state.db.delete_provider(app_type.as_str(), id)?;
                 return Ok(());
@@ -3147,6 +3186,15 @@ impl ProviderService {
                 remove_openclaw_provider_from_live(id)?;
             }
             AppType::KimiCode => {
+                // Hybrid current SSOT: removing the routing target from live
+                // leaves proxy/CLI defaults diverged. Switch away first.
+                let local_current = crate::settings::get_current_provider(&app_type);
+                let db_current = state.db.get_current_provider(app_type.as_str())?;
+                if local_current.as_deref() == Some(id) || db_current.as_deref() == Some(id) {
+                    return Err(AppError::Message(
+                        "无法从配置移除当前正在使用的供应商，请先切换到其他供应商".to_string(),
+                    ));
+                }
                 if Self::kimi_proxy_owns_live(state) {
                     Self::kimi_remove_from_takeover_backup(state, id)?;
                 } else {
@@ -3154,6 +3202,13 @@ impl ProviderService {
                 }
             }
             AppType::Reasonix => {
+                let local_current = crate::settings::get_current_provider(&app_type);
+                let db_current = state.db.get_current_provider(app_type.as_str())?;
+                if local_current.as_deref() == Some(id) || db_current.as_deref() == Some(id) {
+                    return Err(AppError::Message(
+                        "无法从配置移除当前正在使用的供应商，请先切换到其他供应商".to_string(),
+                    ));
+                }
                 if Self::reasonix_proxy_owns_live(state) {
                     Self::reasonix_remove_from_takeover_backup(state, id)?;
                 } else {

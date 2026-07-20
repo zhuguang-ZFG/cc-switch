@@ -31,6 +31,11 @@ import {
   useHermesModelConfig,
   hermesKeys,
 } from "@/hooks/useHermes";
+import {
+  useReasonixLiveProviderIds,
+  useReasonixDefaultModel,
+  reasonixKeys,
+} from "@/hooks/useReasonix";
 import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
@@ -117,18 +122,14 @@ export function ProviderList({
   );
 
   // Reasonix: live [[providers]] 累加成员，用于 isInConfig
-  const { data: reasonixLiveIds } = useQuery({
-    queryKey: ["reasonixLiveProviderIds"],
-    queryFn: () => providersApi.getReasonixLiveProviderIds(),
-    enabled: appId === "reasonix",
-  });
+  const { data: reasonixLiveIds } = useReasonixLiveProviderIds(
+    appId === "reasonix",
+  );
 
   // Live default_model when SSOT current is empty (first import / legacy).
-  const { data: reasonixDefaultModel } = useQuery({
-    queryKey: ["reasonix", "defaultModel"],
-    queryFn: () => providersApi.getReasonixDefaultModel(),
-    enabled: appId === "reasonix",
-  });
+  const { data: reasonixDefaultModel } = useReasonixDefaultModel(
+    appId === "reasonix",
+  );
   const reasonixLiveCurrentProviderId = useMemo(() => {
     if (!reasonixDefaultModel) return undefined;
     const raw = reasonixDefaultModel.trim();
@@ -280,7 +281,10 @@ export function ProviderList({
         }
         if (appId === "reasonix") {
           await queryClient.invalidateQueries({
-            queryKey: ["reasonixLiveProviderIds"],
+            queryKey: reasonixKeys.liveProviderIds,
+          });
+          await queryClient.invalidateQueries({
+            queryKey: reasonixKeys.defaultModel,
           });
         }
         if (appId === "opencode") {

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { profilesApi, providersApi } from "@/lib/api";
 import type { ProfileScope } from "@/lib/api/profiles";
 import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
+import { invalidateReasonixProviderCaches } from "@/hooks/useReasonix";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
 const updateTrayMenuSafely = async () => {
@@ -135,9 +136,7 @@ export const useApplyProfileMutation = () => {
         queryKey: ["providers", "reasonix"],
       });
       await invalidateHermesProviderCaches(queryClient);
-      await queryClient.invalidateQueries({
-        queryKey: ["reasonixLiveProviderIds"],
-      });
+      await invalidateReasonixProviderCaches(queryClient);
       await queryClient.invalidateQueries({ queryKey: ["mcp", "all"] });
       await queryClient.invalidateQueries({ queryKey: ["skills"] });
       await updateTrayMenuSafely();

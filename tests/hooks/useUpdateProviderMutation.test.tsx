@@ -22,6 +22,10 @@ vi.mock("@/hooks/useHermes", () => ({
   invalidateHermesProviderCaches: vi.fn(),
 }));
 
+vi.mock("@/hooks/useReasonix", () => ({
+  invalidateReasonixProviderCaches: vi.fn(),
+}));
+
 vi.mock("@/hooks/useOpenClaw", () => ({
   openclawKeys: {
     health: ["openclaw", "health"],

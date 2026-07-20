@@ -315,7 +315,9 @@ export function useHermesFormState({
 
   const resetHermesState = useCallback(
     (config?: Partial<KimiProviderSettingsConfig>) => {
-      setHermesProviderKey("");
+      // Seed the live TOML key from preset/settingsConfig.name (e.g. "kimi-coding").
+      // Leaving it empty after preset select forces the user to retype and often fails validation.
+      setHermesProviderKey(config?.name?.trim() ?? "");
       setHermesBaseUrl(config?.base_url || "");
       setHermesApiKey(config?.api_key || "");
       setHermesApiMode(config?.type ?? KIMI_DEFAULT_PROVIDER_TYPE);

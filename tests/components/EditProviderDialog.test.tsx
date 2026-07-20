@@ -159,6 +159,48 @@ describe("EditProviderDialog", () => {
     });
   });
 
+  it("Kimi / Reasonix 累加模式编辑时不读取整份 live 配置", async () => {
+    const reasonixProvider: Provider = {
+      id: "deepseek",
+      name: "DeepSeek",
+      category: "custom",
+      settingsConfig: {
+        name: "deepseek",
+        kind: "openai",
+        base_url: "https://api.deepseek.com/v1",
+        api_key: "db-key",
+        models: ["deepseek-v4-flash"],
+        default: "deepseek-v4-flash",
+      },
+    };
+
+    apiMocks.getCurrent.mockResolvedValue(reasonixProvider.id);
+    apiMocks.getLiveProviderSettings.mockResolvedValue({
+      config: 'default_model = "cc-switch-proxy/proxy"\n',
+    });
+
+    for (const appId of ["kimicode", "reasonix"] as const) {
+      apiMocks.getLiveProviderSettings.mockClear();
+      const { unmount } = render(
+        <EditProviderDialog
+          open
+          provider={reasonixProvider}
+          onOpenChange={vi.fn()}
+          onSubmit={vi.fn()}
+          appId={appId}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(
+          JSON.parse(screen.getByTestId("settings-config").textContent ?? "{}"),
+        ).toEqual(reasonixProvider.settingsConfig);
+      });
+      expect(apiMocks.getLiveProviderSettings).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
   it("代理接管中编辑 Codex 供应商时展示数据库配置而不是读取 live 代理配置", async () => {
     const provider: Provider = {
       id: "deepseek",

@@ -272,12 +272,11 @@ pub fn is_proxy_takeover_active() -> Result<bool, AppError> {
         .and_then(|providers| providers.get("cc-switch-proxy"))
         .and_then(Item::as_table);
     Ok(provider.is_some_and(|table| {
-        // Require the managed placeholder key so a user-owned local gateway
-        // named cc-switch-proxy is not treated as proxy takeover.
+        // Align with Reasonix: require the managed placeholder key AND the
+        // CC Switch ingress path. Bare localhost/127.0.0.1 without `/kimicode/`
+        // must not count as takeover (user-owned local gateways).
         table_str(table, "api_key").as_deref() == Some("PROXY_MANAGED")
-            && table_str(table, "base_url").is_some_and(|url| {
-                url.contains("/kimicode/") || url.contains("127.0.0.1") || url.contains("localhost")
-            })
+            && table_str(table, "base_url").is_some_and(|url| url.contains("/kimicode/"))
     }))
 }
 

@@ -1292,9 +1292,31 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
 ///
 /// Writes all providers from the database to the live configuration file.
 /// Used for OpenCode and other additive mode applications.
+///
+/// For Kimi/Reasonix under proxy takeover, live stays on the local proxy
+/// projection — project each managed provider into the restore backup instead
+/// (Claude/Codex `sync_current_provider_for_app_respecting_takeover` parity).
 fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<(), AppError> {
     let providers = state.db.get_all_providers(app_type.as_str())?;
     let mut synced_count = 0usize;
+
+    let takeover_owns_live = match app_type {
+        AppType::KimiCode => {
+            futures::executor::block_on(state.db.get_live_backup(AppType::KimiCode.as_str()))
+                .ok()
+                .flatten()
+                .is_some()
+                || crate::kimi_config::is_proxy_takeover_active().unwrap_or(false)
+        }
+        AppType::Reasonix => {
+            futures::executor::block_on(state.db.get_live_backup(AppType::Reasonix.as_str()))
+                .ok()
+                .flatten()
+                .is_some()
+                || crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false)
+        }
+        _ => false,
+    };
 
     for provider in providers.values() {
         if provider
@@ -1303,6 +1325,11 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
             .and_then(|meta| meta.live_config_managed)
             == Some(false)
         {
+            continue;
+        }
+
+        // Never project the local proxy stub from DB back into live/backup.
+        if provider.id == "cc-switch-proxy" || provider.id.starts_with("cc-switch-") {
             continue;
         }
 
@@ -1336,6 +1363,23 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
             }
         }
 
+        if takeover_owns_live {
+            if let Err(e) = futures::executor::block_on(
+                state
+                    .proxy_service
+                    .update_live_backup_from_provider(app_type.as_str(), provider),
+            ) {
+                log::warn!(
+                    "Failed to sync {:?} provider '{}' to takeover backup: {e}",
+                    app_type,
+                    provider.id
+                );
+                continue;
+            }
+            synced_count += 1;
+            continue;
+        }
+
         if let Err(e) = write_live_with_common_config(state.db.as_ref(), app_type, provider) {
             log::warn!(
                 "Failed to sync {:?} provider '{}' to live: {e}",
@@ -1348,7 +1392,8 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
     }
 
     // 片段合并是文档级操作：循环外补一次，覆盖"零供应商也保存了片段"的情况。
-    if matches!(app_type, AppType::KimiCode) {
+    // Under takeover, live is proxy-owned — skip rewriting common config onto it.
+    if matches!(app_type, AppType::KimiCode) && !takeover_owns_live {
         apply_kimi_common_config_to_live(state.db.as_ref())?;
     }
 
@@ -1953,6 +1998,10 @@ pub fn import_openclaw_providers_from_live(state: &AppState) -> Result<usize, Ap
 /// This imports existing providers from ~/.kimi-code/config.toml
 /// into the CC Switch database. Each provider found will be added to the
 /// database with is_current set to false.
+///
+/// During proxy takeover, live holds the `cc-switch-proxy` projection and may
+/// be stale relative to the restore backup. Mirror Reasonix: never import the
+/// proxy placeholder, never clobber existing SSOT rows from takeover live.
 pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, AppError> {
     use crate::kimi_config;
 
@@ -1964,11 +2013,36 @@ pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, Ap
     let mut imported = 0;
     let mut updated = 0;
     let existing_ids = state.db.get_provider_ids("kimicode")?;
+    // Prefer backup presence (authoritative SSOT ownership) over live heuristics.
+    let proxy_owns_live = futures::executor::block_on(state.db.get_live_backup("kimicode"))
+        .ok()
+        .flatten()
+        .is_some()
+        || kimi_config::is_proxy_takeover_active().unwrap_or(false);
 
     for (name, config) in providers {
         // Validate: skip entries with empty name
         if name.trim().is_empty() {
             log::warn!("Skipping Kimi Code provider with empty name");
+            continue;
+        }
+
+        // Never import the local proxy projection into SSOT.
+        if name == "cc-switch-proxy" || name.starts_with("cc-switch-") {
+            continue;
+        }
+        if config
+            .get("api_key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| key == "PROXY_MANAGED")
+        {
+            continue;
+        }
+        if config
+            .get("base_url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| url.contains("/kimicode/"))
+        {
             continue;
         }
 
@@ -1981,12 +2055,23 @@ pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, Ap
             || config.get("oauth").is_some();
         let is_official_kimi = name == kimi_config::MANAGED_KIMI_PROVIDER;
         if existing_ids.contains(&name) {
+            // Takeover live is a stale projection — do not overwrite SSOT edits
+            // that may only exist in the restore backup / DB.
+            // Still allow managed-provider metadata repair (category/flag only).
+            if proxy_owns_live && !is_managed {
+                log::debug!(
+                    "Skipping Kimi Code provider '{name}' live→DB update during proxy takeover"
+                );
+                continue;
+            }
             match state.db.get_provider_by_id(&name, "kimicode") {
                 Ok(Some(existing)) => {
                     let mut provider = existing;
-                    let mut changed = provider.settings_config != config;
-                    if changed {
+                    let mut changed = false;
+                    // Under takeover, never clobber settings_config from live.
+                    if !proxy_owns_live && provider.settings_config != config {
                         provider.settings_config = config;
+                        changed = true;
                     }
                     if is_managed {
                         if is_official_kimi && provider.name != "Kimi For Coding" {
@@ -2021,6 +2106,16 @@ pub fn import_kimicode_providers_from_live(state: &AppState) -> Result<usize, Ap
                 }
                 Err(e) => log::warn!("Failed to look up Kimi Code provider '{name}': {e}"),
             }
+            continue;
+        }
+
+        // New providers: still skip insert while takeover owns live for non-managed
+        // tables (live may only have the proxy stub). Managed OAuth tables are
+        // authoritative and safe to seed.
+        if proxy_owns_live && !is_managed {
+            log::debug!(
+                "Skipping Kimi Code provider '{name}' live→DB insert during proxy takeover"
+            );
             continue;
         }
 

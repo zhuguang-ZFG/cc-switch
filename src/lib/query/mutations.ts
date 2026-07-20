@@ -9,6 +9,7 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateUUID } from "@/utils/uuid";
 import { openclawKeys } from "@/hooks/useOpenClaw";
 import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
+import { invalidateReasonixProviderCaches } from "@/hooks/useReasonix";
 import { usageKeys } from "@/lib/query/usage";
 import { CODEX_OFFICIAL_PROVIDER_ID } from "@/utils/providerCapabilities";
 
@@ -127,9 +128,7 @@ export const useAddProviderMutation = (appId: AppId) => {
         await invalidateHermesProviderCaches(queryClient);
       }
       if (appId === "reasonix") {
-        await queryClient.invalidateQueries({
-          queryKey: ["reasonixLiveProviderIds"],
-        });
+        await invalidateReasonixProviderCaches(queryClient);
       }
 
       try {
@@ -196,9 +195,7 @@ export const useUpdateProviderMutation = (appId: AppId) => {
         await invalidateHermesProviderCaches(queryClient);
       }
       if (appId === "reasonix") {
-        await queryClient.invalidateQueries({
-          queryKey: ["reasonixLiveProviderIds"],
-        });
+        await invalidateReasonixProviderCaches(queryClient);
       }
       toast.success(
         t("notifications.updateSuccess", {
@@ -257,9 +254,7 @@ export const useDeleteProviderMutation = (appId: AppId) => {
         await invalidateHermesProviderCaches(queryClient);
       }
       if (appId === "reasonix") {
-        await queryClient.invalidateQueries({
-          queryKey: ["reasonixLiveProviderIds"],
-        });
+        await invalidateReasonixProviderCaches(queryClient);
       }
 
       try {
@@ -336,9 +331,7 @@ export const useSwitchProviderMutation = (appId: AppId) => {
         await invalidateHermesProviderCaches(queryClient);
       }
       if (appId === "reasonix") {
-        await queryClient.invalidateQueries({
-          queryKey: ["reasonixLiveProviderIds"],
-        });
+        await invalidateReasonixProviderCaches(queryClient);
       }
 
       try {

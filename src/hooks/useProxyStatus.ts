@@ -12,6 +12,9 @@ import type {
   ProxyTakeoverStatus,
 } from "@/types/proxy";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
+import { invalidateReasonixProviderCaches } from "@/hooks/useReasonix";
+import { openclawKeys } from "@/hooks/useOpenClaw";
 
 /**
  * 代理服务状态管理
@@ -101,6 +104,18 @@ export function useProxyStatus() {
       );
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
       queryClient.invalidateQueries({ queryKey: ["proxyTakeoverStatus"] });
+      // Takeover restore rewrites additive live configs — refresh membership/current.
+      void invalidateHermesProviderCaches(queryClient);
+      void invalidateReasonixProviderCaches(queryClient);
+      queryClient.invalidateQueries({
+        queryKey: ["opencodeLiveProviderIds"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: openclawKeys.liveProviderIds,
+      });
+      queryClient.invalidateQueries({
+        queryKey: openclawKeys.defaultModel,
+      });
       // 彻底删除所有供应商健康状态缓存（后端已清空数据库记录）
       queryClient.removeQueries({ queryKey: ["providerHealth"] });
       // 彻底删除所有熔断器统计缓存（代理停止后熔断器状态已重置）
@@ -157,6 +172,26 @@ export function useProxyStatus() {
 
       queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
       queryClient.invalidateQueries({ queryKey: ["proxyTakeoverStatus"] });
+      // Live config membership changes on takeover enable/restore.
+      if (variables.appType === "kimicode") {
+        void invalidateHermesProviderCaches(queryClient);
+      } else if (variables.appType === "reasonix") {
+        void invalidateReasonixProviderCaches(queryClient);
+      } else if (variables.appType === "opencode") {
+        queryClient.invalidateQueries({
+          queryKey: ["opencodeLiveProviderIds"],
+        });
+      } else if (variables.appType === "openclaw") {
+        queryClient.invalidateQueries({
+          queryKey: openclawKeys.liveProviderIds,
+        });
+        queryClient.invalidateQueries({
+          queryKey: openclawKeys.defaultModel,
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["providers", variables.appType],
+      });
     },
     onError: (error: Error) => {
       const detail =

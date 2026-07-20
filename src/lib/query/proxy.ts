@@ -3,6 +3,9 @@ import { proxyApi } from "@/lib/api/proxy";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import type { GlobalProxyConfig, AppProxyConfig } from "@/types/proxy";
+import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
+import { invalidateReasonixProviderCaches } from "@/hooks/useReasonix";
+import { openclawKeys } from "@/hooks/useOpenClaw";
 
 // ========== 代理服务器状态 Hooks ==========
 
@@ -82,6 +85,18 @@ export function useStopProxyServer() {
       queryClient.invalidateQueries({ queryKey: ["proxyRunning"] });
       queryClient.invalidateQueries({ queryKey: ["liveTakeoverActive"] });
       queryClient.invalidateQueries({ queryKey: ["proxyTakeoverStatus"] });
+      // Restore rewrites additive live configs.
+      void invalidateHermesProviderCaches(queryClient);
+      void invalidateReasonixProviderCaches(queryClient);
+      queryClient.invalidateQueries({
+        queryKey: ["opencodeLiveProviderIds"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: openclawKeys.liveProviderIds,
+      });
+      queryClient.invalidateQueries({
+        queryKey: openclawKeys.defaultModel,
+      });
     },
   });
 }
@@ -95,9 +110,28 @@ export function useSetProxyTakeoverForApp() {
   return useMutation({
     mutationFn: ({ appType, enabled }: { appType: string; enabled: boolean }) =>
       proxyApi.setProxyTakeoverForApp(appType, enabled),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["proxyTakeoverStatus"] });
       queryClient.invalidateQueries({ queryKey: ["liveTakeoverActive"] });
+      if (variables.appType === "kimicode") {
+        void invalidateHermesProviderCaches(queryClient);
+      } else if (variables.appType === "reasonix") {
+        void invalidateReasonixProviderCaches(queryClient);
+      } else if (variables.appType === "opencode") {
+        queryClient.invalidateQueries({
+          queryKey: ["opencodeLiveProviderIds"],
+        });
+      } else if (variables.appType === "openclaw") {
+        queryClient.invalidateQueries({
+          queryKey: openclawKeys.liveProviderIds,
+        });
+        queryClient.invalidateQueries({
+          queryKey: openclawKeys.defaultModel,
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["providers", variables.appType],
+      });
     },
   });
 }

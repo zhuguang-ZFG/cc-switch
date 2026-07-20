@@ -69,7 +69,11 @@ export function EditProviderDialog({
       // OpenCode uses additive mode - each provider's config is stored independently in DB
       // Reading live config would return the full opencode.json (with $schema, provider, mcp etc.)
       // instead of just the provider fragment, causing incorrect nested structure on save
-      if (appId === "opencode") {
+      //
+      // Kimi / Reasonix are the same class of additive multi-provider live files:
+      // getLiveProviderSettings returns the entire config.toml as `{ config: text }`,
+      // not a single-provider fragment. Loading that into the form corrupts settingsConfig.
+      if (appId === "opencode" || appId === "kimicode" || appId === "reasonix") {
         if (!cancelled) {
           setLiveSettings(null);
           setHasLoadedLive(true);
