@@ -959,6 +959,19 @@ fn apply_switch_defaults_to_document(
     Ok(())
 }
 
+/// Upsert a provider (+ models) into a TOML snapshot **without** changing
+/// top-level `default_model`. Used by additive full-sync under proxy takeover
+/// so bulk projection does not stomp the restore backup's routing default.
+pub fn upsert_provider_into_text(
+    text: &str,
+    provider_id: &str,
+    settings_config: &Value,
+) -> Result<String, AppError> {
+    let mut doc = parse_document_text(text)?;
+    upsert_provider_into_document(&mut doc, provider_id.trim(), settings_config)?;
+    Ok(doc.to_string())
+}
+
 /// Project switch defaults into a full TOML snapshot text.
 ///
 /// Used by proxy hot-switch to update the restore backup's `default_model`
@@ -1828,6 +1841,38 @@ mod tests {
             let providers = get_providers().unwrap();
             assert!(providers.contains_key("demo"));
         });
+    }
+
+    #[test]
+    fn upsert_provider_into_text_preserves_default_model() {
+        let original = r#"default_model = "a/model"
+
+[thinking]
+enabled = true
+
+[providers.a]
+type = "openai"
+base_url = "https://a.example/v1"
+api_key = "a-key"
+
+[models."a/model"]
+provider = "a"
+model = "model"
+"#;
+        let settings = serde_json::json!({
+            "type": "openai",
+            "base_url": "https://b.example/v1",
+            "api_key": "b-key",
+            "models": [{ "id": "b-model", "alias": "b/b-model" }]
+        });
+        let updated = upsert_provider_into_text(original, "b", &settings)
+            .expect("upsert into snapshot without switch");
+        assert!(
+            updated.contains("default_model = \"a/model\""),
+            "bulk upsert must not stomp default_model: {updated}"
+        );
+        assert!(updated.contains("[providers.b]"));
+        assert!(updated.contains("[thinking]"));
     }
 
     #[test]

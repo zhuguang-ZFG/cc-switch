@@ -1007,6 +1007,23 @@ pub fn clear_proxy_takeover() -> Result<ReasonixWriteOutcome, AppError> {
 /// matching [`apply_switch_defaults`]. Reasonix stores credentials only in
 /// `.env` via `api_key_env`; a TOML-only backup update would restore a
 /// provider whose env key is missing after disable (B1).
+/// Upsert a provider into a TOML snapshot **without** changing top-level
+/// `default_model`. Used by additive full-sync under proxy takeover so bulk
+/// projection does not stomp the restore backup's routing default.
+pub fn upsert_provider_into_text(
+    text: &str,
+    provider_id: &str,
+    settings_config: &Value,
+) -> Result<String, AppError> {
+    let mut doc = parse_document_text(text)?;
+    let env_update = upsert_provider_into_document(&mut doc, provider_id, settings_config)?;
+    let updated = doc.to_string();
+    if let Some((env_key, api_key)) = env_update {
+        upsert_env_key(&env_key, &api_key)?;
+    }
+    Ok(updated)
+}
+
 pub fn apply_switch_defaults_to_text(
     text: &str,
     provider_id: &str,
@@ -1371,6 +1388,44 @@ api_key_env = "CC_SWITCH_PROXY_API_KEY"
                 "http://127.0.0.1:9999/reasonix/v1"
             ))
             .unwrap());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn upsert_provider_into_text_preserves_default_model() {
+        with_temp_home(|| {
+            let original = r#"default_model = "demo"
+
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["model-a"]
+default = "model-a"
+"#;
+            let settings = json!({
+                "kind": "openai",
+                "base_url": "https://other.test/v1",
+                "api_key": "other-secret",
+                "models": ["other-model"],
+                "default": "other-model"
+            });
+            let updated =
+                upsert_provider_into_text(original, "other", &settings).expect("upsert text");
+            assert!(
+                updated.contains("default_model = \"demo\""),
+                "bulk upsert must not stomp default_model: {updated}"
+            );
+            assert!(updated.contains("name = \"other\""));
+            assert!(updated.contains("other-model"));
+
+            let switched =
+                apply_switch_defaults_to_text(&updated, "other", &settings).expect("switch");
+            assert!(
+                switched.contains("default_model = \"other\""),
+                "switch projection should set default_model: {switched}"
+            );
         });
     }
 

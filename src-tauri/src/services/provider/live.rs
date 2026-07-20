@@ -1296,6 +1296,160 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
 /// For Kimi/Reasonix under proxy takeover, live stays on the local proxy
 /// projection — project each managed provider into the restore backup instead
 /// (Claude/Codex `sync_current_provider_for_app_respecting_takeover` parity).
+/// Whether a DB provider should be projected into additive live/backup.
+fn should_sync_additive_provider(app_type: &AppType, provider: &Provider) -> bool {
+    if provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.live_config_managed)
+        == Some(false)
+    {
+        return false;
+    }
+
+    // Never project the local proxy stub from DB back into live/backup.
+    if provider.id == "cc-switch-proxy" || provider.id.starts_with("cc-switch-") {
+        return false;
+    }
+
+    // Official Kimi OAuth providers are provisioned in config.toml and are
+    // intentionally absent from the editable database projection.
+    if matches!(app_type, AppType::KimiCode) {
+        // DB 侧标记优先于 live 侧探测：managed: 前缀 / _cc_managed / oauth
+        // 的供应商归官方登录所有，即使 live 表缺失（登出/配置重置）也绝不
+        // 从 DB 投影回 live——is_managed_provider 在 live 表缺失时返回
+        // false，继续往下会撞 set_provider 对 managed 名的硬拒绝。
+        let db_side_managed = provider.id.starts_with("managed:")
+            || provider
+                .settings_config
+                .get("_cc_managed")
+                .and_then(Value::as_bool)
+                == Some(true)
+            || provider.settings_config.get("oauth").is_some();
+        if db_side_managed {
+            return false;
+        }
+        match crate::kimi_config::is_managed_provider(&provider.id) {
+            Ok(true) => return false,
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!(
+                    "Failed to inspect managed Kimi provider '{}'; skipping live sync: {err}",
+                    provider.id
+                );
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+/// Project all additive providers into the restore backup without stomping
+/// `default_model` on every row. After bulk upsert, re-apply switch defaults
+/// only for the effective current provider (SSOT routing).
+fn sync_all_providers_to_takeover_backup(
+    state: &AppState,
+    app_type: &AppType,
+    providers: &indexmap::IndexMap<String, Provider>,
+) -> Result<usize, AppError> {
+    let app_str = app_type.as_str();
+    let Some(backup) =
+        futures::executor::block_on(state.db.get_live_backup(app_str))
+            .map_err(|e| AppError::Message(format!("读取 {app_str} 接管备份失败: {e}")))?
+    else {
+        log::warn!(
+            "{app_type:?} takeover owns live but no restore backup is present; skip additive backup sync"
+        );
+        return Ok(0);
+    };
+
+    let mut text = backup.original_config;
+    let mut synced_count = 0usize;
+
+    for provider in providers.values() {
+        if !should_sync_additive_provider(app_type, provider) {
+            continue;
+        }
+
+        let next = match app_type {
+            AppType::KimiCode => crate::kimi_config::upsert_provider_into_text(
+                &text,
+                &provider.id,
+                &provider.settings_config,
+            ),
+            AppType::Reasonix => crate::reasonix_config::upsert_provider_into_text(
+                &text,
+                &provider.id,
+                &provider.settings_config,
+            ),
+            _ => continue,
+        };
+
+        match next {
+            Ok(updated) => {
+                text = updated;
+                synced_count += 1;
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to upsert {:?} provider '{}' into takeover backup: {e}",
+                    app_type,
+                    provider.id
+                );
+            }
+        }
+    }
+
+    // Only the SSOT current provider may rewrite default_model on the backup.
+    if let Ok(Some(current_id)) =
+        crate::settings::get_effective_current_provider(&state.db, app_type)
+    {
+        if let Some(current) = providers.get(&current_id) {
+            // Managed Kimi OAuth current is skipped by should_sync_additive_provider
+            // (must not rewrite the login-owned table), but switch defaults still
+            // need to set default_model on the backup.
+            let is_kimi_managed_current = matches!(app_type, AppType::KimiCode)
+                && (current.id.starts_with("managed:")
+                    || current
+                        .settings_config
+                        .get("_cc_managed")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    || current.settings_config.get("oauth").is_some());
+            if should_sync_additive_provider(app_type, current) || is_kimi_managed_current {
+
+                let switched = match app_type {
+                    AppType::KimiCode => crate::kimi_config::apply_switch_defaults_to_text(
+                        &text,
+                        &current.id,
+                        &current.settings_config,
+                    ),
+                    AppType::Reasonix => crate::reasonix_config::apply_switch_defaults_to_text(
+                        &text,
+                        &current.id,
+                        &current.settings_config,
+                    ),
+                    _ => Ok(text.clone()),
+                };
+                match switched {
+                    Ok(updated) => text = updated,
+                    Err(e) => log::warn!(
+                        "Failed to re-apply {:?} current '{}' onto takeover backup: {e}",
+                        app_type,
+                        current.id
+                    ),
+                }
+            }
+        }
+    }
+
+    futures::executor::block_on(state.db.save_live_backup(app_str, &text))
+        .map_err(|e| AppError::Message(format!("写入 {app_str} 接管备份失败: {e}")))?;
+
+    Ok(synced_count)
+}
+
 fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<(), AppError> {
     let providers = state.db.get_all_providers(app_type.as_str())?;
     let mut synced_count = 0usize;
@@ -1318,65 +1472,17 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
         _ => false,
     };
 
+    // Kimi/Reasonix under takeover: bulk-upsert into the restore backup without
+    // calling apply_switch_defaults per provider (that would stomp default_model
+    // to whichever HashMap entry is last). Current SSOT is applied once at end.
+    if takeover_owns_live && matches!(app_type, AppType::KimiCode | AppType::Reasonix) {
+        synced_count = sync_all_providers_to_takeover_backup(state, app_type, &providers)?;
+        log::info!("Synced {synced_count} {app_type:?} providers to takeover backup");
+        return Ok(());
+    }
+
     for provider in providers.values() {
-        if provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.live_config_managed)
-            == Some(false)
-        {
-            continue;
-        }
-
-        // Never project the local proxy stub from DB back into live/backup.
-        if provider.id == "cc-switch-proxy" || provider.id.starts_with("cc-switch-") {
-            continue;
-        }
-
-        // Official Kimi OAuth providers are provisioned in config.toml and are
-        // intentionally absent from the editable database projection.
-        if matches!(app_type, AppType::KimiCode) {
-            // DB 侧标记优先于 live 侧探测：managed: 前缀 / _cc_managed / oauth
-            // 的供应商归官方登录所有，即使 live 表缺失（登出/配置重置）也绝不
-            // 从 DB 投影回 live——is_managed_provider 在 live 表缺失时返回
-            // false，继续往下会撞 set_provider 对 managed 名的硬拒绝。
-            let db_side_managed = provider.id.starts_with("managed:")
-                || provider
-                    .settings_config
-                    .get("_cc_managed")
-                    .and_then(Value::as_bool)
-                    == Some(true)
-                || provider.settings_config.get("oauth").is_some();
-            if db_side_managed {
-                continue;
-            }
-            match crate::kimi_config::is_managed_provider(&provider.id) {
-                Ok(true) => continue,
-                Ok(false) => {}
-                Err(err) => {
-                    log::warn!(
-                        "Failed to inspect managed Kimi provider '{}'; skipping live sync: {err}",
-                        provider.id
-                    );
-                    continue;
-                }
-            }
-        }
-
-        if takeover_owns_live {
-            if let Err(e) = futures::executor::block_on(
-                state
-                    .proxy_service
-                    .update_live_backup_from_provider(app_type.as_str(), provider),
-            ) {
-                log::warn!(
-                    "Failed to sync {:?} provider '{}' to takeover backup: {e}",
-                    app_type,
-                    provider.id
-                );
-                continue;
-            }
-            synced_count += 1;
+        if !should_sync_additive_provider(app_type, provider) {
             continue;
         }
 
@@ -1392,8 +1498,7 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
     }
 
     // 片段合并是文档级操作：循环外补一次，覆盖"零供应商也保存了片段"的情况。
-    // Under takeover, live is proxy-owned — skip rewriting common config onto it.
-    if matches!(app_type, AppType::KimiCode) && !takeover_owns_live {
+    if matches!(app_type, AppType::KimiCode) {
         apply_kimi_common_config_to_live(state.db.as_ref())?;
     }
 

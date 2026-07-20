@@ -257,13 +257,15 @@ export function ProviderActions({
 
   return (
     <div className="flex items-center gap-1.5">
-      {/* Kimi / Reasonix 接管下隐藏「设为默认」：默认模型由代理备份管理， additive Zap 会误导 */}
+      {/* Kimi / Reasonix 接管下隐藏「设为默认」：默认模型由代理备份管理，additive Zap 会误导。
+          必须覆盖 takeover-only（isHybridTakeoverSwitch）与 takeover+failover（isHybridFailover）：
+          后者主按钮已是「加入/已加入」，再叠一个 Zap「启用」会像截图里那样重复误导。 */}
       {(appId === "openclaw" ||
         appId === "kimicode" ||
         appId === "reasonix") &&
         isInConfig &&
         onSetAsDefault &&
-        !isHybridTakeoverSwitch &&
+        !(isHybridProxyApp && isProxyTakeover) &&
         (() => {
           const activeLabel =
             appId === "openclaw"

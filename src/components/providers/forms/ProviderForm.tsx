@@ -899,8 +899,9 @@ function ProviderFormFull({
     reasonixLiveProviderIds,
   ]);
 
+  // Create and edit both need live IDs before duplicate checks can be trusted.
+  // (Previously create always returned false, allowing live-only key collisions.)
   const isProviderKeyLockStateLoading = useMemo(() => {
-    if (!isEditMode) return false;
     if (appId === "opencode" && !isAnyOmoCategory) {
       return isOpencodeLiveProviderIdsLoading;
     }
@@ -917,7 +918,6 @@ function ProviderFormFull({
   }, [
     appId,
     isAnyOmoCategory,
-    isEditMode,
     isHermesLiveProviderIdsLoading,
     isOpenclawLiveProviderIdsLoading,
     isOpencodeLiveProviderIdsLoading,
@@ -1151,7 +1151,16 @@ function ProviderFormFull({
         toast.error(t("reasonix.form.providerNameInvalid"));
         return;
       }
+      if (isProviderKeyLockStateLoading) {
+        toast.error(
+          t("providerForm.providerKeyStatusLoading", {
+            defaultValue: "正在加载供应商标识状态，请稍后再试",
+          }),
+        );
+        return;
+      }
       if (
+        !isProviderKeyLocked &&
         additiveExistingProviderKeys.includes(reasonixForm.reasonixProviderName)
       ) {
         toast.error(t("reasonix.form.providerNameDuplicate"));
@@ -1413,13 +1422,30 @@ function ProviderFormFull({
         reasonixConfig.models = models;
         if (defaultModel) reasonixConfig.default = defaultModel;
       }
-      // Preserve unknown keys (local proxy overrides, future fields).
+      // Preserve only non-field-owned keys (e.g. future extensions). Field-owned
+      // keys must not be resurrected from a stale RHF blob after the user clears
+      // them in the form (chat_url / models_url / models / default).
+      const reasonixFieldOwned = new Set([
+        "name",
+        "kind",
+        "type",
+        "base_url",
+        "api_key",
+        "chat_url",
+        "models_url",
+        "models",
+        "default",
+      ]);
       try {
         const existing = JSON.parse(
           values.settingsConfig.trim() || REASONIX_DEFAULT_CONFIG,
         ) as Record<string, unknown>;
         for (const [key, value] of Object.entries(existing)) {
-          if (!(key in reasonixConfig) && value !== undefined) {
+          if (
+            !reasonixFieldOwned.has(key) &&
+            !(key in reasonixConfig) &&
+            value !== undefined
+          ) {
             reasonixConfig[key] = value;
           }
         }
@@ -1429,6 +1455,18 @@ function ProviderFormFull({
       settingsConfig = JSON.stringify(reasonixConfig);
     } else if (appId === "kimicode") {
       // Rebuild from Kimi field state; providerKey is applied separately.
+      // Field-owned keys come only from hermesForm — never resurrect from RHF.
+      const kimiFieldOwned = new Set([
+        "name",
+        "type",
+        "api_mode",
+        "base_url",
+        "api_key",
+        "models",
+        "rate_limit_delay",
+        "env",
+        "custom_headers",
+      ]);
       let existing: Record<string, unknown> = {};
       try {
         existing = JSON.parse(
@@ -1437,8 +1475,14 @@ function ProviderFormFull({
       } catch {
         existing = {};
       }
+      const preserved: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(existing)) {
+        if (!kimiFieldOwned.has(key) && value !== undefined) {
+          preserved[key] = value;
+        }
+      }
       const kimiConfig: Record<string, unknown> = {
-        ...existing,
+        ...preserved,
         name: hermesForm.hermesProviderKey.trim(),
         type: hermesForm.hermesApiMode,
         base_url: hermesForm.hermesBaseUrl.trim().replace(/\/+$/, ""),
@@ -1446,23 +1490,15 @@ function ProviderFormFull({
       };
       if (hermesForm.hermesModels.length > 0) {
         kimiConfig.models = hermesForm.hermesModels;
-      } else {
-        delete kimiConfig.models;
       }
       if (hermesForm.hermesRateLimitDelay !== undefined) {
         kimiConfig.rate_limit_delay = hermesForm.hermesRateLimitDelay;
-      } else {
-        delete kimiConfig.rate_limit_delay;
       }
       if (Object.keys(hermesForm.hermesEnv).length > 0) {
         kimiConfig.env = hermesForm.hermesEnv;
-      } else {
-        delete kimiConfig.env;
       }
       if (Object.keys(hermesForm.hermesCustomHeaders).length > 0) {
         kimiConfig.custom_headers = hermesForm.hermesCustomHeaders;
-      } else {
-        delete kimiConfig.custom_headers;
       }
       settingsConfig = JSON.stringify(kimiConfig);
     } else {

@@ -166,6 +166,23 @@ describe("ProviderActions kimicode failover mode", () => {
     expect(props.onSwitch).not.toHaveBeenCalled();
   });
 
+  it("hides the additive Zap「启用」when takeover + failover show「已加入」", () => {
+    // Regression: previously only !isHybridTakeoverSwitch gated Zap, so
+    // takeover+failover still rendered a second blue「启用」next to「已加入」。
+    const props = createProps({
+      isProxyTakeover: true,
+      isAutoFailoverEnabled: true,
+      isInFailoverQueue: true,
+      isInConfig: true,
+      onToggleFailover: vi.fn(),
+      onSetAsDefault: vi.fn(),
+    });
+    render(<ProviderActions {...props} />);
+
+    expect(screen.queryByRole("button", { name: "启用" })).toBeNull();
+    expect(screen.getByRole("button", { name: "已加入" })).toBeInTheDocument();
+  });
+
   it("queue semantics win over takeover switch semantics when both are on", () => {
     const props = createProps({
       isProxyTakeover: true,
