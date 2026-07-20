@@ -89,6 +89,10 @@ export const handlers = [
     success(getLiveProviderIds("openclaw")),
   ),
 
+  http.post(`${TAURI_ENDPOINT}/get_reasonix_live_provider_ids`, () =>
+    success(getLiveProviderIds("reasonix")),
+  ),
+
   http.post(`${TAURI_ENDPOINT}/get_openclaw_default_model`, () =>
     success({ primary: null, fallback: [] }),
   ),

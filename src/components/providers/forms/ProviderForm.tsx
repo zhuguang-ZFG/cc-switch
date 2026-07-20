@@ -932,7 +932,10 @@ function ProviderFormFull({
   const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
 
   const shouldApplyLocalProxyRequestOverrides =
-    (appId === "claude" || appId === "codex" || appId === "kimicode") &&
+    (appId === "claude" ||
+      appId === "codex" ||
+      appId === "kimicode" ||
+      appId === "reasonix") &&
     category !== "official";
 
   const handleSubmit = async (values: ProviderFormData) => {
@@ -2420,6 +2423,10 @@ function ProviderFormFull({
               onModelsChange={reasonixForm.handleReasonixModelsChange}
               defaultModel={reasonixForm.reasonixDefault}
               onDefaultModelChange={reasonixForm.handleReasonixDefaultChange}
+              localProxyHeadersOverride={localProxyHeadersOverride}
+              onLocalProxyHeadersOverrideChange={setLocalProxyHeadersOverride}
+              localProxyBodyOverride={localProxyBodyOverride}
+              onLocalProxyBodyOverrideChange={setLocalProxyBodyOverride}
             />
           )}
 

@@ -814,6 +814,7 @@ impl MultiAppConfig {
         Self::auto_import_prompt_if_exists(&mut config, AppType::OpenCode)?;
         Self::auto_import_prompt_if_exists(&mut config, AppType::OpenClaw)?;
         Self::auto_import_prompt_if_exists(&mut config, AppType::KimiCode)?;
+        Self::auto_import_prompt_if_exists(&mut config, AppType::Reasonix)?;
 
         Ok(config)
     }
@@ -837,6 +838,7 @@ impl MultiAppConfig {
             || !self.prompts.opencode.prompts.is_empty()
             || !self.prompts.openclaw.prompts.is_empty()
             || !self.prompts.kimicode.prompts.is_empty()
+            || !self.prompts.reasonix.prompts.is_empty()
         {
             return Ok(false);
         }
@@ -851,6 +853,7 @@ impl MultiAppConfig {
             AppType::OpenCode,
             AppType::OpenClaw,
             AppType::KimiCode,
+            AppType::Reasonix,
         ] {
             // 复用已有的单应用导入逻辑
             if Self::auto_import_prompt_if_exists(self, app)? {
@@ -1251,17 +1254,25 @@ mod tests {
             .filter(|app| {
                 matches!(
                     app,
-                    AppType::Claude | AppType::Codex | AppType::GrokBuild | AppType::KimiCode
+                    AppType::Claude
+                        | AppType::Codex
+                        | AppType::GrokBuild
+                        | AppType::KimiCode
+                        | AppType::Reasonix
                 )
             })
             .map(|app| app.as_str().to_string())
             .collect();
-        for expected in ["claude", "codex", "grokbuild", "kimicode"] {
+        for expected in ["claude", "codex", "grokbuild", "kimicode", "reasonix"] {
             assert!(
                 proxy_capable.iter().any(|id| id == expected),
                 "{expected} must remain proxy-capable"
             );
         }
+        assert!(
+            AppType::Reasonix.is_additive_mode(),
+            "Reasonix live projection stays additive"
+        );
     }
 
     #[test]

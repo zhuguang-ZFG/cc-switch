@@ -12,7 +12,7 @@ type ProvidersByApp = Record<AppId, Record<string, Provider>>;
 type CurrentProviderState = Record<AppId, string>;
 type McpConfigState = Record<AppId, Record<string, McpServer>>;
 type LiveProviderIdsByApp = Record<
-  "opencode" | "openclaw" | "kimicode",
+  "opencode" | "openclaw" | "kimicode" | "reasonix",
   string[]
 >;
 
@@ -92,6 +92,7 @@ let liveProviderIds: LiveProviderIdsByApp = {
   opencode: [],
   openclaw: [],
   kimicode: [],
+  reasonix: [],
 };
 let settingsState: Settings = {
   showInTray: true,
@@ -207,6 +208,7 @@ export const resetProviderState = () => {
     opencode: [],
     openclaw: [],
     kimicode: [],
+    reasonix: [],
   };
   sessionsState = createDefaultSessions();
   sessionMessagesState = createDefaultSessionMessages();
@@ -271,11 +273,11 @@ export const getProviders = (appType: AppId) =>
 export const getCurrentProviderId = (appType: AppId) => current[appType] ?? "";
 
 export const getLiveProviderIds = (
-  appType: "opencode" | "openclaw" | "kimicode",
+  appType: "opencode" | "openclaw" | "kimicode" | "reasonix",
 ) => [...liveProviderIds[appType]];
 
 export const setLiveProviderIds = (
-  appType: "opencode" | "openclaw" | "kimicode",
+  appType: "opencode" | "openclaw" | "kimicode" | "reasonix",
   ids: string[],
 ) => {
   liveProviderIds[appType] = [...ids];

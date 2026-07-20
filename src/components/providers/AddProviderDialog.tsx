@@ -18,6 +18,7 @@ import { providerPresets } from "@/config/claudeProviderPresets";
 import { codexProviderPresets } from "@/config/codexProviderPresets";
 import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
 import { kimiProviderPresets } from "@/config/kimiProviderPresets";
+import { reasonixProviderPresets } from "@/config/reasonixProviderPresets";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 import { extractGrokBuildBaseUrl } from "@/utils/grokBuildConfig";
 import type { OpenClawSuggestedDefaults } from "@/config/openclawProviderPresets";
@@ -218,6 +219,21 @@ export function AddProviderDialog({
                 addUrl(preset.settingsConfig.base_url);
               }
             }
+          } else if (appId === "reasonix") {
+            const presets = reasonixProviderPresets;
+            const presetIndex = parseInt(
+              values.presetId.replace("reasonix-", ""),
+            );
+            if (
+              !isNaN(presetIndex) &&
+              presetIndex >= 0 &&
+              presetIndex < presets.length
+            ) {
+              const preset = presets[presetIndex];
+              if (preset.settingsConfig.base_url) {
+                addUrl(preset.settingsConfig.base_url);
+              }
+            }
           } else if (appId === "claude-desktop") {
             const presets = claudeDesktopProviderPresets;
             const presetIndex = parseInt(
@@ -273,6 +289,10 @@ export function AddProviderDialog({
             addUrl(parsedConfig.baseUrl as string);
           }
         } else if (appId === "kimicode") {
+          if (parsedConfig.base_url) {
+            addUrl(parsedConfig.base_url as string);
+          }
+        } else if (appId === "reasonix") {
           if (parsedConfig.base_url) {
             addUrl(parsedConfig.base_url as string);
           }

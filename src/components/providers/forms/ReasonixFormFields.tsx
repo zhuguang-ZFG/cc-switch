@@ -13,6 +13,7 @@ import {
 import { Download, Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiKeySection, ModelInputWithFetch } from "./shared";
+import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
 import {
   fetchModelsForConfig,
   showFetchModelsError,
@@ -44,6 +45,10 @@ interface ReasonixFormFieldsProps {
   onModelsChange: (models: string[]) => void;
   defaultModel: string;
   onDefaultModelChange: (model: string) => void;
+  localProxyHeadersOverride?: string;
+  onLocalProxyHeadersOverrideChange?: (value: string) => void;
+  localProxyBodyOverride?: string;
+  onLocalProxyBodyOverrideChange?: (value: string) => void;
 }
 
 export function ReasonixFormFields({
@@ -66,11 +71,19 @@ export function ReasonixFormFields({
   onModelsChange,
   defaultModel,
   onDefaultModelChange,
+  localProxyHeadersOverride = "",
+  onLocalProxyHeadersOverrideChange,
+  localProxyBodyOverride = "",
+  onLocalProxyBodyOverrideChange,
 }: ReasonixFormFieldsProps) {
   const { t } = useTranslation();
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const modelKeysRef = useRef<string[]>([]);
+  const showLocalProxyOverrides =
+    category !== "official" &&
+    typeof onLocalProxyHeadersOverrideChange === "function" &&
+    typeof onLocalProxyBodyOverrideChange === "function";
 
   // Keep stable row keys so typing does not remount inputs / steal focus.
   while (modelKeysRef.current.length < models.length) {
@@ -368,6 +381,17 @@ export function ReasonixFormFields({
           })}
         </p>
       </div>
+
+      {showLocalProxyOverrides && (
+        <div className="border-t border-border-default pt-3">
+          <LocalProxyRequestOverridesField
+            headersJson={localProxyHeadersOverride}
+            bodyJson={localProxyBodyOverride}
+            onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
+            onBodyJsonChange={onLocalProxyBodyOverrideChange}
+          />
+        </div>
+      )}
     </>
   );
 }
