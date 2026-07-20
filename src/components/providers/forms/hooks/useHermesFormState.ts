@@ -41,6 +41,7 @@ export interface HermesFormState {
   hermesModels: KimiModel[];
   hermesRateLimitDelay: number | undefined;
   hermesEnv: Record<string, string>;
+  hermesCustomHeaders: Record<string, string>;
   existingHermesKeys: string[];
   handleHermesBaseUrlChange: (baseUrl: string) => void;
   handleHermesApiKeyChange: (apiKey: string) => void;
@@ -48,6 +49,7 @@ export interface HermesFormState {
   handleHermesModelsChange: (models: KimiModel[]) => void;
   handleHermesRateLimitDelayChange: (delay: number | undefined) => void;
   handleHermesEnvFieldChange: (key: string, value: string) => void;
+  handleHermesCustomHeadersChange: (headers: Record<string, string>) => void;
   resetHermesState: (config?: Partial<KimiProviderSettingsConfig>) => void;
 }
 
@@ -179,6 +181,13 @@ export function useHermesFormState({
     return parseEnvMap(initialData?.settingsConfig?.env);
   });
 
+  const [hermesCustomHeaders, setHermesCustomHeaders] = useState<
+    Record<string, string>
+  >(() => {
+    if (appId !== "kimicode") return {};
+    return parseEnvMap(initialData?.settingsConfig?.custom_headers);
+  });
+
   const updateHermesConfig = useCallback(
     (updater: (config: Record<string, unknown>) => void) => {
       try {
@@ -284,6 +293,26 @@ export function useHermesFormState({
     [updateHermesConfig],
   );
 
+  const handleHermesCustomHeadersChange = useCallback(
+    (headers: Record<string, string>) => {
+      const cleaned: Record<string, string> = {};
+      for (const [key, value] of Object.entries(headers)) {
+        const k = key.trim();
+        const v = value.trim();
+        if (k && v) cleaned[k] = v;
+      }
+      setHermesCustomHeaders(cleaned);
+      updateHermesConfig((config) => {
+        if (Object.keys(cleaned).length === 0) {
+          delete config.custom_headers;
+        } else {
+          config.custom_headers = cleaned;
+        }
+      });
+    },
+    [updateHermesConfig],
+  );
+
   const resetHermesState = useCallback(
     (config?: Partial<KimiProviderSettingsConfig>) => {
       setHermesProviderKey("");
@@ -293,6 +322,7 @@ export function useHermesFormState({
       setHermesModels(config?.models ?? []);
       setHermesRateLimitDelay(parseRateLimitDelay(config?.rate_limit_delay));
       setHermesEnv(parseEnvMap(config?.env));
+      setHermesCustomHeaders(parseEnvMap(config?.custom_headers));
     },
     [],
   );
@@ -306,6 +336,7 @@ export function useHermesFormState({
     hermesModels,
     hermesRateLimitDelay,
     hermesEnv,
+    hermesCustomHeaders,
     existingHermesKeys,
     handleHermesBaseUrlChange,
     handleHermesApiKeyChange,
@@ -313,6 +344,7 @@ export function useHermesFormState({
     handleHermesModelsChange,
     handleHermesRateLimitDelayChange,
     handleHermesEnvFieldChange,
+    handleHermesCustomHeadersChange,
     resetHermesState,
   };
 }

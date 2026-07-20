@@ -36,15 +36,17 @@ pub enum ProfileScope {
     ClaudeDesktop,
     Codex,
     KimiCode,
+    Reasonix,
 }
 
 impl ProfileScope {
     /// 全部分组（扩展新分组时同步扩展 apps/for_app 与前端 scope.ts 镜像）
-    pub const ALL: [ProfileScope; 4] = [
+    pub const ALL: [ProfileScope; 5] = [
         ProfileScope::Claude,
         ProfileScope::ClaudeDesktop,
         ProfileScope::Codex,
         ProfileScope::KimiCode,
+        ProfileScope::Reasonix,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -53,6 +55,7 @@ impl ProfileScope {
             ProfileScope::ClaudeDesktop => "claude-desktop",
             ProfileScope::Codex => "codex",
             ProfileScope::KimiCode => "kimicode",
+            ProfileScope::Reasonix => "reasonix",
         }
     }
 
@@ -62,6 +65,7 @@ impl ProfileScope {
             "claude-desktop" => Ok(ProfileScope::ClaudeDesktop),
             "codex" => Ok(ProfileScope::Codex),
             "kimicode" | "kimi-code" | "hermes" => Ok(ProfileScope::KimiCode),
+            "reasonix" | "reasonix-cli" => Ok(ProfileScope::Reasonix),
             other => Err(AppError::InvalidInput(format!(
                 "Unknown profile scope: {other}"
             ))),
@@ -75,6 +79,7 @@ impl ProfileScope {
             ProfileScope::ClaudeDesktop => &[AppType::ClaudeDesktop],
             ProfileScope::Codex => &[AppType::Codex],
             ProfileScope::KimiCode => &[AppType::KimiCode],
+            ProfileScope::Reasonix => &[AppType::Reasonix],
         }
     }
 
@@ -85,6 +90,7 @@ impl ProfileScope {
             AppType::ClaudeDesktop => Some(ProfileScope::ClaudeDesktop),
             AppType::Codex => Some(ProfileScope::Codex),
             AppType::KimiCode => Some(ProfileScope::KimiCode),
+            AppType::Reasonix => Some(ProfileScope::Reasonix),
             _ => None,
         }
     }
@@ -100,6 +106,8 @@ pub struct PerApp<T> {
     pub codex: T,
     #[serde(rename = "kimicode", alias = "hermes")]
     pub kimicode: T,
+    #[serde(default)]
+    pub reasonix: T,
 }
 
 impl<T> PerApp<T> {
@@ -109,6 +117,7 @@ impl<T> PerApp<T> {
             AppType::ClaudeDesktop => Some(&self.claude_desktop),
             AppType::Codex => Some(&self.codex),
             AppType::KimiCode => Some(&self.kimicode),
+            AppType::Reasonix => Some(&self.reasonix),
             _ => None,
         }
     }
@@ -119,6 +128,7 @@ impl<T> PerApp<T> {
             AppType::ClaudeDesktop => Some(&mut self.claude_desktop),
             AppType::Codex => Some(&mut self.codex),
             AppType::KimiCode => Some(&mut self.kimicode),
+            AppType::Reasonix => Some(&mut self.reasonix),
             _ => None,
         }
     }
@@ -527,24 +537,28 @@ mod tests {
                 claude_desktop: Some("d1".into()),
                 codex: None,
                 kimicode: Some("k1".into()),
+                reasonix: Some("r1".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m1", "m2"])),
                 claude_desktop: Some(vec![]),
                 codex: None,
                 kimicode: Some(ids(&["km1"])),
+                reasonix: Some(ids(&["rm1"])),
             },
             skills: PerApp {
                 claude: Some(vec![]),
                 claude_desktop: Some(vec![]),
                 codex: Some(ids(&["s1"])),
                 kimicode: Some(ids(&["ks1"])),
+                reasonix: Some(ids(&["rs1"])),
             },
             prompts: PerApp {
                 claude: None,
                 claude_desktop: None,
                 codex: Some("pr1".into()),
                 kimicode: Some("kpr1".into()),
+                reasonix: Some("rpr1".into()),
             },
         };
         let json = serde_json::to_string(&payload).unwrap();
@@ -553,6 +567,7 @@ mod tests {
         assert!(json.contains("\"claude-desktop\""));
         assert!(json.contains("\"codex\""));
         assert!(json.contains("\"kimicode\""));
+        assert!(json.contains("\"reasonix\""));
         assert!(!json.contains("\"hermes\""));
         let back: ProfilePayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, payload);
@@ -569,10 +584,12 @@ mod tests {
         assert_eq!(back.providers.claude_desktop, None);
         assert_eq!(back.providers.codex, None);
         assert_eq!(back.providers.kimicode, None);
+        assert_eq!(back.providers.reasonix, None);
         assert_eq!(back.mcp.claude, Some(ids(&["m1"])));
         assert_eq!(back.mcp.claude_desktop, None);
         assert_eq!(back.mcp.codex, None, "missing slot means untouched");
         assert_eq!(back.mcp.kimicode, None, "missing slot means untouched");
+        assert_eq!(back.mcp.reasonix, None, "missing slot means untouched");
         assert_eq!(back.prompts.codex, None);
 
         let empty: ProfilePayload = serde_json::from_str("{}").unwrap();
@@ -595,12 +612,14 @@ mod tests {
                 claude_desktop: Some("d1".into()),
                 codex: Some("c1".into()),
                 kimicode: Some("k1".into()),
+                reasonix: Some("r1".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m1"])),
                 claude_desktop: Some(vec![]),
                 codex: Some(ids(&["m9"])),
                 kimicode: Some(ids(&["km9"])),
+                reasonix: Some(ids(&["rm9"])),
             },
             ..Default::default()
         };
@@ -611,12 +630,14 @@ mod tests {
                 claude_desktop: None,
                 codex: Some("SHOULD-NOT-LEAK".into()),
                 kimicode: Some("SHOULD-NOT-LEAK".into()),
+                reasonix: Some("SHOULD-NOT-LEAK".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m2"])),
                 claude_desktop: Some(vec![]),
                 codex: None,
                 kimicode: None,
+                reasonix: None,
             },
             ..Default::default()
         };
@@ -634,6 +655,8 @@ mod tests {
         assert_eq!(payload.mcp.codex, Some(ids(&["m9"])));
         assert_eq!(payload.providers.kimicode, Some("k1".to_string()));
         assert_eq!(payload.mcp.kimicode, Some(ids(&["km9"])));
+        assert_eq!(payload.providers.reasonix, Some("r1".to_string()));
+        assert_eq!(payload.mcp.reasonix, Some(ids(&["rm9"])));
     }
 
     #[test]
@@ -643,6 +666,7 @@ mod tests {
         assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
         assert!(!payload.scope_captured(ProfileScope::KimiCode));
+        assert!(!payload.scope_captured(ProfileScope::Reasonix));
 
         // 只拍过 claude 组（哪怕拍到的是空集）
         payload.mcp.claude = Some(vec![]);
@@ -650,6 +674,7 @@ mod tests {
         assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
         assert!(!payload.scope_captured(ProfileScope::KimiCode));
+        assert!(!payload.scope_captured(ProfileScope::Reasonix));
 
         // Desktop 槽位属于独立的 claude-desktop 组
         let mut desktop_only = ProfilePayload::default();
@@ -665,6 +690,7 @@ mod tests {
         assert!(per.get(&AppType::ClaudeDesktop).is_some());
         assert!(per.get(&AppType::Codex).is_some());
         assert!(per.get(&AppType::KimiCode).is_some());
+        assert!(per.get(&AppType::Reasonix).is_some());
         assert!(per.get(&AppType::GrokBuild).is_none());
     }
 
@@ -693,6 +719,7 @@ mod tests {
         );
         assert_eq!(ProfileScope::Codex.apps(), &[AppType::Codex]);
         assert_eq!(ProfileScope::KimiCode.apps(), &[AppType::KimiCode]);
+        assert_eq!(ProfileScope::Reasonix.apps(), &[AppType::Reasonix]);
         for scope in ProfileScope::ALL {
             for app in scope.apps() {
                 assert_eq!(ProfileScope::for_app(app), Some(scope));

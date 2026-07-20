@@ -77,6 +77,19 @@ const computeDefaultConfigDir = async (
   app: DirectoryAppId,
 ): Promise<string | undefined> => {
   try {
+    // Reasonix on Windows lives under %APPDATA%\reasonix (not ~/.reasonix).
+    // Prefer the backend-resolved path so reset/placeholder match the live home.
+    if (app === "reasonix") {
+      try {
+        const resolved = await settingsApi.getConfigDir("reasonix");
+        if (resolved?.trim()) return resolved.trim();
+      } catch (error) {
+        console.warn(
+          "[useDirectorySettings] Failed to resolve Reasonix default via backend",
+          error,
+        );
+      }
+    }
     const home = await homeDir();
     return await join(home, APP_DIRECTORY_META[app].defaultFolder);
   } catch (error) {

@@ -27,12 +27,21 @@ export const settingsSchema = z.object({
   grokConfigDir: directorySchema.nullable().optional(),
   opencodeConfigDir: directorySchema.nullable().optional(),
   openclawConfigDir: directorySchema.nullable().optional(),
+  kimiConfigDir: directorySchema.nullable().optional(),
+  hermesConfigDir: directorySchema.nullable().optional(),
+  reasonixConfigDir: directorySchema.nullable().optional(),
 
   // 当前供应商 ID（设备级）
   currentProviderClaude: z.string().optional(),
   currentProviderClaudeDesktop: z.string().optional(),
   currentProviderCodex: z.string().optional(),
   currentProviderGemini: z.string().optional(),
+  currentProviderGrokbuild: z.string().optional(),
+  currentProviderOpencode: z.string().optional(),
+  currentProviderOpenclaw: z.string().optional(),
+  currentProviderKimicode: z.string().optional(),
+  currentProviderHermes: z.string().optional(),
+  currentProviderReasonix: z.string().optional(),
 
   // Skill 同步设置
   skillSyncMethod: z.enum(["auto", "symlink", "copy"]).optional(),

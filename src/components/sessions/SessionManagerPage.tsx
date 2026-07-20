@@ -87,7 +87,8 @@ type ProviderFilter =
   | "claude"
   | "opencode"
   | "openclaw"
-  | "kimicode";
+  | "kimicode"
+  | "reasonix";
 
 type SessionListViewMode = "flat" | "grouped";
 
@@ -1125,6 +1126,16 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                   size={14}
                                 />
                                 <span>Kimi Code</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="reasonix">
+                              <div className="flex items-center gap-2">
+                                <ProviderIcon
+                                  icon="deepseek"
+                                  name="reasonix"
+                                  size={14}
+                                />
+                                <span>Reasonix</span>
                               </div>
                             </SelectItem>
                           </SelectContent>

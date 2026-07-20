@@ -879,7 +879,9 @@
     },
     "saveFailedGeneric": "保存に失敗しました。もう一度お試しください",
     "kimiConfigDir": "Kimi Code 設定ディレクトリ",
-    "browsePlaceholderKimi": "Kimi Code 設定ディレクトリを選択 (~/.kimi-code)"
+    "browsePlaceholderKimi": "Kimi Code 設定ディレクトリを選択 (~/.kimi-code)",
+    "reasonixConfigDir": "Reasonix 設定ディレクトリ",
+    "browsePlaceholderReasonix": "Reasonix 設定ディレクトリを選択（Windows: %APPDATA%\\reasonix）"
   },
   "apps": {
     "claude": "Claude",
@@ -1928,7 +1930,8 @@
       "claude": "プロジェクト：Claude Code のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
       "claude-desktop": "プロジェクト：Claude Desktop のプロバイダーをワンクリックで切り替え",
       "codex": "プロジェクト：Codex のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
-      "kimicode": "プロジェクト：Kimi Code のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え"
+      "kimicode": "プロジェクト：Kimi Code のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
+      "reasonix": "プロジェクト：Reasonix のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え"
     },
     "none": "プロジェクトを使用しない",
     "searchPlaceholder": "プロジェクトを検索",
@@ -1938,7 +1941,8 @@
       "claude": "Claude Code の現在のプロバイダー、MCP、Skills、メモリファイルをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
       "claude-desktop": "Claude Desktop の現在のプロバイダーをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
       "codex": "Codex の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。",
-      "kimicode": "Kimi Code の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。"
+      "kimicode": "Kimi Code の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。",
+      "reasonix": "Reasonix の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。"
     },
     "manage": "プロジェクトを管理…",
     "manageTitle": "プロジェクト管理",
@@ -2160,6 +2164,7 @@
   "reasonix": {
     "presets": {
       "deepseekOfficial": "DeepSeek 公式",
+      "opencodeGo": "OpenCode Go",
       "custom": "カスタム"
     },
     "form": {
@@ -2184,11 +2189,15 @@
       "addModel": "モデルを追加",
       "noModels": "モデルがありません。少なくとも 1 つのモデル ID を追加してください。",
       "modelIdPlaceholder": "deepseek-v4-flash",
-      "modelsHint": "Reasonix live 設定の models フィールドに書き込むモデル ID 一覧。",
+      "modelsHint": "モデル ID 一覧。手動入力、または「モデル取得」後に右側のドロップダウンから選択できます。",
       "modelsRequired": "少なくとも 1 つのモデルを追加してください",
       "default": "デフォルトモデル",
       "defaultPlaceholder": "デフォルトモデルを選択",
-      "defaultHint": "このプロバイダーに切り替えると default_model に書き込まれます。空の場合は models の先頭を使用します。"
+      "defaultHint": "このプロバイダーに切り替えると default_model に書き込まれます。空の場合は models の先頭を使用します。",
+      "chatUrl": "Chat URL（任意）",
+      "chatUrlHint": "任意：Chat Completions の完全 URL を上書き。空なら base_url + /chat/completions を使用。",
+      "modelsUrl": "Models URL（任意）",
+      "modelsUrlHint": "任意：/models プローブ URL を上書き。空なら自動導出。"
     }
   },
   "env": {
@@ -2758,7 +2767,7 @@
     "duplicatedAndSynced": "統合プロバイダーを複製して同期しました",
     "duplicateError": "統合プロバイダーの複製に失敗しました",
     "title": "統合プロバイダー",
-    "description": "統合プロバイダーは Claude、Codex、Gemini、Kimi Code の設定を同時に管理します。変更は有効なすべてのアプリに自動的に同期されます。",
+    "description": "統合プロバイダーは Claude、Codex、Gemini、Kimi Code、Reasonix の設定を同時に管理します。変更は有効なすべてのアプリに自動的に同期されます。",
     "add": "統合プロバイダーを追加",
     "edit": "統合プロバイダーを編集",
     "empty": "統合プロバイダーがありません",
@@ -2787,7 +2796,7 @@
     "updated": "統合プロバイダーを更新しました",
     "deleted": "統合プロバイダーを削除しました",
     "addFailed": "統合プロバイダーの追加に失敗しました",
-    "hint": "クロスアプリ統合設定。Claude/Codex/Gemini/Kimi Code に自動同期します",
+    "hint": "クロスアプリ統合設定。Claude/Codex/Gemini/Kimi Code/Reasonix に自動同期します",
     "manage": "管理",
     "loadError": "統合プロバイダーの読み込みに失敗しました",
     "saveError": "統合プロバイダーの保存に失敗しました",
@@ -2795,7 +2804,7 @@
     "deleteConfirmTitle": "統合プロバイダーを削除",
     "deleteConfirmDescription": "「{{name}}」を削除してもよろしいですか？各アプリで生成されたプロバイダー設定も削除されます。",
     "syncConfirmTitle": "統合プロバイダーを同期",
-    "syncConfirmDescription": "「{{name}}」を同期すると、Claude、Codex、Gemini、Kimi Code の関連プロバイダー設定が上書きされます。続行しますか？",
+    "syncConfirmDescription": "「{{name}}」を同期すると、Claude、Codex、Gemini、Kimi Code、Reasonix の関連プロバイダー設定が上書きされます。続行しますか？",
     "syncConfirm": "同期",
     "saveAndSync": "保存して同期",
     "savedAndSynced": "すべてのアプリに保存・同期されました",

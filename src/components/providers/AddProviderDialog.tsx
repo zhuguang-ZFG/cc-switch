@@ -149,11 +149,12 @@ export function AddProviderDialog({
           preset?.category === "official";
       }
 
-      // OpenCode/OpenClaw: pass providerKey for ID generation
+      // Additive apps: pass providerKey for ID generation
       if (
         (appId === "opencode" ||
           appId === "openclaw" ||
-          appId === "kimicode") &&
+          appId === "kimicode" ||
+          appId === "reasonix") &&
         values.providerKey
       ) {
         providerData.providerKey = values.providerKey;

@@ -125,6 +125,7 @@ const VALID_APPS: AppId[] = [
   "opencode",
   "openclaw",
   "kimicode",
+  "reasonix",
 ];
 
 const getInitialApp = (): AppId => {
@@ -193,6 +194,7 @@ function App() {
     opencode: true,
     openclaw: true,
     kimicode: true,
+    reasonix: true,
   };
 
   const getFirstVisibleApp = (): AppId => {
@@ -203,6 +205,7 @@ function App() {
     if (visibleApps.opencode) return "opencode";
     if (visibleApps.openclaw) return "openclaw";
     if (visibleApps.kimicode ?? visibleApps.hermes) return "kimicode";
+    if (visibleApps.reasonix) return "reasonix";
     return "claude"; // fallback
   };
 
@@ -221,7 +224,8 @@ function App() {
       sharedFeatureApp !== "grokbuild" &&
       sharedFeatureApp !== "opencode" &&
       sharedFeatureApp !== "openclaw" &&
-      sharedFeatureApp !== "kimicode"
+      sharedFeatureApp !== "kimicode" &&
+      sharedFeatureApp !== "reasonix"
     ) {
       setCurrentView("providers");
     }
@@ -290,7 +294,8 @@ function App() {
     sharedFeatureApp === "grokbuild" ||
     sharedFeatureApp === "opencode" ||
     sharedFeatureApp === "openclaw" ||
-    sharedFeatureApp === "kimicode";
+    sharedFeatureApp === "kimicode" ||
+    sharedFeatureApp === "reasonix";
 
   const {
     addProvider,
@@ -664,6 +669,10 @@ function App() {
         await queryClient.invalidateQueries({
           queryKey: hermesKeys.liveProviderIds,
         });
+      } else if (activeApp === "reasonix") {
+        await queryClient.invalidateQueries({
+          queryKey: ["reasonixLiveProviderIds"],
+        });
       }
       toast.success(
         t("notifications.removeFromConfigSuccess", {
@@ -715,7 +724,8 @@ function App() {
     if (
       activeApp === "opencode" ||
       activeApp === "openclaw" ||
-      activeApp === "kimicode"
+      activeApp === "kimicode" ||
+      activeApp === "reasonix"
     ) {
       let liveProviderIds: string[] = [];
       try {
@@ -730,10 +740,15 @@ function App() {
                   queryKey: openclawKeys.liveProviderIds,
                   queryFn: () => providersApi.getOpenClawLiveProviderIds(),
                 })
-              : await queryClient.ensureQueryData({
-                  queryKey: hermesKeys.liveProviderIds,
-                  queryFn: () => providersApi.getHermesLiveProviderIds(),
-                });
+              : activeApp === "reasonix"
+                ? await queryClient.ensureQueryData({
+                    queryKey: ["reasonixLiveProviderIds"],
+                    queryFn: () => providersApi.getReasonixLiveProviderIds(),
+                  })
+                : await queryClient.ensureQueryData({
+                    queryKey: hermesKeys.liveProviderIds,
+                    queryFn: () => providersApi.getHermesLiveProviderIds(),
+                  });
       } catch (error) {
         console.error(
           "[App] Failed to load live provider IDs for duplication",

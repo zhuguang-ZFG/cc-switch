@@ -2375,6 +2375,10 @@ function ProviderFormFull({
               onApiModeChange={hermesForm.handleHermesApiModeChange}
               env={hermesForm.hermesEnv}
               onEnvFieldChange={hermesForm.handleHermesEnvFieldChange}
+              customHeaders={hermesForm.hermesCustomHeaders}
+              onCustomHeadersChange={
+                hermesForm.handleHermesCustomHeadersChange
+              }
               models={hermesForm.hermesModels}
               onModelsChange={hermesForm.handleHermesModelsChange}
               rateLimitDelay={hermesForm.hermesRateLimitDelay}

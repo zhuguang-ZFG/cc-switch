@@ -113,6 +113,7 @@ export function useSettings(): UseSettingsResult {
       opencode: sanitizeDir(data?.opencodeConfigDir),
       openclaw: sanitizeDir(data?.openclawConfigDir),
       kimicode: sanitizeDir(data?.kimiConfigDir ?? data?.hermesConfigDir),
+      reasonix: sanitizeDir(data?.reasonixConfigDir),
     });
     setRequiresRestart(false);
   }, [
@@ -196,6 +197,9 @@ export function useSettings(): UseSettingsResult {
         const sanitizedKimiDir = sanitizeDir(
           mergedSettings.kimiConfigDir ?? mergedSettings.hermesConfigDir,
         );
+        const sanitizedReasonixDir = sanitizeDir(
+          mergedSettings.reasonixConfigDir,
+        );
         const {
           webdavSync: _ignoredWebdavSync,
           s3Sync: _ignoredS3Sync,
@@ -212,6 +216,7 @@ export function useSettings(): UseSettingsResult {
           opencodeConfigDir: sanitizedOpencodeDir,
           openclawConfigDir: sanitizedOpenclawDir,
           kimiConfigDir: sanitizedKimiDir,
+          reasonixConfigDir: sanitizedReasonixDir,
           language: mergedSettings.language,
         };
 
@@ -333,6 +338,9 @@ export function useSettings(): UseSettingsResult {
         const sanitizedKimiDir = sanitizeDir(
           mergedSettings.kimiConfigDir ?? mergedSettings.hermesConfigDir,
         );
+        const sanitizedReasonixDir = sanitizeDir(
+          mergedSettings.reasonixConfigDir,
+        );
         const previousAppDir = initialAppConfigDir;
         const previousClaudeDir = sanitizeDir(data?.claudeConfigDir);
         const previousCodexDir = sanitizeDir(data?.codexConfigDir);
@@ -342,6 +350,7 @@ export function useSettings(): UseSettingsResult {
         const previousKimiDir = sanitizeDir(
           data?.kimiConfigDir ?? data?.hermesConfigDir,
         );
+        const previousReasonixDir = sanitizeDir(data?.reasonixConfigDir);
         const {
           webdavSync: _ignoredWebdavSync,
           s3Sync: _ignoredS3Sync,
@@ -358,6 +367,7 @@ export function useSettings(): UseSettingsResult {
           opencodeConfigDir: sanitizedOpencodeDir,
           openclawConfigDir: sanitizedOpenclawDir,
           kimiConfigDir: sanitizedKimiDir,
+          reasonixConfigDir: sanitizedReasonixDir,
           language: mergedSettings.language,
         };
 
@@ -437,7 +447,7 @@ export function useSettings(): UseSettingsResult {
           console.warn("[useSettings] Failed to refresh tray menu", error);
         }
 
-        // 如果 Claude/Codex/Grok/OpenCode/OpenClaw/Kimi 的目录覆盖发生变化，则立即将"当前使用的供应商"写回对应应用的 live 配置
+        // 如果 Claude/Codex/Grok/OpenCode/OpenClaw/Kimi/Reasonix 的目录覆盖发生变化，则立即将"当前使用的供应商"写回对应应用的 live 配置
         // 如果插件同步已经执行过 syncCurrentProvidersLiveSafe，则跳过避免重复
         const claudeDirChanged = sanitizedClaudeDir !== previousClaudeDir;
         const codexDirChanged = sanitizedCodexDir !== previousCodexDir;
@@ -445,6 +455,7 @@ export function useSettings(): UseSettingsResult {
         const opencodeDirChanged = sanitizedOpencodeDir !== previousOpencodeDir;
         const openclawDirChanged = sanitizedOpenclawDir !== previousOpenclawDir;
         const kimiDirChanged = sanitizedKimiDir !== previousKimiDir;
+        const reasonixDirChanged = sanitizedReasonixDir !== previousReasonixDir;
         if (
           !pluginSynced &&
           (claudeDirChanged ||
@@ -452,7 +463,8 @@ export function useSettings(): UseSettingsResult {
             grokDirChanged ||
             opencodeDirChanged ||
             openclawDirChanged ||
-            kimiDirChanged)
+            kimiDirChanged ||
+            reasonixDirChanged)
         ) {
           const syncResult = await syncCurrentProvidersLiveSafe();
           if (!syncResult.ok) {

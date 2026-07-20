@@ -71,6 +71,8 @@ interface HermesFormFieldsProps {
   onApiModeChange: (mode: KimiProviderType) => void;
   env: Record<string, string>;
   onEnvFieldChange: (key: string, value: string) => void;
+  customHeaders: Record<string, string>;
+  onCustomHeadersChange: (headers: Record<string, string>) => void;
   models: KimiModel[];
   onModelsChange: (models: KimiModel[]) => void;
   rateLimitDelay: number | undefined;
@@ -171,6 +173,8 @@ export function HermesFormFields({
   onApiModeChange,
   env,
   onEnvFieldChange,
+  customHeaders,
+  onCustomHeadersChange,
   models,
   onModelsChange,
   rateLimitDelay,
@@ -192,9 +196,72 @@ export function HermesFormFields({
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [baseUrlTouched, setBaseUrlTouched] = useState(false);
+  const [headerDraftKey, setHeaderDraftKey] = useState("");
+  const [headerDraftValue, setHeaderDraftValue] = useState("");
   const hasRequestOverrides = Boolean(
     localProxyHeadersOverride.trim() || localProxyBodyOverride.trim(),
   );
+
+  const headerEntries = useMemo(
+    () => Object.entries(customHeaders),
+    [customHeaders],
+  );
+
+  const upsertCustomHeader = useCallback(
+    (key: string, value: string, previousKey?: string) => {
+      const next = { ...customHeaders };
+      if (previousKey && previousKey !== key) {
+        delete next[previousKey];
+      }
+      const trimmedKey = key.trim();
+      if (!trimmedKey) {
+        if (previousKey) {
+          delete next[previousKey];
+          onCustomHeadersChange(next);
+        }
+        return;
+      }
+      next[trimmedKey] = value;
+      onCustomHeadersChange(next);
+    },
+    [customHeaders, onCustomHeadersChange],
+  );
+
+  const removeCustomHeader = useCallback(
+    (key: string) => {
+      const next = { ...customHeaders };
+      delete next[key];
+      onCustomHeadersChange(next);
+    },
+    [customHeaders, onCustomHeadersChange],
+  );
+
+  const addCustomHeader = useCallback(() => {
+    const key = headerDraftKey.trim();
+    const value = headerDraftValue.trim();
+    if (!key) return;
+    if (
+      Object.keys(customHeaders).some(
+        (existing) => existing.toLowerCase() === key.toLowerCase(),
+      )
+    ) {
+      toast.error(
+        t("kimicode.form.customHeaderDuplicate", {
+          defaultValue: "请求头名称不能重复",
+        }),
+      );
+      return;
+    }
+    onCustomHeadersChange({ ...customHeaders, [key]: value });
+    setHeaderDraftKey("");
+    setHeaderDraftValue("");
+  }, [
+    customHeaders,
+    headerDraftKey,
+    headerDraftValue,
+    onCustomHeadersChange,
+    t,
+  ]);
   const hasProviderAdvancedValue =
     rateLimitDelay !== undefined ||
     Boolean(customUserAgent) ||
@@ -693,6 +760,72 @@ export function HermesFormFields({
             {t("kimicode.form.rateLimitDelayHint", {
               defaultValue:
                 "连续请求间的最小间隔秒数（可选）。留空表示无限制。",
+            })}
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-xs text-muted-foreground">
+            {t("kimicode.form.customHeaders", {
+              defaultValue: "自定义请求头（custom_headers）",
+            })}
+          </label>
+          {headerEntries.map(([key, value]) => (
+            <div key={key} className="flex items-center gap-2">
+              <Input
+                className="h-8 font-mono text-xs"
+                value={key}
+                onChange={(e) =>
+                  upsertCustomHeader(e.target.value, value, key)
+                }
+                placeholder="X-Custom-Header"
+              />
+              <Input
+                className="h-8 font-mono text-xs"
+                value={value}
+                onChange={(e) => upsertCustomHeader(key, e.target.value)}
+                placeholder="value"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={() => removeCustomHeader(key)}
+                aria-label={t("common.delete", { defaultValue: "删除" })}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+          <div className="flex items-center gap-2">
+            <Input
+              className="h-8 font-mono text-xs"
+              value={headerDraftKey}
+              onChange={(e) => setHeaderDraftKey(e.target.value)}
+              placeholder="X-Custom-Header"
+            />
+            <Input
+              className="h-8 font-mono text-xs"
+              value={headerDraftValue}
+              onChange={(e) => setHeaderDraftValue(e.target.value)}
+              placeholder="value"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 gap-1"
+              onClick={addCustomHeader}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t("common.add", { defaultValue: "添加" })}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t("kimicode.form.customHeadersHint", {
+              defaultValue:
+                "写入 Kimi Code config.toml 的 custom_headers，会附加到该供应商的每次请求。",
             })}
           </p>
         </div>

@@ -372,6 +372,19 @@ pub async fn sync_session_usage(
             }
         }
 
+        // 同步 Reasonix 使用数据（*.events.jsonl model.final）
+        match crate::services::session_usage_reasonix::sync_reasonix_usage(&db) {
+            Ok(reasonix_result) => {
+                result.imported += reasonix_result.imported;
+                result.skipped += reasonix_result.skipped;
+                result.files_scanned += reasonix_result.files_scanned;
+                result.errors.extend(reasonix_result.errors);
+            }
+            Err(e) => {
+                result.errors.push(format!("Reasonix 同步失败: {e}"));
+            }
+        }
+
         Ok(result)
     })
     .await

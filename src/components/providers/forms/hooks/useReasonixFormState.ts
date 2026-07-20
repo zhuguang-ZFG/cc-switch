@@ -79,6 +79,15 @@ function parseModels(raw: unknown): string[] {
     .filter(Boolean);
 }
 
+/** UI may keep empty draft rows; persist path still uses parseModels / filter(Boolean). */
+function parseModelsForUi(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const mapped = raw.map((item) => (typeof item === "string" ? item : ""));
+  if (mapped.length === 0) return [];
+  if (mapped.every((m) => !String(m).trim())) return [""];
+  return mapped.map((m) => String(m));
+}
+
 function normalizeDefaultModel(
   models: string[],
   currentDefault: string,
@@ -106,7 +115,7 @@ export function useReasonixFormState({
   const initialModels = useMemo(
     () =>
       appId === "reasonix"
-        ? parseModels(parseReasonixField(initialData, "models", []))
+        ? parseModelsForUi(parseReasonixField(initialData, "models", []))
         : [],
     [appId, initialData],
   );
@@ -240,8 +249,10 @@ export function useReasonixFormState({
 
   const handleReasonixModelsChange = useCallback(
     (models: string[]) => {
+      // Keep empty draft rows in UI state so "Add model" / typing works.
+      // Only persist non-empty IDs into settings_config.
+      setReasonixModels(models);
       const normalized = models.map((m) => m.trim()).filter(Boolean);
-      setReasonixModels(normalized);
       setReasonixDefault((prev) => normalizeDefaultModel(normalized, prev));
       updateReasonixConfig((config) => {
         if (normalized.length === 0) {
@@ -268,7 +279,24 @@ export function useReasonixFormState({
     (model: string) => {
       const trimmed = model.trim();
       setReasonixDefault(trimmed);
+      setReasonixModels((prev) => {
+        const hasNonEmpty = prev.some((m) => m.trim());
+        if (!hasNonEmpty && trimmed) {
+          return [trimmed];
+        }
+        return prev;
+      });
       updateReasonixConfig((config) => {
+        const existingModels = Array.isArray(config.models)
+          ? (config.models as unknown[])
+              .map((item) => (typeof item === "string" ? item.trim() : ""))
+              .filter(Boolean)
+          : [];
+        if (existingModels.length === 0 && trimmed) {
+          config.models = [trimmed];
+          config.default = trimmed;
+          return;
+        }
         if (!trimmed) {
           delete config.default;
         } else {
@@ -282,9 +310,9 @@ export function useReasonixFormState({
   const resetReasonixState = useCallback(
     (config?: Partial<ReasonixProviderSettingsConfig>) => {
       const nextName = config?.name ?? "";
-      const nextModels = parseModels(config?.models);
+      const nextModels = parseModelsForUi(config?.models);
       const nextDefault = normalizeDefaultModel(
-        nextModels,
+        parseModels(config?.models),
         config?.default ?? "",
       );
 

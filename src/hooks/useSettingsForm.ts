@@ -125,6 +125,7 @@ export function useSettingsForm(): UseSettingsFormResult {
       opencodeConfigDir: sanitizeDir(data.opencodeConfigDir),
       openclawConfigDir: sanitizeDir(data.openclawConfigDir),
       kimiConfigDir: sanitizeDir(data.kimiConfigDir ?? data.hermesConfigDir),
+      reasonixConfigDir: sanitizeDir(data.reasonixConfigDir),
       language: normalizedLanguage,
     };
 
@@ -194,6 +195,7 @@ export function useSettingsForm(): UseSettingsFormResult {
         kimiConfigDir: sanitizeDir(
           serverData.kimiConfigDir ?? serverData.hermesConfigDir,
         ),
+        reasonixConfigDir: sanitizeDir(serverData.reasonixConfigDir),
         language: normalizedLanguage,
       };
 

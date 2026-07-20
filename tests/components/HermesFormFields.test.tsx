@@ -35,6 +35,8 @@ const renderHermesForm = (overrides: Partial<HermesFormFieldsProps> = {}) => {
     onApiModeChange: vi.fn(),
     env: {},
     onEnvFieldChange: vi.fn(),
+    customHeaders: {},
+    onCustomHeadersChange: vi.fn(),
     models: [],
     onModelsChange: vi.fn(),
     rateLimitDelay: undefined,

@@ -89,6 +89,7 @@ impl ConfigService {
         Self::sync_current_provider_for_app(config, &AppType::Codex)?;
         Self::sync_current_provider_for_app(config, &AppType::GrokBuild)?;
         Self::sync_current_provider_for_app(config, &AppType::KimiCode)?;
+        Self::sync_current_provider_for_app(config, &AppType::Reasonix)?;
         Ok(())
     }
 

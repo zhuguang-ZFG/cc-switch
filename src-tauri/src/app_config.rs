@@ -595,6 +595,7 @@ impl Default for MultiAppConfig {
         apps.insert("opencode".to_string(), ProviderManager::default());
         apps.insert("openclaw".to_string(), ProviderManager::default());
         apps.insert("kimicode".to_string(), ProviderManager::default());
+        apps.insert("reasonix".to_string(), ProviderManager::default());
 
         Self {
             version: 2,
@@ -692,6 +693,12 @@ impl MultiAppConfig {
             config
                 .apps
                 .insert("kimicode".to_string(), ProviderManager::default());
+            updated = true;
+        }
+        if !config.apps.contains_key("reasonix") {
+            config
+                .apps
+                .insert("reasonix".to_string(), ProviderManager::default());
             updated = true;
         }
         if !config.apps.contains_key("grokbuild") {

@@ -879,7 +879,9 @@
     },
     "saveFailedGeneric": "Save failed, please try again",
     "kimiConfigDir": "Kimi Code config directory",
-    "browsePlaceholderKimi": "Select Kimi Code config directory (~/.kimi-code)"
+    "browsePlaceholderKimi": "Select Kimi Code config directory (~/.kimi-code)",
+    "reasonixConfigDir": "Reasonix config directory",
+    "browsePlaceholderReasonix": "Select Reasonix config directory (Windows: %APPDATA%\\reasonix)"
   },
   "apps": {
     "claude": "Claude",
@@ -1928,7 +1930,8 @@
       "claude": "Projects: switch the Claude Code provider / MCP / Skills / memory files in one click",
       "claude-desktop": "Projects: switch the Claude Desktop provider in one click",
       "codex": "Projects: switch the Codex provider / MCP / Skills / memory files in one click",
-      "kimicode": "Projects: switch the Kimi Code provider / MCP / Skills / memory files in one click"
+      "kimicode": "Projects: switch the Kimi Code provider / MCP / Skills / memory files in one click",
+      "reasonix": "Projects: switch the Reasonix provider / MCP / Skills / memory files in one click"
     },
     "none": "No project",
     "searchPlaceholder": "Search projects",
@@ -1938,7 +1941,8 @@
       "claude": "Save the current Claude Code provider, MCP, Skills and memory file as a project you can switch to later.",
       "claude-desktop": "Save the current Claude Desktop provider as a project you can switch to later.",
       "codex": "Save the current Codex provider, MCP, Skills and memory file configuration as a project you can switch to later.",
-      "kimicode": "Save the current Kimi Code provider, MCP, Skills and memory file configuration as a project you can switch to later."
+      "kimicode": "Save the current Kimi Code provider, MCP, Skills and memory file configuration as a project you can switch to later.",
+      "reasonix": "Save the current Reasonix provider, MCP, Skills and memory file configuration as a project you can switch to later."
     },
     "manage": "Manage projects…",
     "manageTitle": "Manage Projects",
@@ -2160,6 +2164,7 @@
   "reasonix": {
     "presets": {
       "deepseekOfficial": "DeepSeek Official",
+      "opencodeGo": "OpenCode Go",
       "custom": "Custom"
     },
     "form": {
@@ -2184,11 +2189,15 @@
       "addModel": "Add model",
       "noModels": "No models configured. Add at least one model ID.",
       "modelIdPlaceholder": "deepseek-v4-flash",
-      "modelsHint": "Model ID list written to the models field in Reasonix live config.",
+      "modelsHint": "Model ID list. Type manually, or Fetch models then pick from the dropdown.",
       "modelsRequired": "Add at least one model",
       "default": "Default model",
       "defaultPlaceholder": "Select default model",
-      "defaultHint": "Written to default_model when switching to this provider; falls back to the first model if empty."
+      "defaultHint": "Written to default_model when switching to this provider; falls back to the first model if empty.",
+      "chatUrl": "Chat URL (optional)",
+      "chatUrlHint": "Optional full Chat Completions URL override; leave empty to use base_url + /chat/completions.",
+      "modelsUrl": "Models URL (optional)",
+      "modelsUrlHint": "Optional /models probe URL override; leave empty to auto-derive."
     }
   },
   "env": {
@@ -2758,7 +2767,7 @@
     "duplicatedAndSynced": "Universal provider duplicated and synced",
     "duplicateError": "Failed to duplicate universal provider",
     "title": "Universal Provider",
-    "description": "Universal providers manage Claude, Codex, Gemini, and Kimi Code configurations simultaneously. Changes are automatically synced to all enabled apps.",
+    "description": "Universal providers manage Claude, Codex, Gemini, Kimi Code, and Reasonix configurations simultaneously. Changes are automatically synced to all enabled apps.",
     "add": "Add Universal Provider",
     "edit": "Edit Universal Provider",
     "empty": "No universal providers yet",
@@ -2787,7 +2796,7 @@
     "updated": "Universal provider updated",
     "deleted": "Universal provider deleted",
     "addFailed": "Failed to add universal provider",
-    "hint": "Cross-app unified config, auto-sync to Claude/Codex/Gemini/Kimi Code",
+    "hint": "Cross-app unified config, auto-sync to Claude/Codex/Gemini/Kimi Code/Reasonix",
     "manage": "Manage",
     "loadError": "Failed to load universal providers",
     "saveError": "Failed to save universal provider",
@@ -2795,7 +2804,7 @@
     "deleteConfirmTitle": "Delete Universal Provider",
     "deleteConfirmDescription": "Are you sure you want to delete \"{{name}}\"? This will also delete its generated provider configurations in each app.",
     "syncConfirmTitle": "Sync Universal Provider",
-    "syncConfirmDescription": "Syncing \"{{name}}\" will overwrite the associated provider configurations in Claude, Codex, Gemini, and Kimi Code. Do you want to continue?",
+    "syncConfirmDescription": "Syncing \"{{name}}\" will overwrite the associated provider configurations in Claude, Codex, Gemini, Kimi Code, and Reasonix. Do you want to continue?",
     "syncConfirm": "Sync",
     "saveAndSync": "Save & Sync",
     "savedAndSynced": "Saved and synced to all apps",

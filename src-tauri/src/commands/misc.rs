@@ -111,8 +111,8 @@ pub struct ToolVersion {
     wsl_distro: Option<String>,
 }
 
-const VALID_TOOLS: [&str; 6] = [
-    "claude", "codex", "grok", "opencode", "openclaw", "kimicode",
+const VALID_TOOLS: [&str; 7] = [
+    "claude", "codex", "grok", "opencode", "openclaw", "kimicode", "reasonix",
 ];
 
 fn tool_executable_name(tool: &str) -> &str {
@@ -435,6 +435,7 @@ fn tool_display_name(tool: &str) -> &'static str {
         "opencode" => "OpenCode",
         "openclaw" => "OpenClaw",
         "hermes" | "kimicode" | "kimi" | "kimi-code" => "Kimi Code",
+        "reasonix" => "Reasonix",
         _ => "Unknown",
     }
 }
@@ -502,6 +503,7 @@ fn npm_install_command_for(tool: &str) -> Option<&'static str> {
         "grok" => Some("npm i -g @xai-official/grok@latest"),
         "opencode" => Some("npm i -g opencode-ai@latest"),
         "openclaw" => Some("npm i -g openclaw@latest"),
+        "reasonix" => Some("npm i -g reasonix@latest"),
         _ => None,
     }
 }

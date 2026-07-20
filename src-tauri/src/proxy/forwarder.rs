@@ -35,10 +35,36 @@ use futures::StreamExt;
 use http::Extensions;
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::Manager;
 use tokio::sync::RwLock;
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
+
+/// Exponential backoff between failover attempts, with full jitter.
+///
+/// Without this, a dying P1 gets hammered by every concurrent request before
+/// the circuit opens. Cap at 1s so interactive CLIs still feel snappy.
+///
+/// `failed_attempts` is the number of providers already tried (and failed) in
+/// this request, including the one that just failed (≥1 when called).
+fn failover_backoff_delay(failed_attempts: usize) -> Duration {
+    if failed_attempts == 0 {
+        return Duration::ZERO;
+    }
+    const BASE_MS: u64 = 50;
+    const CAP_MS: u64 = 1000;
+    let exp = (failed_attempts.saturating_sub(1) as u32).min(5);
+    let delay_ms = BASE_MS.saturating_mul(1u64 << exp).min(CAP_MS);
+    // Full jitter in [delay/2, delay] so concurrent clients desynchronize.
+    let half = delay_ms / 2;
+    let span = (delay_ms - half).max(1);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    Duration::from_millis(half + (nanos % span))
+}
 
 fn validate_codex_official_authorization(headers: &http::HeaderMap) -> Result<(), ProxyError> {
     let authorization = headers
@@ -1087,6 +1113,23 @@ impl RequestForwarder {
 
                             last_error = Some(e);
                             last_provider = Some(provider.clone());
+
+                            // Backoff before the next attempt so a flapping P1
+                            // does not absorb the whole queue in a tight loop.
+                            // Skip when this was the last allowed attempt.
+                            if attempted_providers < self.max_attempts
+                                && attempted_providers < providers.len()
+                            {
+                                let delay = failover_backoff_delay(attempted_providers);
+                                if !delay.is_zero() {
+                                    log::debug!(
+                                        "[{app_type_str}] [FAILOVER-BACKOFF] sleeping {}ms before next provider (attempt {attempted_providers}/{})",
+                                        delay.as_millis(),
+                                        self.max_attempts
+                                    );
+                                    tokio::time::sleep(delay).await;
+                                }
+                            }
                             // 继续尝试下一个供应商
                             continue;
                         }
@@ -2753,9 +2796,15 @@ impl RequestForwarder {
                 400 | 405 | 406 | 413 | 414 | 415 | 422 | 501 => ErrorCategory::NonRetryable,
                 _ => ErrorCategory::Retryable,
             },
-            // Provider 级配置/转换问题：换一个 Provider 可能就能成功
+            // Provider 级配置问题：换一个 Provider 可能就能成功
+            // （例如占位模型未映射、供应商 URL 缺失）
             ProxyError::ConfigError(_) => ErrorCategory::Retryable,
-            ProxyError::TransformError(_) => ErrorCategory::Retryable,
+            // 请求/响应转换失败：多数是畸形客户端请求或协议不兼容的固定错误。
+            // 旧逻辑一律 Retryable 会把同一坏请求打满整条故障转移队列并污染熔断器。
+            // 供应商专属可恢复问题应走 ConfigError / UpstreamError，不要塞 TransformError。
+            ProxyError::TransformError(_) => ErrorCategory::NonRetryable,
+            // 客户端请求本身非法：绝不可 failover
+            ProxyError::InvalidRequest(_) => ErrorCategory::NonRetryable,
             ProxyError::AuthError(_) => ErrorCategory::Retryable,
             ProxyError::StreamIdleTimeout(_) => ErrorCategory::Retryable,
             // 无可用供应商：所有供应商都试过了，无法重试
@@ -4672,6 +4721,41 @@ mod tests {
             ),
             ErrorCategory::NonRetryable
         );
+    }
+
+    #[test]
+    fn transform_error_is_not_retryable_to_protect_circuit_breakers() {
+        let forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
+        let provider = test_provider_with_type(None);
+        assert_eq!(
+            forwarder.categorize_proxy_error(
+                &ProxyError::TransformError("malformed tool arguments".to_string()),
+                &provider,
+            ),
+            ErrorCategory::NonRetryable
+        );
+        // Provider-specific recoverable mapping still retries via ConfigError.
+        assert_eq!(
+            forwarder.categorize_proxy_error(
+                &ProxyError::ConfigError("unmapped proxy model".to_string()),
+                &provider,
+            ),
+            ErrorCategory::Retryable
+        );
+    }
+
+    #[test]
+    fn failover_backoff_grows_then_caps_with_jitter() {
+        assert_eq!(failover_backoff_delay(0), Duration::ZERO);
+        for attempts in 1..=8 {
+            let d = failover_backoff_delay(attempts);
+            assert!(d >= Duration::from_millis(25), "attempts={attempts} {d:?}");
+            assert!(d <= Duration::from_millis(1000), "attempts={attempts} {d:?}");
+        }
+        // After a few failures the base hits the 1s cap (jitter keeps ≥ half).
+        let late = failover_backoff_delay(6);
+        assert!(late >= Duration::from_millis(500));
+        assert!(late <= Duration::from_millis(1000));
     }
 
     #[test]

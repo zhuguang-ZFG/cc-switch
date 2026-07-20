@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Download, Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { ApiKeySection } from "./shared";
+import { ApiKeySection, ModelInputWithFetch } from "./shared";
 import {
   fetchModelsForConfig,
   showFetchModelsError,
@@ -70,16 +70,28 @@ export function ReasonixFormFields({
   const { t } = useTranslation();
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const modelKeysRef = useRef<string[]>([]);
+
+  // Keep stable row keys so typing does not remount inputs / steal focus.
+  while (modelKeysRef.current.length < models.length) {
+    modelKeysRef.current.push(crypto.randomUUID());
+  }
+  if (modelKeysRef.current.length > models.length) {
+    modelKeysRef.current.length = models.length;
+  }
 
   const handleAddModel = () => {
+    modelKeysRef.current.push(crypto.randomUUID());
     onModelsChange([...models, ""]);
   };
 
   const handleRemoveModel = (index: number) => {
+    modelKeysRef.current.splice(index, 1);
     const next = models.filter((_, i) => i !== index);
     onModelsChange(next);
-    if (defaultModel && !next.includes(defaultModel)) {
-      onDefaultModelChange(next[0] ?? "");
+    const nonEmpty = next.map((m) => m.trim()).filter(Boolean);
+    if (defaultModel && !nonEmpty.includes(defaultModel)) {
+      onDefaultModelChange(nonEmpty[0] ?? "");
     }
   };
 
@@ -88,6 +100,8 @@ export function ReasonixFormFields({
     const previous = next[index];
     next[index] = value;
     onModelsChange(next);
+    // Keep default in sync when renaming the currently selected default row.
+    // First-model defaulting is handled inside handleReasonixModelsChange.
     if (defaultModel === previous) {
       onDefaultModelChange(value.trim());
     }
@@ -112,6 +126,13 @@ export function ReasonixFormFields({
           toast.success(
             t("providerForm.fetchModelsSuccess", { count: fetched.length }),
           );
+          // If the list is empty, seed the first fetched model so the default
+          // dropdown appears immediately.
+          if (models.every((m) => !m.trim()) && fetched[0]?.id) {
+            modelKeysRef.current = [crypto.randomUUID()];
+            onModelsChange([fetched[0].id]);
+            onDefaultModelChange(fetched[0].id);
+          }
         }
       })
       .catch((err) => {
@@ -119,9 +140,9 @@ export function ReasonixFormFields({
         showFetchModelsError(err, t);
       })
       .finally(() => setIsFetchingModels(false));
-  }, [apiKey, baseUrl, modelsUrl, t]);
+  }, [apiKey, baseUrl, models, modelsUrl, onDefaultModelChange, onModelsChange, t]);
 
-  const nonEmptyModels = models.filter((model) => model.trim());
+  const nonEmptyModels = models.map((model) => model.trim()).filter(Boolean);
 
   return (
     <>
@@ -262,18 +283,22 @@ export function ReasonixFormFields({
         ) : (
           <div className="space-y-2">
             {models.map((model, index) => (
-              <div key={`${index}-${model}`} className="flex items-center gap-2">
-                <Input
-                  value={model}
-                  onChange={(e) => handleModelChange(index, e.target.value)}
-                  placeholder={t("reasonix.form.modelIdPlaceholder", {
-                    defaultValue: "deepseek-v4-flash",
-                  })}
-                  className="flex-1"
-                  list={
-                    fetchedModels.length > 0 ? "reasonix-fetched-models" : undefined
-                  }
-                />
+              <div
+                key={modelKeysRef.current[index] ?? `model-${index}`}
+                className="flex items-center gap-2"
+              >
+                <div className="flex-1 min-w-0">
+                  <ModelInputWithFetch
+                    id={`reasonix-model-${index}`}
+                    value={model}
+                    onChange={(value) => handleModelChange(index, value)}
+                    placeholder={t("reasonix.form.modelIdPlaceholder", {
+                      defaultValue: "deepseek-v4-flash",
+                    })}
+                    fetchedModels={fetchedModels}
+                    isLoading={isFetchingModels}
+                  />
+                </div>
                 <Button
                   type="button"
                   variant="ghost"
@@ -285,19 +310,13 @@ export function ReasonixFormFields({
                 </Button>
               </div>
             ))}
-            {fetchedModels.length > 0 && (
-              <datalist id="reasonix-fetched-models">
-                {fetchedModels.map((model) => (
-                  <option key={model.id} value={model.id} />
-                ))}
-              </datalist>
-            )}
           </div>
         )}
 
         <p className="text-xs text-muted-foreground">
           {t("reasonix.form.modelsHint", {
-            defaultValue: "模型 ID 列表，写入 Reasonix live 配置的 models 字段。",
+            defaultValue:
+              "模型 ID 列表。可手动输入，或先「获取模型」再用右侧下拉选择。",
           })}
         </p>
       </div>
@@ -308,7 +327,11 @@ export function ReasonixFormFields({
         </FormLabel>
         {nonEmptyModels.length > 0 ? (
           <Select
-            value={defaultModel || nonEmptyModels[0]}
+            value={
+              nonEmptyModels.includes(defaultModel)
+                ? defaultModel
+                : nonEmptyModels[0]
+            }
             onValueChange={onDefaultModelChange}
           >
             <SelectTrigger id="reasonix-default">
@@ -327,13 +350,16 @@ export function ReasonixFormFields({
             </SelectContent>
           </Select>
         ) : (
-          <Input
+          <ModelInputWithFetch
             id="reasonix-default"
             value={defaultModel}
-            onChange={(e) => onDefaultModelChange(e.target.value)}
+            onChange={onDefaultModelChange}
             placeholder={t("reasonix.form.defaultPlaceholder", {
               defaultValue: "选择或输入默认模型",
             })}
+            fetchedModels={fetchedModels}
+            isLoading={isFetchingModels}
+            onFetch={handleFetchModels}
           />
         )}
         <p className="text-xs text-muted-foreground">

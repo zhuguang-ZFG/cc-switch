@@ -800,6 +800,7 @@ pub fn create_tray_menu(
                 ProfileScope::ClaudeDesktop => "Claude Desktop",
                 ProfileScope::Codex => "Codex",
                 ProfileScope::KimiCode => "Kimi Code",
+                ProfileScope::Reasonix => "Reasonix",
             };
             let mut scope_builder = SubmenuBuilder::with_id(
                 app,

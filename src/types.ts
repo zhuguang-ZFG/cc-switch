@@ -423,6 +423,18 @@ export interface Settings {
   currentProviderCodex?: string;
   // 当前 Gemini 供应商 ID（优先于数据库 is_current）
   currentProviderGemini?: string;
+  // 当前 Grok Build 供应商 ID
+  currentProviderGrokbuild?: string;
+  // 当前 OpenCode 供应商 ID
+  currentProviderOpencode?: string;
+  // 当前 OpenClaw 供应商 ID
+  currentProviderOpenclaw?: string;
+  // 当前 Kimi Code 供应商 ID
+  currentProviderKimicode?: string;
+  /** @deprecated use currentProviderKimicode */
+  currentProviderHermes?: string;
+  // 当前 Reasonix 供应商 ID
+  currentProviderReasonix?: string;
 
   // ===== Skill 同步设置 =====
   // Skill 同步方式：auto（默认，优先 symlink）、symlink、copy

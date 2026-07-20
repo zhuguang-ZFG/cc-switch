@@ -48,6 +48,7 @@ const CURRENT_ID_KEY: Record<ProfileScope, keyof CurrentProfileIds> = {
   "claude-desktop": "claudeDesktop",
   codex: "codex",
   kimicode: "kimicode",
+  reasonix: "reasonix",
 };
 
 interface ProfileSwitcherProps {

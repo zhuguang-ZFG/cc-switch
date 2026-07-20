@@ -359,6 +359,7 @@ export function SettingsPage({
                             kimiDir={
                               settings.kimiConfigDir ?? settings.hermesConfigDir
                             }
+                            reasonixDir={settings.reasonixConfigDir}
                             onDirectoryChange={updateDirectory}
                             onBrowseDirectory={browseDirectory}
                             onResetDirectory={resetDirectory}

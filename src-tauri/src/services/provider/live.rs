@@ -694,11 +694,61 @@ fn update_kimi_doc_common_config(
     Ok(())
 }
 
+/// Top-level live keys owned by providers / defaults / MCP projection — never
+/// part of the shareable common-config snippet.
+const KIMI_COMMON_CONFIG_SKIP_KEYS: &[&str] = &[
+    "providers",
+    "models",
+    "default_model",
+    "default_provider",
+    "mcp",
+    "mcp_servers",
+];
+
+/// Extract shareable top-level tables from a Kimi Code `config.toml` document
+/// (thinking / hooks / permission / …), stripping provider catalogs and defaults.
+///
+/// Used to re-sync the DB common-config snippet from live after the user edits
+/// global prefs outside CC Switch (mirrors Claude/Codex switch-time autosync).
+pub(crate) fn extract_kimi_common_config_from_toml(text: &str) -> Result<String, AppError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    let doc = trimmed.parse::<DocumentMut>().map_err(|e| {
+        AppError::Message(format!("Failed to parse Kimi Code config for common extract: {e}"))
+    })?;
+
+    let mut out = DocumentMut::new();
+    for (key, item) in doc.as_table().iter() {
+        if KIMI_COMMON_CONFIG_SKIP_KEYS.iter().any(|k| *k == key) {
+            continue;
+        }
+        // Drop empty tables so we don't pollute the snippet with placeholders.
+        if let Some(table) = item.as_table() {
+            if table.is_empty() {
+                continue;
+            }
+        }
+        out.as_table_mut().insert(key, item.clone());
+    }
+
+    let serialized = out.to_string();
+    // toml_edit may emit a trailing newline; normalize for stable comparisons.
+    Ok(serialized.trim().to_string())
+}
+
+/// Read live Kimi `config.toml` and extract the common-config snippet.
+pub(crate) fn extract_kimi_common_config_from_live() -> Result<String, AppError> {
+    let text = crate::kimi_config::read_config_text().unwrap_or_default();
+    extract_kimi_common_config_from_toml(&text)
+}
+
 /// 把 DB 里的 Kimi Code 通用配置片段合并进 live `config.toml`。
 /// 幂等：additive 同步每次重放；内容未变化时不落盘。切换 / 代理接管路径
 /// 本就保留无关表，已合并的片段不会被它们擦掉。
 /// RMW 在 kimi_config 的 write_lock 内完成，并发写不会丢更新。
-fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppError> {
+pub(crate) fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppError> {
     let Some(snippet) = db.get_config_snippet(AppType::KimiCode.as_str())? else {
         return Ok(());
     };
@@ -2166,6 +2216,31 @@ pub fn remove_openclaw_provider_from_live(provider_id: &str) -> Result<(), AppEr
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn extract_kimi_common_config_strips_providers_and_models() {
+        let toml = r#"
+default_model = "moonshot/kimi-k2"
+[thinking]
+enabled = true
+[providers.moonshot]
+type = "openai"
+base_url = "https://api.moonshot.cn/v1"
+[models."moonshot/kimi-k2"]
+provider = "moonshot"
+model = "kimi-k2"
+max_context_size = 128000
+[hooks]
+pre_tool = "echo hi"
+"#;
+        let extracted = extract_kimi_common_config_from_toml(toml).expect("extract");
+        assert!(extracted.contains("[thinking]"));
+        assert!(extracted.contains("[hooks]"));
+        assert!(!extracted.contains("providers"));
+        assert!(!extracted.contains("models"));
+        assert!(!extracted.contains("default_model"));
+        assert!(!extracted.contains("moonshot"));
+    }
 
     #[test]
     fn kimi_for_coding_effective_settings_backfill_256k_context() {

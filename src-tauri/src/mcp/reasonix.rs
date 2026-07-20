@@ -10,7 +10,10 @@ use crate::reasonix_config;
 use super::validation::validate_server_spec;
 
 fn should_sync_reasonix_mcp() -> bool {
-    reasonix_config::get_reasonix_dir().exists()
+    // Always allow projection: write_document creates the Reasonix home/config
+    // if missing. Skipping when the dir is absent left DB `enabled_reasonix=1`
+    // with an empty live [[plugins]] list (counts looked "out of sync").
+    true
 }
 
 fn to_reasonix_plugin(spec: &Value) -> Result<Value, AppError> {

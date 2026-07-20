@@ -68,10 +68,22 @@ export const useAddProviderMutation = (appId: AppId) => {
           const prefix = providerInput.category === "omo" ? "omo" : "omo-slim";
           id = `${prefix}-${generateUUID()}`;
         } else {
-          if (!providerInput.providerKey) {
+          // Prefer explicit providerKey; fall back to settings.name for Reasonix
+          // (live TOML providers.name) when dialog plumbing omits the field.
+          const fromSettings =
+            typeof rest.settingsConfig === "object" &&
+            rest.settingsConfig !== null &&
+            typeof (rest.settingsConfig as Record<string, unknown>).name ===
+              "string"
+              ? String(
+                  (rest.settingsConfig as Record<string, unknown>).name,
+                ).trim()
+              : "";
+          const key = providerInput.providerKey?.trim() || fromSettings;
+          if (!key) {
             throw new Error(`Provider key is required for ${appId}`);
           }
-          id = providerInput.providerKey;
+          id = key;
         }
       } else {
         id = generateUUID();

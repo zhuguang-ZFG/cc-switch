@@ -850,7 +850,9 @@
     },
     "saveFailedGeneric": "儲存失敗，請重試",
     "kimiConfigDir": "Kimi Code 設定目錄",
-    "browsePlaceholderKimi": "選擇 Kimi Code 設定目錄 (~/.kimi-code)"
+    "browsePlaceholderKimi": "選擇 Kimi Code 設定目錄 (~/.kimi-code)",
+    "reasonixConfigDir": "Reasonix 設定目錄",
+    "browsePlaceholderReasonix": "選擇 Reasonix 設定目錄（Windows: %APPDATA%\\reasonix）"
   },
   "apps": {
     "claude": "Claude",
@@ -1900,7 +1902,8 @@
       "claude": "專案：一鍵切換 Claude Code 的供應商 / MCP / Skills / 記憶檔案",
       "claude-desktop": "專案：一鍵切換 Claude Desktop 的供應商",
       "codex": "專案：一鍵切換 Codex 的供應商 / MCP / Skills / 記憶檔案",
-      "kimicode": "專案：一鍵切換 Kimi Code 的供應商 / MCP / Skills / 記憶檔案"
+      "kimicode": "專案：一鍵切換 Kimi Code 的供應商 / MCP / Skills / 記憶檔案",
+      "reasonix": "專案：一鍵切換 Reasonix 的供應商 / MCP / Skills / 記憶檔案"
     },
     "none": "不使用專案",
     "searchPlaceholder": "搜尋專案",
@@ -1910,7 +1913,8 @@
       "claude": "把 Claude Code 目前的供應商、MCP、Skills、記憶檔案儲存為一個專案，之後可一鍵切換。",
       "claude-desktop": "把 Claude Desktop 目前的供應商儲存為一個專案，之後可一鍵切換。",
       "codex": "把 Codex 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。",
-      "kimicode": "把 Kimi Code 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。"
+      "kimicode": "把 Kimi Code 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。",
+      "reasonix": "把 Reasonix 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。"
     },
     "manage": "管理專案…",
     "manageTitle": "管理專案",
@@ -2132,6 +2136,7 @@
   "reasonix": {
     "presets": {
       "deepseekOfficial": "DeepSeek 官方",
+      "opencodeGo": "OpenCode Go",
       "custom": "自訂"
     },
     "form": {
@@ -2156,11 +2161,15 @@
       "addModel": "新增模型",
       "noModels": "暫無模型。請至少新增一個模型 ID。",
       "modelIdPlaceholder": "deepseek-v4-flash",
-      "modelsHint": "模型 ID 列表，寫入 Reasonix live 設定的 models 欄位。",
+      "modelsHint": "模型 ID 列表。可手動輸入，或先「取得模型」再用右側下拉選擇。",
       "modelsRequired": "請至少新增一個模型",
       "default": "預設模型",
       "defaultPlaceholder": "選擇預設模型",
-      "defaultHint": "切換到此供應商時寫入 default_model；留空則取 models 第一項。"
+      "defaultHint": "切換到此供應商時寫入 default_model；留空則取 models 第一項。",
+      "chatUrl": "Chat URL（選用）",
+      "chatUrlHint": "選用：完全覆蓋 Chat Completions 請求 URL；留空則使用 base_url + /chat/completions。",
+      "modelsUrl": "Models URL（選用）",
+      "modelsUrlHint": "選用：覆蓋 /models 探測 URL；留空則自動推導。"
     }
   },
   "env": {
@@ -2730,7 +2739,7 @@
     "duplicatedAndSynced": "通用供應商已複製並同步",
     "duplicateError": "複製通用供應商失敗",
     "title": "通用供應商",
-    "description": "通用供應商可以同時管理 Claude、Codex、Gemini 和 Kimi Code 的設定。修改後會自動同步至所有啟用的應用程式。",
+    "description": "通用供應商可以同時管理 Claude、Codex、Gemini、Kimi Code 和 Reasonix 的設定。修改後會自動同步至所有啟用的應用程式。",
     "add": "新增通用供應商",
     "edit": "編輯通用供應商",
     "empty": "還沒有通用供應商",
@@ -2759,7 +2768,7 @@
     "updated": "通用供應商已更新",
     "deleted": "通用供應商已刪除",
     "addFailed": "通用供應商新增失敗",
-    "hint": "跨應用程式通用設定，自動同步至 Claude/Codex/Gemini/Kimi Code",
+    "hint": "跨應用程式通用設定，自動同步至 Claude/Codex/Gemini/Kimi Code/Reasonix",
     "manage": "管理",
     "loadError": "載入通用供應商失敗",
     "saveError": "儲存通用供應商失敗",
@@ -2767,7 +2776,7 @@
     "deleteConfirmTitle": "刪除通用供應商",
     "deleteConfirmDescription": "確定要刪除 \"{{name}}\" 嗎？這將同時刪除它在各應用程式中產生的供應商設定。",
     "syncConfirmTitle": "同步通用供應商",
-    "syncConfirmDescription": "同步 \"{{name}}\" 將會覆寫 Claude、Codex、Gemini 和 Kimi Code 中關聯的供應商設定。確定要繼續嗎？",
+    "syncConfirmDescription": "同步 \"{{name}}\" 將會覆寫 Claude、Codex、Gemini、Kimi Code 和 Reasonix 中關聯的供應商設定。確定要繼續嗎？",
     "syncConfirm": "同步",
     "saveAndSync": "儲存並同步",
     "savedAndSynced": "已儲存並同步至所有應用程式",

@@ -126,6 +126,7 @@ export const getProviderIconName = (providerId: string) => {
   if (providerId === "opencode") return "opencode";
   if (providerId === "openclaw") return "openclaw";
   if (providerId === "kimicode") return "kimi";
+  if (providerId === "reasonix") return "deepseek";
   return providerId;
 };
 

@@ -19,7 +19,10 @@ import { mcpPresets } from "@/config/mcpPresets";
 import { toast } from "sonner";
 import { MCP_APP_IDS } from "@/config/appConfig";
 import { AppCountBar } from "@/components/common/AppCountBar";
-import { AppToggleGroup } from "@/components/common/AppToggleGroup";
+import {
+  AppToggleGroup,
+  isMcpAppEnabled,
+} from "@/components/common/AppToggleGroup";
 import { ListItemRow } from "@/components/common/ListItemRow";
 
 interface UnifiedMcpPanelProps {
@@ -69,7 +72,7 @@ const UnifiedMcpPanel = React.forwardRef<
     };
     serverEntries.forEach(([_, server]) => {
       for (const app of MCP_APP_IDS) {
-        if (server.apps[app]) counts[app]++;
+        if (isMcpAppEnabled(server.apps, app)) counts[app]++;
       }
     });
     return counts;

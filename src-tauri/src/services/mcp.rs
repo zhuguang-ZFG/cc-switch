@@ -44,6 +44,9 @@ impl McpService {
         if prev_apps.hermes && !server.apps.hermes {
             Self::remove_server_from_app(state, &server.id, &AppType::KimiCode)?;
         }
+        if prev_apps.reasonix && !server.apps.reasonix {
+            Self::remove_server_from_app(state, &server.id, &AppType::Reasonix)?;
+        }
 
         // 同步到各个启用的应用
         Self::sync_server_to_apps(state, &server)?;

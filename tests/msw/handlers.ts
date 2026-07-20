@@ -62,6 +62,7 @@ export const handlers = [
         claudeDesktop: null,
         codex: null,
         kimicode: null,
+        reasonix: null,
       },
     }),
   ),

@@ -20,6 +20,7 @@ interface DirectorySettingsProps {
   opencodeDir?: string;
   openclawDir?: string;
   kimiDir?: string;
+  reasonixDir?: string;
   onDirectoryChange: (app: DirectoryAppId, value?: string) => void;
   onBrowseDirectory: (app: DirectoryAppId) => Promise<void>;
   onResetDirectory: (app: DirectoryAppId) => Promise<void>;
@@ -37,6 +38,7 @@ export function DirectorySettings({
   opencodeDir,
   openclawDir,
   kimiDir,
+  reasonixDir,
   onDirectoryChange,
   onBrowseDirectory,
   onResetDirectory,
@@ -161,6 +163,21 @@ export function DirectorySettings({
           onChange={(val) => onDirectoryChange("kimicode", val)}
           onBrowse={() => onBrowseDirectory("kimicode")}
           onReset={() => onResetDirectory("kimicode")}
+        />
+
+        <DirectoryInput
+          label={t("settings.reasonixConfigDir", {
+            defaultValue: "Reasonix 配置目录",
+          })}
+          description={undefined}
+          value={reasonixDir}
+          resolvedValue={resolvedDirs.reasonix}
+          placeholder={t("settings.browsePlaceholderReasonix", {
+            defaultValue: "选择 Reasonix 配置目录 (~/.reasonix)",
+          })}
+          onChange={(val) => onDirectoryChange("reasonix", val)}
+          onBrowse={() => onBrowseDirectory("reasonix")}
+          onReset={() => onResetDirectory("reasonix")}
         />
       </section>
     </div>

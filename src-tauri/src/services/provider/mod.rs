@@ -3377,7 +3377,18 @@ impl ProviderService {
         // only change default_model and custom providers get full additive projection
         // (equivalent to Claude/Codex live write + Kimi multi-provider coexistence).
         if matches!(app_type, AppType::KimiCode) {
+            // Re-extract shareable top-level tables from live before rewriting
+            // defaults so user edits to thinking/hooks/… outside CC Switch land
+            // in the common-config snippet (Claude/Codex switch-time autosync).
+            Self::sync_kimi_common_config_snippet_from_live(state, &mut result);
             crate::kimi_config::apply_switch_defaults(&provider.id, &provider.settings_config)?;
+            // Re-apply snippet after switch so extracted prefs stay projected.
+            if let Err(err) = live::apply_kimi_common_config_to_live(state.db.as_ref()) {
+                log::warn!("Failed to re-apply Kimi common config after switch: {err}");
+                result
+                    .warnings
+                    .push("kimi_common_config_reapply_failed".into());
+            }
         } else if matches!(app_type, AppType::Reasonix) {
             crate::reasonix_config::apply_switch_defaults(&provider.id, &provider.settings_config)?;
         } else {
@@ -3589,6 +3600,8 @@ impl ProviderService {
     /// `mcp_servers`（SSOT 在 DB 表）、顶层 `experimental_bearer_token`
     /// fallback、`model_catalog_json`、`web_search = "disabled"` 哨兵——密钥与
     /// 注入产物不会进共享片段。Gemini 暂未纳入，如需支持应单独验证后再加。
+    /// Kimi Code 走独立的 `sync_kimi_common_config_snippet_from_live`（additive
+    /// live 文档，不经 per-provider settings_config）。
     ///
     /// 仅对**显式勾选"写入通用配置"**（`meta.common_config_enabled == Some(true)`）的
     /// 供应商生效；用户**显式清空**过片段（`_cleared`）时跳过，避免把用户主动清掉的
@@ -3692,7 +3705,8 @@ impl ProviderService {
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(&provider.settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(&provider.settings_config),
-            AppType::KimiCode => Ok(String::new()), // Kimi Code doesn't use common config snippets
+            // Kimi common config is global live tables, not per-provider settings.
+            AppType::KimiCode => live::extract_kimi_common_config_from_live(),
             AppType::Reasonix => Ok(String::new()),
         }
     }
@@ -3709,8 +3723,65 @@ impl ProviderService {
             AppType::GrokBuild => Ok(String::new()),
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
-            AppType::KimiCode => Ok(String::new()), // Kimi Code doesn't use common config snippets
+            // Provider settings_config is not the live document; re-read live.
+            AppType::KimiCode => live::extract_kimi_common_config_from_live(),
             AppType::Reasonix => Ok(String::new()),
+        }
+    }
+
+    /// Re-extract Kimi common-config snippet from live `config.toml` into DB.
+    ///
+    /// Additive-mode Kimi skips the exclusive-app backfill path, so this is
+    /// invoked explicitly on switch. Non-fatal: failures only warn.
+    fn sync_kimi_common_config_snippet_from_live(state: &AppState, result: &mut SwitchResult) {
+        match state.db.is_config_snippet_cleared(AppType::KimiCode.as_str()) {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!("Failed to read Kimi common config cleared flag: {err}");
+                return;
+            }
+        }
+
+        // Skip autosync when the user never saved a snippet and live has nothing
+        // shareable either — avoid writing empty placeholders.
+        let current = state
+            .db
+            .get_config_snippet(AppType::KimiCode.as_str())
+            .ok()
+            .flatten();
+
+        let new_snippet = match live::extract_kimi_common_config_from_live() {
+            Ok(s) => s,
+            Err(err) => {
+                log::warn!("Failed to extract Kimi common config from live: {err}");
+                result
+                    .warnings
+                    .push("kimi_common_config_extract_failed".into());
+                return;
+            }
+        };
+
+        if new_snippet.trim().is_empty() && current.as_ref().is_none_or(|s| s.trim().is_empty()) {
+            return;
+        }
+
+        if current.as_deref().map(str::trim) == Some(new_snippet.trim()) {
+            return;
+        }
+
+        if let Err(err) = state.db.set_config_snippet(
+            AppType::KimiCode.as_str(),
+            if new_snippet.trim().is_empty() {
+                None
+            } else {
+                Some(new_snippet)
+            },
+        ) {
+            log::warn!("Failed to persist Kimi common config from live: {err}");
+            result
+                .warnings
+                .push("kimi_common_config_sync_failed".into());
         }
     }
 
@@ -4836,21 +4907,31 @@ impl ProviderService {
             let _ = state.db.delete_provider("gemini", &gemini_id);
         }
 
-        // 同步到 Kimi Code
+        // 同步到 Kimi Code（加法模式：必须走 add/update 才能写入 live）
         if let Some(mut kimi_provider) = provider.to_kimi_provider() {
-            // 合并已有配置
             if let Some(existing) = state.db.get_provider_by_id(&kimi_provider.id, "kimicode")? {
                 let mut merged = existing.settings_config.clone();
                 Self::merge_json(&mut merged, &kimi_provider.settings_config);
                 kimi_provider.settings_config = merged;
+                if kimi_provider.meta.is_none() {
+                    kimi_provider.meta = existing.meta.clone();
+                }
+                Self::update(state, AppType::KimiCode, None, kimi_provider)?;
+            } else {
+                Self::add(state, AppType::KimiCode, kimi_provider, true)?;
             }
-            state.db.save_provider("kimicode", &kimi_provider)?;
         } else {
             let kimicode_id = format!("universal-kimicode-{id}");
-            let _ = state.db.delete_provider("kimicode", &kimicode_id);
+            if state
+                .db
+                .get_provider_by_id(&kimicode_id, "kimicode")?
+                .is_some()
+            {
+                let _ = Self::delete(state, AppType::KimiCode, &kimicode_id);
+            }
         }
 
-        // 同步到 Reasonix
+        // 同步到 Reasonix（加法模式：必须走 add/update 才能写入 live / .env）
         if let Some(mut reasonix_provider) = provider.to_reasonix_provider() {
             if let Some(existing) =
                 state
@@ -4860,24 +4941,21 @@ impl ProviderService {
                 let mut merged = existing.settings_config.clone();
                 Self::merge_json(&mut merged, &reasonix_provider.settings_config);
                 reasonix_provider.settings_config = merged;
-            }
-            state.db.save_provider("reasonix", &reasonix_provider)?;
-            // Project into live when not under proxy takeover.
-            if !Self::reasonix_proxy_owns_live(state) {
-                let _ = crate::reasonix_config::set_provider(
-                    &reasonix_provider.id,
-                    reasonix_provider.settings_config.clone(),
-                );
+                if reasonix_provider.meta.is_none() {
+                    reasonix_provider.meta = existing.meta.clone();
+                }
+                Self::update(state, AppType::Reasonix, None, reasonix_provider)?;
             } else {
-                let _ = Self::reasonix_update_takeover_backup(state, &reasonix_provider);
+                Self::add(state, AppType::Reasonix, reasonix_provider, true)?;
             }
         } else {
             let reasonix_id = format!("universal-reasonix-{id}");
-            let _ = state.db.delete_provider("reasonix", &reasonix_id);
-            if !Self::reasonix_proxy_owns_live(state) {
-                let _ = remove_reasonix_provider_from_live(&reasonix_id);
-            } else {
-                let _ = Self::reasonix_remove_from_takeover_backup(state, &reasonix_id);
+            if state
+                .db
+                .get_provider_by_id(&reasonix_id, "reasonix")?
+                .is_some()
+            {
+                let _ = Self::delete(state, AppType::Reasonix, &reasonix_id);
             }
         }
 

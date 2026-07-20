@@ -49,6 +49,8 @@ export interface KimiProviderSettingsConfig {
   models?: KimiModel[];
   /** Provider env vars (e.g. GOOGLE_CLOUD_PROJECT for vertexai) */
   env?: Record<string, string>;
+  /** Custom HTTP headers attached to each request (CLI: custom_headers) */
+  custom_headers?: Record<string, string>;
   [key: string]: unknown;
 }
 
