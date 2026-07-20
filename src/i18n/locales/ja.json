@@ -1498,7 +1498,9 @@
       "codex_db": "Codex DB",
       "codex_session": "Codex セッション",
       "gemini_session": "Gemini セッション",
-      "opencode_session": "OpenCode セッション"
+      "opencode_session": "OpenCode セッション",
+      "kimi_session": "Kimi Code セッション",
+      "reasonix_session": "Reasonix セッション"
     },
     "sessionSync": {
       "trigger": "セッションログを同期",

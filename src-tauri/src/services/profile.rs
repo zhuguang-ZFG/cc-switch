@@ -214,8 +214,8 @@ pub struct ProfileService;
 
 impl ProfileService {
     /// Resolve the provider that is actually active for a profile snapshot.
-    /// Kimi Code is additive, so its active provider comes from `default_model`
-    /// rather than the database `is_current` flag used by switch-mode apps.
+    /// Additive apps (Kimi / Reasonix) use live `default_model` / default
+    /// provider rather than only the database `is_current` flag.
     pub(crate) fn current_provider_id(
         state: &AppState,
         app: &AppType,
@@ -234,6 +234,24 @@ impl ProfileService {
             };
             let providers = state.db.get_all_providers(app.as_str())?;
             return Ok(providers.contains_key(&provider_id).then_some(provider_id));
+        }
+
+        if matches!(app, AppType::Reasonix) {
+            // Same takeover hazard as Kimi: live default_model becomes
+            // `cc-switch-proxy` while takeover is active.
+            if crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false) {
+                return Ok(state.db.get_current_provider(app.as_str()).ok().flatten());
+            }
+            let Some(provider_id) = crate::reasonix_config::get_default_model()? else {
+                return Ok(None);
+            };
+            // default_model may be bare provider name or provider/model.
+            let provider_key = provider_id
+                .split_once('/')
+                .map(|(name, _)| name.to_string())
+                .unwrap_or(provider_id);
+            let providers = state.db.get_all_providers(app.as_str())?;
+            return Ok(providers.contains_key(&provider_key).then_some(provider_key));
         }
 
         crate::settings::get_effective_current_provider(&state.db, app)

@@ -131,7 +131,13 @@ export const useApplyProfileMutation = () => {
       await queryClient.invalidateQueries({
         queryKey: ["providers", "kimicode"],
       });
+      await queryClient.invalidateQueries({
+        queryKey: ["providers", "reasonix"],
+      });
       await invalidateHermesProviderCaches(queryClient);
+      await queryClient.invalidateQueries({
+        queryKey: ["reasonixLiveProviderIds"],
+      });
       await queryClient.invalidateQueries({ queryKey: ["mcp", "all"] });
       await queryClient.invalidateQueries({ queryKey: ["skills"] });
       await updateTrayMenuSafely();

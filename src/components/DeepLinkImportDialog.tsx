@@ -222,7 +222,7 @@ export function DeepLinkImportDialog() {
 
   // Parse config file content for display
   interface ParsedConfig {
-    type: "claude" | "codex" | "gemini" | "kimicode";
+    type: "claude" | "codex" | "gemini" | "kimicode" | "reasonix";
     env?: Record<string, string>;
     auth?: Record<string, string>;
     tomlConfig?: string;
@@ -289,6 +289,35 @@ export function DeepLinkImportDialog() {
         }
         return {
           type: "kimicode",
+          env,
+          raw: parsed,
+        };
+      } else if (request.app === "reasonix") {
+        // Reasonix 格式: { kind, base_url, api_key, models: [...] }
+        const env: Record<string, string> = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          if (typeof value === "string") {
+            env[key] = value;
+          } else if (typeof value === "number" || typeof value === "boolean") {
+            env[key] = String(value);
+          }
+        }
+        if (Array.isArray(parsed.models)) {
+          env.models = parsed.models
+            .map((m: unknown) =>
+              m && typeof m === "object"
+                ? String(
+                    (m as Record<string, unknown>).id ??
+                      (m as Record<string, unknown>).name ??
+                      "",
+                  )
+                : String(m),
+            )
+            .filter(Boolean)
+            .join(", ");
+        }
+        return {
+          type: "reasonix",
           env,
           raw: parsed,
         };
@@ -607,9 +636,10 @@ export function DeepLinkImportDialog() {
                             </div>
                           )}
 
-                          {/* Gemini / Kimi Code config */}
+                          {/* Gemini / Kimi Code / Reasonix config */}
                           {(parsedConfig.type === "gemini" ||
-                            parsedConfig.type === "kimicode") &&
+                            parsedConfig.type === "kimicode" ||
+                            parsedConfig.type === "reasonix") &&
                             parsedConfig.env && (
                               <div className="space-y-1.5">
                                 {Object.entries(parsedConfig.env).map(

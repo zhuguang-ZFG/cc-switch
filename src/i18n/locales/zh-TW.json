@@ -1470,7 +1470,9 @@
       "codex_db": "Codex 資料庫",
       "codex_session": "Codex 工作階段日誌",
       "gemini_session": "Gemini 工作階段日誌",
-      "opencode_session": "OpenCode 工作階段日誌"
+      "opencode_session": "OpenCode 工作階段日誌",
+      "kimi_session": "Kimi Code 工作階段日誌",
+      "reasonix_session": "Reasonix 工作階段日誌"
     },
     "sessionSync": {
       "trigger": "同步工作階段日誌",

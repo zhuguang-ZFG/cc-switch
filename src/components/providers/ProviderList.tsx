@@ -114,13 +114,20 @@ export function ProviderList({
     appId === "kimicode",
   );
 
+  // Reasonix: live [[providers]] 累加成员，用于 isInConfig
+  const { data: reasonixLiveIds } = useQuery({
+    queryKey: ["reasonixLiveProviderIds"],
+    queryFn: () => providersApi.getReasonixLiveProviderIds(),
+    enabled: appId === "reasonix",
+  });
+
   // Hermes: 读取当前 model.provider，用于判断哪个供应商是"当前激活"（高亮）
   const { data: hermesModelConfig } = useHermesModelConfig(
     appId === "kimicode",
   );
   const hermesCurrentProviderId = hermesModelConfig?.provider;
 
-  // 判断供应商是否已添加到配置（累加模式应用：OpenCode/OpenClaw/Hermes）
+  // 判断供应商是否已添加到配置（累加模式应用：OpenCode/OpenClaw/Hermes/Reasonix）
   const isProviderInConfig = useCallback(
     (providerId: string): boolean => {
       if (appId === "opencode") {
@@ -132,9 +139,12 @@ export function ProviderList({
       if (appId === "kimicode") {
         return hermesLiveIds?.includes(providerId) ?? false;
       }
+      if (appId === "reasonix") {
+        return reasonixLiveIds?.includes(providerId) ?? false;
+      }
       return true; // 其他应用始终返回 true
     },
-    [appId, opencodeLiveIds, openclawLiveIds, hermesLiveIds],
+    [appId, opencodeLiveIds, openclawLiveIds, hermesLiveIds, reasonixLiveIds],
   );
 
   // OpenClaw: query default model to determine which provider is default

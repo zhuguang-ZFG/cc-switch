@@ -139,7 +139,8 @@ fn parse_session_file(root: &Path, path: &Path) -> Option<SessionMeta> {
         created_at: created.or(modified),
         last_active_at: modified,
         source_path: Some(path.display().to_string()),
-        resume_command: Some(format!("reasonix --resume {session_id}")),
+        // Prefer full path: CLI --resume accepts path or query; id alone is ambiguous.
+        resume_command: Some(format!("reasonix --resume \"{}\"", path.display())),
     })
 }
 

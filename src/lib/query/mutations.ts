@@ -126,6 +126,11 @@ export const useAddProviderMutation = (appId: AppId) => {
       if (appId === "kimicode") {
         await invalidateHermesProviderCaches(queryClient);
       }
+      if (appId === "reasonix") {
+        await queryClient.invalidateQueries({
+          queryKey: ["reasonixLiveProviderIds"],
+        });
+      }
 
       try {
         await providersApi.updateTrayMenu();
@@ -190,6 +195,11 @@ export const useUpdateProviderMutation = (appId: AppId) => {
       if (appId === "kimicode") {
         await invalidateHermesProviderCaches(queryClient);
       }
+      if (appId === "reasonix") {
+        await queryClient.invalidateQueries({
+          queryKey: ["reasonixLiveProviderIds"],
+        });
+      }
       toast.success(
         t("notifications.updateSuccess", {
           defaultValue: "供应商更新成功",
@@ -245,6 +255,11 @@ export const useDeleteProviderMutation = (appId: AppId) => {
 
       if (appId === "kimicode") {
         await invalidateHermesProviderCaches(queryClient);
+      }
+      if (appId === "reasonix") {
+        await queryClient.invalidateQueries({
+          queryKey: ["reasonixLiveProviderIds"],
+        });
       }
 
       try {
@@ -319,6 +334,11 @@ export const useSwitchProviderMutation = (appId: AppId) => {
       }
       if (appId === "kimicode") {
         await invalidateHermesProviderCaches(queryClient);
+      }
+      if (appId === "reasonix") {
+        await queryClient.invalidateQueries({
+          queryKey: ["reasonixLiveProviderIds"],
+        });
       }
 
       try {

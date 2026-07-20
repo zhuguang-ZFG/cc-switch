@@ -136,7 +136,11 @@ export function useProxyStatus() {
                 ? "Grok Build"
                 : variables.appType === "kimicode"
                   ? "Kimi Code"
-                  : "OpenCode";
+                  : variables.appType === "reasonix"
+                    ? "Reasonix"
+                    : variables.appType === "opencode"
+                      ? "OpenCode"
+                      : variables.appType;
 
       toast.success(
         variables.enabled
