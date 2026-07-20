@@ -297,8 +297,10 @@ export const useSwitchProviderMutation = (appId: AppId) => {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+      // Hot-switch / failover updates proxy active_targets; refresh without waiting
+      // for the status poll (claude-desktop also needs this for route UI).
+      await queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
       if (appId === "claude-desktop") {
-        await queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
         await queryClient.invalidateQueries({
           queryKey: ["claudeDesktopStatus"],
         });

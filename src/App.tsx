@@ -838,6 +838,19 @@ function App() {
         queryKey: ["providers"],
         refetchType: "all",
       });
+      // Import/restore may rewrite additive live TOML — refresh membership +
+      // fallback-current caches so isInConfig / highlight stay correct.
+      await invalidateHermesProviderCaches(queryClient);
+      await invalidateReasonixProviderCaches(queryClient);
+      await queryClient.invalidateQueries({
+        queryKey: ["opencodeLiveProviderIds"],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: openclawKeys.liveProviderIds,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: openclawKeys.defaultModel,
+      });
       await queryClient.refetchQueries({
         queryKey: ["providers"],
         type: "all",

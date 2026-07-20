@@ -121,17 +121,32 @@ const extractApiUrl = (provider: Provider, fallbackText: string) => {
   const config = provider.settingsConfig;
 
   if (config && typeof config === "object") {
+    const cfg = config as Record<string, any>;
     const envBase =
-      (config as Record<string, any>)?.env?.ANTHROPIC_BASE_URL ||
-      (config as Record<string, any>)?.env?.GOOGLE_GEMINI_BASE_URL;
+      cfg?.env?.ANTHROPIC_BASE_URL || cfg?.env?.GOOGLE_GEMINI_BASE_URL;
     if (typeof envBase === "string" && envBase.trim()) {
       return envBase;
     }
 
-    const baseUrl = (config as Record<string, any>)?.config;
+    // Flat settings (Kimi / Reasonix / many OpenAI-compat providers).
+    const flatBase = cfg?.base_url;
+    if (typeof flatBase === "string" && flatBase.trim()) {
+      return flatBase.trim();
+    }
+    // OpenClaw / camelCase variants.
+    const openclawBase = cfg?.baseUrl;
+    if (typeof openclawBase === "string" && openclawBase.trim()) {
+      return openclawBase.trim();
+    }
+    // OpenCode nested options.baseURL
+    const opencodeBase = cfg?.options?.baseURL ?? cfg?.options?.baseUrl;
+    if (typeof opencodeBase === "string" && opencodeBase.trim()) {
+      return opencodeBase.trim();
+    }
 
-    if (typeof baseUrl === "string" && baseUrl.includes("base_url")) {
-      const extractedBaseUrl = extractCodexBaseUrl(baseUrl);
+    const codexToml = cfg?.config;
+    if (typeof codexToml === "string" && codexToml.includes("base_url")) {
+      const extractedBaseUrl = extractCodexBaseUrl(codexToml);
       if (extractedBaseUrl) {
         return extractedBaseUrl;
       }
