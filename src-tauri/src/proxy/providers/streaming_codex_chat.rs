@@ -769,27 +769,42 @@ pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error +
                         continue;
                     }
                     if looks_like_json && is_eof {
-                        match serde_json::from_str::<Value>(buffer.trim())
-                            .map_err(|e| e.to_string())
-                            .and_then(|chat| {
-                                transform_codex_chat::chat_completion_to_response_with_context(
-                                    chat,
+                        // Distinguish a complete JSON document from a mixed
+                        // JSON-then-SSE body. If the buffer parses as one JSON
+                        // Value it is standalone — either a chat completion
+                        // (convert) or an error/invalid doc (terminal failure).
+                        // Only a genuine PARSE failure means it wasn't really a
+                        // JSON doc (e.g. a bare line preceding SSE): fall
+                        // through to SSE parsing then.
+                        match serde_json::from_str::<Value>(buffer.trim()) {
+                            Ok(json_doc) => {
+                                match transform_codex_chat::chat_completion_to_response_with_context(
+                                    json_doc.clone(),
                                     &json_fallback_context,
-                                )
-                                .map_err(|e| e.to_string())
-                            }) {
-                            Ok(response) => {
-                                yield Ok(sse::response_created(&response));
-                                yield Ok(sse::response_completed(&response));
+                                ) {
+                                    Ok(response) => {
+                                        yield Ok(sse::response_created(&response));
+                                        yield Ok(sse::response_completed(&response));
+                                    }
+                                    Err(_) => {
+                                        // Standalone JSON that isn't a valid
+                                        // completion = a definitive upstream
+                                        // error/quota/auth envelope. Emit a
+                                        // terminal failure (NOT truncation, which
+                                        // clients treat as a retriable drop).
+                                        let (message, error_type) =
+                                            extract_chat_sse_error(&json_doc);
+                                        yield Ok(state.failed_event(message, error_type));
+                                    }
+                                }
                                 buffer.clear();
-                                stream_failed = true; // terminal event already emitted
+                                stream_failed = true; // terminal event emitted
                                 break;
                             }
                             Err(_) => {
-                                // Not a standalone JSON completion after all
-                                // (e.g. a bare metadata/error line preceding
-                                // real SSE events): fall through to SSE parsing
-                                // rather than discarding the whole response.
+                                // Not a standalone JSON doc after all (e.g. a
+                                // bare metadata line preceding real SSE events):
+                                // fall through to SSE parsing.
                             }
                         }
                     }
@@ -1309,5 +1324,35 @@ mod tests {
         assert!(output.contains("quota exceeded"));
         assert!(output.contains("rate_limit_exceeded"));
         assert!(!output.contains("event: response.completed"));
+    }
+
+    #[tokio::test]
+    async fn standalone_json_error_body_emits_failed_not_truncation() {
+        // A gateway that ignores stream:true and returns a bare JSON error
+        // document must yield a terminal response.failed with the real error —
+        // NOT stream_truncated, which clients treat as a retriable drop.
+        let output = collect(vec![
+            "{\"error\":{\"message\":\"quota exceeded\",\"type\":\"insufficient_quota\"}}",
+        ])
+        .await;
+
+        assert!(output.contains("event: response.failed"));
+        assert!(output.contains("quota exceeded"));
+        assert!(output.contains("insufficient_quota"));
+        assert!(!output.contains("stream_truncated"));
+        assert!(!output.contains("event: response.completed"));
+    }
+
+    #[tokio::test]
+    async fn standalone_json_completion_body_converts() {
+        // A gateway returning one non-stream chat completion doc should convert
+        // cleanly to a Responses completion.
+        let output = collect(vec![
+            "{\"id\":\"chatcmpl_x\",\"model\":\"gpt-5.4\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}",
+        ])
+        .await;
+
+        assert!(output.contains("event: response.completed"));
+        assert!(!output.contains("stream_truncated"));
     }
 }

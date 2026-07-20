@@ -716,19 +716,15 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
 
     #[cfg(not(unix))]
     {
-        // settings.json holds S3/WebDAV credentials in plaintext; restrict
-        // the ACL to the current user on first creation (fs::write keeps the
-        // same file object afterwards, so the ACL persists across saves).
-        let created = !path.exists();
         fs::write(&path, json).map_err(|e| AppError::io(&path, e))?;
+        // settings.json holds S3/WebDAV credentials in plaintext. Re-assert the
+        // owner-only ACL on every save (mirrors the Unix 0600 arm) so files
+        // created before this hardening — exactly the at-risk cohort — get
+        // locked down on their next save instead of keeping the inherited ACL.
         #[cfg(windows)]
-        if created {
-            if let Err(error) = crate::kimi_config::restrict_path_to_current_user(&path) {
-                log::warn!("Failed to restrict settings.json ACL: {error}");
-            }
+        if let Err(error) = crate::kimi_config::restrict_path_to_current_user(&path) {
+            log::warn!("Failed to restrict settings.json ACL: {error}");
         }
-        #[cfg(not(windows))]
-        let _ = created;
     }
 
     Ok(())
