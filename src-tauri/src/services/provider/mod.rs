@@ -2447,27 +2447,99 @@ impl ProviderService {
                 .detect_takeover_in_live_config_for_app(&AppType::Reasonix)
     }
 
-    /// Project a Kimi provider upsert into the restore backup while live stays
-    /// on `cc-switch-proxy`.
-    fn kimi_update_takeover_backup(state: &AppState, provider: &Provider) -> Result<(), AppError> {
+    /// Project a Kimi provider into the restore backup while live stays on
+    /// `cc-switch-proxy`.
+    ///
+    /// Only rewrite top-level `default_model` when this provider is (or is about
+    /// to become) the SSOT current. Non-current add/update must use upsert-only
+    /// so bulk/CRUD does not stomp restore routing (parity with
+    /// `sync_all_providers_to_takeover_backup`).
+    fn kimi_update_takeover_backup(
+        state: &AppState,
+        provider: &Provider,
+        force_as_default: bool,
+    ) -> Result<(), AppError> {
+        let backup =
+            futures::executor::block_on(state.db.get_live_backup(AppType::KimiCode.as_str()))
+                .map_err(|e| AppError::Message(format!("读取 Kimi Code 备份失败: {e}")))?;
+        let Some(backup) = backup else {
+            return Err(AppError::Message(
+                "Kimi Code 代理接管中但缺少恢复备份，无法更新配置；请先关闭再重新开启接管"
+                    .to_string(),
+            ));
+        };
+
+        let is_current = force_as_default
+            || crate::settings::get_effective_current_provider(&state.db, &AppType::KimiCode)?
+                .as_deref()
+                == Some(provider.id.as_str());
+
+        let updated = if is_current {
+            crate::kimi_config::apply_switch_defaults_to_text(
+                &backup.original_config,
+                &provider.id,
+                &provider.settings_config,
+            )
+            .map_err(|e| AppError::Message(format!("更新 Kimi Code 接管备份失败: {e}")))?
+        } else {
+            crate::kimi_config::upsert_provider_into_text(
+                &backup.original_config,
+                &provider.id,
+                &provider.settings_config,
+            )
+            .map_err(|e| AppError::Message(format!("更新 Kimi Code 接管备份失败: {e}")))?
+        };
+
         futures::executor::block_on(
             state
-                .proxy_service
-                .update_live_backup_from_provider(AppType::KimiCode.as_str(), provider),
+                .db
+                .save_live_backup(AppType::KimiCode.as_str(), &updated),
         )
-        .map_err(|e| AppError::Message(format!("更新 Kimi Code 接管备份失败: {e}")))
+        .map_err(|e| AppError::Message(format!("写入 Kimi Code 备份失败: {e}")))
     }
 
     fn reasonix_update_takeover_backup(
         state: &AppState,
         provider: &Provider,
+        force_as_default: bool,
     ) -> Result<(), AppError> {
+        let backup =
+            futures::executor::block_on(state.db.get_live_backup(AppType::Reasonix.as_str()))
+                .map_err(|e| AppError::Message(format!("读取 Reasonix 备份失败: {e}")))?;
+        let Some(backup) = backup else {
+            return Err(AppError::Message(
+                "Reasonix 代理接管中但缺少恢复备份，无法更新配置；请先关闭再重新开启接管"
+                    .to_string(),
+            ));
+        };
+
+        let is_current = force_as_default
+            || crate::settings::get_effective_current_provider(&state.db, &AppType::Reasonix)?
+                .as_deref()
+                == Some(provider.id.as_str());
+
+        let updated = if is_current {
+            crate::reasonix_config::apply_switch_defaults_to_text(
+                &backup.original_config,
+                &provider.id,
+                &provider.settings_config,
+            )
+            .map_err(|e| AppError::Message(format!("更新 Reasonix 接管备份失败: {e}")))?
+        } else {
+            crate::reasonix_config::upsert_provider_into_text(
+                &backup.original_config,
+                &provider.id,
+                &provider.settings_config,
+            )
+            .map_err(|e| AppError::Message(format!("更新 Reasonix 接管备份失败: {e}")))?
+        };
+
         futures::executor::block_on(
             state
-                .proxy_service
-                .update_live_backup_from_provider(AppType::Reasonix.as_str(), provider),
+                .db
+                .save_live_backup(AppType::Reasonix.as_str(), &updated),
         )
-        .map_err(|e| AppError::Message(format!("更新 Reasonix 接管备份失败: {e}")))
+        .map_err(|e| AppError::Message(format!("写入 Reasonix 备份失败: {e}")))
     }
 
     /// Remove a Kimi provider from the restore backup snapshot only.
@@ -2652,8 +2724,9 @@ impl ProviderService {
 
             // During proxy takeover, never write live (would clobber cc-switch-proxy).
             // Project into the restore backup instead (PRD R5).
+            // force_as_default when this add seeds SSOT current (first provider).
             if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
-                Self::kimi_update_takeover_backup(state, &provider)?;
+                Self::kimi_update_takeover_backup(state, &provider, seed_additive_current)?;
                 if seed_additive_current {
                     state
                         .db
@@ -2663,7 +2736,7 @@ impl ProviderService {
                 return Ok(true);
             }
             if matches!(app_type, AppType::Reasonix) && Self::reasonix_proxy_owns_live(state) {
-                Self::reasonix_update_takeover_backup(state, &provider)?;
+                Self::reasonix_update_takeover_backup(state, &provider, seed_additive_current)?;
                 if seed_additive_current {
                     state
                         .db
@@ -2947,13 +3020,14 @@ impl ProviderService {
             }
 
             // Kimi/Reasonix takeover: update restore backup only (PRD R5). Live stays on
-            // the fixed local proxy projection.
+            // the fixed local proxy projection. Non-current edits must not rewrite
+            // default_model (upsert-only inside the helper).
             if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
-                Self::kimi_update_takeover_backup(state, &provider)?;
+                Self::kimi_update_takeover_backup(state, &provider, false)?;
                 return Ok(true);
             }
             if matches!(app_type, AppType::Reasonix) && Self::reasonix_proxy_owns_live(state) {
-                Self::reasonix_update_takeover_backup(state, &provider)?;
+                Self::reasonix_update_takeover_backup(state, &provider, false)?;
                 return Ok(true);
             }
 
