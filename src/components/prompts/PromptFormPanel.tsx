@@ -32,7 +32,7 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
     grokbuild: "AGENTS.md",
     opencode: "AGENTS.md",
     openclaw: "AGENTS.md",
-    reasonix: "AGENTS.md",
+    reasonix: "REASONIX.md / AGENTS.md",
   };
   const filename = filenameMap[appId];
   const [name, setName] = useState("");

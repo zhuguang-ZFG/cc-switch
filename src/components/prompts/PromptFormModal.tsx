@@ -35,7 +35,7 @@ const PromptFormModal: React.FC<PromptFormModalProps> = ({
     "claude-desktop": "CLAUDE.md",
     codex: "AGENTS.md",
     kimicode: "AGENTS.md",
-    reasonix: "AGENTS.md",
+    reasonix: "REASONIX.md / AGENTS.md",
     grokbuild: "AGENTS.md",
     opencode: "AGENTS.md",
   };

@@ -93,7 +93,8 @@ pub fn sync_reasonix_usage(db: &Database) -> Result<SessionSyncResult, AppError>
 
 /// Global `sessions/` plus desktop `projects/<slug>/sessions/`.
 fn collect_all_events_files() -> Vec<PathBuf> {
-    let home = crate::reasonix_config::get_reasonix_dir();
+    // Sessions live under state home (REASONIX_STATE_HOME), not necessarily config home.
+    let home = crate::reasonix_config::get_reasonix_state_dir();
     let mut files = Vec::new();
     collect_events_recursive(&home.join("sessions"), &mut files, 0, 2);
     let projects = home.join("projects");

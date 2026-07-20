@@ -207,6 +207,13 @@ export const providersApi = {
   },
 
   /**
+   * Live `default_model` (provider name or provider/model).
+   */
+  async getReasonixDefaultModel(): Promise<string | null> {
+    return await invoke("get_reasonix_default_model");
+  },
+
+  /**
    * 从 Reasonix live 配置导入供应商到数据库
    */
   async importReasonixProvidersFromLive(): Promise<number> {

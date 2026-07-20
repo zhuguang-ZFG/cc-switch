@@ -83,6 +83,21 @@ pub fn get_reasonix_dir() -> PathBuf {
     default_reasonix_home()
 }
 
+/// State root for sessions / projects / memory (mirrors Reasonix `userSupportDir`).
+///
+/// Prefer `REASONIX_STATE_HOME`, then the same home as `get_reasonix_dir()`.
+/// Config (`config.toml`, `.env`) stays under `get_reasonix_dir()`.
+pub fn get_reasonix_state_dir() -> PathBuf {
+    if let Some(raw) = std::env::var_os("REASONIX_STATE_HOME") {
+        let value = raw.to_string_lossy();
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    get_reasonix_dir()
+}
+
 pub fn get_reasonix_config_path() -> PathBuf {
     get_reasonix_dir().join("config.toml")
 }

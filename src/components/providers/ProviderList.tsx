@@ -123,6 +123,19 @@ export function ProviderList({
     enabled: appId === "reasonix",
   });
 
+  // Live default_model when SSOT current is empty (first import / legacy).
+  const { data: reasonixDefaultModel } = useQuery({
+    queryKey: ["reasonix", "defaultModel"],
+    queryFn: () => providersApi.getReasonixDefaultModel(),
+    enabled: appId === "reasonix",
+  });
+  const reasonixLiveCurrentProviderId = useMemo(() => {
+    if (!reasonixDefaultModel) return undefined;
+    const raw = reasonixDefaultModel.trim();
+    if (!raw || raw.startsWith("cc-switch-")) return undefined;
+    return raw.split("/")[0] || undefined;
+  }, [reasonixDefaultModel]);
+
   // Hermes: 读取当前 model.provider，用于判断哪个供应商是"当前激活"（高亮）
   const { data: hermesModelConfig } = useHermesModelConfig(
     appId === "kimicode",
@@ -450,11 +463,18 @@ export function ProviderList({
               hermesCurrentProviderId === provider.id;
             const isKimiCurrent = isKimiSSotCurrent || isKimiLiveCurrent;
             // Reasonix is hybrid like Kimi: exclusive SSOT current + additive live.
-            // Prefer backend currentProviderId (stable under proxy takeover).
-            const isReasonixCurrent =
+            // Prefer backend currentProviderId (stable under proxy takeover);
+            // fall back to live default_model when SSOT is empty.
+            const isReasonixSSotCurrent =
               appId === "reasonix" &&
               Boolean(currentProviderId) &&
               provider.id === currentProviderId;
+            const isReasonixLiveCurrent =
+              appId === "reasonix" &&
+              !currentProviderId &&
+              reasonixLiveCurrentProviderId === provider.id;
+            const isReasonixCurrent =
+              isReasonixSSotCurrent || isReasonixLiveCurrent;
             return (
               <SortableProviderCard
                 key={provider.id}

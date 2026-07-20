@@ -28,14 +28,23 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::ClaudeDesktop => unreachable!("handled above"),
     };
 
+    // Reasonix official memory prefers REASONIX.md, then AGENTS.md.
+    if matches!(app, AppType::Reasonix) {
+        let reasonix_md = base_dir.join("REASONIX.md");
+        if reasonix_md.exists() {
+            return Ok(reasonix_md);
+        }
+        return Ok(base_dir.join("AGENTS.md"));
+    }
+
     let filename = match app {
         AppType::Claude => "CLAUDE.md",
         AppType::Codex
         | AppType::GrokBuild
         | AppType::OpenCode
         | AppType::OpenClaw
-        | AppType::KimiCode
-        | AppType::Reasonix => "AGENTS.md",
+        | AppType::KimiCode => "AGENTS.md",
+        AppType::Reasonix => unreachable!("handled above"),
         AppType::ClaudeDesktop => unreachable!("handled above"),
     };
 

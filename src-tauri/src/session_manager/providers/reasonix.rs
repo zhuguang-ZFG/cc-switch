@@ -36,13 +36,13 @@ fn is_transcript_jsonl(name: &str) -> bool {
 }
 
 pub fn session_root() -> PathBuf {
-    crate::reasonix_config::get_reasonix_dir().join("sessions")
+    crate::reasonix_config::get_reasonix_state_dir().join("sessions")
 }
 
 /// Global sessions + per-project `projects/<slug>/sessions` roots.
 pub fn session_roots() -> Vec<PathBuf> {
     let mut roots = vec![session_root()];
-    let projects = crate::reasonix_config::get_reasonix_dir().join("projects");
+    let projects = crate::reasonix_config::get_reasonix_state_dir().join("projects");
     if let Ok(entries) = fs::read_dir(&projects) {
         for entry in entries.flatten() {
             let path = entry.path();

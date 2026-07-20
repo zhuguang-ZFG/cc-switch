@@ -2190,6 +2190,50 @@ pub fn import_reasonix_providers_from_live(state: &AppState) -> Result<usize, Ap
         log::info!("Imported Reasonix provider '{name}' from live config");
     }
 
+    // Seed SSOT current from live default_model when no current is set
+    // (first import / empty settings), so tray/UI highlight match live.
+    if imported + updated > 0 {
+        let has_current = state
+            .db
+            .get_current_provider("reasonix")
+            .ok()
+            .flatten()
+            .filter(|id| !id.is_empty())
+            .is_some();
+        if !has_current {
+            if let Ok(Some(default_model)) = reasonix_config::get_default_model() {
+                let provider_id = default_model
+                    .split_once('/')
+                    .map(|(name, _)| name)
+                    .unwrap_or(default_model.as_str())
+                    .trim();
+                if !provider_id.is_empty()
+                    && provider_id != reasonix_config::REASONIX_PROXY_PROVIDER
+                    && state
+                        .db
+                        .get_provider_by_id(provider_id, "reasonix")
+                        .ok()
+                        .flatten()
+                        .is_some()
+                {
+                    if let Err(e) = state.db.set_current_provider("reasonix", provider_id) {
+                        log::warn!(
+                            "Failed to seed Reasonix current provider from live default_model: {e}"
+                        );
+                    } else {
+                        let _ = crate::settings::set_current_provider(
+                            &AppType::Reasonix,
+                            Some(provider_id),
+                        );
+                        log::info!(
+                            "Seeded Reasonix current provider '{provider_id}' from live default_model"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     Ok(imported + updated)
 }
 

@@ -93,6 +93,12 @@ export const handlers = [
     success(getLiveProviderIds("reasonix")),
   ),
 
+  http.post(`${TAURI_ENDPOINT}/get_reasonix_default_model`, () => success(null)),
+
+  http.post(`${TAURI_ENDPOINT}/get_kimicode_live_provider_ids`, () =>
+    success(getLiveProviderIds("kimicode")),
+  ),
+
   http.post(`${TAURI_ENDPOINT}/get_openclaw_default_model`, () =>
     success({ primary: null, fallback: [] }),
   ),
