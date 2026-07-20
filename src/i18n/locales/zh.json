@@ -2118,7 +2118,19 @@
       "editTitle": "编辑 Kimi Code 通用配置片段",
       "hint": "该片段会合并进所有 Kimi Code 供应商共享的 live 配置（~/.kimi-code/config.toml），保存后立即生效。",
       "guideUsage": "使用方式：保存片段后，每次同步 live 配置时都会自动合并，无需逐个供应商勾选。",
-      "emptyHint": "在下方编辑器中输入要共享的 TOML 配置，保存后对所有 Kimi Code 供应商生效"
+      "emptyHint": "在下方编辑器中输入要共享的 TOML 配置，保存后对所有 Kimi Code 供应商生效",
+      "rawToml": "高级：完整 TOML 片段",
+      "openButton": "思维强度 / 通用配置"
+    },
+    "thinking": {
+      "title": "思维强度",
+      "hint": "写入 Kimi Code 全局 [thinking]（effort / enabled）。与 Claude「最大强度思考」、Codex「思考等级」同类；保存后合并进 live config.toml。",
+      "effort": "思考等级 (effort)",
+      "effortUnset": "不设置（沿用 CLI / 模型默认）",
+      "enabled": "显式启用 Thinking",
+      "enabledHint": "写入 enabled = true；关闭则不写 enabled 键，仅保留 effort。",
+      "enabledFalse": "当前片段含 enabled = false。",
+      "invalidToml": "当前片段 TOML 无效，请先在下方编辑器修复后再用可视化控件。"
     },
     "form": {
       "baseUrl": "API 端点",

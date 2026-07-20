@@ -2676,7 +2676,9 @@ function ProviderFormFull({
                       onClick={() => setIsKimiCommonConfigModalOpen(true)}
                       className="text-xs text-blue-500 dark:text-blue-400 hover:underline"
                     >
-                      {t("codexConfig.editCommonConfig")}
+                      {t("kimicode.commonConfig.openButton", {
+                        defaultValue: "思维强度 / 通用配置",
+                      })}
                     </button>
                   </div>
                   <KimiCommonConfigModal

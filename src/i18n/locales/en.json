@@ -2118,7 +2118,19 @@
       "editTitle": "Edit Kimi Code Common Config Snippet",
       "hint": "This snippet is merged into the shared Kimi Code live config (~/.kimi-code/config.toml) and takes effect for every Kimi Code provider on save.",
       "guideUsage": "How to use: save the snippet and it is merged automatically on every live config sync — no per-provider opt-in needed.",
-      "emptyHint": "Type the shared TOML configuration in the editor below; it applies to all Kimi Code providers"
+      "emptyHint": "Type the shared TOML configuration in the editor below; it applies to all Kimi Code providers",
+      "rawToml": "Advanced: full TOML snippet",
+      "openButton": "Thinking intensity / common config"
+    },
+    "thinking": {
+      "title": "Thinking intensity",
+      "hint": "Writes global [thinking] (effort / enabled) in Kimi Code config. Same class of control as Claude effort / Codex reasoning level; merged into live config.toml on save.",
+      "effort": "Effort level",
+      "effortUnset": "Unset (use CLI / model default)",
+      "enabled": "Explicitly enable thinking",
+      "enabledHint": "Writes enabled = true; turning off omits the enabled key and keeps effort only.",
+      "enabledFalse": "Snippet currently has enabled = false.",
+      "invalidToml": "Snippet TOML is invalid. Fix it in the editor below before using structured controls."
     },
     "form": {
       "baseUrl": "API Endpoint",
