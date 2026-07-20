@@ -142,12 +142,27 @@ fn file_ends_with_newline(file: &fs::File, file_len: u64) -> bool {
     cursor.read_exact(&mut byte).is_ok() && byte[0] == b'\n'
 }
 
+/// Stable session key for usage request_ids — includes project slug when under
+/// `projects/<slug>/sessions/` so two workspaces with the same stem don't collide.
 fn session_id_from_events_path(path: &Path) -> String {
-    path.file_name()
+    let stem = path
+        .file_name()
         .and_then(|n| n.to_str())
         .and_then(|n| n.strip_suffix(".events.jsonl"))
-        .unwrap_or("unknown")
-        .to_string()
+        .unwrap_or("unknown");
+
+    // …/projects/<slug>/sessions/<stem>.events.jsonl
+    let components: Vec<_> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    if let Some(sessions_idx) = components.iter().rposition(|c| *c == "sessions") {
+        if sessions_idx >= 2 && components.get(sessions_idx - 2) == Some(&"projects") {
+            let slug = components[sessions_idx - 1];
+            return format!("projects/{slug}/{stem}");
+        }
+    }
+    stem.to_string()
 }
 
 fn parse_usage(usage: &serde_json::Value) -> Option<UsageTokens> {
@@ -562,6 +577,12 @@ mod tests {
         assert_eq!(
             session_id_from_events_path(Path::new("/x/code-jh.events.jsonl")),
             "code-jh"
+        );
+        assert_eq!(
+            session_id_from_events_path(Path::new(
+                "/home/reasonix/projects/c--users-demo/sessions/chat.events.jsonl"
+            )),
+            "projects/c--users-demo/chat"
         );
     }
 }

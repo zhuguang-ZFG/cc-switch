@@ -143,10 +143,22 @@ fn parse_session_file(root: &Path, path: &Path) -> Option<SessionMeta> {
     let preview = first_user_preview(path);
     let title = custom_title.or_else(|| preview.clone());
 
-    let project_dir = path
-        .parent()
-        .filter(|parent| *parent != root)
-        .map(|parent| parent.display().to_string());
+    let project_dir = project_dir_for_session(root, path);
+
+    // Qualify id under projects so two workspaces with the same basename don't collide in the UI.
+    let session_id = if let Some(ref project) = project_dir {
+        if let Some(slug) = Path::new(project)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|s| !s.is_empty())
+        {
+            format!("{slug}/{session_id}")
+        } else {
+            session_id
+        }
+    } else {
+        session_id
+    };
 
     Some(SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
@@ -160,6 +172,25 @@ fn parse_session_file(root: &Path, path: &Path) -> Option<SessionMeta> {
         // Prefer full path: CLI --resume accepts path or query; id alone is ambiguous.
         resume_command: Some(format!("reasonix --resume \"{}\"", path.display())),
     })
+}
+
+/// Resolve a display project label for a session file.
+/// - Global sessions under `…/sessions/<slug>/file` → parent dir name
+/// - Desktop project roots `…/projects/<slug>/sessions/file` → project slug
+fn project_dir_for_session(root: &Path, path: &Path) -> Option<String> {
+    let parent = path.parent()?;
+    if parent != root {
+        return Some(parent.display().to_string());
+    }
+    // root is already …/projects/<slug>/sessions
+    let mut comps = root.components().rev();
+    let sessions = comps.next()?;
+    let slug = comps.next()?;
+    let projects = comps.next()?;
+    if sessions.as_os_str() == "sessions" && projects.as_os_str() == "projects" {
+        return Some(slug.as_os_str().to_string_lossy().into_owned());
+    }
+    None
 }
 
 fn read_custom_title(session_path: &Path) -> Option<String> {
@@ -190,8 +221,11 @@ fn read_custom_title(session_path: &Path) -> Option<String> {
         };
         // Custom title keys first, then official `preview` from branch meta.
         for key in [
+            "custom_title",
             "customTitle",
             "CustomTitle",
+            "topic_title",
+            "topicTitle",
             "title",
             "Title",
             "preview",
@@ -296,13 +330,18 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
         ));
     }
     let stem = file_name.strip_suffix(".jsonl").unwrap_or(file_name);
-    if stem != session_id {
+    // Accept bare stem or qualified `project-slug/stem` from scan_sessions.
+    let id_matches = session_id == stem
+        || session_id
+            .rsplit_once('/')
+            .is_some_and(|(_, tail)| tail == stem);
+    if !id_matches {
         return Err(format!(
             "Reasonix session ID mismatch: expected {session_id}, found {stem}"
         ));
     }
 
-    // Remove the transcript and common sidecars sharing the same stem.
+    // Remove the transcript and common sidecars sharing the same stem / basename.
     let parent = path
         .parent()
         .ok_or_else(|| format!("Invalid Reasonix session path: {}", path.display()))?;
@@ -312,18 +351,42 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
             .map_err(|e| format!("Failed to delete Reasonix session {}: {e}", path.display()))?;
         removed = true;
     }
-    let sidecar_suffixes = [
-        ".events.jsonl",
-        ".meta.json",
-        ".jsonl.bak",
-        ".pending.json",
-        ".plan.json",
-        ".guardian.jsonl",
+    // Official branch meta is `chat.jsonl.meta` (path + ".meta"), not `{stem}.meta.json`.
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(stem);
+    let sidecar_names = [
+        format!("{stem}.events.jsonl"),
+        format!("{stem}.meta.json"),
+        format!("{file_name}.meta"),
+        format!("{stem}.jsonl.bak"),
+        format!("{stem}.pending.json"),
+        format!("{stem}.plan.json"),
+        format!("{stem}.guardian.jsonl"),
+        format!("{stem}.goal-state.json"),
+        format!("{stem}.event-index.json"),
     ];
-    for suffix in sidecar_suffixes {
-        let sidecar = parent.join(format!("{stem}{suffix}"));
+    for name in sidecar_names {
+        let sidecar = parent.join(name);
         if sidecar.is_file() {
             let _ = fs::remove_file(&sidecar);
+        }
+    }
+    // Best-effort: drop rename entry from .titles.json
+    let titles_path = parent.join(".titles.json");
+    if titles_path.is_file() {
+        if let Ok(raw) = fs::read_to_string(&titles_path) {
+            if let Ok(mut value) = serde_json::from_str::<Value>(&raw) {
+                if let Some(obj) = value.as_object_mut() {
+                    if obj.remove(file_name).is_some() {
+                        let _ = fs::write(
+                            &titles_path,
+                            serde_json::to_string_pretty(&value).unwrap_or(raw),
+                        );
+                    }
+                }
+            }
         }
     }
     Ok(removed)
@@ -388,8 +451,11 @@ mod tests {
         assert_eq!(demo.provider_id, "reasonix");
         assert!(demo.title.as_deref().unwrap_or("").contains("hello"));
         assert!(
-            scanned.iter().any(|s| s.session_id == "proj-chat"),
-            "project workspace session must be listed"
+            scanned
+                .iter()
+                .any(|s| s.session_id == "proj-chat" || s.session_id.ends_with("/proj-chat")),
+            "project workspace session must be listed, got {:?}",
+            scanned.iter().map(|s| &s.session_id).collect::<Vec<_>>()
         );
 
         let messages = load_messages(&path).unwrap();

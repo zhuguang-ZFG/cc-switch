@@ -706,14 +706,53 @@ pub fn set_provider(name: &str, settings_config: Value) -> Result<ReasonixWriteO
     Ok(outcome)
 }
 
+/// Whether top-level `default_model` refers to this provider entry.
+/// Switch path writes the provider **name**; older rows may still store a model id.
+fn default_model_refers_to_provider(default_model: &str, name: &str, table: &Table) -> bool {
+    let default_model = default_model.trim();
+    let name = name.trim();
+    if default_model.is_empty() || name.is_empty() {
+        return false;
+    }
+    if default_model == name {
+        return true;
+    }
+    // provider/model form
+    if default_model
+        .split_once('/')
+        .is_some_and(|(prefix, _)| prefix == name)
+    {
+        return true;
+    }
+    // Legacy: default_model equals the table's default/model field
+    if default_model_from_provider_table(table).as_deref() == Some(default_model) {
+        return true;
+    }
+    models_from_provider_table(table)
+        .iter()
+        .any(|model| model == default_model)
+}
+
+fn first_remaining_provider_name(doc: &DocumentMut) -> Option<String> {
+    doc.get("providers")
+        .and_then(Item::as_array_of_tables)
+        .and_then(|providers| {
+            providers.iter().find_map(|table| {
+                table_str(table, "name")
+                    .filter(|n| n != REASONIX_PROXY_PROVIDER && !n.is_empty())
+            })
+        })
+}
+
 pub fn remove_provider(name: &str) -> Result<ReasonixWriteOutcome, AppError> {
     let _guard = write_lock()
         .lock()
         .map_err(|_| AppError::Message("Reasonix config write lock poisoned".into()))?;
 
     let mut doc = read_document()?;
+    let name = name.trim();
     let providers = providers_array_mut(&mut doc);
-    let index = find_array_table_index(providers, "name", name.trim());
+    let index = find_array_table_index(providers, "name", name);
     let Some(index) = index else {
         return Ok(ReasonixWriteOutcome::default());
     };
@@ -722,21 +761,13 @@ pub fn remove_provider(name: &str) -> Result<ReasonixWriteOutcome, AppError> {
     providers.remove(index);
     let env_key = table_str(&removed, "api_key_env");
 
-    let mut changed_default = false;
     if let Some(default_model) = doc
         .get("default_model")
         .and_then(Item::as_str)
         .map(str::to_string)
     {
-        let removed_default = default_model_from_provider_table(&removed)
-            .is_some_and(|model| model == default_model);
-        if removed_default {
-            changed_default = true;
-            let fallback_default = doc
-                .get("providers")
-                .and_then(Item::as_array_of_tables)
-                .and_then(|providers| providers.iter().find_map(default_model_from_provider_table));
-            if let Some(next) = fallback_default {
+        if default_model_refers_to_provider(&default_model, name, &removed) {
+            if let Some(next) = first_remaining_provider_name(&doc) {
                 doc["default_model"] = Item::Value(TomlEditValue::from(next.as_str()));
             } else {
                 doc.as_table_mut().remove("default_model");
@@ -744,10 +775,9 @@ pub fn remove_provider(name: &str) -> Result<ReasonixWriteOutcome, AppError> {
         }
     }
 
-    if env_key.is_none() && !changed_default {
-        return Ok(ReasonixWriteOutcome::default());
-    }
-
+    // Always persist after a successful array removal — early-return used to
+    // drop the in-memory remove when there was no env key and default_model
+    // comparison failed (provider-name vs model-id mismatch).
     let outcome = write_document(&doc)?;
     if let Some(key) = env_key {
         let _ = clear_env_key(&key);
@@ -930,11 +960,8 @@ pub fn clear_proxy_takeover() -> Result<ReasonixWriteOutcome, AppError> {
             || value == REASONIX_PROXY_MODEL
             || value == "cc-switch-proxy/cc-switch-proxy-default"
     }) {
-        if let Some(fallback) = doc
-            .get("providers")
-            .and_then(Item::as_array_of_tables)
-            .and_then(|providers| providers.iter().find_map(default_model_from_provider_table))
-        {
+        // Prefer provider name (switch semantics), not a bare model id.
+        if let Some(fallback) = first_remaining_provider_name(&doc) {
             doc["default_model"] = Item::Value(TomlEditValue::from(fallback.as_str()));
         } else {
             doc.as_table_mut().remove("default_model");
@@ -993,13 +1020,29 @@ pub fn remove_provider_from_text(
     name: &str,
 ) -> Result<(String, Option<String>), AppError> {
     let mut doc = parse_document_text(text)?;
+    let name = name.trim();
     let providers = providers_array_mut(&mut doc);
-    let Some(index) = find_array_table_index(providers, "name", name.trim()) else {
+    let Some(index) = find_array_table_index(providers, "name", name) else {
         return Ok((text.to_string(), None));
     };
     let removed = providers.get(index).cloned().unwrap_or_default();
     let env_key = table_str(&removed, "api_key_env");
     providers.remove(index);
+
+    if let Some(default_model) = doc
+        .get("default_model")
+        .and_then(Item::as_str)
+        .map(str::to_string)
+    {
+        if default_model_refers_to_provider(&default_model, name, &removed) {
+            if let Some(next) = first_remaining_provider_name(&doc) {
+                doc["default_model"] = Item::Value(TomlEditValue::from(next.as_str()));
+            } else {
+                doc.as_table_mut().remove("default_model");
+            }
+        }
+    }
+
     Ok((doc.to_string(), env_key))
 }
 
