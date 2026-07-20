@@ -91,6 +91,8 @@ fn parse_provider_deeplink(
             | "kimi-code"
             | "kimi"
             | "hermes"
+            | "reasonix"
+            | "reasonix-cli"
     ) {
         return Err(AppError::InvalidInput(format!(
             "Invalid app type: expected a supported app id, got '{app}'"
@@ -209,6 +211,8 @@ fn parse_prompt_deeplink(
             | "kimi-code"
             | "kimi"
             | "hermes"
+            | "reasonix"
+            | "reasonix-cli"
     ) {
         return Err(AppError::InvalidInput(format!(
             "Invalid app type: expected a supported app id, got '{app}'"
@@ -291,6 +295,8 @@ fn parse_mcp_deeplink(
                 | "kimi-code"
                 | "kimi"
                 | "hermes"
+                | "reasonix"
+                | "reasonix-cli"
         ) {
             return Err(AppError::InvalidInput(format!(
                 "Invalid app in 'apps': expected a supported app id, got '{trimmed}'"

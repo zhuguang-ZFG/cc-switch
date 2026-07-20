@@ -23,8 +23,9 @@ use crate::store::AppState;
 // Re-export sub-module functions for external access
 pub use live::{
     import_default_config, import_kimicode_providers_from_live,
-    import_openclaw_providers_from_live, import_opencode_providers_from_live, read_live_settings,
-    remove_kimicode_provider_from_live, remove_reasonix_provider_from_live, should_import_default_config_on_startup,
+    import_openclaw_providers_from_live, import_opencode_providers_from_live,
+    import_reasonix_providers_from_live, read_live_settings, remove_kimicode_provider_from_live,
+    remove_reasonix_provider_from_live, should_import_default_config_on_startup,
     sync_current_to_live, update_toml_common_config_snippet,
 };
 
@@ -1908,6 +1909,155 @@ requires_openai_auth = true
         });
     }
 
+    /// During takeover, Reasonix CRUD must update the restore backup (+ `.env`)
+    /// and leave the live `cc-switch-proxy` projection intact.
+    #[test]
+    #[serial]
+    fn reasonix_update_during_takeover_writes_backup_and_env_not_live() {
+        with_test_home(|state, home| {
+            std::env::set_var("REASONIX_HOME", home.join("reasonix-home"));
+            crate::settings::reload_settings().expect("reload settings");
+
+            let provider = Provider {
+                id: "demo".to_string(),
+                name: "Demo".to_string(),
+                settings_config: json!({
+                    "kind": "openai",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "demo-secret",
+                    "models": ["demo-model"],
+                    "default": "demo-model"
+                }),
+                website_url: None,
+                category: Some("custom".to_string()),
+                created_at: Some(1),
+                sort_index: Some(0),
+                notes: None,
+                meta: None,
+                icon: None,
+                icon_color: None,
+                in_failover_queue: false,
+            };
+            ProviderService::add(state, AppType::Reasonix, provider.clone(), true)
+                .expect("add demo");
+
+            let original = crate::reasonix_config::read_config_text().expect("read live");
+            futures::executor::block_on(
+                state
+                    .db
+                    .save_live_backup(AppType::Reasonix.as_str(), &original),
+            )
+            .expect("seed backup");
+            crate::reasonix_config::apply_proxy_takeover("http://127.0.0.1:15721/reasonix/v1")
+                .expect("apply takeover");
+
+            let mut edited = provider.clone();
+            edited.settings_config["base_url"] =
+                Value::String("https://updated.example/v1".into());
+            edited.settings_config["api_key"] = Value::String("updated-secret".into());
+            ProviderService::update(state, AppType::Reasonix, None, edited)
+                .expect("update during takeover");
+
+            let live = crate::reasonix_config::read_config_text().expect("live after update");
+            assert!(
+                live.contains("cc-switch-proxy"),
+                "live must keep proxy projection, got:\n{live}"
+            );
+            assert!(
+                !live.contains("updated.example"),
+                "edited base_url must not land in live during takeover"
+            );
+
+            let backup = futures::executor::block_on(state.db.get_live_backup("reasonix"))
+                .expect("read backup")
+                .expect("backup exists");
+            assert!(
+                backup.original_config.contains("updated.example"),
+                "backup must receive the edit, got:\n{}",
+                backup.original_config
+            );
+            let env = crate::reasonix_config::read_env_map().expect("read env");
+            assert_eq!(
+                env.get("DEMO_API_KEY").map(String::as_str),
+                Some("updated-secret"),
+                "takeover backup update must sync api_key into .env"
+            );
+            assert_eq!(
+                env.get("CC_SWITCH_PROXY_API_KEY").map(String::as_str),
+                Some("PROXY_MANAGED"),
+                "proxy placeholder env must remain during takeover"
+            );
+
+            std::env::remove_var("REASONIX_HOME");
+        });
+    }
+
+    /// During takeover, startup/manual live→DB import must not overwrite SSOT
+    /// with the stale live projection (edits land in backup, not live).
+    #[test]
+    #[serial]
+    fn reasonix_import_from_live_skips_existing_updates_during_takeover() {
+        with_test_home(|state, home| {
+            std::env::set_var("REASONIX_HOME", home.join("reasonix-home"));
+            crate::settings::reload_settings().expect("reload settings");
+
+            let provider = Provider {
+                id: "demo".to_string(),
+                name: "Demo".to_string(),
+                settings_config: json!({
+                    "kind": "openai",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "demo-secret",
+                    "models": ["demo-model"],
+                    "default": "demo-model"
+                }),
+                website_url: None,
+                category: Some("custom".to_string()),
+                created_at: Some(1),
+                sort_index: Some(0),
+                notes: None,
+                meta: None,
+                icon: None,
+                icon_color: None,
+                in_failover_queue: false,
+            };
+            ProviderService::add(state, AppType::Reasonix, provider.clone(), true)
+                .expect("add demo");
+
+            let original = crate::reasonix_config::read_config_text().expect("read live");
+            futures::executor::block_on(
+                state
+                    .db
+                    .save_live_backup(AppType::Reasonix.as_str(), &original),
+            )
+            .expect("seed backup");
+            crate::reasonix_config::apply_proxy_takeover("http://127.0.0.1:15721/reasonix/v1")
+                .expect("apply takeover");
+
+            let mut edited = provider.clone();
+            edited.settings_config["base_url"] =
+                Value::String("https://updated.example/v1".into());
+            ProviderService::update(state, AppType::Reasonix, None, edited)
+                .expect("update during takeover");
+
+            let count = import_reasonix_providers_from_live(state).expect("import");
+            assert_eq!(count, 0, "takeover must skip updates of existing providers");
+
+            let db = state
+                .db
+                .get_provider_by_id("demo", "reasonix")
+                .expect("lookup")
+                .expect("demo exists");
+            assert_eq!(
+                db.settings_config["base_url"].as_str(),
+                Some("https://updated.example/v1"),
+                "SSOT must keep takeover edit, not stale live URL"
+            );
+
+            std::env::remove_var("REASONIX_HOME");
+        });
+    }
+
     /// Kimi Code must maintain Claude/Codex-aligned current SSOT even outside
     /// proxy takeover: switch updates settings + DB is_current, live default_model,
     /// and proxy select_providers (failover off) returns the switched provider.
@@ -2345,7 +2495,7 @@ impl ProviderService {
         let Some(backup) = backup else {
             return Ok(());
         };
-        let updated =
+        let (updated, env_key) =
             crate::reasonix_config::remove_provider_from_text(&backup.original_config, id)
                 .map_err(|e| AppError::Message(format!("从 Reasonix 备份移除供应商失败: {e}")))?;
         futures::executor::block_on(
@@ -2353,7 +2503,11 @@ impl ProviderService {
                 .db
                 .save_live_backup(AppType::Reasonix.as_str(), &updated),
         )
-        .map_err(|e| AppError::Message(format!("写入 Reasonix 备份失败: {e}")))
+        .map_err(|e| AppError::Message(format!("写入 Reasonix 备份失败: {e}")))?;
+        if let Some(key) = env_key {
+            let _ = crate::reasonix_config::clear_env_key(&key);
+        }
+        Ok(())
     }
 
     fn normalize_usage_script_credential_overrides(app_type: &AppType, provider: &mut Provider) {
@@ -4232,6 +4386,42 @@ impl ProviderService {
                         "Reasonix API endpoint is required",
                     ));
                 }
+
+                let models = settings.get("models").and_then(Value::as_array);
+                let single_model = settings
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                let has_models = models.is_some_and(|m| !m.is_empty()) || single_model.is_some();
+                if !has_models {
+                    return Err(AppError::localized(
+                        "provider.reasonix.models.missing",
+                        "Reasonix 至少需要一个模型",
+                        "Reasonix requires at least one model",
+                    ));
+                }
+                if let Some(models) = models {
+                    if models.iter().any(|model| {
+                        let id = model.as_str().map(str::trim).filter(|s| !s.is_empty()).or_else(
+                            || {
+                                model
+                                    .get("id")
+                                    .or_else(|| model.get("model"))
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                            },
+                        );
+                        id.is_none()
+                    }) {
+                        return Err(AppError::localized(
+                            "provider.reasonix.model_id.missing",
+                            "Reasonix 模型 ID 不能为空",
+                            "Reasonix model ID is required",
+                        ));
+                    }
+                }
             }
         }
 
@@ -4587,6 +4777,10 @@ impl ProviderService {
                 let kimicode_id = format!("universal-kimicode-{id}");
                 let _ = state.db.delete_provider("kimicode", &kimicode_id);
             }
+            if p.apps.reasonix {
+                let reasonix_id = format!("universal-reasonix-{id}");
+                let _ = state.db.delete_provider("reasonix", &reasonix_id);
+            }
         }
 
         Ok(true)
@@ -4654,6 +4848,37 @@ impl ProviderService {
         } else {
             let kimicode_id = format!("universal-kimicode-{id}");
             let _ = state.db.delete_provider("kimicode", &kimicode_id);
+        }
+
+        // 同步到 Reasonix
+        if let Some(mut reasonix_provider) = provider.to_reasonix_provider() {
+            if let Some(existing) =
+                state
+                    .db
+                    .get_provider_by_id(&reasonix_provider.id, "reasonix")?
+            {
+                let mut merged = existing.settings_config.clone();
+                Self::merge_json(&mut merged, &reasonix_provider.settings_config);
+                reasonix_provider.settings_config = merged;
+            }
+            state.db.save_provider("reasonix", &reasonix_provider)?;
+            // Project into live when not under proxy takeover.
+            if !Self::reasonix_proxy_owns_live(state) {
+                let _ = crate::reasonix_config::set_provider(
+                    &reasonix_provider.id,
+                    reasonix_provider.settings_config.clone(),
+                );
+            } else {
+                let _ = Self::reasonix_update_takeover_backup(state, &reasonix_provider);
+            }
+        } else {
+            let reasonix_id = format!("universal-reasonix-{id}");
+            let _ = state.db.delete_provider("reasonix", &reasonix_id);
+            if !Self::reasonix_proxy_owns_live(state) {
+                let _ = remove_reasonix_provider_from_live(&reasonix_id);
+            } else {
+                let _ = Self::reasonix_remove_from_takeover_backup(state, &reasonix_id);
+            }
         }
 
         Ok(true)

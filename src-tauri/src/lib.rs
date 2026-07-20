@@ -707,6 +707,13 @@ pub fn run() {
                 Ok(_) => log::debug!("○ No Kimi Code provider changes from live config"),
                 Err(e) => log::warn!("✗ Failed to import Kimi Code providers: {e}"),
             }
+            match crate::services::provider::import_reasonix_providers_from_live(&app_state) {
+                Ok(count) if count > 0 => {
+                    log::info!("✓ Synced {count} Reasonix provider(s) from live config");
+                }
+                Ok(_) => log::debug!("○ No Reasonix provider changes from live config"),
+                Err(e) => log::warn!("✗ Failed to import Reasonix providers: {e}"),
+            }
 
             // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
             {
@@ -1470,6 +1477,10 @@ pub fn run() {
             commands::set_openclaw_tools,
             // Kimi Code (replaces Hermes)
             commands::import_kimicode_providers_from_live,
+            commands::import_reasonix_providers_from_live,
+            commands::get_reasonix_live_provider_ids,
+            commands::get_reasonix_live_provider,
+            commands::get_reasonix_default_model,
             commands::get_kimicode_live_provider_ids,
             commands::get_kimicode_live_provider,
             commands::get_kimicode_default_model,

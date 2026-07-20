@@ -198,6 +198,20 @@ export const providersApi = {
   async importHermesFromLive(): Promise<number> {
     return await invoke("import_kimicode_providers_from_live");
   },
+
+  /**
+   * 获取 Reasonix live 配置中的供应商 ID 列表
+   */
+  async getReasonixLiveProviderIds(): Promise<string[]> {
+    return await invoke("get_reasonix_live_provider_ids");
+  },
+
+  /**
+   * 从 Reasonix live 配置导入供应商到数据库
+   */
+  async importReasonixProvidersFromLive(): Promise<number> {
+    return await invoke("import_reasonix_providers_from_live");
+  },
 };
 
 // ============================================================================

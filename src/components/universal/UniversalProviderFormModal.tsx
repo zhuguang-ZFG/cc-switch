@@ -24,6 +24,7 @@ import {
   type UniversalProviderPreset,
 } from "@/config/universalProviderPresets";
 import { KIMI_PROVIDER_TYPES } from "@/config/kimiProviderPresets";
+import { REASONIX_PROVIDER_KINDS } from "@/config/reasonixProviderPresets";
 import { deepClone } from "@/utils/deepClone";
 import { tryDecodeBase64Key } from "@/utils/base64Key";
 
@@ -65,6 +66,7 @@ export function UniversalProviderFormModal({
   const [codexEnabled, setCodexEnabled] = useState(true);
   const [geminiEnabled, setGeminiEnabled] = useState(true);
   const [kimiEnabled, setKimiEnabled] = useState(false);
+  const [reasonixEnabled, setReasonixEnabled] = useState(false);
 
   // 模型配置
   const [models, setModels] = useState<UniversalProviderModels>({});
@@ -87,6 +89,7 @@ export function UniversalProviderFormModal({
       setCodexEnabled(!!editingProvider.apps.codex);
       setGeminiEnabled(!!editingProvider.apps.gemini);
       setKimiEnabled(!!editingProvider.apps.kimicode);
+      setReasonixEnabled(!!editingProvider.apps.reasonix);
       setModels(editingProvider.models || {});
 
       // 尝试匹配预设
@@ -107,6 +110,7 @@ export function UniversalProviderFormModal({
       setCodexEnabled(!!defaultPreset.defaultApps.codex);
       setGeminiEnabled(!!defaultPreset.defaultApps.gemini);
       setKimiEnabled(!!defaultPreset.defaultApps.kimicode);
+      setReasonixEnabled(!!defaultPreset.defaultApps.reasonix);
       setModels(deepClone(defaultPreset.defaultModels));
     }
   }, [editingProvider, initialPreset, isOpen]);
@@ -121,6 +125,7 @@ export function UniversalProviderFormModal({
         setCodexEnabled(!!preset.defaultApps.codex);
         setGeminiEnabled(!!preset.defaultApps.gemini);
         setKimiEnabled(!!preset.defaultApps.kimicode);
+        setReasonixEnabled(!!preset.defaultApps.reasonix);
         setModels(deepClone(preset.defaultModels));
       }
     },
@@ -130,7 +135,7 @@ export function UniversalProviderFormModal({
   // 更新模型配置
   const updateModel = useCallback(
     (
-      app: "claude" | "codex" | "gemini" | "kimicode",
+      app: "claude" | "codex" | "gemini" | "kimicode" | "reasonix",
       field: string,
       value: string | number | undefined,
     ) => {
@@ -221,6 +226,20 @@ requires_openai_auth = true`;
     };
   }, [kimiEnabled, baseUrl, apiKey, models.kimicode]);
 
+  // 计算 Reasonix 配置 JSON 预览（与后端 to_reasonix_provider 生成的结构一致）
+  const reasonixConfigJson = useMemo(() => {
+    if (!reasonixEnabled) return null;
+    const kind = models.reasonix?.kind || "openai";
+    const model = models.reasonix?.model || "deepseek-chat";
+    return {
+      kind,
+      base_url: baseUrl.replace(/\/+$/, ""),
+      api_key: apiKey,
+      models: [model],
+      default: model,
+    };
+  }, [reasonixEnabled, baseUrl, apiKey, models.reasonix]);
+
   // 提交表单
   const handleSubmit = useCallback(() => {
     if (!name.trim() || !baseUrl.trim() || !apiKey.trim()) {
@@ -240,6 +259,7 @@ requires_openai_auth = true`;
             codex: codexEnabled,
             gemini: geminiEnabled,
             kimicode: kimiEnabled,
+            reasonix: reasonixEnabled,
           },
           models,
         }
@@ -258,6 +278,7 @@ requires_openai_auth = true`;
         codex: codexEnabled,
         gemini: geminiEnabled,
         kimicode: kimiEnabled,
+        reasonix: reasonixEnabled,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -277,6 +298,7 @@ requires_openai_auth = true`;
     codexEnabled,
     geminiEnabled,
     kimiEnabled,
+    reasonixEnabled,
     models,
     selectedPreset,
     onSave,
@@ -302,6 +324,7 @@ requires_openai_auth = true`;
             codex: codexEnabled,
             gemini: geminiEnabled,
             kimicode: kimiEnabled,
+            reasonix: reasonixEnabled,
           },
           models,
         }
@@ -320,6 +343,7 @@ requires_openai_auth = true`;
         codex: codexEnabled,
         gemini: geminiEnabled,
         kimicode: kimiEnabled,
+        reasonix: reasonixEnabled,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -338,6 +362,7 @@ requires_openai_auth = true`;
     codexEnabled,
     geminiEnabled,
     kimiEnabled,
+    reasonixEnabled,
     models,
     selectedPreset,
   ]);
@@ -576,6 +601,16 @@ requires_openai_auth = true`;
               </div>
               <Switch checked={kimiEnabled} onCheckedChange={setKimiEnabled} />
             </div>
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="flex items-center gap-2">
+                <ProviderIcon icon="deepseek" name="Reasonix" size={20} />
+                <span className="font-medium">Reasonix</span>
+              </div>
+              <Switch
+                checked={reasonixEnabled}
+                onCheckedChange={setReasonixEnabled}
+              />
+            </div>
           </div>
         </div>
 
@@ -763,11 +798,59 @@ requires_openai_auth = true`;
               </div>
             </div>
           )}
+
+          {/* Reasonix 模型 */}
+          {reasonixEnabled && (
+            <div className="space-y-3 rounded-lg border p-4">
+              <div className="flex items-center gap-2 font-medium">
+                <ProviderIcon icon="deepseek" name="Reasonix" size={16} />
+                Reasonix
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    {t("reasonix.form.kind", { defaultValue: "API 协议" })}
+                  </Label>
+                  <Select
+                    value={models.reasonix?.kind || "openai"}
+                    onValueChange={(v) => updateModel("reasonix", "kind", v)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REASONIX_PROVIDER_KINDS.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {t(item.labelKey)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    {t("universalProvider.model", { defaultValue: "模型" })}
+                  </Label>
+                  <Input
+                    value={models.reasonix?.model || ""}
+                    onChange={(e) =>
+                      updateModel("reasonix", "model", e.target.value)
+                    }
+                    placeholder="deepseek-chat"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 配置 JSON 预览 */}
         {isEditMode &&
-          (claudeEnabled || codexEnabled || geminiEnabled || kimiEnabled) && (
+          (claudeEnabled ||
+            codexEnabled ||
+            geminiEnabled ||
+            kimiEnabled ||
+            reasonixEnabled) && (
             <div className="space-y-4">
               <Label>
                 {t("universalProvider.configJsonPreview", {
@@ -844,6 +927,22 @@ requires_openai_auth = true`;
                   />
                 </div>
               )}
+
+              {/* Reasonix JSON */}
+              {reasonixConfigJson && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <ProviderIcon icon="deepseek" name="Reasonix" size={16} />
+                    Reasonix
+                  </div>
+                  <JsonEditor
+                    value={JSON.stringify(reasonixConfigJson, null, 2)}
+                    onChange={() => {}}
+                    height={180}
+                    darkMode={isDarkMode}
+                  />
+                </div>
+              )}
             </div>
           )}
       </div>
@@ -855,7 +954,7 @@ requires_openai_auth = true`;
           defaultValue: "同步统一供应商",
         })}
         message={t("universalProvider.syncConfirmDescription", {
-          defaultValue: `同步 "${name}" 将会覆盖 Claude、Codex、Gemini 和 Kimi Code 中关联的供应商配置。确定要继续吗？`,
+          defaultValue: `同步 "${name}" 将会覆盖 Claude、Codex、Gemini、Kimi Code 和 Reasonix 中关联的供应商配置。确定要继续吗？`,
           name: name,
         })}
         confirmText={t("universalProvider.saveAndSync", {

@@ -1192,11 +1192,32 @@ impl RequestForwarder {
         let adapter = protocol_override_adapter.as_deref().unwrap_or(adapter);
         let mut base_url = adapter.extract_base_url(provider)?;
 
-        let is_full_url = provider
+        let mut is_full_url = provider
             .meta
             .as_ref()
             .and_then(|meta| meta.is_full_url)
             .unwrap_or(false);
+
+        // Reasonix openai `chat_url` fully overrides the Chat Completions URL
+        // (same contract as Reasonix CLI openai.go). Live proxy ingress strips
+        // this field; only DB upstream providers may set it.
+        let reasonix_chat_url_override = if matches!(app_type, AppType::Reasonix)
+            && !reasonix_chat_to_anthropic_early
+        {
+            provider
+                .settings_config
+                .get("chat_url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .map(|url| url.trim_end_matches('/').to_string())
+        } else {
+            None
+        };
+        if let Some(chat_url) = reasonix_chat_url_override {
+            base_url = chat_url;
+            is_full_url = true;
+        }
 
         // GitHub Copilot API 使用 /chat/completions（无 /v1 前缀）
         let is_copilot = provider

@@ -99,12 +99,14 @@ Live 侧对 Reasonix **固定** OpenAI Chat 入站；上游 openai / anthropic �
 - 故障转移设置页含 Reasonix 队列编辑。
 - 用量筛选含 Reasonix。
 
-### R6. 非目标（本轮不做）
+### R6. 产品边界（已闭环，非缺口）
 
-- Reasonix OAuth / 托管登录（官方无对等能力）。
-- Responses 入站（openai kind 不是 Responses）。
-- 修改上游 Reasonix `ccswitch.go` 改读 `enabled_reasonix`（可另开任务）。
-- OpenCode / OpenClaw 代理（仍明确不支持）。
+| 项 | 结论 | 说明 |
+|----|------|------|
+| Reasonix OAuth / 托管登录 | **N/A** | 官方无对等能力；本产品不虚构 OAuth |
+| Responses 入站 | **不适用** | openai kind 走 Chat Completions，非 Responses |
+| OpenCode / OpenClaw 代理 | **范围外** | 另开任务；不纳入 Reasonix 代理对齐验收 |
+| 上游 `ccswitch.go` | **vendor 补丁已备** | 见 `docs/patches/reasonix-ccswitch-enabled-reasonix.md`；合入上游另跟 |
 
 ## 5. 验收标准
 

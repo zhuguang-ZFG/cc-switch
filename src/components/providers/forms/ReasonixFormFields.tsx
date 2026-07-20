@@ -29,6 +29,10 @@ interface ReasonixFormFieldsProps {
   onKindChange: (kind: ReasonixProviderKind) => void;
   baseUrl: string;
   onBaseUrlChange: (value: string) => void;
+  chatUrl?: string;
+  onChatUrlChange?: (value: string) => void;
+  modelsUrl?: string;
+  onModelsUrlChange?: (value: string) => void;
   apiKey: string;
   onApiKeyChange: (value: string) => void;
   category?: ProviderCategory;
@@ -47,6 +51,10 @@ export function ReasonixFormFields({
   onKindChange,
   baseUrl,
   onBaseUrlChange,
+  chatUrl = "",
+  onChatUrlChange,
+  modelsUrl = "",
+  onModelsUrlChange,
   apiKey,
   onApiKeyChange,
   category,
@@ -94,7 +102,8 @@ export function ReasonixFormFields({
       return;
     }
     setIsFetchingModels(true);
-    fetchModelsForConfig(baseUrl, apiKey)
+    const trimmedModelsUrl = modelsUrl.trim() || undefined;
+    fetchModelsForConfig(baseUrl, apiKey, undefined, trimmedModelsUrl)
       .then((fetched) => {
         setFetchedModels(fetched);
         if (fetched.length === 0) {
@@ -110,7 +119,7 @@ export function ReasonixFormFields({
         showFetchModelsError(err, t);
       })
       .finally(() => setIsFetchingModels(false));
-  }, [apiKey, baseUrl, t]);
+  }, [apiKey, baseUrl, modelsUrl, t]);
 
   const nonEmptyModels = models.filter((model) => model.trim());
 
@@ -155,6 +164,50 @@ export function ReasonixFormFields({
           })}
         </p>
       </div>
+
+      {onChatUrlChange && (
+        <div className="space-y-2">
+          <FormLabel htmlFor="reasonix-chat-url">
+            {t("reasonix.form.chatUrl", {
+              defaultValue: "Chat URL（可选）",
+            })}
+          </FormLabel>
+          <Input
+            id="reasonix-chat-url"
+            value={chatUrl}
+            onChange={(e) => onChatUrlChange(e.target.value)}
+            placeholder="https://api.example.com/v1/chat/completions"
+          />
+          <p className="text-xs text-muted-foreground">
+            {t("reasonix.form.chatUrlHint", {
+              defaultValue:
+                "可选：完全覆盖 Chat Completions 请求 URL；留空则使用 base_url + /chat/completions。",
+            })}
+          </p>
+        </div>
+      )}
+
+      {onModelsUrlChange && (
+        <div className="space-y-2">
+          <FormLabel htmlFor="reasonix-models-url">
+            {t("reasonix.form.modelsUrl", {
+              defaultValue: "Models URL（可选）",
+            })}
+          </FormLabel>
+          <Input
+            id="reasonix-models-url"
+            value={modelsUrl}
+            onChange={(e) => onModelsUrlChange(e.target.value)}
+            placeholder="https://api.example.com/v1/models"
+          />
+          <p className="text-xs text-muted-foreground">
+            {t("reasonix.form.modelsUrlHint", {
+              defaultValue:
+                "可选：覆盖 /models 探测 URL；留空则自动推导。",
+            })}
+          </p>
+        </div>
+      )}
 
       <ApiKeySection
         value={apiKey}

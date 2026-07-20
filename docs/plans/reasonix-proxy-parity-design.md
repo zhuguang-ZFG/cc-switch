@@ -279,13 +279,15 @@ Reasonix openai 客户端支持 SSE streaming。代理必须：
 - 对 anthropic 上游做流式转换回 OpenAI Chat SSE（复用现有转换器）
 - usage 在 stream 结束时解析并记账
 
-### 5.5 不实现（首版）
+### 5.5 产品边界（已闭环，非缺口）
 
-- 入站 Anthropic（Reasonix live 占位固定 openai）
-- 入站 Responses
-- Google / Vertex（Reasonix 官方 kind 仅 openai/anthropic）
-- Reasonix OAuth
-
+| 项 | 结论 |
+|----|------|
+| 入站 Anthropic | 不实现：Live 占位固定 `kind=openai`（出站 anthropic 仍支持） |
+| 入站 Responses | **不适用**：CLI 只走 Chat Completions |
+| Google / Vertex | 不实现：官方 kind 仅 openai/anthropic |
+| Reasonix OAuth | **N/A**：上游无对等托管登录 |
+| OpenCode / OpenClaw 代理 | **范围外**：另开任务，不纳入本设计验收 |
 ---
 
 ## 6. ProxyService 集成点

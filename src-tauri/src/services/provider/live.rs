@@ -2037,6 +2037,112 @@ pub fn remove_reasonix_provider_from_live(provider_id: &str) -> Result<(), AppEr
     Ok(())
 }
 
+/// Import providers from Reasonix live `config.toml` (+ `.env`) into the database.
+///
+/// Skips the proxy placeholder (`cc-switch-proxy`) and empty names. Existing DB
+/// rows are updated from live settings (additive upsert by provider name/id),
+/// except while proxy takeover is active — live then holds a stale projection
+/// and must not overwrite SSOT edits that landed in the restore backup.
+pub fn import_reasonix_providers_from_live(state: &AppState) -> Result<usize, AppError> {
+    use crate::reasonix_config;
+
+    let providers = reasonix_config::get_providers()?;
+    if providers.is_empty() {
+        return Ok(0);
+    }
+
+    let mut imported = 0;
+    let mut updated = 0;
+    let existing_ids = state.db.get_provider_ids("reasonix")?;
+    // Prefer backup presence (authoritative SSOT ownership) over live heuristics.
+    let proxy_owns_live = futures::executor::block_on(state.db.get_live_backup("reasonix"))
+        .ok()
+        .flatten()
+        .is_some()
+        || reasonix_config::is_proxy_takeover_active().unwrap_or(false);
+
+    for (name, mut config) in providers {
+        if name.trim().is_empty() {
+            log::warn!("Skipping Reasonix provider with empty name");
+            continue;
+        }
+        if name == reasonix_config::REASONIX_PROXY_PROVIDER || name.starts_with("cc-switch-") {
+            continue;
+        }
+        // Never import proxy-managed credentials into SSOT.
+        if config
+            .get("api_key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| key == "PROXY_MANAGED")
+        {
+            continue;
+        }
+        if config
+            .get("base_url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| url.contains("/reasonix/v1"))
+        {
+            continue;
+        }
+
+        // Normalize type → kind for DB/form consistency.
+        if config.get("kind").is_none() {
+            if let Some(ty) = config.get("type").cloned() {
+                if let Some(obj) = config.as_object_mut() {
+                    obj.insert("kind".into(), ty);
+                }
+            }
+        }
+
+        if existing_ids.contains(&name) {
+            if proxy_owns_live {
+                log::debug!(
+                    "Skipping Reasonix provider '{name}' live→DB update during proxy takeover"
+                );
+                continue;
+            }
+            match state.db.get_provider_by_id(&name, "reasonix") {
+                Ok(Some(existing)) => {
+                    let mut provider = existing;
+                    if provider.settings_config != config {
+                        provider.settings_config = config;
+                        if let Err(e) = state.db.save_provider("reasonix", &provider) {
+                            log::warn!(
+                                "Failed to update Reasonix provider '{name}' from live config: {e}"
+                            );
+                        } else {
+                            updated += 1;
+                            log::info!("Updated Reasonix provider '{name}' from live config");
+                        }
+                    }
+                }
+                Ok(None) => {
+                    log::warn!("Reasonix provider '{name}' disappeared while importing live config")
+                }
+                Err(e) => log::warn!("Failed to look up Reasonix provider '{name}': {e}"),
+            }
+            continue;
+        }
+
+        let mut provider = Provider::with_id(name.clone(), name.clone(), config, None);
+        provider.meta = Some(crate::provider::ProviderMeta {
+            live_config_managed: Some(true),
+            ..Default::default()
+        });
+        provider.category = Some("custom".to_string());
+
+        if let Err(e) = state.db.save_provider("reasonix", &provider) {
+            log::warn!("Failed to import Reasonix provider '{name}': {e}");
+            continue;
+        }
+
+        imported += 1;
+        log::info!("Imported Reasonix provider '{name}' from live config");
+    }
+
+    Ok(imported + updated)
+}
+
 /// Remove an OpenClaw provider from live config
 ///
 /// This removes a specific provider from ~/.openclaw/openclaw.json

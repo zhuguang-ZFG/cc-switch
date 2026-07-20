@@ -25,6 +25,10 @@ export interface ReasonixProviderSettingsConfig {
   models?: string[];
   /** 默认模型；缺省取 models[0] */
   default?: string;
+  /** 可选：完全覆盖 Chat Completions URL */
+  chat_url?: string;
+  /** 可选：覆盖 /models 探测 URL */
+  models_url?: string;
   [key: string]: unknown;
 }
 

@@ -53,9 +53,9 @@ export interface ProxyTakeoverStatus {
   /** @deprecated Hermes replaced by Kimi Code */
   hermes?: boolean;
   /** Kimi Code local proxy takeover (same class as Claude/Codex/Grok). */
-  kimicode?: boolean;
+  kimicode: boolean;
   /** Reasonix local proxy takeover */
-  reasonix?: boolean;
+  reasonix: boolean;
 }
 
 export interface ProviderHealth {

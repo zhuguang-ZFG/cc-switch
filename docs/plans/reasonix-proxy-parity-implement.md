@@ -8,7 +8,7 @@
 
 - [x] 实现前通读 design §1–§7、§13 与 PRD §4–§5。
 - [x] 触碰 live 文件的测试使用临时目录 fixture（`REASONIX_HOME`）。
-- [x] 未修改上游 Reasonix `internal/config/ccswitch.go`。
+- [x] 上游 `ccswitch.go` 以 vendor 补丁形式落地（非直接改远端仓库）。
 - [x] 未复用 `/kimicode/v1/responses`；Reasonix 入站为 Chat。
 
 ## 1. 阶段 A：基线与回归护栏
@@ -69,13 +69,24 @@
 
 > 说明：当前 **已安装的** `cc-switch.exe` 尚无 `/reasonix/v1`（404）；真实入口需用本分支构建启动。上述 e2e 用本分支 in-process 代理 + 系统 PATH 上的 Reasonix CLI 验证。
 
-## 8. 明确非目标（已跳过）
+## 8. 产品边界（已闭环，非缺口）
 
-- Reasonix OAuth
-- Responses 入站
-- 修改上游 `ccswitch.go` 的 `enabled_codex` → `enabled_reasonix`
-- OpenCode / OpenClaw 代理
-- 完整 live→DB 导入（SSOT 以 DB + 备份为准）
+下列项**不是待办**，已按 1A/2A/3A 决策关闭，勿再列为 Reasonix 补齐项：
+
+| 项 | 闭环结论 | 理由 |
+|----|----------|------|
+| Reasonix OAuth / 托管登录 | **N/A** | 上游 Reasonix 无对等 OAuth 契约；不虚构 managed 登录 |
+| Responses 入站（`/reasonix/v1/responses`） | **不适用** | Live `kind=openai` 固定 Chat Completions；CLI 只拼 `/chat/completions` |
+| OpenCode / OpenClaw 代理接管 | **范围外** | 独立产品能力；若要做另开分支（如 `feat/opencode-openclaw-proxy`），不在本 Reasonix 闭环内 |
+
+### 已补齐的前序延后项
+
+- [x] Live→DB 导入（`import_reasonix_providers_from_live` + 启动同步）
+- [x] Deeplink / MCP apps 白名单放行 `reasonix`
+- [x] `chat_url` 出站透传 + 表单 `chat_url`/`models_url` 高级字段
+- [x] Universal 表单 Reasonix 开关与同步
+- [x] JSON SSOT 占位检测；接管备份删除清 `.env`
+- [x] 上游 `ccswitch.go` vendor 补丁（见 `docs/patches/reasonix-ccswitch-enabled-reasonix.md`；待上游合入）
 
 ## 9. 关键契约速查
 

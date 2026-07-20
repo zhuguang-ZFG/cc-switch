@@ -39,12 +39,16 @@ export interface ReasonixFormState {
   reasonixKind: ReasonixProviderKind;
   reasonixBaseUrl: string;
   reasonixApiKey: string;
+  reasonixChatUrl: string;
+  reasonixModelsUrl: string;
   reasonixModels: string[];
   reasonixDefault: string;
   existingReasonixKeys: string[];
   handleReasonixKindChange: (kind: ReasonixProviderKind) => void;
   handleReasonixBaseUrlChange: (baseUrl: string) => void;
   handleReasonixApiKeyChange: (apiKey: string) => void;
+  handleReasonixChatUrlChange: (chatUrl: string) => void;
+  handleReasonixModelsUrlChange: (modelsUrl: string) => void;
   handleReasonixModelsChange: (models: string[]) => void;
   handleReasonixDefaultChange: (model: string) => void;
   resetReasonixState: (config?: Partial<ReasonixProviderSettingsConfig>) => void;
@@ -132,6 +136,16 @@ export function useReasonixFormState({
     return parseReasonixField(initialData, "api_key", "");
   });
 
+  const [reasonixChatUrl, setReasonixChatUrl] = useState<string>(() => {
+    if (appId !== "reasonix") return "";
+    return parseReasonixField(initialData, "chat_url", "");
+  });
+
+  const [reasonixModelsUrl, setReasonixModelsUrl] = useState<string>(() => {
+    if (appId !== "reasonix") return "";
+    return parseReasonixField(initialData, "models_url", "");
+  });
+
   const [reasonixModels, setReasonixModels] =
     useState<string[]>(initialModels);
 
@@ -194,6 +208,36 @@ export function useReasonixFormState({
     [updateReasonixConfig],
   );
 
+  const handleReasonixChatUrlChange = useCallback(
+    (chatUrl: string) => {
+      setReasonixChatUrl(chatUrl);
+      updateReasonixConfig((config) => {
+        const trimmed = chatUrl.trim();
+        if (trimmed) {
+          config.chat_url = trimmed;
+        } else {
+          delete config.chat_url;
+        }
+      });
+    },
+    [updateReasonixConfig],
+  );
+
+  const handleReasonixModelsUrlChange = useCallback(
+    (modelsUrl: string) => {
+      setReasonixModelsUrl(modelsUrl);
+      updateReasonixConfig((config) => {
+        const trimmed = modelsUrl.trim();
+        if (trimmed) {
+          config.models_url = trimmed;
+        } else {
+          delete config.models_url;
+        }
+      });
+    },
+    [updateReasonixConfig],
+  );
+
   const handleReasonixModelsChange = useCallback(
     (models: string[]) => {
       const normalized = models.map((m) => m.trim()).filter(Boolean);
@@ -248,6 +292,8 @@ export function useReasonixFormState({
       setReasonixKind(config?.kind ?? REASONIX_DEFAULT_KIND);
       setReasonixBaseUrl(config?.base_url ?? "");
       setReasonixApiKey(config?.api_key ?? "");
+      setReasonixChatUrl(config?.chat_url ?? "");
+      setReasonixModelsUrl(config?.models_url ?? "");
       setReasonixModels(nextModels);
       setReasonixDefault(nextDefault);
     },
@@ -260,12 +306,16 @@ export function useReasonixFormState({
     reasonixKind,
     reasonixBaseUrl,
     reasonixApiKey,
+    reasonixChatUrl,
+    reasonixModelsUrl,
     reasonixModels,
     reasonixDefault,
     existingReasonixKeys,
     handleReasonixKindChange,
     handleReasonixBaseUrlChange,
     handleReasonixApiKeyChange,
+    handleReasonixChatUrlChange,
+    handleReasonixModelsUrlChange,
     handleReasonixModelsChange,
     handleReasonixDefaultChange,
     resetReasonixState,

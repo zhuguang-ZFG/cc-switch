@@ -161,13 +161,14 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
             "grokbuild" | "grok" => apps.grokbuild = true,
             "opencode" => apps.opencode = true,
             "hermes" | "kimicode" | "kimi-code" | "kimi" => apps.hermes = true,
+            "reasonix" | "reasonix-cli" => apps.reasonix = true,
             "openclaw" => {
                 // OpenClaw doesn't support MCP, ignore silently
                 log::debug!("OpenClaw doesn't support MCP, ignoring in apps parameter");
             }
             "gemini" => {
                 return Err(AppError::InvalidInput(format!(
-                    "MCP sync is not supported for app '{}': use claude, codex, grokbuild, opencode, or kimicode",
+                    "MCP sync is not supported for app '{}': use claude, codex, grokbuild, opencode, kimicode, or reasonix",
                     app.trim()
                 )))
             }

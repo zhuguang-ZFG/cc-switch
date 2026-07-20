@@ -800,14 +800,10 @@ async fn handle_reasonix_anthropic_to_chat(
     let status = response.status();
 
     if !status.is_success() {
-        return process_response(
-            response,
-            ctx,
-            state,
-            &OPENAI_PARSER_CONFIG,
-            connection_guard,
-        )
-        .await;
+        // Drop the connection lease before rebuilding the OpenAI-shaped error
+        // body (Anthropic upstream errors are not Chat Completions JSON).
+        drop(connection_guard);
+        return handle_reasonix_anthropic_error_response(response, ctx, status).await;
     }
 
     if response.is_sse() || (client_wants_stream && !response.is_json()) {
@@ -1021,20 +1017,75 @@ fn build_reasonix_anthropic_chat_sse_response(
         .map_err(|e| ProxyError::Internal(format!("Build SSE response failed: {e}")))
 }
 
-fn reasonix_models_from_db_providers(providers: &[crate::provider::Provider]) -> Vec<Value> {
-    let mut data = Vec::new();
-    for provider in providers {
-        if provider.id == crate::reasonix_config::REASONIX_PROXY_PROVIDER
-            || provider.id.starts_with("cc-switch-")
-        {
-            continue;
+/// Normalize Anthropic (or plain-text) upstream errors into OpenAI Chat Completions
+/// `{"error":{message,type,code,param}}` so Reasonix CLI clients stay on the
+/// OpenAI ingress contract.
+fn reasonix_anthropic_error_body_to_openai(body: &Value) -> Value {
+    transform_codex_chat::chat_error_to_response_error(Some(body))
+}
+
+async fn handle_reasonix_anthropic_error_response(
+    response: super::hyper_client::ProxyResponse,
+    ctx: &RequestContext,
+    status: axum::http::StatusCode,
+) -> Result<axum::response::Response, ProxyError> {
+    let body_timeout =
+        if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
+            std::time::Duration::from_secs(ctx.app_config.non_streaming_timeout as u64)
+        } else {
+            std::time::Duration::ZERO
+        };
+    let (mut response_headers, _status, body_bytes) =
+        read_decoded_body(response, ctx.tag, body_timeout).await?;
+
+    let parsed_value: Value = match serde_json::from_slice::<Value>(&body_bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            const MAX_RAW_ERROR_BYTES: usize = 1024;
+            let lossy = String::from_utf8_lossy(&body_bytes);
+            let truncated = if lossy.len() > MAX_RAW_ERROR_BYTES {
+                let mut end = MAX_RAW_ERROR_BYTES;
+                while end > 0 && !lossy.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}…(truncated)", &lossy[..end])
+            } else {
+                lossy.into_owned()
+            };
+            log::warn!("[Reasonix] Anthropic error body is not JSON; passing as text: {truncated}");
+            Value::String(truncated)
         }
-        let models = provider
-            .settings_config
-            .get("models")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
+    };
+
+    let openai_error = reasonix_anthropic_error_body_to_openai(&parsed_value);
+
+    strip_entity_headers_for_rebuilt_body(&mut response_headers);
+    strip_hop_by_hop_response_headers(&mut response_headers);
+    response_headers.remove(axum::http::header::CONTENT_TYPE);
+
+    let mut builder = axum::response::Response::builder().status(status);
+    for (key, value) in response_headers.iter() {
+        builder = builder.header(key, value);
+    }
+    builder = builder.header(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+
+    let body = serde_json::to_vec(&openai_error).map_err(|e| {
+        log::error!("[Reasonix] Failed to serialize OpenAI error body: {e}");
+        ProxyError::TransformError(format!("Failed to serialize openai error: {e}"))
+    })?;
+
+    builder.body(axum::body::Body::from(body)).map_err(|e| {
+        log::error!("[Reasonix] Failed to build OpenAI error response: {e}");
+        ProxyError::Internal(format!("Failed to build response: {e}"))
+    })
+}
+
+fn reasonix_model_ids_from_settings(settings: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(models) = settings.get("models").and_then(Value::as_array) {
         for model in models {
             let id = model
                 .as_str()
@@ -1047,9 +1098,41 @@ fn reasonix_models_from_db_providers(providers: &[crate::provider::Provider]) ->
                         .map(str::to_string)
                 })
                 .unwrap_or_default();
+            let id = id.trim();
             if id.is_empty() || id == crate::reasonix_config::REASONIX_PROXY_MODEL {
                 continue;
             }
+            ids.push(id.to_string());
+        }
+    }
+    if !ids.is_empty() {
+        return ids;
+    }
+    // Legacy / sparse settings: single `model` or `default` (same as live projection).
+    for key in ["model", "default"] {
+        if let Some(id) = settings
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .filter(|value| *value != crate::reasonix_config::REASONIX_PROXY_MODEL)
+        {
+            ids.push(id.to_string());
+            break;
+        }
+    }
+    ids
+}
+
+fn reasonix_models_from_db_providers(providers: &[crate::provider::Provider]) -> Vec<Value> {
+    let mut data = Vec::new();
+    for provider in providers {
+        if provider.id == crate::reasonix_config::REASONIX_PROXY_PROVIDER
+            || provider.id.starts_with("cc-switch-")
+        {
+            continue;
+        }
+        for id in reasonix_model_ids_from_settings(&provider.settings_config) {
             data.push(json!({
                 "id": id,
                 "object": "model",
@@ -1057,29 +1140,27 @@ fn reasonix_models_from_db_providers(providers: &[crate::provider::Provider]) ->
             }));
         }
     }
-    if data.is_empty() {
-        data.push(json!({
-            "id": crate::reasonix_config::REASONIX_PROXY_MODEL,
-            "object": "model",
-            "owned_by": "cc-switch",
-        }));
-    }
+    // Truly empty (no real providers/models): return `data: []` — never inject
+    // `cc-switch-proxy-default`, which belongs only on the Live ingress stub.
     data
 }
 
 /// GET /reasonix/v1/models — stable catalog for the local Reasonix proxy ingress.
 ///
-/// Prefer DB `proxy_config.reasonix.enabled` over Live file heuristics so a
-/// stale/local proxy-shaped provider does not flip the catalog source.
+/// Use DB `proxy_config.reasonix.enabled` **or** live takeover detection so a
+/// half-failed disable (enabled=false but live still proxy-shaped) still serves
+/// the DB catalog instead of the Live `cc-switch-proxy` stub.
 pub async fn handle_reasonix_models(
     State(state): State<ProxyState>,
 ) -> Result<Json<Value>, ProxyError> {
-    let takeover = state
+    let db_enabled = state
         .db
         .get_proxy_config_for_app("reasonix")
         .await
         .map(|c| c.enabled)
         .unwrap_or(false);
+    let live_takeover = crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false);
+    let takeover = db_enabled || live_takeover;
     let data = if takeover {
         let routed = state
             .provider_router
@@ -1107,24 +1188,8 @@ pub async fn handle_reasonix_models(
             {
                 continue;
             }
-            if let Some(models) = value.get("models").and_then(Value::as_array) {
-                for model in models {
-                    let id = model
-                        .as_str()
-                        .map(str::to_string)
-                        .or_else(|| {
-                            model
-                                .get("id")
-                                .or_else(|| model.get("model"))
-                                .and_then(|value| value.as_str())
-                                .map(str::to_string)
-                        })
-                        .unwrap_or_default();
-                    if id.is_empty() {
-                        continue;
-                    }
-                    data.push(json!({"id": id, "object": "model", "owned_by": name}));
-                }
+            for id in reasonix_model_ids_from_settings(&value) {
+                data.push(json!({"id": id, "object": "model", "owned_by": name}));
             }
         }
         data
@@ -3064,8 +3129,10 @@ async fn log_usage(
 mod tests {
     use super::{
         body_looks_like_sse, body_snippet, chat_sse_to_response_value, codex_proxy_error_json,
-        kimicode_models_from_db_providers, responses_sse_to_response_value,
-        should_use_claude_transform_streaming, transform, upstream_body_parse_error,
+        kimicode_models_from_db_providers, reasonix_anthropic_error_body_to_openai,
+        reasonix_model_ids_from_settings, reasonix_models_from_db_providers,
+        responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
+        upstream_body_parse_error,
     };
     use crate::provider::Provider;
     use crate::proxy::ProxyError;
@@ -3099,6 +3166,98 @@ mod tests {
         assert_eq!(entries[0]["owned_by"], "demo");
         assert_eq!(entries[1]["id"], "demo/only-id");
         assert!(!entries.iter().any(|e| e["owned_by"] == "cc-switch-proxy"));
+    }
+
+    #[test]
+    fn reasonix_models_catalog_skips_proxy_and_does_not_inject_placeholder_when_empty() {
+        let providers = vec![Provider::with_id(
+            "cc-switch-proxy".into(),
+            "Proxy".into(),
+            json!({ "models": ["cc-switch-proxy-default"] }),
+            None,
+        )];
+        let entries = reasonix_models_from_db_providers(&providers);
+        assert!(
+            entries.is_empty(),
+            "empty real catalog must stay empty (no proxy placeholder inject), got: {entries:?}"
+        );
+
+        let with_demo = vec![
+            providers[0].clone(),
+            Provider::with_id(
+                "demo".into(),
+                "Demo".into(),
+                json!({ "models": ["demo-model", { "id": "obj-model" }] }),
+                None,
+            ),
+        ];
+        let entries = reasonix_models_from_db_providers(&with_demo);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["id"], "demo-model");
+        assert_eq!(entries[1]["id"], "obj-model");
+    }
+
+    #[test]
+    fn reasonix_models_catalog_falls_back_to_model_or_default_when_models_missing() {
+        assert_eq!(
+            reasonix_model_ids_from_settings(&json!({ "model": "solo-model" })),
+            vec!["solo-model".to_string()]
+        );
+        assert_eq!(
+            reasonix_model_ids_from_settings(&json!({ "default": "default-only" })),
+            vec!["default-only".to_string()]
+        );
+        // `models` wins over sparse fields
+        assert_eq!(
+            reasonix_model_ids_from_settings(&json!({
+                "models": ["from-array"],
+                "model": "ignored",
+                "default": "also-ignored"
+            })),
+            vec!["from-array".to_string()]
+        );
+
+        let providers = vec![Provider::with_id(
+            "sparse".into(),
+            "Sparse".into(),
+            json!({ "kind": "openai", "model": "legacy-model" }),
+            None,
+        )];
+        let entries = reasonix_models_from_db_providers(&providers);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], "legacy-model");
+        assert_eq!(entries[0]["owned_by"], "sparse");
+    }
+
+    #[test]
+    fn reasonix_anthropic_error_body_normalizes_to_openai_chat_shape() {
+        let anthropic = json!({
+            "type": "error",
+            "error": {
+                "type": "authentication_error",
+                "message": "invalid x-api-key"
+            }
+        });
+        let openai = reasonix_anthropic_error_body_to_openai(&anthropic);
+        assert_eq!(openai["error"]["message"], "invalid x-api-key");
+        assert_eq!(openai["error"]["type"], "authentication_error");
+        assert!(openai["error"]["code"].is_null());
+        assert!(openai["error"]["param"].is_null());
+
+        let plain = reasonix_anthropic_error_body_to_openai(&json!("Unauthorized"));
+        assert_eq!(plain["error"]["message"], "Unauthorized");
+        assert_eq!(plain["error"]["type"], "upstream_error");
+
+        let nested_openaiish = reasonix_anthropic_error_body_to_openai(&json!({
+            "error": {
+                "message": "rate limited",
+                "type": "rate_limit_error",
+                "code": "429"
+            }
+        }));
+        assert_eq!(nested_openaiish["error"]["message"], "rate limited");
+        assert_eq!(nested_openaiish["error"]["type"], "rate_limit_error");
+        assert_eq!(nested_openaiish["error"]["code"], "429");
     }
 
     #[test]

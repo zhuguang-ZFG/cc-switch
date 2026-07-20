@@ -36,6 +36,14 @@ fn write_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Serialize `.env` read-modify-write separately from TOML [`write_lock`].
+/// Callers that hold `write_lock` must take this lock **after** the TOML lock
+/// (never the reverse) to avoid ABBA deadlocks with [`apply_proxy_takeover`].
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 // ============================================================================
 // Paths
 // ============================================================================
@@ -279,8 +287,10 @@ fn merge_json_into_table(table: &mut Table, object: &Map<String, Value>, skipped
             continue;
         }
         if value.is_null()
-            || matches!(key.as_str(), "api_key" | "base_url")
-                && value.as_str().is_some_and(|value| value.trim().is_empty())
+            || matches!(
+                key.as_str(),
+                "api_key" | "base_url" | "chat_url" | "models_url"
+            ) && value.as_str().is_some_and(|value| value.trim().is_empty())
         {
             table.remove(key);
             continue;
@@ -534,6 +544,9 @@ pub fn upsert_env_key(key: &str, value: &str) -> Result<(), AppError> {
     if key.is_empty() {
         return Ok(());
     }
+    let _guard = env_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Reasonix env write lock poisoned".into()))?;
     let path = get_reasonix_env_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
@@ -549,6 +562,9 @@ pub fn clear_env_key(key: &str) -> Result<(), AppError> {
     if key.is_empty() {
         return Ok(());
     }
+    let _guard = env_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Reasonix env write lock poisoned".into()))?;
     let path = get_reasonix_env_path();
     if !path.exists() {
         return Ok(());
@@ -619,6 +635,14 @@ fn upsert_provider_into_document(
         object,
         &["name", "api_key", "api_key_env", "type"],
     );
+
+    // Optional URL fields: absence in settings means remove from live TOML.
+    // `merge_json_into_table` is additive for missing keys, so clear explicitly.
+    for key in ["chat_url", "models_url"] {
+        if !object.contains_key(key) {
+            table.remove(key);
+        }
+    }
 
     table.insert("name", Item::Value(TomlEditValue::from(name)));
 
@@ -854,6 +878,13 @@ fn stash_proxy_env_previous_if_needed() -> Result<(), AppError> {
     if let Some(parent) = backup_path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
+    // Hold env_lock so the snapshot cannot tear against concurrent upsert/clear.
+    let _guard = env_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Reasonix env write lock poisoned".into()))?;
+    if backup_path.exists() {
+        return Ok(());
+    }
     let previous = read_env_map()?
         .get(REASONIX_PROXY_API_KEY_ENV)
         .cloned()
@@ -926,32 +957,50 @@ pub fn clear_proxy_takeover() -> Result<ReasonixWriteOutcome, AppError> {
 
 /// Project switch defaults into a full TOML snapshot text.
 ///
-/// Used by proxy hot-switch to update the restore backup's `default_model`
-/// (and custom provider projection) while live stays on `cc-switch-proxy`.
+/// Used by proxy hot-switch / takeover CRUD to update the restore backup's
+/// `default_model` (and custom provider projection) while live stays on
+/// `cc-switch-proxy`.
+///
+/// Also syncs `settings_config.api_key` into `.env` under [`env_lock`],
+/// matching [`apply_switch_defaults`]. Reasonix stores credentials only in
+/// `.env` via `api_key_env`; a TOML-only backup update would restore a
+/// provider whose env key is missing after disable (B1).
 pub fn apply_switch_defaults_to_text(
     text: &str,
     provider_id: &str,
     settings_config: &Value,
 ) -> Result<String, AppError> {
     let mut doc = parse_document_text(text)?;
-    upsert_provider_into_document(&mut doc, provider_id, settings_config)?;
+    let env_update = upsert_provider_into_document(&mut doc, provider_id, settings_config)?;
     // Reasonix ResolveModel prefers provider name (uses provider.default) or
     // provider/model. Prefer the provider id so multi-provider same-model-id
     // configs stay unambiguous after restore.
     doc["default_model"] = Item::Value(TomlEditValue::from(provider_id.trim()));
-    Ok(doc.to_string())
+    let updated = doc.to_string();
+    if let Some((env_key, api_key)) = env_update {
+        upsert_env_key(&env_key, &api_key)?;
+    }
+    Ok(updated)
 }
 
 /// Remove a provider table from a TOML snapshot (used to edit restore backups
 /// during proxy takeover without touching live).
-pub fn remove_provider_from_text(text: &str, name: &str) -> Result<String, AppError> {
+///
+/// Returns `(updated_text, api_key_env)` so callers can clear the orphan `.env`
+/// key after deleting the provider from the restore snapshot.
+pub fn remove_provider_from_text(
+    text: &str,
+    name: &str,
+) -> Result<(String, Option<String>), AppError> {
     let mut doc = parse_document_text(text)?;
     let providers = providers_array_mut(&mut doc);
     let Some(index) = find_array_table_index(providers, "name", name.trim()) else {
-        return Ok(text.to_string());
+        return Ok((text.to_string(), None));
     };
+    let removed = providers.get(index).cloned().unwrap_or_default();
+    let env_key = table_str(&removed, "api_key_env");
     providers.remove(index);
-    Ok(doc.to_string())
+    Ok((doc.to_string(), env_key))
 }
 
 pub fn provider_exists_in_text(text: &str, name: &str) -> Result<bool, AppError> {
@@ -1283,6 +1332,7 @@ default = "model-a"
             let settings = json!({
                 "kind": "openai",
                 "base_url": "https://other.test/v1",
+                "api_key": "other-secret",
                 "models": ["other-model"],
                 "default": "other-model"
             });
@@ -1291,6 +1341,64 @@ default = "model-a"
             assert!(updated.contains("name = \"other\""));
             assert!(updated.contains("default_model = \"other\""));
             assert!(updated.contains("default = \"other-model\""));
+            assert!(
+                updated.contains("api_key_env"),
+                "backup projection must use api_key_env, not plaintext api_key"
+            );
+            assert!(
+                !updated.contains("other-secret"),
+                "plaintext api_key must not land in TOML backup"
+            );
+            let env = read_env_map().expect("read env");
+            assert_eq!(
+                env.get("OTHER_API_KEY").map(String::as_str),
+                Some("other-secret"),
+                "backup projection must sync api_key into .env for restore"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn set_provider_clears_optional_urls_when_absent() {
+        with_temp_home(|| {
+            set_provider(
+                "demo",
+                json!({
+                    "kind": "openai",
+                    "base_url": "https://api.example.com",
+                    "api_key": "sk-secret",
+                    "chat_url": "https://api.example.com/chat/completions",
+                    "models_url": "https://api.example.com/models",
+                    "models": ["m1"],
+                    "default": "m1"
+                }),
+            )
+            .unwrap();
+            let with_urls = fs::read_to_string(get_reasonix_config_path()).unwrap();
+            assert!(with_urls.contains("chat_url"));
+            assert!(with_urls.contains("models_url"));
+
+            set_provider(
+                "demo",
+                json!({
+                    "kind": "openai",
+                    "base_url": "https://api.example.com",
+                    "api_key": "sk-secret",
+                    "models": ["m1"],
+                    "default": "m1"
+                }),
+            )
+            .unwrap();
+            let cleared = fs::read_to_string(get_reasonix_config_path()).unwrap();
+            assert!(
+                !cleared.contains("chat_url"),
+                "absent chat_url must be removed from live TOML, got:\n{cleared}"
+            );
+            assert!(
+                !cleared.contains("models_url"),
+                "absent models_url must be removed from live TOML, got:\n{cleared}"
+            );
         });
     }
 

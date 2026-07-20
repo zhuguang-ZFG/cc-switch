@@ -2340,16 +2340,25 @@ impl ProxyService {
                         || text.contains("/kimicode/v1"))
             }
             AppType::Reasonix => {
+                // TOML backup/live text form
                 let text = config
                     .get("config")
                     .and_then(Value::as_str)
                     .or_else(|| config.as_str())
                     .unwrap_or("");
-                // Require managed provider + reasonix ingress path together.
-                // Do not treat a reused env var name alone as polluted backup.
-                !text.trim().is_empty()
+                if !text.trim().is_empty()
                     && text.contains("name = \"cc-switch-proxy\"")
                     && text.contains("/reasonix/v1")
+                {
+                    return true;
+                }
+                // DB / JSON settings_config form (SSOT pollution check)
+                let base_url = config
+                    .get("base_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let api_key = config.get("api_key").and_then(Value::as_str).unwrap_or("");
+                base_url.contains("/reasonix/v1") || api_key == PROXY_TOKEN_PLACEHOLDER
             }
             _ => false,
         }
@@ -3937,8 +3946,22 @@ api_key_env = "DEMO_API_KEY"
             .expect("disable reasonix takeover");
         let restored = crate::reasonix_config::read_config_text().expect("restored");
         assert!(
-            restored.contains("other-model") || restored.contains("default_model"),
-            "restore must use updated backup, got:\n{restored}"
+            restored.contains("name = \"other\"")
+                && (restored.contains("default_model = \"other\"")
+                    || restored.contains("default_model = 'other'"))
+                && restored.contains("other-model"),
+            "restore must use updated backup with switched provider, got:\n{restored}"
+        );
+        let env = crate::reasonix_config::read_env_map().expect("read env after restore");
+        assert_eq!(
+            env.get("OTHER_API_KEY").map(String::as_str),
+            Some("other-secret"),
+            "hot-switch under takeover must project api_key into .env before restore"
+        );
+        assert_ne!(
+            env.get("CC_SWITCH_PROXY_API_KEY").map(String::as_str),
+            Some("PROXY_MANAGED"),
+            "proxy env placeholder must be cleared/restored on disable"
         );
         env::remove_var("REASONIX_HOME");
     }

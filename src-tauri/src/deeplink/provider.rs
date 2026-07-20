@@ -650,7 +650,8 @@ pub fn parse_and_merge_config(
         "gemini" => merge_gemini_config(&mut merged, &config_value)?,
         "grokbuild" => merge_grokbuild_config(&mut merged, &config_value)?,
         // Additive mode apps use JSON config directly; pass through as-is
-        "openclaw" | "opencode" | "hermes" | "kimicode" | "kimi-code" | "kimi" => {
+        "openclaw" | "opencode" | "hermes" | "kimicode" | "kimi-code" | "kimi" | "reasonix"
+        | "reasonix-cli" => {
             merge_additive_config(&mut merged, &config_value)?;
         }
         "" => {

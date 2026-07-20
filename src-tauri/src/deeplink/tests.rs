@@ -151,6 +151,34 @@ fn test_parse_kimicode_provider() {
 }
 
 #[test]
+fn test_parse_reasonix_provider() {
+    use super::provider::build_provider_from_request;
+
+    let url = "ccswitch://v1/import?resource=provider&app=reasonix&name=DeepSeek&endpoint=https%3A%2F%2Fapi.deepseek.com%2Fv1&apiKey=sk-ds&model=deepseek-chat";
+
+    let request = parse_deeplink_url(url).unwrap();
+
+    assert_eq!(request.app.as_deref(), Some("reasonix"));
+    assert_eq!(request.name.as_deref(), Some("DeepSeek"));
+    assert_eq!(
+        request.endpoint.as_deref(),
+        Some("https://api.deepseek.com/v1")
+    );
+    assert_eq!(request.api_key.as_deref(), Some("sk-ds"));
+    assert_eq!(request.model.as_deref(), Some("deepseek-chat"));
+
+    let provider = build_provider_from_request(&AppType::Reasonix, &request).unwrap();
+    let config = provider.settings_config.as_object().unwrap();
+
+    assert_eq!(config["name"], "DeepSeek");
+    assert_eq!(config["base_url"], "https://api.deepseek.com/v1");
+    assert_eq!(config["api_key"], "sk-ds");
+    assert_eq!(config["kind"], "openai");
+    assert_eq!(config["models"][0], "deepseek-chat");
+    assert_eq!(config["default"], "deepseek-chat");
+}
+
+#[test]
 fn test_parse_kimicode_aliases_through_full_deeplink_parser() {
     for alias in ["kimicode", "kimi-code", "kimi", "hermes"] {
         let provider = format!(

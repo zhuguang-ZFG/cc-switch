@@ -57,6 +57,10 @@ const NEWAPI_DEFAULT_MODELS: UniversalProviderModels = {
     providerType: "openai",
     model: "gpt-5.5",
   },
+  reasonix: {
+    kind: "openai",
+    model: "deepseek-chat",
+  },
 };
 
 /**
@@ -71,6 +75,7 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
       codex: true,
       gemini: true,
       kimicode: true,
+      reasonix: true,
     },
     defaultModels: NEWAPI_DEFAULT_MODELS,
     websiteUrl: "https://www.newapi.pro",
@@ -87,6 +92,7 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
       codex: true,
       gemini: true,
       kimicode: true,
+      reasonix: true,
     },
     defaultModels: NEWAPI_DEFAULT_MODELS,
     icon: "openai",

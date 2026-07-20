@@ -2401,6 +2401,10 @@ function ProviderFormFull({
               onKindChange={reasonixForm.handleReasonixKindChange}
               baseUrl={reasonixForm.reasonixBaseUrl}
               onBaseUrlChange={reasonixForm.handleReasonixBaseUrlChange}
+              chatUrl={reasonixForm.reasonixChatUrl}
+              onChatUrlChange={reasonixForm.handleReasonixChatUrlChange}
+              modelsUrl={reasonixForm.reasonixModelsUrl}
+              onModelsUrlChange={reasonixForm.handleReasonixModelsUrlChange}
               apiKey={reasonixForm.reasonixApiKey}
               onApiKeyChange={reasonixForm.handleReasonixApiKeyChange}
               category={category}
