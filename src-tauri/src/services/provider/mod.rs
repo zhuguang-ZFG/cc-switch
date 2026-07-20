@@ -32,8 +32,8 @@ pub use live::{
 // Internal re-exports (pub(crate))
 pub(crate) use live::sanitize_claude_settings_for_live;
 pub(crate) use live::{
-    apply_kimi_common_config_to_live, build_effective_settings_with_common_config,
-    normalize_provider_common_config_for_storage, provider_exists_in_live_config,
+    build_effective_settings_with_common_config, normalize_provider_common_config_for_storage,
+    provider_exists_in_live_config, reconcile_kimi_common_config_on_live,
     replace_kimi_common_config_in_live, replace_kimi_common_config_in_text,
     strip_common_config_from_live_settings, sync_current_provider_for_app_to_live,
     write_live_with_common_config,

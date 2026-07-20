@@ -346,17 +346,20 @@ pub async fn set_common_config_snippet(
     // Kimi Code 的 live 是所有供应商共享的 additive TOML 文档：旧片段剥离与
     // 新片段合并在 kimi_config write_lock 内一次 RMW 完成（单次落盘，中间
     // 失败不会留下"无片段"中间态；值匹配剥离，用户改过的值保留）。
-    // 代理接管期间 live 归代理所有：把 strip/merge 写进 restore backup，
-    // 关接管恢复后 live 即带上最新片段（并在 restore 路径 re-apply DB 片段）。
+    // 代理接管期间 live 归代理所有：
+    // - 有 restore backup → strip/merge 写 backup
+    // - live 已是 proxy 但无 backup（孤儿接管）→ 只落 DB，禁止写 live
+    // - 正常 → 写 live
     let kimi_backup = if app_type == "kimicode" {
         futures::executor::block_on(state.db.get_live_backup("kimicode"))
             .map_err(|e| e.to_string())?
     } else {
         None
     };
-    let kimi_live_owned_by_proxy = app_type == "kimicode"
-        && (kimi_backup.is_some()
-            || crate::kimi_config::is_proxy_takeover_active().unwrap_or(false));
+    let kimi_live_detect_takeover = app_type == "kimicode"
+        && crate::kimi_config::is_proxy_takeover_active().unwrap_or(false);
+    let kimi_live_owned_by_proxy =
+        app_type == "kimicode" && (kimi_backup.is_some() || kimi_live_detect_takeover);
     if app_type == "kimicode" {
         if let Some(backup) = kimi_backup.as_ref() {
             let updated = crate::services::provider::replace_kimi_common_config_in_text(
@@ -367,6 +370,14 @@ pub async fn set_common_config_snippet(
             .map_err(|e| e.to_string())?;
             futures::executor::block_on(state.db.save_live_backup("kimicode", &updated))
                 .map_err(|e| format!("写入 Kimi Code 接管备份失败: {e}"))?;
+        } else if kimi_live_detect_takeover {
+            // Orphan takeover: live holds the proxy projection and there is no
+            // restore snapshot. Never merge into live (would pollute cc-switch-proxy).
+            // Snippet is already in DB; user must re-enable/disable takeover to
+            // re-create a backup, or save again after restore.
+            log::warn!(
+                "Kimi Code common-config saved to DB only: proxy takeover is active but restore backup is missing"
+            );
         } else {
             crate::services::provider::replace_kimi_common_config_in_live(
                 old_snippet.as_deref(),

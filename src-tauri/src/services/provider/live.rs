@@ -748,6 +748,9 @@ pub(crate) fn extract_kimi_common_config_from_live() -> Result<String, AppError>
 /// 幂等：additive 同步每次重放；内容未变化时不落盘。切换 / 代理接管路径
 /// 本就保留无关表，已合并的片段不会被它们擦掉。
 /// RMW 在 kimi_config 的 write_lock 内完成，并发写不会丢更新。
+///
+/// Only **merges** the DB snippet (no strip). Safe for routine sync so
+/// user-owned top-level tables outside the snippet are preserved.
 pub(crate) fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppError> {
     let Some(snippet) = db.get_config_snippet(AppType::KimiCode.as_str())? else {
         return Ok(());
@@ -759,6 +762,31 @@ pub(crate) fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppE
     crate::kimi_config::update_document(|doc| {
         let before = doc.to_string();
         update_kimi_doc_common_config(doc, &snippet, true)?;
+        Ok(doc.to_string() != before)
+    })?;
+    Ok(())
+}
+
+/// After takeover restore: reconcile live common tables with the DB snippet.
+///
+/// Strips the common-config projection currently on live (value-matched), then
+/// merges the DB snippet — so cleared thinking/hooks keys do not survive restore
+/// when the DB snippet no longer contains them. Routine sync should keep using
+/// [`apply_kimi_common_config_to_live`] (merge-only).
+pub(crate) fn reconcile_kimi_common_config_on_live(db: &Database) -> Result<(), AppError> {
+    let new_snippet = db
+        .get_config_snippet(AppType::KimiCode.as_str())?
+        .unwrap_or_default();
+
+    crate::kimi_config::update_document(|doc| {
+        let before = doc.to_string();
+        let live_common = extract_kimi_common_config_from_toml(&before)?;
+        let old = (!live_common.trim().is_empty()).then_some(live_common);
+        let new = (!new_snippet.trim().is_empty()).then_some(new_snippet.as_str());
+        if old.is_none() && new.is_none() {
+            return Ok(false);
+        }
+        replace_kimi_common_config_in_doc(doc, old.as_deref(), new)?;
         Ok(doc.to_string() != before)
     })?;
     Ok(())
@@ -2536,6 +2564,27 @@ base_url = "https://example.test/v1"
             updated.contains("default_model = \"demo/model\""),
             "default_model must be preserved: {updated}"
         );
+    }
+
+    #[test]
+    fn replace_kimi_common_config_in_text_clears_thinking_when_new_snippet_empty() {
+        let original = r#"default_model = "demo/model"
+
+[thinking]
+effort = "max"
+
+[providers.demo]
+type = "openai"
+"#;
+        let old = "[thinking]\neffort = \"max\"\n";
+        let updated =
+            replace_kimi_common_config_in_text(original, Some(old), None).expect("clear");
+        assert!(
+            !updated.contains("[thinking]"),
+            "empty new snippet must strip thinking: {updated}"
+        );
+        assert!(updated.contains("[providers.demo]"));
+        assert!(updated.contains("default_model = \"demo/model\""));
     }
 
     #[test]

@@ -1760,10 +1760,10 @@ impl ProxyService {
                     crate::kimi_config::write_config_text(&backup.original_config)
                         .map_err(|e| format!("恢复 Kimi Code 配置失败: {e}"))?;
                     if let Err(e) =
-                        crate::services::provider::apply_kimi_common_config_to_live(&self.db)
+                        crate::services::provider::reconcile_kimi_common_config_on_live(&self.db)
                     {
                         log::warn!(
-                            "恢复 Kimi Code 后合并通用配置片段失败（将在下次同步自愈）: {e}"
+                            "恢复 Kimi Code 后对齐通用配置片段失败（将在下次同步自愈）: {e}"
                         );
                     }
                     log::info!("Kimi Code Live 配置已恢复");
@@ -1842,14 +1842,13 @@ impl ProxyService {
                 } else if matches!(app_type, AppType::KimiCode) {
                     crate::kimi_config::write_config_text(&backup.original_config)
                         .map_err(|e| format!("恢复 Kimi Code 配置失败: {e}"))?;
-                    // Re-apply DB common-config snippet so thinking/hooks edits
-                    // made during takeover (DB-only or backup-merged) land on
-                    // live after restore. Idempotent when backup already has them.
+                    // Reconcile DB common-config (strip+merge) so cleared
+                    // thinking/hooks keys do not survive from a stale backup.
                     if let Err(e) =
-                        crate::services::provider::apply_kimi_common_config_to_live(&self.db)
+                        crate::services::provider::reconcile_kimi_common_config_on_live(&self.db)
                     {
                         log::warn!(
-                            "恢复 Kimi Code 后合并通用配置片段失败（将在下次同步自愈）: {e}"
+                            "恢复 Kimi Code 后对齐通用配置片段失败（将在下次同步自愈）: {e}"
                         );
                     }
                     log::info!("{app_type_str} Live 配置已从备份恢复");
@@ -1980,8 +1979,10 @@ impl ProxyService {
                 .map_err(|e| format!("清理 Kimi Code 接管占位失败: {e}"))?;
             crate::kimi_config::apply_switch_defaults(&provider.id, &provider.settings_config)
                 .map_err(|e| format!("从 SSOT 恢复 Kimi Code Live 失败: {e}"))?;
-            if let Err(e) = crate::services::provider::apply_kimi_common_config_to_live(&self.db) {
-                log::warn!("从 SSOT 恢复 Kimi Code 后合并通用配置失败: {e}");
+            if let Err(e) =
+                crate::services::provider::reconcile_kimi_common_config_on_live(&self.db)
+            {
+                log::warn!("从 SSOT 恢复 Kimi Code 后对齐通用配置失败: {e}");
             }
             return Ok(true);
         }
