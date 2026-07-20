@@ -24,10 +24,12 @@ import { useDragSort } from "@/hooks/useDragSort";
 import {
   useOpenClawLiveProviderIds,
   useOpenClawDefaultModel,
+  openclawKeys,
 } from "@/hooks/useOpenClaw";
 import {
   useHermesLiveProviderIds,
   useHermesModelConfig,
+  hermesKeys,
 } from "@/hooks/useHermes";
 import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
@@ -247,11 +249,36 @@ export function ProviderList({
       }
       return providersApi.importDefault(appId);
     },
-    onSuccess: (imported) => {
+    onSuccess: async (imported) => {
       if (imported) {
-        queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+        await queryClient.invalidateQueries({ queryKey: ["providers", appId] });
         if (appId === "claude-desktop") {
-          queryClient.invalidateQueries({ queryKey: ["claudeDesktopStatus"] });
+          await queryClient.invalidateQueries({
+            queryKey: ["claudeDesktopStatus"],
+          });
+        }
+        if (appId === "kimicode") {
+          await queryClient.invalidateQueries({
+            queryKey: hermesKeys.liveProviderIds,
+          });
+          await queryClient.invalidateQueries({
+            queryKey: hermesKeys.modelConfig,
+          });
+        }
+        if (appId === "reasonix") {
+          await queryClient.invalidateQueries({
+            queryKey: ["reasonixLiveProviderIds"],
+          });
+        }
+        if (appId === "opencode") {
+          await queryClient.invalidateQueries({
+            queryKey: ["opencodeLiveProviderIds"],
+          });
+        }
+        if (appId === "openclaw") {
+          await queryClient.invalidateQueries({
+            queryKey: openclawKeys.liveProviderIds,
+          });
         }
         toast.success(t("provider.importCurrentDescription"));
       } else {

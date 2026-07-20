@@ -163,17 +163,22 @@ fn parse_session_file(root: &Path, path: &Path) -> Option<SessionMeta> {
 }
 
 fn read_custom_title(session_path: &Path) -> Option<String> {
-    // Official sidecars: <name>.meta.json next to <name>.jsonl
+    // Prefer .titles.json in the same directory (desktop renames).
+    if let Some(title) = read_title_from_titles_json(session_path) {
+        return Some(title);
+    }
+
+    // Sidecars next to the transcript:
+    //   <name>.meta.json  (legacy naming)
+    //   <name>.jsonl.meta (current DeepSeek-Reasonix branch meta)
     let meta_path = session_path.with_extension("meta.json");
-    let alt = {
+    let jsonl_meta = {
         let mut p = session_path.to_path_buf();
-        // e.g. code-jh.jsonl → code-jh.meta.json already covered;
-        // also try code-jh.jsonl.meta (branch meta naming variants).
         let name = session_path.file_name()?.to_str()?.to_string();
         p.set_file_name(format!("{name}.meta"));
         p
     };
-    for candidate in [meta_path, alt] {
+    for candidate in [meta_path, jsonl_meta] {
         if !candidate.is_file() {
             continue;
         }
@@ -183,7 +188,15 @@ fn read_custom_title(session_path: &Path) -> Option<String> {
         let Ok(value) = serde_json::from_str::<Value>(&raw) else {
             continue;
         };
-        for key in ["customTitle", "CustomTitle", "title", "Title"] {
+        // Custom title keys first, then official `preview` from branch meta.
+        for key in [
+            "customTitle",
+            "CustomTitle",
+            "title",
+            "Title",
+            "preview",
+            "Preview",
+        ] {
             if let Some(title) = value
                 .get(key)
                 .and_then(Value::as_str)
@@ -195,6 +208,32 @@ fn read_custom_title(session_path: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// `.titles.json` maps basename → display title (desktop rename UI).
+fn read_title_from_titles_json(session_path: &Path) -> Option<String> {
+    let parent = session_path.parent()?;
+    let titles_path = parent.join(".titles.json");
+    if !titles_path.is_file() {
+        return None;
+    }
+    let raw = fs::read_to_string(&titles_path).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    let file_name = session_path.file_name()?.to_str()?;
+    let title = value
+        .get(file_name)
+        .and_then(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| v.get("title").and_then(Value::as_str).map(str::to_string))
+        })?
+        .trim()
+        .to_string();
+    if title.is_empty() {
+        None
+    } else {
+        Some(truncate_summary(&title, TITLE_MAX_CHARS))
+    }
 }
 
 pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {

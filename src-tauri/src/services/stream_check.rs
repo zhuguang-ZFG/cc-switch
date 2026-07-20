@@ -181,6 +181,10 @@ impl StreamCheckService {
             }
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
             AppType::KimiCode => Self::extract_hermes_base_url(provider),
+            // Reasonix settings_config is flat { base_url, kind, models } like Kimi —
+            // not Codex auth/config TOML. Using get_adapter(Reasonix) would hit Codex
+            // extract_base_url and always fail.
+            AppType::Reasonix => Self::extract_reasonix_base_url(provider),
             AppType::ClaudeDesktop => ClaudeAdapter::new()
                 .extract_base_url(provider)
                 .map_err(|e| AppError::Message(format!("Failed to extract base_url: {e}"))),
@@ -319,6 +323,23 @@ impl StreamCheckService {
                     "hermes_base_url_missing",
                     "Hermes 供应商缺少 base_url",
                     "Hermes provider is missing `base_url`",
+                )
+            })
+    }
+
+    /// Reasonix: `{ base_url, kind, models, default }`（snake_case [[providers]] 投影）
+    fn extract_reasonix_base_url(provider: &Provider) -> Result<String, AppError> {
+        provider
+            .settings_config
+            .get("base_url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::localized(
+                    "reasonix_base_url_missing",
+                    "Reasonix 供应商缺少 base_url",
+                    "Reasonix provider is missing `base_url`",
                 )
             })
     }
@@ -498,6 +519,21 @@ mod tests {
         assert_eq!(
             StreamCheckService::extract_openclaw_base_url(&p2).unwrap(),
             "https://api.deepseek.com/v1"
+        );
+    }
+
+    #[test]
+    fn test_resolve_reasonix_base_url_from_flat_settings() {
+        let mut p = Provider::with_id(
+            "rx".into(),
+            "RX".into(),
+            serde_json::json!({ "base_url": "https://api.deepseek.com", "kind": "openai" }),
+            None,
+        );
+        p.category = Some("custom".into());
+        assert_eq!(
+            StreamCheckService::resolve_base_url(&AppType::Reasonix, &p).unwrap(),
+            "https://api.deepseek.com"
         );
     }
 
