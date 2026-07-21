@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - **README tool lists now include Reasonix (8 tools)** across all four languages (EN/ZH/JA/DE): title, intro, feature bullets, and FAQ previously listed only seven tools and predated the Reasonix app type.
-- **User-manual index pages replace the retired Hermes name with Kimi Code and add Reasonix** (`docs/user-manual/{,en,zh,ja}/README.md`). Note: the per-chapter manual pages still describe the legacy Hermes app (`~/.hermes/` paths, YAML config) and predate the Kimi Code fork; a chapter-level rewrite is tracked as follow-up.
+- **User-manual index pages replace the retired Hermes name with Kimi Code and add Reasonix** (`docs/user-manual/{,en,zh,ja}/README.md`).
+- **User-manual chapters rewritten for the current 8-app matrix** (en/zh/ja × 8 chapters: introduction, interface, settings, add-provider, MCP, skills, sessions, config-files): Hermes→Kimi Code (TOML `config.toml`, separate `mcp.json`, `credentials/`), Gemini CLI→Grok Build (`~/.grok/config.toml`), Reasonix sections added (`[[providers]]`/`[[plugins]]`/`.env`), and per-feature app coverage aligned with the code (MCP/Skills = 6 apps, sessions/prompts = 7, stream check = 8). Hermes-only content (YAML, `custom_providers`, Memory, `state.db`) dropped. Remaining stale Gemini mentions in proxy/usage chapters (4.x, 2.2, 5.x) are tracked as follow-up.
 - **Pi agent support plan** recorded at `docs/plans/pi-agent-support-plan.md` (upcoming `pi` app type: `~/.pi/agent/models.json` + typed `auth.json`, proxy route `/pi/v1/*`).
 - **`.gitignore` now excludes `.trellis/` and `.pi/`** — local Trellis/pi workspaces whose journals can contain machine paths and credentials; not for publication.
 
