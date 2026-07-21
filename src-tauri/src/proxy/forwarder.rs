@@ -1590,6 +1590,7 @@ impl RequestForwarder {
                 );
             }
             super::providers::apply_codex_chat_upstream_model(provider, &mut mapped_body);
+            super::providers::clamp_codex_max_output_tokens(provider, &mut mapped_body);
             let reasoning_config =
                 super::providers::resolve_codex_chat_reasoning_config(provider, &mapped_body);
             let mut chat_body = super::providers::transform_codex_chat::responses_to_chat_completions_with_reasoning(
@@ -1615,14 +1616,7 @@ impl RequestForwarder {
             // lets the thinking-budget clamp size its headroom against the real
             // ceiling too. Kept per-provider to avoid a global large default that
             // would 400 on low-output-ceiling gateways.
-            if let Some(max_out) = provider
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.max_output_tokens)
-                .filter(|v| *v > 0)
-            {
-                mapped_body["max_output_tokens"] = Value::from(max_out);
-            }
+            super::providers::clamp_codex_max_output_tokens(provider, &mut mapped_body);
             // Anthropic requires max_tokens; fall back to this default only when the
             // Codex request omits max_output_tokens (rare — Codex normally sends it).
             // Kept conservative so a low-output-ceiling model or relay does not hard-400

@@ -555,6 +555,34 @@ pub fn apply_codex_chat_upstream_model(
     apply_codex_upstream_model(provider, body)
 }
 
+/// Clamp `max_output_tokens` to the provider's configured ceiling, falling back
+/// to a conservative global ceiling for implausibly large values.
+///
+/// Clients that derive `max_output_tokens` from context size (e.g. Kimi Code's
+/// 262144 `max_context_size`) would otherwise hard-400 on gateways with lower
+/// output limits. Provider meta takes precedence; the fallback only fires when
+/// the request value exceeds 131072, which is almost always context-window
+/// confusion rather than real intent.
+pub fn clamp_codex_max_output_tokens(provider: &Provider, body: &mut JsonValue) {
+    if let Some(max_out) = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.max_output_tokens)
+        .filter(|v| *v > 0)
+    {
+        body["max_output_tokens"] = JsonValue::from(max_out);
+    } else {
+        const FALLBACK_MAX_OUTPUT_TOKENS: u64 = 131072;
+        if body
+            .get("max_output_tokens")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|v| v > FALLBACK_MAX_OUTPUT_TOKENS)
+        {
+            body["max_output_tokens"] = JsonValue::from(FALLBACK_MAX_OUTPUT_TOKENS);
+        }
+    }
+}
+
 /// Codex / Grok model substitution — catalog first, then configured default.
 ///
 /// Must **not** interpret Kimi `models[]` catalogs (see [`apply_kimi_upstream_model`]).
@@ -1250,6 +1278,46 @@ mod tests {
             icon_color: None,
             in_failover_queue: false,
         }
+    }
+
+    #[test]
+    fn clamp_max_output_tokens_prefers_provider_meta() {
+        let mut provider = create_provider(json!({}));
+        provider.meta = Some(crate::provider::ProviderMeta {
+            max_output_tokens: Some(64000),
+            ..Default::default()
+        });
+        let mut body = json!({ "max_output_tokens": 262144 });
+        clamp_codex_max_output_tokens(&provider, &mut body);
+        assert_eq!(body["max_output_tokens"], json!(64000));
+    }
+
+    #[test]
+    fn clamp_max_output_tokens_fallback_caps_implausible_values() {
+        let provider = create_provider(json!({}));
+        let mut body = json!({ "max_output_tokens": 262144 });
+        clamp_codex_max_output_tokens(&provider, &mut body);
+        assert_eq!(body["max_output_tokens"], json!(131072));
+    }
+
+    #[test]
+    fn clamp_max_output_tokens_preserves_reasonable_values() {
+        let provider = create_provider(json!({}));
+        let mut body = json!({ "max_output_tokens": 8192 });
+        clamp_codex_max_output_tokens(&provider, &mut body);
+        assert_eq!(body["max_output_tokens"], json!(8192));
+
+        let mut body = json!({ "max_output_tokens": 131072 });
+        clamp_codex_max_output_tokens(&provider, &mut body);
+        assert_eq!(body["max_output_tokens"], json!(131072));
+    }
+
+    #[test]
+    fn clamp_max_output_tokens_noop_when_absent() {
+        let provider = create_provider(json!({}));
+        let mut body = json!({ "model": "test" });
+        clamp_codex_max_output_tokens(&provider, &mut body);
+        assert!(body.get("max_output_tokens").is_none());
     }
 
     #[test]
