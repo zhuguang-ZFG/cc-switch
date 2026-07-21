@@ -2638,7 +2638,7 @@
     "switchFailed": "Switch failed: {{error}}",
     "takeover": {
       "hint": "Select apps to route — once enabled, requests from that app will go through local routing",
-      "reasonixNoProxyHint": "Reasonix: if config.toml sets network.proxy_mode = \"custom\", provider no_proxy may be ignored and 127.0.0.1 local routing can be captured by the system proxy. Add loopback to network.no_proxy, or avoid custom mode.",
+      "reasonixNoProxyAuto": "Loopback (127.0.0.1/localhost) is automatically added to Reasonix network.no_proxy when present, so the local ingress cannot be captured by a custom proxy.",
       "enabled": "{{app}} routing enabled",
       "disabled": "{{app}} routing disabled",
       "failed": "Failed to toggle routing: {{detail}}",

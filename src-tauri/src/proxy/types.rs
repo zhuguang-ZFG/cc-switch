@@ -118,6 +118,10 @@ pub struct ProxyTakeoverStatus {
     pub openclaw: bool,
     pub kimicode: bool,
     pub reasonix: bool,
+    /// Reasonix 接管期间检测到 `network.proxy_mode = "custom"` 且
+    /// `network.no_proxy` 未覆盖 loopback 时的风险提示（serde 蛇形字段名）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasonix_proxy_warning: Option<String>,
 }
 
 /// API 格式类型（预留，当前不需要格式转换）

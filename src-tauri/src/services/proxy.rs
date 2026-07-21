@@ -719,6 +719,14 @@ impl ProxyService {
         let opencode_enabled = false;
         let openclaw_enabled = false;
 
+        // 接管期间用户又手改了 config（custom 代理且 no_proxy 不含 loopback）
+        // 时给出可见警告 —— 正常接管流程已在投影时自动注入 loopback。
+        let reasonix_proxy_warning = (reasonix_enabled
+            && crate::reasonix_config::custom_proxy_lacks_loopback_bypass())
+        .then(|| {
+            "Reasonix network.proxy_mode 为 custom 且 no_proxy 未包含 127.0.0.1/localhost，本地代理入口可能被系统代理拐走；请在 config.toml 的 [network].no_proxy 中加入 loopback，或改用非 custom 模式".to_string()
+        });
+
         Ok(ProxyTakeoverStatus {
             claude: claude_enabled,
             codex: codex_enabled,
@@ -728,6 +736,7 @@ impl ProxyService {
             openclaw: openclaw_enabled,
             kimicode: kimicode_enabled,
             reasonix: reasonix_enabled,
+            reasonix_proxy_warning,
         })
     }
 
@@ -1774,6 +1783,8 @@ impl ProxyService {
                     crate::reasonix_config::write_config_text(&backup.original_config)
                         .map_err(|e| format!("恢复 Reasonix 配置失败: {e}"))?;
                     let _ = crate::reasonix_config::clear_proxy_env_placeholder();
+                    // 快照已整份还原 [network]，丢弃 loopback 注入的 stash。
+                    crate::reasonix_config::discard_network_no_proxy_stash();
                     log::info!("Reasonix Live 配置已恢复");
                 }
             }
@@ -1857,6 +1868,8 @@ impl ProxyService {
                     crate::reasonix_config::write_config_text(&backup.original_config)
                         .map_err(|e| format!("恢复 Reasonix 配置失败: {e}"))?;
                     let _ = crate::reasonix_config::clear_proxy_env_placeholder();
+                    // 快照已整份还原 [network]，丢弃 loopback 注入的 stash。
+                    crate::reasonix_config::discard_network_no_proxy_stash();
                     log::info!("{app_type_str} Live 配置已从备份恢复");
                     return Ok(());
                 }

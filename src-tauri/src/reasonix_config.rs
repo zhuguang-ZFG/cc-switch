@@ -804,6 +804,95 @@ pub const REASONIX_PROXY_PROVIDER: &str = "cc-switch-proxy";
 pub const REASONIX_PROXY_MODEL: &str = "cc-switch-proxy-default";
 pub const REASONIX_PROXY_API_KEY_ENV: &str = "CC_SWITCH_PROXY_API_KEY";
 
+/// Loopback hosts that must bypass any user proxy while the takeover ingress
+/// (http://127.0.0.1:<port>) is projected into live config.
+const LOOPBACK_NO_PROXY_HOSTS: &[&str] = &["127.0.0.1", "localhost", "::1"];
+
+/// Parse `[network].no_proxy` entries from a string ("a, b") or string array.
+/// Returns `None` for missing / unrecognized value shapes.
+fn network_no_proxy_entries(network: &Table) -> Option<Vec<String>> {
+    match network.get("no_proxy").and_then(Item::as_value) {
+        Some(TomlEditValue::String(s)) => Some(
+            s.value()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect(),
+        ),
+        Some(TomlEditValue::Array(a)) => Some(
+            a.iter()
+                .filter_map(|v| {
+                    v.as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(ToString::to_string)
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Ensure `[network].no_proxy` covers loopback so a user `proxy_mode = "custom"`
+/// (or a system proxy) cannot hijack requests to the local takeover ingress —
+/// the provider-level `no_proxy = true` on the projected entry may be ignored
+/// in custom mode. No-op without a `[network]` table (default modes do not
+/// proxy loopback). Reverted losslessly by takeover restore, which writes back
+/// the full pre-takeover snapshot.
+fn ensure_loopback_no_proxy(doc: &mut DocumentMut) {
+    let Some(network) = doc.get_mut("network").and_then(Item::as_table_mut) else {
+        return;
+    };
+    let existing = match network_no_proxy_entries(network) {
+        Some(entries) => entries,
+        None if network.contains_key("no_proxy") => {
+            log::warn!("Reasonix [network].no_proxy 类型无法识别，跳过 loopback 注入");
+            return;
+        }
+        None => Vec::new(),
+    };
+    let missing: Vec<&str> = LOOPBACK_NO_PROXY_HOSTS
+        .iter()
+        .copied()
+        .filter(|host| !existing.iter().any(|e| e.eq_ignore_ascii_case(host)))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    let mut merged = existing;
+    merged.extend(missing.iter().map(ToString::to_string));
+    network.insert(
+        "no_proxy",
+        Item::Value(TomlEditValue::from(merged.join(", "))),
+    );
+    log::info!(
+        "Reasonix 接管：已向 [network].no_proxy 注入 loopback（{}）",
+        missing.join(", ")
+    );
+}
+
+/// True when live config sets `network.proxy_mode = "custom"` but
+/// `network.no_proxy` does not cover the loopback ingress host — takeover
+/// requests to 127.0.0.1 could be routed through the user's custom proxy.
+pub fn custom_proxy_lacks_loopback_bypass() -> bool {
+    let Ok(doc) = read_document() else {
+        return false;
+    };
+    let Some(network) = doc.get("network").and_then(Item::as_table) else {
+        return false;
+    };
+    let is_custom = table_str(network, "proxy_mode")
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("custom"));
+    if !is_custom {
+        return false;
+    }
+    let entries = network_no_proxy_entries(network).unwrap_or_default();
+    let covers = |host: &str| entries.iter().any(|e| e.eq_ignore_ascii_case(host));
+    // 入口 URL 使用字面量 127.0.0.1；两个常见写法都不在才算风险。
+    !covers("127.0.0.1") && !covers("localhost")
+}
+
 /// Project Reasonix onto the stable local OpenAI ingress while preserving
 /// unrelated `[[providers]]` tables and user-defined fields.
 pub fn apply_proxy_takeover(proxy_base_url: &str) -> Result<ReasonixWriteOutcome, AppError> {
@@ -853,6 +942,12 @@ pub fn apply_proxy_takeover(proxy_base_url: &str) -> Result<ReasonixWriteOutcome
     // Prefer provider name so ResolveModel uses provider.default (not a bare
     // model id that could collide with a user model named the same).
     doc["default_model"] = Item::Value(TomlEditValue::from(REASONIX_PROXY_PROVIDER));
+
+    // custom 代理模式下 provider 级 no_proxy 可能被忽略，确保 loopback 不被
+    // 用户代理拐走。先快照原值：快照恢复路径整份回写自动还原，非快照路径
+    // （clear_proxy_takeover）依赖该 stash 回放。
+    stash_network_no_proxy_if_needed(&doc)?;
+    ensure_loopback_no_proxy(&mut doc);
 
     let outcome = write_document(&doc)?;
     stash_proxy_env_previous_if_needed()?;
@@ -955,6 +1050,65 @@ pub fn restore_proxy_env_placeholder() -> Result<(), AppError> {
     clear_env_key(REASONIX_PROXY_API_KEY_ENV)
 }
 
+const PROXY_NO_PROXY_ABSENT_MARKER: &str = "__ABSENT__";
+const PROXY_NO_PROXY_BACKUP_FILENAME: &str = ".cc-switch-network-no-proxy.bak";
+
+fn proxy_no_proxy_backup_path() -> PathBuf {
+    get_reasonix_dir().join(PROXY_NO_PROXY_BACKUP_FILENAME)
+}
+
+/// Snapshot the original `[network].no_proxy` once per takeover session so the
+/// non-snapshot restore ([`clear_proxy_takeover`]) can revert the loopback
+/// injection losslessly. Idempotent, mirroring the env-key stash.
+fn stash_network_no_proxy_if_needed(doc: &DocumentMut) -> Result<(), AppError> {
+    let backup_path = proxy_no_proxy_backup_path();
+    if backup_path.exists() {
+        return Ok(());
+    }
+    let content = doc
+        .get("network")
+        .and_then(Item::as_table)
+        .and_then(|table| table.get("no_proxy"))
+        .map(|item| item.to_string().trim().to_string())
+        .unwrap_or_else(|| PROXY_NO_PROXY_ABSENT_MARKER.to_string());
+    atomic_write(&backup_path, content.as_bytes())
+}
+
+/// Apply the stashed pre-takeover `[network].no_proxy` to `doc` (raw text
+/// replay preserves the user's original string/array shape). Returns true
+/// when `doc` changed. The stash is deleted either way.
+fn restore_stashed_network_no_proxy(doc: &mut DocumentMut) -> Result<bool, AppError> {
+    let backup_path = proxy_no_proxy_backup_path();
+    if !backup_path.exists() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(&backup_path).map_err(|e| AppError::io(&backup_path, e))?;
+    let trimmed = content.trim();
+    let mut changed = false;
+    if trimmed.is_empty() || trimmed == PROXY_NO_PROXY_ABSENT_MARKER {
+        if let Some(network) = doc.get_mut("network").and_then(Item::as_table_mut) {
+            changed = network.remove("no_proxy").is_some();
+        }
+    } else if let Some(network) = doc.get_mut("network").and_then(Item::as_table_mut) {
+        let snippet = format!("no_proxy = {trimmed}");
+        let parsed = snippet
+            .parse::<DocumentMut>()
+            .map_err(|e| AppError::Message(format!("Reasonix no_proxy 备份解析失败: {e}")))?;
+        if let Some(item) = parsed.get("no_proxy") {
+            network.insert("no_proxy", item.clone());
+            changed = true;
+        }
+    }
+    let _ = fs::remove_file(&backup_path);
+    Ok(changed)
+}
+
+/// Discard the no_proxy stash without touching live config — the full-snapshot
+/// restore path already reverts `[network]` wholesale.
+pub fn discard_network_no_proxy_stash() {
+    let _ = fs::remove_file(proxy_no_proxy_backup_path());
+}
+
 /// Remove only the CC Switch-owned projection if no backup is available.
 pub fn clear_proxy_takeover() -> Result<ReasonixWriteOutcome, AppError> {
     let _guard = write_lock()
@@ -983,6 +1137,9 @@ pub fn clear_proxy_takeover() -> Result<ReasonixWriteOutcome, AppError> {
         }
         changed = true;
     }
+
+    // 回放接管前的 [network].no_proxy（loopback 注入的逆操作，幂等）。
+    changed |= restore_stashed_network_no_proxy(&mut doc)?;
 
     if changed {
         let outcome = write_document(&doc)?;
@@ -1351,6 +1508,120 @@ api_key_env = "DEMO_API_KEY"
                 "previous env value must be restored, got:\n{env_restored}"
             );
             assert!(!proxy_env_backup_path().exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn takeover_injects_loopback_no_proxy_and_clear_restores_it() {
+        with_temp_home(|| {
+            fs::write(
+                get_reasonix_config_path(),
+                r#"default_model = "demo-model"
+
+[network]
+proxy_mode = "custom"
+no_proxy = "internal.example.com"
+
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#,
+            )
+            .unwrap();
+
+            // 接管前：custom 且 no_proxy 不含 loopback → 风险成立。
+            assert!(custom_proxy_lacks_loopback_bypass());
+
+            apply_proxy_takeover("http://127.0.0.1:15721/reasonix/v1").unwrap();
+            let taken = fs::read_to_string(get_reasonix_config_path()).unwrap();
+            assert!(
+                taken.contains("internal.example.com"),
+                "existing no_proxy entries must be preserved: {taken}"
+            );
+            assert!(taken.contains("127.0.0.1"), "loopback injected: {taken}");
+            assert!(taken.contains("localhost"), "loopback injected: {taken}");
+            // 注入后风险解除。
+            assert!(!custom_proxy_lacks_loopback_bypass());
+
+            // 非快照恢复路径：clear 必须回放用户原始 no_proxy，不残留注入。
+            clear_proxy_takeover().unwrap();
+            let restored = fs::read_to_string(get_reasonix_config_path()).unwrap();
+            assert!(restored.contains("no_proxy = \"internal.example.com\""));
+            assert!(
+                !restored.contains("127.0.0.1"),
+                "injected loopback must not survive clear: {restored}"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn takeover_skips_no_proxy_injection_without_network_table() {
+        with_temp_home(|| {
+            fs::write(
+                get_reasonix_config_path(),
+                r#"default_model = "demo-model"
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#,
+            )
+            .unwrap();
+
+            apply_proxy_takeover("http://127.0.0.1:15721/reasonix/v1").unwrap();
+            let taken = fs::read_to_string(get_reasonix_config_path()).unwrap();
+            assert!(
+                !taken.contains("[network]"),
+                "no [network] table must stay untouched: {taken}"
+            );
+
+            // custom_proxy_lacks_loopback_bypass：无 network / 非 custom 均无风险。
+            assert!(!custom_proxy_lacks_loopback_bypass());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn takeover_no_proxy_absent_key_removed_on_clear() {
+        with_temp_home(|| {
+            fs::write(
+                get_reasonix_config_path(),
+                r#"default_model = "demo-model"
+
+[network]
+proxy_mode = "custom"
+
+[[providers]]
+name = "demo"
+kind = "openai"
+base_url = "https://example.test/v1"
+models = ["demo-model"]
+default = "demo-model"
+api_key_env = "DEMO_API_KEY"
+"#,
+            )
+            .unwrap();
+
+            apply_proxy_takeover("http://127.0.0.1:15721/reasonix/v1").unwrap();
+            let taken = fs::read_to_string(get_reasonix_config_path()).unwrap();
+            assert!(taken.contains("no_proxy"), "key injected: {taken}");
+
+            clear_proxy_takeover().unwrap();
+            let restored = fs::read_to_string(get_reasonix_config_path()).unwrap();
+            assert!(
+                !restored.contains("no_proxy"),
+                "injected key must be removed when it was absent pre-takeover: {restored}"
+            );
+            assert!(restored.contains("proxy_mode = \"custom\""));
         });
     }
 

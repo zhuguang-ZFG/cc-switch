@@ -474,6 +474,7 @@ mod tests {
             reasonix: false,
             opencode: false,
             openclaw: false,
+            reasonix_proxy_warning: None,
         };
         assert!(!takeover_blocks_proxy_stop(&takeover));
         takeover.reasonix = true;

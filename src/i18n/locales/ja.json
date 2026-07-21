@@ -2626,7 +2626,7 @@
     "switchFailed": "切り替えに失敗しました: {{error}}",
     "takeover": {
       "hint": "ルーティングするアプリを選択します。有効にすると、そのアプリのリクエストはローカルルーティング経由で転送されます",
-      "reasonixNoProxyHint": "Reasonix: config.toml で network.proxy_mode = \"custom\" の場合、provider の no_proxy が無視され、127.0.0.1 のローカルルーティングがシステムプロキシに吸われる可能性があります。loopback を network.no_proxy に追加するか、custom 以外を使ってください。",
+      "reasonixNoProxyAuto": "127.0.0.1/localhost は Reasonix の network.no_proxy に（存在する場合）自動追加済みです。custom プロキシモードでもローカル ingress は横取りされません。",
       "enabled": "{{app}} ルーティング有効",
       "disabled": "{{app}} ルーティング無効",
       "failed": "ルーティングの切り替えに失敗しました: {{detail}}",
