@@ -1614,8 +1614,9 @@ impl RequestForwarder {
             // request-supplied `max_output_tokens` and over the default below.
             // Injecting it into the body (rather than overriding after transform)
             // lets the thinking-budget clamp size its headroom against the real
-            // ceiling too. Kept per-provider to avoid a global large default that
-            // would 400 on low-output-ceiling gateways.
+            // ceiling too. Without a provider override, the helper only caps
+            // implausibly large values (>131072, e.g. context-size confusion),
+            // so low-output-ceiling gateways are not hit with a global large default.
             super::providers::clamp_codex_max_output_tokens(provider, &mut mapped_body);
             // Anthropic requires max_tokens; fall back to this default only when the
             // Codex request omits max_output_tokens (rare — Codex normally sends it).
