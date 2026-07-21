@@ -888,9 +888,11 @@ pub fn custom_proxy_lacks_loopback_bypass() -> bool {
         return false;
     }
     let entries = network_no_proxy_entries(network).unwrap_or_default();
-    let covers = |host: &str| entries.iter().any(|e| e.eq_ignore_ascii_case(host));
-    // 入口 URL 使用字面量 127.0.0.1；两个常见写法都不在才算风险。
-    !covers("127.0.0.1") && !covers("localhost")
+    // 入口 URL 使用字面量 127.0.0.1：只认字面量覆盖。no_proxy 仅写
+    // "localhost" 时主流客户端（reqwest/curl/Go httpproxy）按字面量/后缀
+    // 匹配、不做 DNS 解析，到 127.0.0.1 的请求仍会被 custom 代理拐走，
+    // 按 fail-safe 视为风险。
+    !entries.iter().any(|e| e.eq_ignore_ascii_case("127.0.0.1"))
 }
 
 /// Project Reasonix onto the stable local OpenAI ingress while preserving
@@ -1622,6 +1624,35 @@ api_key_env = "DEMO_API_KEY"
                 "injected key must be removed when it was absent pre-takeover: {restored}"
             );
             assert!(restored.contains("proxy_mode = \"custom\""));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn custom_proxy_localhost_only_no_proxy_still_counts_as_risk() {
+        with_temp_home(|| {
+            // ingress 使用字面量 127.0.0.1：no_proxy 只写 "localhost" 时按字面量
+            // 匹配的客户端仍会走 custom 代理，必须判为风险（fail-safe）。
+            fs::write(
+                get_reasonix_config_path(),
+                r#"[network]
+proxy_mode = "custom"
+no_proxy = "localhost"
+"#,
+            )
+            .unwrap();
+            assert!(custom_proxy_lacks_loopback_bypass());
+
+            // 字面量 127.0.0.1 覆盖 → 无风险。
+            fs::write(
+                get_reasonix_config_path(),
+                r#"[network]
+proxy_mode = "custom"
+no_proxy = "127.0.0.1"
+"#,
+            )
+            .unwrap();
+            assert!(!custom_proxy_lacks_loopback_bypass());
         });
     }
 

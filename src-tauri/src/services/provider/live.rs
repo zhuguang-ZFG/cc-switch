@@ -721,7 +721,7 @@ pub(crate) fn extract_kimi_common_config_from_toml(text: &str) -> Result<String,
 
     let mut out = DocumentMut::new();
     for (key, item) in doc.as_table().iter() {
-        if KIMI_COMMON_CONFIG_SKIP_KEYS.iter().any(|k| *k == key) {
+        if KIMI_COMMON_CONFIG_SKIP_KEYS.contains(&key) {
             continue;
         }
         // Drop empty tables so we don't pollute the snippet with placeholders.
