@@ -767,19 +767,24 @@ pub(crate) fn apply_kimi_common_config_to_live(db: &Database) -> Result<(), AppE
     Ok(())
 }
 
-/// Keys always treated as CC Switch–managed on restore reconcile (thinking UI).
+/// Keys treated as CC Switch–managed on restore reconcile (thinking UI) —
+/// but only when the user explicitly cleared the DB snippet. A `thinking`
+/// table in the restored backup may be the user's own hand-authored config;
+/// stripping it unconditionally would violate takeover losslessness.
 const KIMI_MANAGED_COMMON_KEYS: &[&str] = &["thinking"];
 
 /// Build a value-match strip snippet for restore reconcile.
 ///
 /// Includes:
-/// - always-managed keys present on live (currently `thinking`)
+/// - managed keys present on live (currently `thinking`), only when
+///   `snippet_cleared` (user explicitly cleared the DB common snippet)
 /// - live copies of keys that appear in the DB snippet (full replace those tables)
 ///
 /// Does **not** strip unrelated user tables (e.g. hand-edited `[hooks]` not in DB).
 fn build_kimi_reconcile_strip_snippet(
     live_common: &str,
     new_snippet: &str,
+    snippet_cleared: bool,
 ) -> Result<String, AppError> {
     if live_common.trim().is_empty() {
         return Ok(String::new());
@@ -797,7 +802,7 @@ fn build_kimi_reconcile_strip_snippet(
 
     let mut strip = DocumentMut::new();
     for (key, item) in live_doc.as_table().iter() {
-        let managed = KIMI_MANAGED_COMMON_KEYS.iter().any(|k| *k == key);
+        let managed = snippet_cleared && KIMI_MANAGED_COMMON_KEYS.contains(&key);
         let in_new = new_doc.as_table().contains_key(key);
         if managed || in_new {
             strip.as_table_mut().insert(key, item.clone());
@@ -808,19 +813,24 @@ fn build_kimi_reconcile_strip_snippet(
 
 /// After takeover restore: reconcile live common tables with the DB snippet.
 ///
-/// Strips a **narrow** projection (managed keys + keys present in the DB snippet),
-/// then merges the DB snippet — so cleared `thinking` does not stick, without
-/// wiping hand-edited unrelated tables. Routine sync keeps using
-/// [`apply_kimi_common_config_to_live`] (merge-only).
+/// Strips a **narrow** projection, then merges the DB snippet:
+/// - keys present in the DB snippet are fully replaced by the DB value;
+/// - managed keys (`thinking`) are stripped only when the user explicitly
+///   cleared the snippet (`snippet_cleared`), so a cleared `thinking` does
+///   not stick while a hand-authored one survives restore untouched.
+///
+/// Routine sync keeps using [`apply_kimi_common_config_to_live`] (merge-only).
 pub(crate) fn reconcile_kimi_common_config_on_live(db: &Database) -> Result<(), AppError> {
     let new_snippet = db
         .get_config_snippet(AppType::KimiCode.as_str())?
         .unwrap_or_default();
+    let snippet_cleared = db.is_config_snippet_cleared(AppType::KimiCode.as_str())?;
 
     crate::kimi_config::update_document(|doc| {
         let before = doc.to_string();
         let live_common = extract_kimi_common_config_from_toml(&before)?;
-        let strip_snippet = build_kimi_reconcile_strip_snippet(&live_common, &new_snippet)?;
+        let strip_snippet =
+            build_kimi_reconcile_strip_snippet(&live_common, &new_snippet, snippet_cleared)?;
         let old = (!strip_snippet.trim().is_empty()).then_some(strip_snippet);
         let new = (!new_snippet.trim().is_empty()).then_some(new_snippet.as_str());
         if old.is_none() && new.is_none() {
@@ -2622,11 +2632,11 @@ effort = "low"
 pre_tool = "echo hi"
 "#;
         let new_snippet = "[thinking]\neffort = \"max\"\n";
-        let strip =
-            build_kimi_reconcile_strip_snippet(live_common, new_snippet).expect("strip");
+        let strip = build_kimi_reconcile_strip_snippet(live_common, new_snippet, false)
+            .expect("strip");
         assert!(
             strip.contains("[thinking]"),
-            "managed thinking must be stripped: {strip}"
+            "DB-snippet thinking must be stripped for full replace: {strip}"
         );
         assert!(
             !strip.contains("[hooks]"),
@@ -2646,6 +2656,29 @@ pre_tool = "echo hi"
             "hooks must survive reconcile: {updated}"
         );
         assert!(updated.contains("pre_tool"));
+    }
+
+    #[test]
+    fn reconcile_strip_preserves_user_thinking_when_snippet_not_cleared() {
+        let live_common = "[thinking]\nenabled = true\n";
+        // No DB snippet and the user never cleared one: the restored backup's
+        // [thinking] is the user's own config and must survive (losslessness).
+        let strip = build_kimi_reconcile_strip_snippet(live_common, "", false).expect("strip");
+        assert!(
+            strip.trim().is_empty(),
+            "user-authored thinking must not be stripped: {strip}"
+        );
+    }
+
+    #[test]
+    fn reconcile_strip_removes_thinking_when_snippet_cleared() {
+        let live_common = "[thinking]\nenabled = true\n";
+        // User explicitly cleared the DB snippet: managed thinking is stripped.
+        let strip = build_kimi_reconcile_strip_snippet(live_common, "", true).expect("strip");
+        assert!(
+            strip.contains("[thinking]"),
+            "cleared snippet must strip managed thinking: {strip}"
+        );
     }
 
     #[test]
