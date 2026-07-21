@@ -1,6 +1,6 @@
 # CC Switch 用户手册
 
-> Claude Code / Claude Desktop / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes 全方位辅助工具
+> Claude Code / Claude Desktop / Codex / Gemini CLI / OpenCode / OpenClaw / Kimi Code / Reasonix 全方位辅助工具
 
 ## 目录结构
 
@@ -113,7 +113,7 @@
 ### v3.16.0 亮点
 
 - **Codex Chat Completions 路由**：DeepSeek、Kimi、GLM、MiniMax 等仅支持 Chat 协议的供应商可通过 Codex 使用 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
-- **托管 CLI 工具生命周期**：在设置 / 关于页安装、升级、全部升级并诊断 Claude / Codex / Gemini / OpenCode / OpenClaw / Hermes — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)
+- **托管 CLI 工具生命周期**：在设置 / 关于页安装、升级、全部升级并诊断 Claude / Codex / Gemini / OpenCode / OpenClaw / Kimi Code / Reasonix — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)
 - **供应商与模型矩阵刷新**：新增合作方预设，刷新默认模型与计费矩阵，Claude Opus 默认升级到 4.8，适用场景下 GPT 默认升级到 5.5
 - **路由支持徽章**：Claude Code / Codex 供应商卡片会标明是否支持 Local Routing，便于选择可代理的供应商
 - **Codex OAuth 实时模型发现**：ChatGPT Codex 类供应商按需从 ChatGPT 后端拉取最新模型列表
@@ -124,7 +124,7 @@
 - **托盘按应用分级菜单**：Claude / Codex / Gemini 独立子菜单，标题展示当前供应商与可用用量摘要 — 详见 [2.2 切换供应商](./2-providers/2.2-switch.md)
 - **Skills 发现与批量更新**：SHA-256 更新检测、批量更新、skills.sh 公共注册表搜索 — 详见 [3.3 Skills 技能管理](./3-extensions/3.3-skills.md)
 - **完整 URL 端点模式**：高级选项支持将 base_url 视作完整上游端点 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
-- **OpenCode / OpenClaw / Hermes 流式检测覆盖**：Stream Check 面板覆盖 Claude / Codex / Gemini / OpenCode / OpenClaw / Hermes — 详见 [4.5 模型检查](./4-proxy/4.5-model-test.md)
+- **OpenCode / OpenClaw / Kimi Code / Reasonix 流式检测覆盖**：Stream Check 面板覆盖 Claude / Codex / Gemini / OpenCode / OpenClaw / Kimi Code / Reasonix — 详见 [4.5 模型检查](./4-proxy/4.5-model-test.md)
 
 ## 贡献
 

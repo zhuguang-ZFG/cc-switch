@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **README tool lists now include Reasonix (8 tools)** across all four languages (EN/ZH/JA/DE): title, intro, feature bullets, and FAQ previously listed only seven tools and predated the Reasonix app type.
+- **User-manual index pages replace the retired Hermes name with Kimi Code and add Reasonix** (`docs/user-manual/{,en,zh,ja}/README.md`). Note: the per-chapter manual pages still describe the legacy Hermes app (`~/.hermes/` paths, YAML config) and predate the Kimi Code fork; a chapter-level rewrite is tracked as follow-up.
+- **Pi agent support plan** recorded at `docs/plans/pi-agent-support-plan.md` (upcoming `pi` app type: `~/.pi/agent/models.json` + typed `auth.json`, proxy route `/pi/v1/*`).
+- **`.gitignore` now excludes `.trellis/` and `.pi/`** — local Trellis/pi workspaces whose journals can contain machine paths and credentials; not for publication.
+
 Post-review hardening pass over the first-class Kimi Code integration (commits `98c22e86..8a08baea`): a three-way parallel audit (proxy/OAuth core, services/data layer, frontend) found no correctness or security blockers and verified the fail-closed routing, idempotent fork migrations, lossless serde round-trips, and no-secrets-in-logs claims — the fixes below address the warnings and suggestions it surfaced. A second comparative audit against the vendored Kimi Code CLI 0.27 source (OAuth lifecycle, config.toml contract, usage/wire.jsonl contract) then verified the shared-file token format, refresh threshold, provider-type schema, alias derivation, per-call usage semantics, and session layout all match the official implementation, and landed the interop fixes below. A third audit round (adversarial re-review of the fixes themselves, proxy streaming hot path, failover concurrency, and a whole-app performance sweep) landed the resilience and performance work below. A fourth round audited the external-input security surface (deep-link import), cloud-sync/secrets handling, and the project-profile system, plus an adversarial re-review of round three. A fifth round audited the Copilot/Codex OAuth providers, the non-Kimi config writers, and frontend state/query correctness.
 
 ### Fixed (Reasonix / Kimi Code takeover hardening)
