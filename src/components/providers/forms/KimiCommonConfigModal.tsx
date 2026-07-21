@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Save, Package } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Save, Package, Info, AlertCircle, Sparkles, Code2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { Button } from "@/components/ui/button";
@@ -61,10 +61,14 @@ export const KimiCommonConfigModal: React.FC<KimiCommonConfigModalProps> = ({
     return () => observer.disconnect();
   }, []);
 
+  // 仅在面板从关闭变为打开的瞬间同步草稿；打开期间外部 value 变化
+  // （如保存失败后重拉）不应清掉用户正在编辑的内容。
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpenRef.current) {
       setDraftValue(value);
     }
+    wasOpenRef.current = isOpen;
   }, [isOpen, value]);
 
   const structuredOk = canEditKimiThinkingStructured(draftValue);
@@ -108,19 +112,22 @@ export const KimiCommonConfigModal: React.FC<KimiCommonConfigModalProps> = ({
       }
     >
       <div className="space-y-4">
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/30 p-3 space-y-1.5">
-          <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
-            {t("commonConfig.guideTitle")}
-          </p>
-          <p className="text-xs text-blue-700/80 dark:text-blue-400/80">
-            {t("commonConfig.guidePurpose")}
-          </p>
-          <p className="text-xs text-blue-700/80 dark:text-blue-400/80">
-            {t("kimicode.commonConfig.guideUsage")}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {t("commonConfig.guideReassurance")}
-          </p>
+        <div className="flex gap-2.5 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/30 p-3">
+          <Info className="w-4 h-4 mt-0.5 shrink-0 text-blue-600 dark:text-blue-400" />
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
+              {t("commonConfig.guideTitle")}
+            </p>
+            <p className="text-xs text-blue-700/80 dark:text-blue-400/80">
+              {t("commonConfig.guidePurpose")}
+            </p>
+            <p className="text-xs text-blue-700/80 dark:text-blue-400/80">
+              {t("kimicode.commonConfig.guideUsage")}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {t("commonConfig.guideReassurance")}
+            </p>
+          </div>
         </div>
         <p className="text-xs text-muted-foreground">
           {t("kimicode.commonConfig.hint")}
@@ -129,7 +136,8 @@ export const KimiCommonConfigModal: React.FC<KimiCommonConfigModalProps> = ({
         {/* Structured thinking intensity — maps to global [thinking] in config.toml */}
         <div className="rounded-lg border border-border p-4 space-y-3">
           <div>
-            <p className="text-sm font-medium">
+            <p className="text-sm font-medium flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-muted-foreground" />
               {t("kimicode.thinking.title", {
                 defaultValue: "思维强度",
               })}
@@ -235,8 +243,9 @@ export const KimiCommonConfigModal: React.FC<KimiCommonConfigModalProps> = ({
           </div>
         )}
 
-        <div className="space-y-1">
-          <Label>
+        <div className="space-y-1.5">
+          <Label className="flex items-center gap-1.5">
+            <Code2 className="w-3.5 h-3.5 text-muted-foreground" />
             {t("kimicode.commonConfig.rawToml", {
               defaultValue: "高级：完整 TOML 片段",
             })}
@@ -256,7 +265,10 @@ export const KimiCommonConfigModal: React.FC<KimiCommonConfigModalProps> = ({
         </div>
 
         {error && (
-          <p className="text-sm text-red-500 dark:text-red-400">{error}</p>
+          <div className="flex items-start gap-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 p-3">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-600 dark:text-red-400" />
+            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          </div>
         )}
       </div>
     </FullScreenPanel>

@@ -121,4 +121,27 @@ describe("useKimiCommonConfig", () => {
     expect(saved).toBe(false);
     expect(result.current.commonConfigError).not.toBe("");
   });
+
+  it("resyncs local state from the backend after a partial save failure", async () => {
+    // 孤儿接管场景：后端已把新片段落库，仅 backup 写入失败并返回错误。
+    // 失败后必须重拉片段，否则重开编辑器会用旧值覆盖已保存内容。
+    setCommonConfigSnippetMock.mockRejectedValue(new Error("backup missing"));
+    getCommonConfigSnippetMock.mockResolvedValue("[thinking]\neffort = \"max\"\n");
+
+    const { result } = renderHook(() => useKimiCommonConfig({ enabled: true }));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    let saved = true;
+    await act(async () => {
+      saved = await result.current.handleCommonConfigSnippetChange(
+        "[thinking]\neffort = \"max\"\n",
+      );
+    });
+
+    expect(saved).toBe(false);
+    expect(getCommonConfigSnippetMock).toHaveBeenCalledTimes(2);
+    expect(result.current.commonConfigSnippet).toBe(
+      "[thinking]\neffort = \"max\"\n",
+    );
+  });
 });

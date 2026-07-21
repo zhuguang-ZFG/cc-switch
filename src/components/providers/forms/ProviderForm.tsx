@@ -4,6 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -2671,15 +2672,18 @@ function ProviderFormFull({
               {appId === "kimicode" && (
                 <>
                   <div className="flex items-center justify-end">
-                    <button
+                    <Button
                       type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 h-8 text-xs"
                       onClick={() => setIsKimiCommonConfigModalOpen(true)}
-                      className="text-xs text-blue-500 dark:text-blue-400 hover:underline"
                     >
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
                       {t("kimicode.commonConfig.openButton", {
                         defaultValue: "思维强度 / 通用配置",
                       })}
-                    </button>
+                    </Button>
                   </div>
                   <KimiCommonConfigModal
                     isOpen={isKimiCommonConfigModalOpen}

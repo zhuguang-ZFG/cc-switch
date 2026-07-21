@@ -82,6 +82,14 @@ export function useKimiCommonConfig({ enabled }: UseKimiCommonConfigProps) {
         setCommonConfigError(
           t("codexConfig.saveFailed", { error: String(error) }),
         );
+        // 后端可能已部分落库（如孤儿接管：DB 已保存、仅 backup 写入失败），
+        // 重新拉取片段使本地状态与 DB 一致，避免下次打开用旧值覆盖。
+        try {
+          const snippet = await configApi.getCommonConfigSnippet("kimicode");
+          setCommonConfigSnippetState(snippet ?? "");
+        } catch (refetchError) {
+          console.error("重拉 Kimi Code 通用配置失败:", refetchError);
+        }
         return false;
       }
 
