@@ -28,6 +28,7 @@ export function UniversalProviderCard({
     provider.apps.gemini ? "Gemini" : null,
     provider.apps.kimicode ? "Kimi Code" : null,
     provider.apps.reasonix ? "Reasonix" : null,
+    provider.apps.pi ? "Pi" : null,
   ].filter((app): app is string => app !== null);
 
   return (

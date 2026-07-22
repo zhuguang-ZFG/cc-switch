@@ -73,6 +73,8 @@ describe("useDirectorySettings", () => {
       if (app === "opencode") return "/remote/opencode";
       if (app === "openclaw") return "/remote/openclaw";
       if (app === "kimicode") return "/remote/kimi";
+      if (app === "reasonix") return "/remote/reasonix";
+      if (app === "pi") return "/remote/pi";
       throw new Error(`Unexpected app: ${app}`);
     });
     selectConfigDirectoryMock.mockReset();
@@ -96,6 +98,8 @@ describe("useDirectorySettings", () => {
       grokbuild: "/remote/grok",
       opencode: "/remote/opencode",
       openclaw: "/remote/openclaw",
+      reasonix: "/remote/reasonix",
+      pi: "/remote/pi",
     });
   });
 

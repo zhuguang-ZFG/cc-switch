@@ -577,6 +577,8 @@ export interface UniversalProviderApps {
   kimicode?: boolean;
   /** Reasonix */
   reasonix?: boolean;
+  /** Pi coding agent */
+  pi?: boolean;
 }
 
 // Claude 模型配置

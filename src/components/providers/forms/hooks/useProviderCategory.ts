@@ -47,7 +47,7 @@ export function useProviderCategory({
 
     // 从预设 ID 提取索引
     const match = selectedPresetId.match(
-      /^(claude|codex|gemini|opencode|openclaw|kimicode|reasonix)-(\d+)$/,
+      /^(claude|codex|gemini|opencode|openclaw|kimicode|reasonix|pi)-(\d+)$/,
     );
     if (!match) return;
 

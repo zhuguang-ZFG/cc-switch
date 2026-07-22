@@ -179,6 +179,10 @@ export function useDirectorySettings({
 
     const load = async () => {
       try {
+        // 单个 app 的目录解析失败（后端不认识新 app、权限问题等）不应拖垮整页：
+        // 逐项降级为 undefined，由 defaultsRef 兜底
+        const safeGetConfigDir = (app: AppId): Promise<string | undefined> =>
+          settingsApi.getConfigDir(app).catch(() => undefined);
         const [
           overrideRaw,
           claudeDir,
@@ -200,14 +204,14 @@ export function useDirectorySettings({
           defaultPiDir,
         ] = await Promise.all([
           settingsApi.getAppConfigDirOverride(),
-          settingsApi.getConfigDir("claude"),
-          settingsApi.getConfigDir("codex"),
-          settingsApi.getConfigDir("grokbuild"),
-          settingsApi.getConfigDir("opencode"),
-          settingsApi.getConfigDir("openclaw"),
-          settingsApi.getConfigDir("kimicode"),
-          settingsApi.getConfigDir("reasonix"),
-          settingsApi.getConfigDir("pi"),
+          safeGetConfigDir("claude"),
+          safeGetConfigDir("codex"),
+          safeGetConfigDir("grokbuild"),
+          safeGetConfigDir("opencode"),
+          safeGetConfigDir("openclaw"),
+          safeGetConfigDir("kimicode"),
+          safeGetConfigDir("reasonix"),
+          safeGetConfigDir("pi"),
           computeDefaultAppConfigDir(),
           computeDefaultConfigDir("claude"),
           computeDefaultConfigDir("codex"),

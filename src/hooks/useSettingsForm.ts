@@ -197,6 +197,7 @@ export function useSettingsForm(): UseSettingsFormResult {
           serverData.kimiConfigDir ?? serverData.hermesConfigDir,
         ),
         reasonixConfigDir: sanitizeDir(serverData.reasonixConfigDir),
+        piConfigDir: sanitizeDir(serverData.piConfigDir),
         language: normalizedLanguage,
       };
 

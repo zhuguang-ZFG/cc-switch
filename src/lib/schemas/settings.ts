@@ -30,6 +30,7 @@ export const settingsSchema = z.object({
   kimiConfigDir: directorySchema.nullable().optional(),
   hermesConfigDir: directorySchema.nullable().optional(),
   reasonixConfigDir: directorySchema.nullable().optional(),
+  piConfigDir: directorySchema.nullable().optional(),
 
   // 当前供应商 ID（设备级）
   currentProviderClaude: z.string().optional(),

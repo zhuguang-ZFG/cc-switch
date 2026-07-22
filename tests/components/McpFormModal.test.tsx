@@ -392,6 +392,7 @@ type = "stdio"
       grokbuild: false,
       opencode: false,
       kimicode: false,
+      reasonix: false,
     });
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith();
@@ -431,6 +432,12 @@ type = "stdio"
     expect(kimicodeCheckbox.checked).toBe(true);
     fireEvent.click(kimicodeCheckbox);
 
+    const reasonixCheckbox = document.getElementById(
+      "enable-reasonix",
+    ) as HTMLInputElement;
+    expect(reasonixCheckbox.checked).toBe(true);
+    fireEvent.click(reasonixCheckbox);
+
     fireEvent.click(screen.getByText("common.add"));
 
     await waitFor(() => expect(upsertMock).toHaveBeenCalledTimes(1));
@@ -442,6 +449,7 @@ type = "stdio"
       grokbuild: false,
       opencode: false,
       kimicode: false,
+      reasonix: false,
     });
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(toastErrorMock).not.toHaveBeenCalled();
