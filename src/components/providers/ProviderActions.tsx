@@ -264,7 +264,8 @@ export function ProviderActions({
           后者主按钮已是「加入/已加入」，再叠一个 Zap「启用」会像截图里那样重复误导。 */}
       {(appId === "openclaw" ||
         appId === "kimicode" ||
-        appId === "reasonix") &&
+        appId === "reasonix" ||
+        appId === "pi") &&
         isInConfig &&
         onSetAsDefault &&
         !(isHybridProxyApp && isProxyTakeover) &&

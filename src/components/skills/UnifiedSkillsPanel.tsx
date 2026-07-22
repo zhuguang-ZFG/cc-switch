@@ -754,6 +754,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
           openclaw: false,
           kimicode: skill.foundIn.includes("kimicode"),
           reasonix: skill.foundIn.includes("reasonix"),
+          pi: skill.foundIn.includes("pi"),
         },
       ]),
     ),
@@ -782,6 +783,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
           openclaw: false,
           kimicode: false,
           reasonix: false,
+          pi: false,
         },
       })),
     );

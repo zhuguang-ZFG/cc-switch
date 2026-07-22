@@ -111,8 +111,8 @@ pub struct ToolVersion {
     wsl_distro: Option<String>,
 }
 
-const VALID_TOOLS: [&str; 7] = [
-    "claude", "codex", "grok", "opencode", "openclaw", "kimicode", "reasonix",
+const VALID_TOOLS: [&str; 8] = [
+    "claude", "codex", "grok", "opencode", "openclaw", "kimicode", "reasonix", "pi",
 ];
 
 fn tool_executable_name(tool: &str) -> &str {
@@ -436,6 +436,7 @@ fn tool_display_name(tool: &str) -> &'static str {
         "openclaw" => "OpenClaw",
         "hermes" | "kimicode" | "kimi" | "kimi-code" => "Kimi Code",
         "reasonix" => "Reasonix",
+        "pi" => "Pi",
         _ => "Unknown",
     }
 }
@@ -504,6 +505,7 @@ fn npm_install_command_for(tool: &str) -> Option<&'static str> {
         "opencode" => Some("npm i -g opencode-ai@latest"),
         "openclaw" => Some("npm i -g openclaw@latest"),
         "reasonix" => Some("npm i -g reasonix@latest"),
+        "pi" => Some("npm i -g @earendil-works/pi-coding-agent@latest"),
         _ => None,
     }
 }
@@ -513,6 +515,7 @@ fn official_update_args(tool: &str) -> Option<&'static str> {
         "claude" | "codex" | "kimicode" => Some("update"),
         "openclaw" => Some("update --yes"),
         "opencode" => Some("upgrade"),
+        "pi" => Some("update self"),
         _ => None,
     }
 }

@@ -75,6 +75,7 @@ export function ProxyPanel({
   const { data: grokQueue = [] } = useFailoverQueue("grokbuild");
   const { data: kimiQueue = [] } = useFailoverQueue("kimicode");
   const { data: reasonixQueue = [] } = useFailoverQueue("reasonix");
+  const { data: piQueue = [] } = useFailoverQueue("pi");
 
   const handleTakeoverChange = async (appType: string, enabled: boolean) => {
     try {
@@ -450,7 +451,8 @@ export function ProxyPanel({
                 codexQueue.length > 0 ||
                 grokQueue.length > 0 ||
                 kimiQueue.length > 0 ||
-                reasonixQueue.length > 0) && (
+                reasonixQueue.length > 0 ||
+                piQueue.length > 0) && (
                 <div className="pt-3 border-t border-border space-y-3">
                   <div className="flex items-center gap-2">
                     <ListOrdered className="h-3.5 w-3.5 text-muted-foreground" />
@@ -512,6 +514,18 @@ export function ProxyPanel({
                       appType="reasonix"
                       appLabel="Reasonix"
                       targets={reasonixQueue.map((item) => ({
+                        id: item.providerId,
+                        name: item.providerName,
+                      }))}
+                      status={status}
+                    />
+                  )}
+
+                  {piQueue.length > 0 && (
+                    <ProviderQueueGroup
+                      appType="pi"
+                      appLabel="Pi"
+                      targets={piQueue.map((item) => ({
                         id: item.providerId,
                         name: item.providerName,
                       }))}

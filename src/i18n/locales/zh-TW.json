@@ -3000,5 +3000,31 @@
     "expiredHint": "請執行 {{tool}} 命令重新整理登入",
     "queryFailed": "查詢失敗",
     "refresh": "重新整理"
+  },
+  "pi": {
+    "presets": {
+      "openaiCompatible": "OpenAI 相容",
+      "custom": "自訂"
+    },
+    "form": {
+      "providerName": "供應商識別碼",
+      "providerNamePlaceholder": "my-provider",
+      "providerNameHint": "只能使用小寫字母、數字和連字號。寫入 Pi models.json 的 providers 鍵。",
+      "providerNameRequired": "請填寫供應商識別碼",
+      "providerNameInvalid": "供應商識別碼只能使用小寫字母、數字和連字號",
+      "providerNameDuplicate": "供應商識別碼已存在",
+      "baseUrl": "API 端點",
+      "baseUrlHint": "OpenAI-compatible base URL。代理接管時將導向本機 /pi/v1。",
+      "baseUrlRequired": "請填寫 API 端點",
+      "baseUrlScheme": "API 端點必須以 http:// 或 https:// 開頭",
+      "baseUrlInvalid": "API 端點格式無效",
+      "apiKeyRequired": "請填寫 API Key",
+      "models": "模型",
+      "addModel": "新增模型",
+      "fetchModels": "擷取模型",
+      "noModelsFetched": "未擷取到模型，請檢查端點與金鑰",
+      "modelsRequired": "至少新增一個模型",
+      "defaultModel": "預設模型"
+    }
   }
 }

@@ -73,7 +73,7 @@ impl<'a> UsageLogger<'a> {
         let created_at = chrono::Utc::now().timestamp();
         let input_token_semantics = if matches!(
             log.app_type.as_str(),
-            "codex" | "gemini" | "grokbuild" | "kimicode" | "reasonix"
+            "codex" | "gemini" | "grokbuild" | "kimicode" | "reasonix" | "pi"
         ) {
             INPUT_TOKEN_SEMANTICS_TOTAL
         } else {
