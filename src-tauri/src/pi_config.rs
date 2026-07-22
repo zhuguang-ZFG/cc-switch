@@ -58,15 +58,15 @@ fn default_pi_agent_dir() -> PathBuf {
 /// Resolve Pi agent directory.
 ///
 /// Order:
-/// 1. CC Switch settings override (`pi_config_dir`)
-/// 2. `PI_AGENT_HOME` env
-/// 3. `PI_HOME` env → `<PI_HOME>/agent`
+/// 1. `PI_AGENT_HOME` env
+/// 2. `PI_HOME` env → `<PI_HOME>/agent`
+/// 3. CC Switch settings override (`pi_config_dir`)
 /// 4. `~/.pi/agent`
+///
+/// env 优先于 settings 覆盖：PI_AGENT_HOME 并非 Pi 官方变量，仅作显式指定/
+/// 测试隔离用途，显式设置者应赢过持久化覆盖（同时保证 cargo test 不会
+/// 因本机配过 pi_config_dir 而写坏真实配置）。
 pub fn get_pi_dir() -> PathBuf {
-    if let Some(override_dir) = get_pi_override_dir() {
-        return override_dir;
-    }
-
     if let Some(raw) = std::env::var_os("PI_AGENT_HOME") {
         let value = raw.to_string_lossy();
         let trimmed = value.trim();
@@ -81,6 +81,10 @@ pub fn get_pi_dir() -> PathBuf {
         if !trimmed.is_empty() {
             return PathBuf::from(trimmed).join("agent");
         }
+    }
+
+    if let Some(override_dir) = get_pi_override_dir() {
+        return override_dir;
     }
 
     default_pi_agent_dir()

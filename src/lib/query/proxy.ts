@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { GlobalProxyConfig, AppProxyConfig } from "@/types/proxy";
 import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
 import { invalidateReasonixProviderCaches } from "@/hooks/useReasonix";
+import { invalidatePiProviderCaches } from "@/hooks/usePi";
 import { openclawKeys } from "@/hooks/useOpenClaw";
 
 // ========== 代理服务器状态 Hooks ==========
@@ -88,6 +89,7 @@ export function useStopProxyServer() {
       // Restore rewrites additive live configs.
       void invalidateHermesProviderCaches(queryClient);
       void invalidateReasonixProviderCaches(queryClient);
+      void invalidatePiProviderCaches(queryClient);
       queryClient.invalidateQueries({
         queryKey: ["opencodeLiveProviderIds"],
       });
@@ -118,6 +120,8 @@ export function useSetProxyTakeoverForApp() {
         void invalidateHermesProviderCaches(queryClient);
       } else if (variables.appType === "reasonix") {
         void invalidateReasonixProviderCaches(queryClient);
+      } else if (variables.appType === "pi") {
+        void invalidatePiProviderCaches(queryClient);
       } else if (variables.appType === "opencode") {
         queryClient.invalidateQueries({
           queryKey: ["opencodeLiveProviderIds"],

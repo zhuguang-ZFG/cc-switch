@@ -28,6 +28,8 @@ export interface SkillApps {
   kimicode?: boolean;
   /** Reasonix skills */
   reasonix?: boolean;
+  /** Pi skills */
+  pi?: boolean;
 }
 
 /** 已安装的 Skill（v3.10.0+ 统一结构） */

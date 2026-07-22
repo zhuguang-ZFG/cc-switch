@@ -10,6 +10,7 @@ import { generateUUID } from "@/utils/uuid";
 import { openclawKeys } from "@/hooks/useOpenClaw";
 import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
 import { invalidateReasonixProviderCaches } from "@/hooks/useReasonix";
+import { invalidatePiProviderCaches } from "@/hooks/usePi";
 import { usageKeys } from "@/lib/query/usage";
 import { CODEX_OFFICIAL_PROVIDER_ID } from "@/utils/providerCapabilities";
 
@@ -60,7 +61,8 @@ export const useAddProviderMutation = (appId: AppId) => {
         appId === "opencode" ||
         appId === "openclaw" ||
         appId === "kimicode" ||
-        appId === "reasonix"
+        appId === "reasonix" ||
+        appId === "pi"
       ) {
         if (
           providerInput.category === "omo" ||
@@ -130,6 +132,9 @@ export const useAddProviderMutation = (appId: AppId) => {
       if (appId === "reasonix") {
         await invalidateReasonixProviderCaches(queryClient);
       }
+      if (appId === "pi") {
+        await invalidatePiProviderCaches(queryClient);
+      }
 
       try {
         await providersApi.updateTrayMenu();
@@ -197,6 +202,9 @@ export const useUpdateProviderMutation = (appId: AppId) => {
       if (appId === "reasonix") {
         await invalidateReasonixProviderCaches(queryClient);
       }
+      if (appId === "pi") {
+        await invalidatePiProviderCaches(queryClient);
+      }
       toast.success(
         t("notifications.updateSuccess", {
           defaultValue: "供应商更新成功",
@@ -255,6 +263,9 @@ export const useDeleteProviderMutation = (appId: AppId) => {
       }
       if (appId === "reasonix") {
         await invalidateReasonixProviderCaches(queryClient);
+      }
+      if (appId === "pi") {
+        await invalidatePiProviderCaches(queryClient);
       }
 
       try {
@@ -334,6 +345,9 @@ export const useSwitchProviderMutation = (appId: AppId) => {
       }
       if (appId === "reasonix") {
         await invalidateReasonixProviderCaches(queryClient);
+      }
+      if (appId === "pi") {
+        await invalidatePiProviderCaches(queryClient);
       }
 
       try {

@@ -38,6 +38,7 @@ const PromptFormModal: React.FC<PromptFormModalProps> = ({
     reasonix: "REASONIX.md / AGENTS.md",
     grokbuild: "AGENTS.md",
     opencode: "AGENTS.md",
+    pi: "AGENTS.md",
   };
   const filename = filenameMap[appId as Exclude<AppId, "openclaw">];
   const [name, setName] = useState("");

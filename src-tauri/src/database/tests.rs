@@ -866,6 +866,80 @@ fn fork_migration_rebuilds_kimicode_only_proxy_config_for_reasonix() -> Result<(
 }
 
 #[test]
+fn fork_migration_rebuilds_proxy_config_for_pi() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    {
+        let conn = lock_conn!(db.conn);
+        conn.execute("DROP TABLE proxy_config", [])?;
+        // reasonix 时代的旧 CHECK（不含 'pi'），即存量用户库的真实形态
+        conn.execute_batch(
+            "CREATE TABLE proxy_config (
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
+            proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+            listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+            max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+            streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+            circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+            circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+            circuit_min_requests INTEGER NOT NULL DEFAULT 10, default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+            pricing_model_source TEXT NOT NULL DEFAULT 'response', live_takeover_active INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+         );
+         INSERT INTO proxy_config (app_type, enabled, max_retries, listen_port)
+         VALUES ('claude', 1, 7, 19001),
+                ('reasonix', 1, 5, 19005);",
+        )?;
+        // 前序 fork 迁移全部标记完成，只让 pi 迁移跑
+        for key in [
+            "fork_migration_kimicode_v1",
+            "fork_migration_kimicode_proxy_v1",
+            "fork_migration_reasonix_proxy_v1",
+        ] {
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, 'done')",
+                [key],
+            )?;
+        }
+        conn.execute(
+            "DELETE FROM settings WHERE key = 'fork_migration_pi_proxy_v1'",
+            [],
+        )?;
+    }
+
+    // 跑两次验证幂等
+    db.apply_fork_data_migrations()?;
+    db.apply_fork_data_migrations()?;
+
+    let conn = lock_conn!(db.conn);
+    let claude: (i64, i64, i64) = conn.query_row(
+        "SELECT enabled, max_retries, listen_port FROM proxy_config WHERE app_type = 'claude'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(claude, (1, 7, 19001), "rebuild must preserve existing rows");
+    let reasonix: (i64, i64) = conn.query_row(
+        "SELECT enabled, max_retries FROM proxy_config WHERE app_type = 'reasonix'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(reasonix, (1, 5));
+    let pi: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'pi'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(pi, 1, "pi row must be inserted");
+    let table_sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert!(table_sql.contains("'pi'"), "CHECK constraint must include 'pi'");
+    Ok(())
+}
+
+#[test]
 fn fork_migration_rebuilds_legacy_four_row_proxy_config_losslessly() -> Result<(), AppError> {
     let db = Database::memory()?;
     let before = {
@@ -921,7 +995,8 @@ fn fork_migration_rebuilds_legacy_four_row_proxy_config_losslessly() -> Result<(
     assert_eq!(after, before);
     assert_eq!(Database::get_user_version(&conn)?, 15);
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM proxy_config", [], |row| row.get(0))?;
-    assert_eq!(count, 6);
+    // 4 legacy rows + kimicode + reasonix + pi
+    assert_eq!(count, 7);
     Ok(())
 }
 
@@ -1053,7 +1128,7 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
     let proxy_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 6);
+    assert_eq!(proxy_rows, 7);
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn

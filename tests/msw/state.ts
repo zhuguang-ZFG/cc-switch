@@ -73,6 +73,7 @@ const createDefaultProviders = (): ProvidersByApp => ({
   opencode: {},
   openclaw: {},
   reasonix: {},
+  pi: {},
 });
 
 const createDefaultCurrent = (): CurrentProviderState => ({
@@ -84,6 +85,7 @@ const createDefaultCurrent = (): CurrentProviderState => ({
   opencode: "",
   openclaw: "",
   reasonix: "",
+  pi: "",
 });
 
 let providers = createDefaultProviders();
@@ -196,6 +198,7 @@ let mcpConfigs: McpConfigState = {
   opencode: {},
   openclaw: {},
   reasonix: {},
+  pi: {},
 };
 
 const cloneProviders = (value: ProvidersByApp) =>
@@ -264,6 +267,7 @@ export const resetProviderState = () => {
     opencode: {},
     openclaw: {},
     reasonix: {},
+    pi: {},
   };
 };
 

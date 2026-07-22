@@ -18,6 +18,7 @@ const ENDPOINT_TIMEOUT_SECS: Record<AppId, number> = {
   openclaw: 8,
   kimicode: 8,
   reasonix: 8,
+  pi: 8,
 };
 
 interface TestResult {

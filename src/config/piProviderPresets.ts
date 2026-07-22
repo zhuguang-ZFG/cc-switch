@@ -45,6 +45,8 @@ export interface PiProviderPreset {
   isOfficial?: boolean;
   category?: ProviderCategory;
   icon?: string;
+  isPartner?: boolean;
+  partnerPromotionKey?: string;
 }
 
 export const piProviderPresets: PiProviderPreset[] = [

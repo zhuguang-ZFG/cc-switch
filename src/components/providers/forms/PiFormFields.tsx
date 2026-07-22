@@ -49,11 +49,7 @@ export function PiFormFields({
     const seq = ++fetchSeq.current;
     setIsFetching(true);
     try {
-      const result = await fetchModelsForConfig({
-        appType: "pi",
-        baseUrl,
-        apiKey,
-      });
+      const result = await fetchModelsForConfig(baseUrl, apiKey);
       if (seq !== fetchSeq.current) return;
       setFetchedModels(result);
       if (result.length === 0) {
@@ -92,10 +88,10 @@ export function PiFormFields({
       </div>
 
       <ApiKeySection
-        apiKey={apiKey}
-        onApiKeyChange={onApiKeyChange}
+        value={apiKey}
+        onChange={onApiKeyChange}
         category={category}
-        shouldShowApiKeyLink={shouldShowApiKeyLink}
+        shouldShowLink={shouldShowApiKeyLink}
         websiteUrl={websiteUrl}
       />
 
@@ -122,6 +118,7 @@ export function PiFormFields({
           {models.map((model, index) => (
             <div key={`pi-model-${index}`} className="flex items-center gap-2">
               <ModelInputWithFetch
+                id={`pi-model-${index}`}
                 value={model}
                 onChange={(value) => {
                   const next = [...models];
@@ -129,6 +126,7 @@ export function PiFormFields({
                   onModelsChange(next);
                 }}
                 fetchedModels={fetchedModels}
+                isLoading={isFetching}
                 placeholder="model-id"
               />
               <Button

@@ -1253,6 +1253,15 @@ impl ProviderAdapter for CodexAdapter {
             return Ok(url.trim_end_matches('/').to_string());
         }
 
+        // 2b. 尝试 camelCase baseUrl（Pi provider 的统一存储格式）
+        if let Some(url) = provider
+            .settings_config
+            .get("baseUrl")
+            .and_then(|v| v.as_str())
+        {
+            return Ok(url.trim_end_matches('/').to_string());
+        }
+
         // 3. 尝试从 config 对象中获取
         if let Some(config) = provider.settings_config.get("config") {
             if let Some(url) = config.get("base_url").and_then(|v| v.as_str()) {
@@ -1583,6 +1592,21 @@ wire_api = "responses"
 
         let url = adapter.extract_base_url(&provider).unwrap();
         assert_eq!(url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_extract_base_url_camel_case_pi() {
+        // Pi provider 统一存 camelCase baseUrl（UI 表单 / deeplink / live 导入）
+        let adapter = CodexAdapter::new();
+        let provider = create_provider(json!({
+            "name": "demo",
+            "baseUrl": "https://example.invalid/v1/",
+            "apiKey": "sk-test",
+            "api": "openai-completions"
+        }));
+
+        let url = adapter.extract_base_url(&provider).unwrap();
+        assert_eq!(url, "https://example.invalid/v1");
     }
 
     #[test]
