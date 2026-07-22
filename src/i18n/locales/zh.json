@@ -1491,7 +1491,8 @@
       "grokbuild": "Grok Build",
       "kimicode": "Kimi Code",
       "reasonix": "Reasonix",
-      "opencode": "OpenCode"
+      "opencode": "OpenCode",
+      "pi": "Pi"
     },
     "rawInputLabel": "原始",
     "dataSources": "数据来源",
@@ -1503,7 +1504,8 @@
       "gemini_session": "Gemini 会话日志",
       "opencode_session": "OpenCode 会话日志",
       "kimi_session": "Kimi Code 会话日志",
-      "reasonix_session": "Reasonix 会话日志"
+      "reasonix_session": "Reasonix 会话日志",
+      "pi_session": "Pi 会话日志"
     },
     "sessionSync": {
       "trigger": "同步会话日志",

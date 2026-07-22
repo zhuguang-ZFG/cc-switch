@@ -385,6 +385,19 @@ pub async fn sync_session_usage(
             }
         }
 
+        // 同步 Pi 使用数据（sessions/<slug>/*.jsonl assistant message usage）
+        match crate::services::session_usage_pi::sync_pi_usage(&db) {
+            Ok(pi_result) => {
+                result.imported += pi_result.imported;
+                result.skipped += pi_result.skipped;
+                result.files_scanned += pi_result.files_scanned;
+                result.errors.extend(pi_result.errors);
+            }
+            Err(e) => {
+                result.errors.push(format!("Pi 同步失败: {e}"));
+            }
+        }
+
         Ok(result)
     })
     .await

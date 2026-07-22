@@ -233,7 +233,9 @@ export function useSetAutoFailoverEnabled() {
                 ? "Kimi Code"
                 : variables.appType === "reasonix"
                   ? "Reasonix"
-                  : "Gemini";
+                  : variables.appType === "pi"
+                    ? "Pi"
+                    : "Gemini";
 
       toast.success(
         variables.enabled

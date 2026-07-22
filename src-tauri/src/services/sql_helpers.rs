@@ -16,7 +16,7 @@
 /// style provider not added here) shows up loudly as a too-low cache hit
 /// rate, which is easier to catch than the silent over-deduction that
 /// would happen with the opposite default.
-const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini", "grokbuild", "kimicode"];
+const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini", "grokbuild", "kimicode", "pi"];
 
 pub(crate) const INPUT_TOKEN_SEMANTICS_LEGACY: i64 = 0;
 pub(crate) const INPUT_TOKEN_SEMANTICS_TOTAL: i64 = 1;

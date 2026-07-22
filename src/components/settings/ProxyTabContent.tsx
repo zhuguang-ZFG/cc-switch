@@ -172,12 +172,13 @@ export function ProxyTabContent({
               )}
 
               <Tabs defaultValue="claude" className="w-full">
-                <TabsList className="grid w-full grid-cols-5">
+                <TabsList className="grid w-full grid-cols-6">
                   <TabsTrigger value="claude">Claude</TabsTrigger>
                   <TabsTrigger value="codex">Codex</TabsTrigger>
                   <TabsTrigger value="grokbuild">Grok Build</TabsTrigger>
                   <TabsTrigger value="kimicode">Kimi Code</TabsTrigger>
                   <TabsTrigger value="reasonix">Reasonix</TabsTrigger>
+                  <TabsTrigger value="pi">Pi</TabsTrigger>
                 </TabsList>
                 {(
                   [
@@ -186,6 +187,7 @@ export function ProxyTabContent({
                     "grokbuild",
                     "kimicode",
                     "reasonix",
+                    "pi",
                   ] as const
                 ).map((appType) => {
                   const failoverDisabled =

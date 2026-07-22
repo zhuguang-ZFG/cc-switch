@@ -1140,6 +1140,10 @@ pub fn run() {
                         "Reasonix usage initial sync",
                         crate::services::session_usage_reasonix::sync_reasonix_usage(db),
                     );
+                    run_step(
+                        "Pi usage initial sync",
+                        crate::services::session_usage_pi::sync_pi_usage(db),
+                    );
 
                     // 定期同步
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(
@@ -1171,6 +1175,10 @@ pub fn run() {
                         run_step(
                             "Reasonix usage periodic sync",
                             crate::services::session_usage_reasonix::sync_reasonix_usage(db),
+                        );
+                        run_step(
+                            "Pi usage periodic sync",
+                            crate::services::session_usage_pi::sync_pi_usage(db),
                         );
                     }
                 });
