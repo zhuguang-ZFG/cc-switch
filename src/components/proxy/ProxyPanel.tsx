@@ -283,6 +283,7 @@ export function ProxyPanel({
                       "grokbuild",
                       "kimicode",
                       "reasonix",
+                      "pi",
                     ] as const
                   ).map((appType) => {
                     const isEnabled = takeoverStatus?.[appType] ?? false;
@@ -298,7 +299,9 @@ export function ProxyPanel({
                               ? "Kimi Code"
                               : appType === "reasonix"
                                 ? "Reasonix"
-                                : appType}
+                                : appType === "pi"
+                                  ? "Pi"
+                                  : appType}
                         </span>
                         <Switch
                           checked={isEnabled}

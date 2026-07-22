@@ -52,6 +52,7 @@ impl Database {
                             opencode: enabled_opencode,
                             hermes: enabled_hermes,
                             reasonix: enabled_reasonix,
+                            pi: false,
                         },
                         description,
                         homepage,

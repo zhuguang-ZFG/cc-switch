@@ -852,7 +852,9 @@
     "kimiConfigDir": "Kimi Code 設定目錄",
     "browsePlaceholderKimi": "選擇 Kimi Code 設定目錄 (~/.kimi-code)",
     "reasonixConfigDir": "Reasonix 設定目錄",
-    "browsePlaceholderReasonix": "選擇 Reasonix 設定目錄（Windows: %APPDATA%\\reasonix）"
+    "browsePlaceholderReasonix": "選擇 Reasonix 設定目錄（Windows: %APPDATA%\\reasonix）",
+    "piConfigDir": "Pi 設定目錄",
+    "browsePlaceholderPi": "選擇 Pi agent 設定目錄 (~/.pi/agent)"
   },
   "apps": {
     "claude": "Claude",
@@ -866,7 +868,8 @@
     "openclaw": "OpenClaw",
     "kimicode": "Kimi Code",
     "hermes": "Hermes",
-    "reasonix": "Reasonix"
+    "reasonix": "Reasonix",
+    "pi": "Pi"
   },
   "grokBuild": {
     "apiBackend": "API Backend",

@@ -54,6 +54,8 @@ pub struct VisibleApps {
     pub kimicode: bool,
     #[serde(default = "default_true")]
     pub reasonix: bool,
+    #[serde(default = "default_true")]
+    pub pi: bool,
 }
 
 impl Default for VisibleApps {
@@ -68,6 +70,7 @@ impl Default for VisibleApps {
             openclaw: true,
             kimicode: true,
             reasonix: true,
+            pi: true,
         }
     }
 }
@@ -84,6 +87,7 @@ impl VisibleApps {
             AppType::OpenClaw => self.openclaw,
             AppType::KimiCode => self.kimicode,
             AppType::Reasonix => self.reasonix,
+            AppType::Pi => self.pi,
         }
     }
 }
@@ -449,6 +453,13 @@ pub struct AppSettings {
         alias = "reasonix_config_dir"
     )]
     pub reasonix_config_dir: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "piConfigDir",
+        alias = "pi_config_dir"
+    )]
+    pub pi_config_dir: Option<String>,
 
     // ===== 当前供应商 ID（设备级）=====
     /// 当前 Claude 供应商 ID（本地存储，优先于数据库 is_current）
@@ -489,6 +500,14 @@ pub struct AppSettings {
         alias = "current_provider_reasonix"
     )]
     pub current_provider_reasonix: Option<String>,
+    /// 当前 Pi 供应商 ID（本地存储）
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "currentProviderPi",
+        alias = "current_provider_pi"
+    )]
+    pub current_provider_pi: Option<String>,
 
     // ===== Skill 同步设置 =====
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
@@ -575,6 +594,7 @@ impl Default for AppSettings {
             openclaw_config_dir: None,
             kimi_config_dir: None,
             reasonix_config_dir: None,
+            pi_config_dir: None,
             current_provider_claude: None,
             current_provider_claude_desktop: None,
             current_provider_codex: None,
@@ -584,6 +604,7 @@ impl Default for AppSettings {
             current_provider_openclaw: None,
             current_provider_kimicode: None,
             current_provider_reasonix: None,
+            current_provider_pi: None,
             skill_sync_method: SyncMethod::default(),
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
@@ -659,6 +680,13 @@ impl AppSettings {
 
         self.reasonix_config_dir = self
             .reasonix_config_dir
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        self.pi_config_dir = self
+            .pi_config_dir
             .as_ref()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -1001,6 +1029,14 @@ pub fn get_reasonix_override_dir() -> Option<PathBuf> {
         .map(|p| resolve_override_path(p))
 }
 
+pub fn get_pi_override_dir() -> Option<PathBuf> {
+    let settings = settings_store().read().ok()?;
+    settings
+        .pi_config_dir
+        .as_ref()
+        .map(|p| resolve_override_path(p))
+}
+
 pub fn preserve_codex_official_auth_on_switch() -> bool {
     settings_store()
         .read()
@@ -1038,6 +1074,7 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
         AppType::KimiCode => settings.current_provider_kimicode.clone(),
         AppType::Reasonix => settings.current_provider_reasonix.clone(),
+        AppType::Pi => settings.current_provider_pi.clone(),
     }
 }
 
@@ -1056,6 +1093,7 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::OpenClaw => settings.current_provider_openclaw = id_owned.clone(),
         AppType::KimiCode => settings.current_provider_kimicode = id_owned.clone(),
         AppType::Reasonix => settings.current_provider_reasonix = id_owned.clone(),
+        AppType::Pi => settings.current_provider_pi = id_owned.clone(),
     })
 }
 

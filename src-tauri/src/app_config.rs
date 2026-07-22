@@ -26,6 +26,9 @@ pub struct McpApps {
     pub hermes: bool,
     #[serde(default)]
     pub reasonix: bool,
+    /// Pi agent MCP flag (not projected in phase 1).
+    #[serde(default)]
+    pub pi: bool,
 }
 
 impl McpApps {
@@ -39,6 +42,7 @@ impl McpApps {
             AppType::OpenClaw => false, // OpenClaw doesn't support MCP
             AppType::KimiCode => self.hermes,
             AppType::Reasonix => self.reasonix,
+            AppType::Pi => self.pi,
             AppType::ClaudeDesktop => false,
         }
     }
@@ -53,6 +57,7 @@ impl McpApps {
             AppType::OpenClaw => {} // OpenClaw doesn't support MCP, ignore
             AppType::KimiCode => self.hermes = enabled,
             AppType::Reasonix => self.reasonix = enabled,
+            AppType::Pi => self.pi = enabled,
             AppType::ClaudeDesktop => {} // Claude Desktop 3P provider config doesn't support MCP here
         }
     }
@@ -78,6 +83,9 @@ impl McpApps {
         if self.reasonix {
             apps.push(AppType::Reasonix);
         }
+        if self.pi {
+            apps.push(AppType::Pi);
+        }
         apps
     }
 
@@ -89,6 +97,7 @@ impl McpApps {
             && !self.opencode
             && !self.hermes
             && !self.reasonix
+            && !self.pi
     }
 }
 
@@ -111,6 +120,9 @@ pub struct SkillApps {
     pub hermes: bool,
     #[serde(default)]
     pub reasonix: bool,
+    /// Pi agent skills flag (not projected in phase 1).
+    #[serde(default)]
+    pub pi: bool,
 }
 
 impl SkillApps {
@@ -123,6 +135,7 @@ impl SkillApps {
             AppType::OpenCode => self.opencode,
             AppType::KimiCode => self.hermes,
             AppType::Reasonix => self.reasonix,
+            AppType::Pi => self.pi,
             AppType::OpenClaw => false, // OpenClaw doesn't support Skills
             AppType::ClaudeDesktop => false,
         }
@@ -137,6 +150,7 @@ impl SkillApps {
             AppType::OpenCode => self.opencode = enabled,
             AppType::KimiCode => self.hermes = enabled,
             AppType::Reasonix => self.reasonix = enabled,
+            AppType::Pi => self.pi = enabled,
             AppType::OpenClaw => {} // OpenClaw doesn't support Skills, ignore
             AppType::ClaudeDesktop => {} // Claude Desktop 3P profiles don't use CC Switch skill sync
         }
@@ -163,6 +177,9 @@ impl SkillApps {
         if self.reasonix {
             apps.push(AppType::Reasonix);
         }
+        if self.pi {
+            apps.push(AppType::Pi);
+        }
         apps
     }
 
@@ -174,6 +191,7 @@ impl SkillApps {
             && !self.opencode
             && !self.hermes
             && !self.reasonix
+            && !self.pi
     }
 
     /// 仅启用指定应用（其他应用设为禁用）
@@ -325,6 +343,8 @@ pub struct McpRoot {
     pub hermes: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub reasonix: McpConfig,
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
+    pub pi: McpConfig,
 }
 
 impl Default for McpRoot {
@@ -342,6 +362,7 @@ impl Default for McpRoot {
             openclaw: McpConfig::default(),
             hermes: McpConfig::default(),
             reasonix: McpConfig::default(),
+            pi: McpConfig::default(),
         }
     }
 }
@@ -386,6 +407,8 @@ pub struct PromptRoot {
     pub kimicode: PromptConfig,
     #[serde(default)]
     pub reasonix: PromptConfig,
+    #[serde(default)]
+    pub pi: PromptConfig,
 }
 
 impl PromptConfig {
@@ -426,6 +449,9 @@ pub enum AppType {
     /// Reasonix CLI (DeepSeek-native terminal coding agent).
     #[serde(rename = "reasonix", alias = "reasonix-cli")]
     Reasonix,
+    /// Pi coding agent (`~/.pi/agent`).
+    #[serde(rename = "pi", alias = "pi-agent", alias = "pi_agent")]
+    Pi,
 }
 
 impl AppType {
@@ -439,6 +465,7 @@ impl AppType {
             AppType::OpenClaw => "openclaw",
             AppType::KimiCode => "kimicode",
             AppType::Reasonix => "reasonix",
+            AppType::Pi => "pi",
         }
     }
 
@@ -449,7 +476,11 @@ impl AppType {
     pub fn is_additive_mode(&self) -> bool {
         matches!(
             self,
-            AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix
+            AppType::OpenCode
+                | AppType::OpenClaw
+                | AppType::KimiCode
+                | AppType::Reasonix
+                | AppType::Pi
         )
     }
 
@@ -464,6 +495,7 @@ impl AppType {
             AppType::OpenClaw,
             AppType::KimiCode,
             AppType::Reasonix,
+            AppType::Pi,
         ]
         .into_iter()
     }
@@ -483,6 +515,7 @@ impl FromStr for AppType {
             "openclaw" => Ok(AppType::OpenClaw),
             "kimicode" | "kimi-code" | "kimi_code" | "kimi" | "hermes" => Ok(AppType::KimiCode),
             "reasonix" | "reasonix-cli" => Ok(AppType::Reasonix),
+            "pi" | "pi-agent" | "pi_agent" => Ok(AppType::Pi),
             // Gemini CLI app support was removed; reject explicitly with guidance.
             "gemini" => Err(AppError::localized(
                 "unsupported_app_gemini_removed",
@@ -491,8 +524,8 @@ impl FromStr for AppType {
             )),
             other => Err(AppError::localized(
                 "unsupported_app",
-                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode, reasonix。"),
-                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode, reasonix."),
+                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode, reasonix, pi。"),
+                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, grokbuild, opencode, openclaw, kimicode, reasonix, pi."),
             )),
         }
     }
@@ -538,6 +571,7 @@ impl CommonConfigSnippets {
             AppType::OpenClaw => self.openclaw.as_ref(),
             AppType::KimiCode => self.kimicode.as_ref(),
             AppType::Reasonix => None,
+            AppType::Pi => None,
         }
     }
 
@@ -552,6 +586,7 @@ impl CommonConfigSnippets {
             AppType::OpenClaw => self.openclaw = snippet,
             AppType::KimiCode => self.kimicode = snippet,
             AppType::Reasonix => {}
+            AppType::Pi => {}
         }
     }
 }
@@ -784,6 +819,7 @@ impl MultiAppConfig {
             // The storage field keeps its legacy name for database compatibility.
             AppType::KimiCode => &self.mcp.hermes,
             AppType::Reasonix => &self.mcp.reasonix,
+            AppType::Pi => &self.mcp.pi,
         }
     }
 
@@ -798,6 +834,7 @@ impl MultiAppConfig {
             AppType::OpenClaw => &mut self.mcp.openclaw,
             AppType::KimiCode => &mut self.mcp.hermes,
             AppType::Reasonix => &mut self.mcp.reasonix,
+            AppType::Pi => &mut self.mcp.pi,
         }
     }
 
@@ -815,6 +852,7 @@ impl MultiAppConfig {
         Self::auto_import_prompt_if_exists(&mut config, AppType::OpenClaw)?;
         Self::auto_import_prompt_if_exists(&mut config, AppType::KimiCode)?;
         Self::auto_import_prompt_if_exists(&mut config, AppType::Reasonix)?;
+        Self::auto_import_prompt_if_exists(&mut config, AppType::Pi)?;
 
         Ok(config)
     }
@@ -839,6 +877,7 @@ impl MultiAppConfig {
             || !self.prompts.openclaw.prompts.is_empty()
             || !self.prompts.kimicode.prompts.is_empty()
             || !self.prompts.reasonix.prompts.is_empty()
+            || !self.prompts.pi.prompts.is_empty()
         {
             return Ok(false);
         }
@@ -854,6 +893,7 @@ impl MultiAppConfig {
             AppType::OpenClaw,
             AppType::KimiCode,
             AppType::Reasonix,
+            AppType::Pi,
         ] {
             // 复用已有的单应用导入逻辑
             if Self::auto_import_prompt_if_exists(self, app)? {
@@ -928,6 +968,7 @@ impl MultiAppConfig {
             AppType::OpenClaw => &mut config.prompts.openclaw.prompts,
             AppType::KimiCode => &mut config.prompts.kimicode.prompts,
             AppType::Reasonix => &mut config.prompts.reasonix.prompts,
+            AppType::Pi => &mut config.prompts.pi.prompts,
         };
 
         prompts.insert(id, prompt);
@@ -971,6 +1012,7 @@ impl MultiAppConfig {
                 AppType::OpenClaw => continue, // OpenClaw MCP is still in development, skip
                 AppType::KimiCode => &self.mcp.hermes.servers,
                 AppType::Reasonix => continue, // New app type; no legacy per-app MCP data to migrate
+                AppType::Pi => continue, // New app type; no legacy per-app MCP data to migrate
             };
 
             for (id, entry) in old_servers {

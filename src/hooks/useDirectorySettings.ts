@@ -13,7 +13,8 @@ type AppDirectoryKey =
   | "opencode"
   | "openclaw"
   | "kimicode"
-  | "reasonix";
+  | "reasonix"
+  | "pi";
 type DirectoryKey = "appConfig" | AppDirectoryKey;
 
 export interface ResolvedDirectories {
@@ -25,6 +26,7 @@ export interface ResolvedDirectories {
   openclaw: string;
   kimicode: string;
   reasonix: string;
+  pi: string;
 }
 
 // Single source of truth for per-app directory metadata.
@@ -39,6 +41,7 @@ const APP_DIRECTORY_META: Record<
   openclaw: { key: "openclaw", defaultFolder: ".openclaw" },
   kimicode: { key: "kimicode", defaultFolder: ".kimi-code" },
   reasonix: { key: "reasonix", defaultFolder: ".reasonix" },
+  pi: { key: "pi", defaultFolder: ".pi/agent" },
 };
 
 const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
@@ -52,6 +55,7 @@ const DIRECTORY_KEY_TO_SETTINGS_FIELD: Record<
   openclaw: "openclawConfigDir",
   kimicode: "kimiConfigDir",
   reasonix: "reasonixConfigDir",
+  pi: "piConfigDir",
 };
 
 const sanitizeDir = (value?: string | null): string | undefined => {
@@ -77,15 +81,15 @@ const computeDefaultConfigDir = async (
   app: DirectoryAppId,
 ): Promise<string | undefined> => {
   try {
-    // Reasonix on Windows lives under %APPDATA%\reasonix (not ~/.reasonix).
-    // Prefer the backend-resolved path so reset/placeholder match the live home.
-    if (app === "reasonix") {
+    // Prefer backend-resolved path so reset/placeholder match the live home
+    // (Reasonix on Windows: %APPDATA%\reasonix; Pi may use PI_AGENT_HOME).
+    if (app === "reasonix" || app === "pi") {
       try {
-        const resolved = await settingsApi.getConfigDir("reasonix");
+        const resolved = await settingsApi.getConfigDir(app);
         if (resolved?.trim()) return resolved.trim();
       } catch (error) {
         console.warn(
-          "[useDirectorySettings] Failed to resolve Reasonix default via backend",
+          `[useDirectorySettings] Failed to resolve ${app} default via backend`,
           error,
         );
       }
@@ -151,6 +155,7 @@ export function useDirectorySettings({
     openclaw: "",
     kimicode: "",
     reasonix: "",
+    pi: "",
   });
   const [isLoading, setIsLoading] = useState(true);
 
@@ -163,6 +168,7 @@ export function useDirectorySettings({
     openclaw: "",
     kimicode: "",
     reasonix: "",
+    pi: "",
   });
   const initialAppConfigDirRef = useRef<string | undefined>(undefined);
 
@@ -182,6 +188,7 @@ export function useDirectorySettings({
           openclawDir,
           kimiDir,
           reasonixDir,
+          piDir,
           defaultAppConfig,
           defaultClaudeDir,
           defaultCodexDir,
@@ -190,6 +197,7 @@ export function useDirectorySettings({
           defaultOpenclawDir,
           defaultKimiDir,
           defaultReasonixDir,
+          defaultPiDir,
         ] = await Promise.all([
           settingsApi.getAppConfigDirOverride(),
           settingsApi.getConfigDir("claude"),
@@ -199,6 +207,7 @@ export function useDirectorySettings({
           settingsApi.getConfigDir("openclaw"),
           settingsApi.getConfigDir("kimicode"),
           settingsApi.getConfigDir("reasonix"),
+          settingsApi.getConfigDir("pi"),
           computeDefaultAppConfigDir(),
           computeDefaultConfigDir("claude"),
           computeDefaultConfigDir("codex"),
@@ -207,6 +216,7 @@ export function useDirectorySettings({
           computeDefaultConfigDir("openclaw"),
           computeDefaultConfigDir("kimicode"),
           computeDefaultConfigDir("reasonix"),
+          computeDefaultConfigDir("pi"),
         ]);
 
         if (!active) return;
@@ -222,6 +232,7 @@ export function useDirectorySettings({
           openclaw: defaultOpenclawDir ?? "",
           kimicode: defaultKimiDir ?? "",
           reasonix: defaultReasonixDir ?? "",
+          pi: defaultPiDir ?? "",
         };
 
         setAppConfigDir(normalizedOverride);
@@ -236,6 +247,7 @@ export function useDirectorySettings({
           openclaw: openclawDir || defaultsRef.current.openclaw,
           kimicode: kimiDir || defaultsRef.current.kimicode,
           reasonix: reasonixDir || defaultsRef.current.reasonix,
+          pi: piDir || defaultsRef.current.pi,
         });
       } catch (error) {
         console.error(
@@ -378,6 +390,7 @@ export function useDirectorySettings({
         openclaw: overrides?.openclaw ?? defaultsRef.current.openclaw,
         kimicode: overrides?.kimicode ?? defaultsRef.current.kimicode,
         reasonix: overrides?.reasonix ?? defaultsRef.current.reasonix,
+        pi: overrides?.pi ?? defaultsRef.current.pi,
       });
     },
     [],

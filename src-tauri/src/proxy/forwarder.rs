@@ -1330,6 +1330,8 @@ impl RequestForwarder {
             super::providers::apply_kimi_upstream_model(provider, &mut mapped_body)?;
         } else if matches!(app_type, AppType::Reasonix) {
             super::providers::apply_reasonix_upstream_model(provider, &mut mapped_body)?;
+        } else if matches!(app_type, AppType::Pi) {
+            super::providers::apply_pi_upstream_model(provider, &mut mapped_body)?;
         }
 
         if is_copilot {

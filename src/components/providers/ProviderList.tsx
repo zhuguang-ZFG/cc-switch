@@ -36,6 +36,11 @@ import {
   useReasonixDefaultModel,
   reasonixKeys,
 } from "@/hooks/useReasonix";
+import {
+  usePiLiveProviderIds,
+  usePiDefaultProvider,
+  piKeys,
+} from "@/hooks/usePi";
 import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
@@ -137,13 +142,23 @@ export function ProviderList({
     return raw.split("/")[0] || undefined;
   }, [reasonixDefaultModel]);
 
+  // Pi: live models.json providers, isInConfig + current highlight
+  const { data: piLiveIds } = usePiLiveProviderIds(appId === "pi");
+  const { data: piDefaultProvider } = usePiDefaultProvider(appId === "pi");
+  const piLiveCurrentProviderId = useMemo(() => {
+    if (!piDefaultProvider) return undefined;
+    const raw = piDefaultProvider.trim();
+    if (!raw || raw.startsWith("cc-switch-")) return undefined;
+    return raw;
+  }, [piDefaultProvider]);
+
   // Hermes: 读取当前 model.provider，用于判断哪个供应商是"当前激活"（高亮）
   const { data: hermesModelConfig } = useHermesModelConfig(
     appId === "kimicode",
   );
   const hermesCurrentProviderId = hermesModelConfig?.provider;
 
-  // 判断供应商是否已添加到配置（累加模式应用：OpenCode/OpenClaw/Hermes/Reasonix）
+  // 判断供应商是否已添加到配置（累加模式应用：OpenCode/OpenClaw/Hermes/Reasonix/Pi）
   const isProviderInConfig = useCallback(
     (providerId: string): boolean => {
       if (appId === "opencode") {
@@ -158,9 +173,19 @@ export function ProviderList({
       if (appId === "reasonix") {
         return reasonixLiveIds?.includes(providerId) ?? false;
       }
+      if (appId === "pi") {
+        return piLiveIds?.includes(providerId) ?? false;
+      }
       return true; // 其他应用始终返回 true
     },
-    [appId, opencodeLiveIds, openclawLiveIds, hermesLiveIds, reasonixLiveIds],
+    [
+      appId,
+      opencodeLiveIds,
+      openclawLiveIds,
+      hermesLiveIds,
+      reasonixLiveIds,
+      piLiveIds,
+    ],
   );
 
   // OpenClaw: query default model to determine which provider is default
@@ -257,6 +282,10 @@ export function ProviderList({
         const count = await providersApi.importReasonixProvidersFromLive();
         return count > 0;
       }
+      if (appId === "pi") {
+        const count = await providersApi.importPiProvidersFromLive();
+        return count > 0;
+      }
       if (appId === "claude-desktop") {
         const count = await providersApi.importClaudeDesktopFromClaude();
         return count > 0;
@@ -285,6 +314,17 @@ export function ProviderList({
           });
           await queryClient.invalidateQueries({
             queryKey: reasonixKeys.defaultModel,
+          });
+        }
+        if (appId === "pi") {
+          await queryClient.invalidateQueries({
+            queryKey: piKeys.liveProviderIds,
+          });
+          await queryClient.invalidateQueries({
+            queryKey: piKeys.defaultProvider,
+          });
+          await queryClient.invalidateQueries({
+            queryKey: piKeys.defaultModel,
           });
         }
         if (appId === "opencode") {
@@ -479,6 +519,15 @@ export function ProviderList({
               reasonixLiveCurrentProviderId === provider.id;
             const isReasonixCurrent =
               isReasonixSSotCurrent || isReasonixLiveCurrent;
+            const isPiSSotCurrent =
+              appId === "pi" &&
+              Boolean(currentProviderId) &&
+              provider.id === currentProviderId;
+            const isPiLiveCurrent =
+              appId === "pi" &&
+              !currentProviderId &&
+              piLiveCurrentProviderId === provider.id;
+            const isPiCurrent = isPiSSotCurrent || isPiLiveCurrent;
             return (
               <SortableProviderCard
                 key={provider.id}
@@ -492,7 +541,9 @@ export function ProviderList({
                         ? isKimiCurrent
                         : appId === "reasonix"
                           ? isReasonixCurrent
-                          : provider.id === currentProviderId
+                          : appId === "pi"
+                            ? isPiCurrent
+                            : provider.id === currentProviderId
                 }
                 appId={appId}
                 isInConfig={isProviderInConfig(provider.id)}
@@ -525,7 +576,9 @@ export function ProviderList({
                     ? isKimiCurrent
                     : appId === "reasonix"
                       ? isReasonixCurrent
-                      : isProviderDefaultModel(provider.id)
+                      : appId === "pi"
+                        ? isPiCurrent
+                        : isProviderDefaultModel(provider.id)
                 }
                 onSetAsDefault={
                   onSetAsDefault ? () => onSetAsDefault(provider) : undefined

@@ -51,10 +51,15 @@ import {
   reasonixProviderPresets,
   type ReasonixProviderPreset,
 } from "@/config/reasonixProviderPresets";
+import {
+  piProviderPresets,
+  type PiProviderPreset,
+} from "@/config/piProviderPresets";
 import { OpenCodeFormFields } from "./OpenCodeFormFields";
 import { OpenClawFormFields } from "./OpenClawFormFields";
 import { HermesFormFields } from "./HermesFormFields";
 import { ReasonixFormFields } from "./ReasonixFormFields";
+import { PiFormFields } from "./PiFormFields";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
 import {
   applyTemplateValues,
@@ -109,6 +114,7 @@ import {
   useCopilotAuth,
   useCodexOauth,
 } from "./hooks";
+import { usePiFormState, PI_DEFAULT_CONFIG } from "./hooks/usePiFormState";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useSettingsQuery } from "@/lib/query";
 import {
@@ -124,6 +130,7 @@ import { resolveManagedAccountId } from "@/lib/authBinding";
 import { useOpenClawLiveProviderIds } from "@/hooks/useOpenClaw";
 import { useHermesLiveProviderIds } from "@/hooks/useHermes";
 import { useReasonixLiveProviderIds } from "@/hooks/useReasonix";
+import { usePiLiveProviderIds } from "@/hooks/usePi";
 
 type PresetEntry = {
   id: string;
@@ -133,7 +140,8 @@ type PresetEntry = {
     | OpenCodeProviderPreset
     | OpenClawProviderPreset
     | KimiProviderPreset
-    | ReasonixProviderPreset;
+    | ReasonixProviderPreset
+    | PiProviderPreset;
 };
 
 export const normalizeCodexCatalogModelsForSave = (
@@ -395,7 +403,9 @@ function ProviderFormFull({
                 ? HERMES_DEFAULT_CONFIG
                 : appId === "reasonix"
                   ? REASONIX_DEFAULT_CONFIG
-                  : CLAUDE_DEFAULT_CONFIG,
+                  : appId === "pi"
+                    ? PI_DEFAULT_CONFIG
+                    : CLAUDE_DEFAULT_CONFIG,
       icon: initialData?.icon ?? "",
       iconColor: initialData?.iconColor ?? "",
     }),
@@ -699,6 +709,11 @@ function ProviderFormFull({
         id: `reasonix-${index}`,
         preset,
       }));
+    } else if (appId === "pi") {
+      return piProviderPresets.map<PresetEntry>((preset, index) => ({
+        id: `pi-${index}`,
+        preset,
+      }));
     }
     return providerPresets
       .filter((p) => !p.hidden)
@@ -842,6 +857,18 @@ function ProviderFormFull({
     isLoading: isReasonixLiveProviderIdsLoading,
   } = useReasonixLiveProviderIds(appId === "reasonix");
 
+  const piForm = usePiFormState({
+    initialData,
+    appId,
+    providerId,
+    onSettingsConfigChange: (config) => form.setValue("settingsConfig", config),
+    getSettingsConfig: () => form.getValues("settingsConfig"),
+  });
+  const {
+    data: piLiveProviderIds = [],
+    isLoading: isPiLiveProviderIdsLoading,
+  } = usePiLiveProviderIds(appId === "pi");
+
   const additiveExistingProviderKeys = useMemo(() => {
     if (appId === "opencode" && !isAnyOmoCategory) {
       return Array.from(
@@ -885,6 +912,16 @@ function ProviderFormFull({
       );
     }
 
+    if (appId === "pi") {
+      return Array.from(
+        new Set(
+          [...piForm.existingPiKeys, ...piLiveProviderIds].filter(
+            (key) => key !== providerId,
+          ),
+        ),
+      );
+    }
+
     return [];
   }, [
     appId,
@@ -895,6 +932,8 @@ function ProviderFormFull({
     openclawForm.existingOpenclawKeys,
     openclawLiveProviderIds,
     opencodeLiveProviderIds,
+    piForm.existingPiKeys,
+    piLiveProviderIds,
     providerId,
     reasonixForm.existingReasonixKeys,
     reasonixLiveProviderIds,
@@ -915,6 +954,9 @@ function ProviderFormFull({
     if (appId === "reasonix") {
       return isReasonixLiveProviderIdsLoading;
     }
+    if (appId === "pi") {
+      return isPiLiveProviderIdsLoading;
+    }
     return false;
   }, [
     appId,
@@ -922,6 +964,7 @@ function ProviderFormFull({
     isHermesLiveProviderIdsLoading,
     isOpenclawLiveProviderIdsLoading,
     isOpencodeLiveProviderIdsLoading,
+    isPiLiveProviderIdsLoading,
     isReasonixLiveProviderIdsLoading,
   ]);
 
@@ -939,6 +982,9 @@ function ProviderFormFull({
     if (appId === "reasonix") {
       return reasonixLiveProviderIds.includes(providerId);
     }
+    if (appId === "pi") {
+      return piLiveProviderIds.includes(providerId);
+    }
     return false;
   }, [
     appId,
@@ -947,6 +993,7 @@ function ProviderFormFull({
     isEditMode,
     openclawLiveProviderIds,
     opencodeLiveProviderIds,
+    piLiveProviderIds,
     providerId,
     reasonixLiveProviderIds,
   ]);
@@ -1189,6 +1236,81 @@ function ProviderFormFull({
       }
       if (reasonixForm.reasonixModels.filter((m) => m.trim()).length === 0) {
         toast.error(t("reasonix.form.modelsRequired"));
+        return;
+      }
+    }
+
+    if (appId === "pi") {
+      if (!piForm.piProviderName.trim()) {
+        toast.error(
+          t("pi.form.providerNameRequired", {
+            defaultValue: "请填写供应商标识",
+          }),
+        );
+        return;
+      }
+      if (!keyPattern.test(piForm.piProviderName)) {
+        toast.error(
+          t("pi.form.providerNameInvalid", {
+            defaultValue: "供应商标识只能使用小写字母、数字和连字符",
+          }),
+        );
+        return;
+      }
+      if (isProviderKeyLockStateLoading) {
+        toast.error(
+          t("providerForm.providerKeyStatusLoading", {
+            defaultValue: "正在加载供应商标识状态，请稍后再试",
+          }),
+        );
+        return;
+      }
+      if (
+        !isProviderKeyLocked &&
+        additiveExistingProviderKeys.includes(piForm.piProviderName)
+      ) {
+        toast.error(
+          t("pi.form.providerNameDuplicate", {
+            defaultValue: "供应商标识已存在",
+          }),
+        );
+        return;
+      }
+      const piBaseUrl = piForm.piBaseUrl.trim();
+      if (!piBaseUrl) {
+        toast.error(
+          t("pi.form.baseUrlRequired", { defaultValue: "请填写 API 端点" }),
+        );
+        return;
+      }
+      try {
+        const parsed = new URL(piBaseUrl);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          toast.error(
+            t("pi.form.baseUrlScheme", {
+              defaultValue: "API 端点必须以 http:// 或 https:// 开头",
+            }),
+          );
+          return;
+        }
+      } catch {
+        toast.error(
+          t("pi.form.baseUrlInvalid", { defaultValue: "API 端点格式无效" }),
+        );
+        return;
+      }
+      if (!piForm.piApiKey.trim()) {
+        toast.error(
+          t("pi.form.apiKeyRequired", { defaultValue: "请填写 API Key" }),
+        );
+        return;
+      }
+      if (piForm.piModels.filter((m) => m.trim()).length === 0) {
+        toast.error(
+          t("pi.form.modelsRequired", {
+            defaultValue: "至少添加一个模型",
+          }),
+        );
         return;
       }
     }
@@ -1454,6 +1576,27 @@ function ProviderFormFull({
         // ignore corrupt RHF blob; field state is authoritative
       }
       settingsConfig = JSON.stringify(reasonixConfig);
+    } else if (appId === "pi") {
+      const models = piForm.piModels.map((m) => m.trim()).filter(Boolean);
+      const defaultModel =
+        piForm.piDefaultModel.trim() &&
+        models.includes(piForm.piDefaultModel.trim())
+          ? piForm.piDefaultModel.trim()
+          : (models[0] ?? "");
+      const piConfig: Record<string, unknown> = {
+        name: piForm.piProviderName.trim(),
+        baseUrl: piForm.piBaseUrl.trim().replace(/\/+$/, ""),
+        api: "openai-completions",
+        apiKey: piForm.piApiKey,
+        models: models.map((id) => ({ id, name: id })),
+        defaultModel,
+        compat: {
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          maxTokensField: "max_tokens",
+        },
+      };
+      settingsConfig = JSON.stringify(piConfig);
     } else if (appId === "kimicode") {
       // Rebuild from Kimi field state; providerKey is applied separately.
       // Field-owned keys come only from hermesForm — never resurrect from RHF.
@@ -1528,6 +1671,8 @@ function ProviderFormFull({
       payload.providerKey = hermesForm.hermesProviderKey;
     } else if (appId === "reasonix") {
       payload.providerKey = reasonixForm.reasonixProviderName;
+    } else if (appId === "pi") {
+      payload.providerKey = piForm.piProviderName;
     }
 
     if (isAnyOmoCategory && !payload.presetCategory) {
@@ -1834,6 +1979,9 @@ function ProviderFormFull({
       if (appId === "reasonix") {
         reasonixForm.resetReasonixState();
       }
+      if (appId === "pi") {
+        piForm.resetPiState();
+      }
       return;
     }
 
@@ -1958,6 +2106,21 @@ function ProviderFormFull({
         settingsConfig: JSON.stringify(config, null, 2),
         icon: preset.icon ?? "",
         iconColor: preset.iconColor ?? "",
+      });
+      return;
+    }
+
+    if (appId === "pi") {
+      const preset = entry.preset as PiProviderPreset;
+      const config = preset.settingsConfig;
+      piForm.resetPiState(config);
+      piForm.setPiProviderName(config.name ?? "");
+      form.reset({
+        name: preset.nameKey ? t(preset.nameKey) : preset.name,
+        websiteUrl: preset.websiteUrl ?? "",
+        settingsConfig: JSON.stringify(config, null, 2),
+        icon: preset.icon ?? "",
+        iconColor: "",
       });
       return;
     }
@@ -2225,6 +2388,44 @@ function ProviderFormFull({
                             })}
                       </p>
                     )}
+                </div>
+              ) : appId === "pi" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="pi-name">
+                    {t("pi.form.providerName", {
+                      defaultValue: "供应商标识",
+                    })}
+                    <span className="text-destructive ml-1">*</span>
+                  </Label>
+                  <Input
+                    id="pi-name"
+                    value={piForm.piProviderName}
+                    onChange={(e) =>
+                      piForm.setPiProviderName(
+                        e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                      )
+                    }
+                    placeholder={t("pi.form.providerNamePlaceholder", {
+                      defaultValue: "my-provider",
+                    })}
+                    disabled={isEditMode}
+                    className={
+                      (additiveExistingProviderKeys.includes(
+                        piForm.piProviderName,
+                      ) &&
+                        !isEditMode) ||
+                      (piForm.piProviderName.trim() !== "" &&
+                        !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(piForm.piProviderName))
+                        ? "border-destructive"
+                        : ""
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("pi.form.providerNameHint", {
+                      defaultValue:
+                        "只能使用小写字母、数字和连字符。写入 Pi models.json 的 providers 键。",
+                    })}
+                  </p>
                 </div>
               ) : appId === "reasonix" ? (
                 <div className="space-y-2">
@@ -2537,6 +2738,22 @@ function ProviderFormFull({
             />
           )}
 
+          {appId === "pi" && (
+            <PiFormFields
+              baseUrl={piForm.piBaseUrl}
+              onBaseUrlChange={piForm.handlePiBaseUrlChange}
+              apiKey={piForm.piApiKey}
+              onApiKeyChange={piForm.handlePiApiKeyChange}
+              category={category}
+              shouldShowApiKeyLink={false}
+              websiteUrl={form.getValues("websiteUrl") || ""}
+              models={piForm.piModels}
+              onModelsChange={piForm.handlePiModelsChange}
+              defaultModel={piForm.piDefaultModel}
+              onDefaultModelChange={piForm.handlePiDefaultModelChange}
+            />
+          )}
+
           {appId === "reasonix" && (
             <ReasonixFormFields
               kind={reasonixForm.reasonixKind}
@@ -2631,7 +2848,10 @@ function ProviderFormFull({
               </div>
               {settingsConfigErrorField}
             </>
-          ) : appId === "openclaw" || appId === "kimicode" || appId === "reasonix" ? (
+          ) : appId === "openclaw" ||
+            appId === "kimicode" ||
+            appId === "reasonix" ||
+            appId === "pi" ? (
             <>
               <div className="space-y-2">
                 <Label htmlFor="settingsConfig">
@@ -2730,7 +2950,8 @@ function ProviderFormFull({
           {!isAnyOmoCategory &&
             appId !== "opencode" &&
             appId !== "openclaw" &&
-            appId !== "reasonix" && (
+            appId !== "reasonix" &&
+            appId !== "pi" && (
               <ProviderAdvancedConfig
                 pricingConfig={pricingConfig}
                 onPricingConfigChange={setPricingConfig}

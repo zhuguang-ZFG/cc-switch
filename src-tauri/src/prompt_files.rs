@@ -25,6 +25,7 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::OpenClaw => get_openclaw_dir(),
         AppType::KimiCode => crate::kimi_config::get_kimi_dir(),
         AppType::Reasonix => crate::reasonix_config::get_reasonix_dir(),
+        AppType::Pi => crate::pi_config::get_pi_dir(),
         AppType::ClaudeDesktop => unreachable!("handled above"),
     };
 
@@ -43,7 +44,8 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         | AppType::GrokBuild
         | AppType::OpenCode
         | AppType::OpenClaw
-        | AppType::KimiCode => "AGENTS.md",
+        | AppType::KimiCode
+        | AppType::Pi => "AGENTS.md",
         AppType::Reasonix => unreachable!("handled above"),
         AppType::ClaudeDesktop => unreachable!("handled above"),
     };

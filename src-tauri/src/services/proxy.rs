@@ -715,6 +715,12 @@ impl ProxyService {
             .await
             .map(|c| c.enabled)
             .unwrap_or(false);
+        let pi_enabled = self
+            .db
+            .get_proxy_config_for_app("pi")
+            .await
+            .map(|c| c.enabled)
+            .unwrap_or(false);
         // OpenCode and OpenClaw don't support proxy features, always return false
         let opencode_enabled = false;
         let openclaw_enabled = false;
@@ -736,6 +742,7 @@ impl ProxyService {
             openclaw: openclaw_enabled,
             kimicode: kimicode_enabled,
             reasonix: reasonix_enabled,
+            pi: pi_enabled,
             reasonix_proxy_warning,
         })
     }
@@ -997,7 +1004,7 @@ impl ProxyService {
             AppType::Claude => self.read_claude_live()?,
             AppType::Codex => self.read_codex_live()?,
             AppType::GrokBuild => self.read_grok_live()?,
-            AppType::KimiCode | AppType::Reasonix => return Ok(()),
+            AppType::KimiCode | AppType::Reasonix | AppType::Pi => return Ok(()),
             _ => return Err("该应用不支持代理功能".to_string()),
         };
 
@@ -1283,7 +1290,7 @@ impl ProxyService {
             .map_err(|e| format!("清除接管状态失败: {e}"))?;
 
         // 4. 清除所有应用的 enabled 状态（用户手动关闭，不需要下次自动恢复）
-        for app_type in ["claude", "codex", "gemini", "grokbuild", "kimicode", "reasonix"] {
+        for app_type in ["claude", "codex", "gemini", "grokbuild", "kimicode", "reasonix", "pi"] {
             if let Ok(mut config) = self.db.get_proxy_config_for_app(app_type).await {
                 if config.enabled {
                     config.enabled = false;
@@ -1418,6 +1425,20 @@ impl ProxyService {
             }
         }
 
+        // Pi uses a composite models/auth/settings snapshot.
+        if crate::pi_config::has_live_config()
+            && !crate::pi_config::is_proxy_takeover_active().unwrap_or(false)
+        {
+            if let Ok(text) = crate::pi_config::read_snapshot_text() {
+                if !text.trim().is_empty() {
+                    self.db
+                        .save_live_backup("pi", &text)
+                        .await
+                        .map_err(|e| format!("备份 Pi 配置失败: {e}"))?;
+                }
+            }
+        }
+
         log::info!("已备份所有应用的 Live 配置");
         Ok(())
     }
@@ -1449,6 +1470,20 @@ impl ProxyService {
                     .save_live_backup("reasonix", &text)
                     .await
                     .map_err(|e| format!("备份 Reasonix 配置失败: {e}"))?;
+            }
+            return Ok(());
+        }
+        if matches!(app_type, AppType::Pi) {
+            if !crate::pi_config::has_live_config() {
+                return Err("Pi 配置不存在或为空".to_string());
+            }
+            if !crate::pi_config::is_proxy_takeover_active().unwrap_or(false) {
+                let text = crate::pi_config::read_snapshot_text()
+                    .map_err(|e| format!("读取 Pi 配置失败: {e}"))?;
+                self.db
+                    .save_live_backup("pi", &text)
+                    .await
+                    .map_err(|e| format!("备份 Pi 配置失败: {e}"))?;
             }
             return Ok(());
         }
@@ -1600,6 +1635,12 @@ impl ProxyService {
             log::info!("Reasonix Live 配置已接管，代理地址: {proxy_url}/reasonix/v1");
         }
 
+        if crate::pi_config::has_live_config() {
+            crate::pi_config::apply_proxy_takeover(&format!("{proxy_url}/pi/v1"))
+                .map_err(|e| format!("更新 Pi 接管配置失败: {e}"))?;
+            log::info!("Pi Live 配置已接管，代理地址: {proxy_url}/pi/v1");
+        }
+
         Ok(())
     }
 
@@ -1654,6 +1695,11 @@ impl ProxyService {
                 ))
                 .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
                 log::info!("Reasonix Live 配置已接管，代理地址: {proxy_url}/reasonix/v1");
+            }
+            AppType::Pi => {
+                crate::pi_config::apply_proxy_takeover(&format!("{proxy_url}/pi/v1"))
+                    .map_err(|e| format!("更新 Pi 接管配置失败: {e}"))?;
+                log::info!("Pi Live 配置已接管，代理地址: {proxy_url}/pi/v1");
             }
             _ => return Err("该应用不支持代理功能".to_string()),
         }
@@ -1732,6 +1778,10 @@ impl ProxyService {
                 ))
                 .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
             }
+            AppType::Pi if crate::pi_config::has_live_config() => {
+                crate::pi_config::apply_proxy_takeover(&format!("{proxy_url}/pi/v1"))
+                    .map_err(|e| format!("更新 Pi 接管配置失败: {e}"))?;
+            }
             _ => {}
         }
 
@@ -1788,6 +1838,13 @@ impl ProxyService {
                     log::info!("Reasonix Live 配置已恢复");
                 }
             }
+            AppType::Pi => {
+                if let Ok(Some(backup)) = self.db.get_live_backup("pi").await {
+                    crate::pi_config::write_snapshot_text(&backup.original_config)
+                        .map_err(|e| format!("恢复 Pi 配置失败: {e}"))?;
+                    log::info!("Pi Live 配置已恢复");
+                }
+            }
             _ => {}
         }
 
@@ -1804,6 +1861,7 @@ impl ProxyService {
             AppType::GrokBuild,
             AppType::KimiCode,
             AppType::Reasonix,
+            AppType::Pi,
         ] {
             if let Err(e) = self
                 .restore_live_config_for_app_with_fallback(&app_type)
@@ -1842,7 +1900,10 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取 {app_type_str} Live 备份失败: {e}"))?;
         if let Some(backup) = backup {
-            if matches!(app_type, AppType::KimiCode | AppType::Reasonix) {
+            if matches!(
+                app_type,
+                AppType::KimiCode | AppType::Reasonix | AppType::Pi
+            ) {
                 // Same polluted-backup guard as Claude/Codex: never write a
                 // proxy placeholder snapshot back as "original" live.
                 let placeholder_probe = json!({ "config": backup.original_config });
@@ -1864,12 +1925,17 @@ impl ProxyService {
                     }
                     log::info!("{app_type_str} Live 配置已从备份恢复");
                     return Ok(());
-                } else {
+                } else if matches!(app_type, AppType::Reasonix) {
                     crate::reasonix_config::write_config_text(&backup.original_config)
                         .map_err(|e| format!("恢复 Reasonix 配置失败: {e}"))?;
                     let _ = crate::reasonix_config::clear_proxy_env_placeholder();
                     // 快照已整份还原 [network]，丢弃 loopback 注入的 stash。
                     crate::reasonix_config::discard_network_no_proxy_stash();
+                    log::info!("{app_type_str} Live 配置已从备份恢复");
+                    return Ok(());
+                } else {
+                    crate::pi_config::write_snapshot_text(&backup.original_config)
+                        .map_err(|e| format!("恢复 Pi 配置失败: {e}"))?;
                     log::info!("{app_type_str} Live 配置已从备份恢复");
                     return Ok(());
                 }
@@ -1928,6 +1994,7 @@ impl ProxyService {
             AppType::GrokBuild => self.write_grok_live(config),
             AppType::KimiCode => Err("Kimi Code 必须从原始 TOML 快照恢复".to_string()),
             AppType::Reasonix => Err("Reasonix 必须从原始 TOML 快照恢复".to_string()),
+            AppType::Pi => Err("Pi 必须从原始 JSON 快照恢复".to_string()),
             _ => Err("该应用不支持代理功能".to_string()),
         }
     }
@@ -1948,6 +2015,7 @@ impl ProxyService {
             },
             AppType::KimiCode => crate::kimi_config::is_proxy_takeover_active().unwrap_or(false),
             AppType::Reasonix => crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false),
+            AppType::Pi => crate::pi_config::is_proxy_takeover_active().unwrap_or(false),
             _ => false,
         }
     }
@@ -2006,6 +2074,13 @@ impl ProxyService {
                 .map_err(|e| format!("从 SSOT 恢复 Reasonix Live 失败: {e}"))?;
             return Ok(true);
         }
+        if matches!(app_type, AppType::Pi) {
+            crate::pi_config::clear_proxy_takeover()
+                .map_err(|e| format!("清理 Pi 接管占位失败: {e}"))?;
+            crate::pi_config::apply_switch_defaults(&provider.id, &provider.settings_config)
+                .map_err(|e| format!("从 SSOT 恢复 Pi Live 失败: {e}"))?;
+            return Ok(true);
+        }
 
         write_live_with_common_config(self.db.as_ref(), app_type, provider)
             .map_err(|e| format!("写入 {app_type:?} Live 配置失败: {e}"))?;
@@ -2027,6 +2102,9 @@ impl ProxyService {
             AppType::Reasonix => crate::reasonix_config::clear_proxy_takeover()
                 .map(|_| ())
                 .map_err(|e| format!("清理 Reasonix 接管配置失败: {e}")),
+            AppType::Pi => crate::pi_config::clear_proxy_takeover()
+                .map(|_| ())
+                .map_err(|e| format!("清理 Pi 接管配置失败: {e}")),
             _ => Ok(()),
         }
     }
@@ -2146,6 +2224,11 @@ impl ProxyService {
                 ))
                 .unwrap_or(false))
             }
+            AppType::Pi => {
+                let expected = format!("{proxy_url}/pi/v1");
+                Ok(crate::pi_config::is_proxy_takeover_active_for_url(Some(&expected))
+                    .unwrap_or(false))
+            }
             _ => Ok(false),
         }
     }
@@ -2232,7 +2315,12 @@ impl ProxyService {
     /// 检查是否处于 Live 接管模式
     pub async fn is_takeover_active(&self) -> Result<bool, String> {
         let status = self.get_takeover_status().await?;
-        Ok(status.claude || status.codex || status.grokbuild || status.kimicode || status.reasonix)
+        Ok(status.claude
+            || status.codex
+            || status.grokbuild
+            || status.kimicode
+            || status.reasonix
+            || status.pi)
     }
 
     /// 从异常退出中恢复（启动时调用）
@@ -2394,6 +2482,31 @@ impl ProxyService {
                 let api_key = config.get("api_key").and_then(Value::as_str).unwrap_or("");
                 base_url.contains("/reasonix/v1") || api_key == PROXY_TOKEN_PLACEHOLDER
             }
+            AppType::Pi => {
+                let text = config
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .or_else(|| config.as_str())
+                    .unwrap_or("");
+                if !text.trim().is_empty()
+                    && (text.contains("cc-switch-proxy")
+                        || text.contains(PROXY_TOKEN_PLACEHOLDER)
+                        || text.contains("/pi/v1"))
+                {
+                    return true;
+                }
+                let base_url = config
+                    .get("baseUrl")
+                    .or_else(|| config.get("base_url"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let api_key = config
+                    .get("apiKey")
+                    .or_else(|| config.get("api_key"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                base_url.contains("/pi/v1") || api_key == PROXY_TOKEN_PLACEHOLDER
+            }
             _ => false,
         }
     }
@@ -2418,10 +2531,10 @@ impl ProxyService {
         app_type: &str,
         provider: &Provider,
     ) -> Result<(), String> {
-        if app_type == "kimicode" || app_type == "reasonix" {
-            // Kimi / Reasonix takeover owns a full TOML snapshot. Live stays on the
+        if app_type == "kimicode" || app_type == "reasonix" || app_type == "pi" {
+            // Kimi / Reasonix / Pi takeover owns a full live snapshot. Live stays on the
             // fixed local `cc-switch-proxy` projection, but the restore backup must
-            // track the newly selected provider's default_model (and custom
+            // track the newly selected provider's default (and custom
             // provider projection) — same SSOT discipline as Claude/Codex
             // backup updates during hot-switch (design §4 / stage E).
             if let Some(backup) = self
@@ -2443,6 +2556,12 @@ impl ProxyService {
                         &provider.settings_config,
                     )
                     .map_err(|e| format!("更新 Reasonix 备份投影失败: {e}"))?,
+                    "pi" => crate::pi_config::apply_switch_defaults_to_snapshot_text(
+                        &backup.original_config,
+                        &provider.id,
+                        &provider.settings_config,
+                    )
+                    .map_err(|e| format!("更新 Pi 备份投影失败: {e}"))?,
                     _ => unreachable!(),
                 };
                 self.db
@@ -3264,6 +3383,11 @@ impl ProxyService {
                         .await?;
                     updated_any = true;
                 }
+                if takeover.pi {
+                    self.takeover_live_config_best_effort(&AppType::Pi)
+                        .await?;
+                    updated_any = true;
+                }
 
                 if updated_any {
                     log::info!("已同步更新 Live 配置中的代理地址");
@@ -3474,6 +3598,154 @@ model = "model"
             original
         );
         env::remove_var("KIMI_CODE_HOME");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_takeover_smoke_is_lossless_and_reports_status() {
+        let home = TempHome::new();
+        let pi_home = home.dir.path().join("pi-agent-home");
+        std::fs::create_dir_all(&pi_home).expect("create pi home");
+        env::set_var("PI_AGENT_HOME", &pi_home);
+        crate::settings::reload_settings().expect("reload settings");
+
+        // Seed a minimal live Pi config (models + auth + settings).
+        let models = json!({
+            "providers": {
+                "demo": {
+                    "name": "Demo",
+                    "baseUrl": "https://example.test/v1",
+                    "api": "openai-completions",
+                    "apiKey": "secret",
+                    "compat": {
+                        "supportsStore": false,
+                        "supportsDeveloperRole": false,
+                        "maxTokensField": "max_tokens"
+                    },
+                    "models": [{ "id": "gpt-test", "name": "gpt-test" }]
+                }
+            }
+        });
+        let auth = json!({
+            "demo": { "type": "api_key", "key": "secret" }
+        });
+        let settings = json!({
+            "defaultProvider": "demo",
+            "defaultModel": "gpt-test"
+        });
+        std::fs::write(
+            crate::pi_config::get_models_path(),
+            serde_json::to_string_pretty(&models).unwrap(),
+        )
+        .expect("seed models.json");
+        std::fs::write(
+            crate::pi_config::get_auth_path(),
+            serde_json::to_string_pretty(&auth).unwrap(),
+        )
+        .expect("seed auth.json");
+        std::fs::write(
+            crate::pi_config::get_settings_path(),
+            serde_json::to_string_pretty(&settings).unwrap(),
+        )
+        .expect("seed settings.json");
+        let original_snapshot = crate::pi_config::read_snapshot_text().expect("read original");
+
+        let db = Arc::new(Database::memory().expect("init db"));
+        use_ephemeral_proxy_port(&db).await;
+        let state = crate::store::AppState::new(db.clone());
+        let provider = Provider::with_id(
+            "demo".to_string(),
+            "Demo".to_string(),
+            json!({
+                "name": "Demo",
+                "baseUrl": "https://example.test/v1",
+                "api": "openai-completions",
+                "apiKey": "secret",
+                "models": [{ "id": "gpt-test", "name": "gpt-test" }],
+                "defaultModel": "gpt-test"
+            }),
+            None,
+        );
+        db.save_provider("pi", &provider).expect("save provider");
+        db.set_current_provider("pi", "demo")
+            .expect("set current provider");
+        crate::settings::set_current_provider(&AppType::Pi, Some("demo"))
+            .expect("set local current provider");
+
+        state
+            .proxy_service
+            .set_takeover_for_app("pi", true)
+            .await
+            .expect("enable pi takeover");
+        let status = state
+            .proxy_service
+            .get_takeover_status()
+            .await
+            .expect("get takeover status");
+        assert!(status.pi, "pi takeover status must be true");
+        assert!(
+            crate::pi_config::is_proxy_takeover_active().unwrap(),
+            "live takeover must be detected"
+        );
+        let taken_models = crate::pi_config::read_models().expect("read taken models");
+        assert!(
+            taken_models
+                .pointer("/providers/cc-switch-proxy")
+                .is_some(),
+            "proxy provider must be projected"
+        );
+        assert_eq!(
+            crate::pi_config::get_default_provider()
+                .unwrap()
+                .as_deref(),
+            Some(crate::pi_config::PI_PROXY_PROVIDER)
+        );
+        assert!(
+            taken_models
+                .pointer("/providers/demo")
+                .is_some(),
+            "user provider must remain during takeover"
+        );
+
+        state
+            .proxy_service
+            .set_takeover_for_app("pi", false)
+            .await
+            .expect("disable pi takeover");
+        assert!(
+            !crate::pi_config::is_proxy_takeover_active().unwrap(),
+            "takeover must clear"
+        );
+        let restored = crate::pi_config::read_snapshot_text().expect("read restored");
+        // Snapshot text may re-pretty-print; compare parsed values for losslessness.
+        let original: serde_json::Value =
+            serde_json::from_str(&original_snapshot).expect("parse original");
+        let restored_val: serde_json::Value =
+            serde_json::from_str(&restored).expect("parse restored");
+        assert_eq!(
+            restored_val["settings"]["defaultProvider"],
+            original["settings"]["defaultProvider"]
+        );
+        assert_eq!(
+            restored_val["settings"]["defaultModel"],
+            original["settings"]["defaultModel"]
+        );
+        assert!(
+            restored_val
+                .pointer("/models/providers/demo")
+                .is_some()
+        );
+        assert!(
+            restored_val
+                .pointer("/models/providers/cc-switch-proxy")
+                .is_none()
+        );
+        assert_eq!(
+            restored_val.pointer("/auth/demo/key").and_then(|v| v.as_str()),
+            Some("secret")
+        );
+
+        env::remove_var("PI_AGENT_HOME");
     }
 
     #[tokio::test]

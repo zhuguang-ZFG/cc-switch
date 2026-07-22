@@ -126,7 +126,7 @@ impl Database {
 
         // 8. Proxy Config 表（每应用一行，app_type 主键）
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix','pi')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -204,6 +204,17 @@ impl Database {
                     circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                     circuit_error_rate_threshold, circuit_min_requests)
                     VALUES ('reasonix', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                    [],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            }
+            if Self::proxy_config_supports_pi(conn)? {
+                conn.execute(
+                    "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                    streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                    circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                    circuit_error_rate_threshold, circuit_min_requests)
+                    VALUES ('pi', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
                     [],
                 )
                 .map_err(|e| AppError::Database(e.to_string()))?;
@@ -571,7 +582,8 @@ impl Database {
         let conn = lock_conn!(self.conn);
         Self::apply_kimicode_data_migration(&conn)?;
         Self::apply_kimicode_proxy_migration(&conn)?;
-        Self::apply_reasonix_proxy_migration(&conn)
+        Self::apply_reasonix_proxy_migration(&conn)?;
+        Self::apply_pi_proxy_migration(&conn)
     }
 
     /// Whether both fork data migrations have already run. Used before
@@ -591,6 +603,7 @@ impl Database {
         marked("fork_migration_kimicode_v1")
             && marked("fork_migration_kimicode_proxy_v1")
             && marked("fork_migration_reasonix_proxy_v1")
+            && marked("fork_migration_pi_proxy_v1")
     }
 
     fn apply_kimicode_data_migration(conn: &Connection) -> Result<(), AppError> {
@@ -843,7 +856,7 @@ impl Database {
                 conn.execute("DROP TABLE IF EXISTS proxy_config_kimicode", [])?;
                 conn.execute(
                     "CREATE TABLE proxy_config_kimicode (
-                        app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
+                        app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix','pi')),
                         proxy_enabled INTEGER NOT NULL DEFAULT 0,
                         listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
                         listen_port INTEGER NOT NULL DEFAULT 15721,
@@ -977,7 +990,7 @@ impl Database {
                 conn.execute("DROP TABLE IF EXISTS proxy_config_reasonix", [])?;
                 conn.execute(
                     "CREATE TABLE proxy_config_reasonix (
-                        app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
+                        app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix','pi')),
                         proxy_enabled INTEGER NOT NULL DEFAULT 0,
                         listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
                         listen_port INTEGER NOT NULL DEFAULT 15721,
@@ -1055,6 +1068,122 @@ impl Database {
                 Err(AppError::Database(format!(
                     "Reasonix 代理配置迁移失败: {error}"
                 )))
+            }
+        }
+    }
+
+    fn proxy_config_supports_pi(conn: &Connection) -> Result<bool, AppError> {
+        let table_sql = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .flatten();
+        Ok(table_sql.is_some_and(|sql| sql.contains("'pi'")))
+    }
+
+    fn apply_pi_proxy_migration(conn: &Connection) -> Result<(), AppError> {
+        const MARKER: &str = "fork_migration_pi_proxy_v1";
+        let applied = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [MARKER],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        if applied.as_deref() == Some("done") {
+            return Ok(());
+        }
+
+        let needs_rebuild =
+            Self::table_exists(conn, "proxy_config")? && !Self::proxy_config_supports_pi(conn)?;
+
+        conn.execute_batch(
+            "SAVEPOINT fork_pi_proxy_migration; PRAGMA defer_foreign_keys = ON;",
+        )
+        .map_err(|e| AppError::Database(format!("开启 Pi 代理配置迁移失败: {e}")))?;
+        let result = (|| {
+            if needs_rebuild {
+                conn.execute("DROP TABLE IF EXISTS proxy_config_pi", [])?;
+                conn.execute(
+                    "CREATE TABLE proxy_config_pi (
+                        app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix','pi')),
+                        proxy_enabled INTEGER NOT NULL DEFAULT 0,
+                        listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+                        listen_port INTEGER NOT NULL DEFAULT 15721,
+                        enable_logging INTEGER NOT NULL DEFAULT 1,
+                        enabled INTEGER NOT NULL DEFAULT 0,
+                        auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                        max_retries INTEGER NOT NULL DEFAULT 3,
+                        streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+                        streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
+                        non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+                        circuit_failure_threshold INTEGER NOT NULL DEFAULT 4,
+                        circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+                        circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+                        circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+                        circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+                        default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                        pricing_model_source TEXT NOT NULL DEFAULT 'response',
+                        live_takeover_active INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO proxy_config_pi (
+                        app_type, proxy_enabled, listen_address, listen_port, enable_logging,
+                        enabled, auto_failover_enabled, max_retries,
+                        streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                        circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                        circuit_error_rate_threshold, circuit_min_requests,
+                        default_cost_multiplier, pricing_model_source, live_takeover_active,
+                        created_at, updated_at
+                    )
+                    SELECT app_type, proxy_enabled, listen_address, listen_port, enable_logging,
+                           enabled, auto_failover_enabled, max_retries,
+                           streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                           circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                           circuit_error_rate_threshold, circuit_min_requests,
+                           default_cost_multiplier, pricing_model_source, live_takeover_active,
+                           created_at, updated_at
+                    FROM proxy_config",
+                    [],
+                )?;
+                conn.execute("DROP TABLE proxy_config", [])?;
+                conn.execute("ALTER TABLE proxy_config_pi RENAME TO proxy_config", [])?;
+            }
+
+            conn.execute(
+                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                    streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                    circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                    circuit_error_rate_threshold, circuit_min_requests)
+                 VALUES ('pi', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, 'done')",
+                [MARKER],
+            )?;
+            Ok::<(), rusqlite::Error>(())
+        })();
+
+        match result {
+            Ok(()) => conn
+                .execute_batch("RELEASE fork_pi_proxy_migration;")
+                .map_err(|e| AppError::Database(format!("提交 Pi 代理配置迁移失败: {e}"))),
+            Err(error) => {
+                conn.execute_batch(
+                    "ROLLBACK TO fork_pi_proxy_migration; RELEASE fork_pi_proxy_migration;",
+                )
+                .ok();
+                Err(AppError::Database(format!("Pi 代理配置迁移失败: {error}")))
             }
         }
     }
@@ -1391,7 +1520,7 @@ impl Database {
         // 创建新表
         conn.execute("DROP TABLE IF EXISTS proxy_config_new", [])?;
         conn.execute("CREATE TABLE proxy_config_new (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix','pi')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -1953,7 +2082,7 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute(
             "CREATE TABLE proxy_config_v14 (
-                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix')),
+                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','kimicode','reasonix','pi')),
                 proxy_enabled INTEGER NOT NULL DEFAULT 0,
                 listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
                 listen_port INTEGER NOT NULL DEFAULT 15721,

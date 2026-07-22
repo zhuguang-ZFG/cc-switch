@@ -298,7 +298,9 @@ export function useProviderActions(
           } else if (
             activeApp === "opencode" ||
             activeApp === "openclaw" ||
-            ((activeApp === "kimicode" || activeApp === "reasonix") &&
+            ((activeApp === "kimicode" ||
+              activeApp === "reasonix" ||
+              activeApp === "pi") &&
               !isProxyTakeover)
           ) {
             // 累加模式（非接管）：主按钮是「添加」语义。

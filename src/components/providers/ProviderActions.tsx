@@ -88,7 +88,8 @@ export function ProviderActions({
   // 与 Claude/Codex 一致。必须同时要求 isProxyTakeover：否则仅开故障转移开关
   // （或测试传入 isAutoFailoverEnabled）会把累加模式误判成队列模式，
   // 导致非接管下无法添加/移除供应商。
-  const isHybridProxyApp = appId === "kimicode" || appId === "reasonix";
+  const isHybridProxyApp =
+    appId === "kimicode" || appId === "reasonix" || appId === "pi";
   const isHybridFailover =
     isHybridProxyApp &&
     isProxyTakeover &&
@@ -101,14 +102,15 @@ export function ProviderActions({
   const isHybridTakeoverSwitch =
     isHybridProxyApp && isProxyTakeover && !isHybridFailover;
 
-  // 累加模式应用（OpenCode 非 OMO / OpenClaw / Kimi / Reasonix）
+  // 累加模式应用（OpenCode 非 OMO / OpenClaw / Kimi / Reasonix / Pi）
   const isAdditiveMode =
     !isHybridTakeoverSwitch &&
     !isHybridFailover &&
     ((appId === "opencode" && !isOmo) ||
       appId === "openclaw" ||
       appId === "kimicode" ||
-      appId === "reasonix");
+      appId === "reasonix" ||
+      appId === "pi");
 
   // 故障转移模式下的按钮逻辑（累加模式、OMO 应用和 hybrid 接管切换不支持故障转移；
   // hybrid 故障转移由上面的 isHybridFailover 单独放行）

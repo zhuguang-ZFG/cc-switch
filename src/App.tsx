@@ -42,6 +42,7 @@ import {
   reasonixKeys,
   invalidateReasonixProviderCaches,
 } from "@/hooks/useReasonix";
+import { piKeys, invalidatePiProviderCaches } from "@/hooks/usePi";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { useAutoCompact } from "@/hooks/useAutoCompact";
 import { useUsageCacheBridge } from "@/hooks/useUsageCacheBridge";
@@ -130,6 +131,7 @@ const VALID_APPS: AppId[] = [
   "openclaw",
   "kimicode",
   "reasonix",
+  "pi",
 ];
 
 const getInitialApp = (): AppId => {
@@ -199,6 +201,7 @@ function App() {
     openclaw: true,
     kimicode: true,
     reasonix: true,
+    pi: true,
   };
 
   const getFirstVisibleApp = (): AppId => {
@@ -210,6 +213,7 @@ function App() {
     if (visibleApps.openclaw) return "openclaw";
     if (visibleApps.kimicode ?? visibleApps.hermes) return "kimicode";
     if (visibleApps.reasonix) return "reasonix";
+    if (visibleApps.pi) return "pi";
     return "claude"; // fallback
   };
 
@@ -229,7 +233,8 @@ function App() {
       sharedFeatureApp !== "opencode" &&
       sharedFeatureApp !== "openclaw" &&
       sharedFeatureApp !== "kimicode" &&
-      sharedFeatureApp !== "reasonix"
+      sharedFeatureApp !== "reasonix" &&
+      sharedFeatureApp !== "pi"
     ) {
       setCurrentView("providers");
     }
@@ -299,7 +304,8 @@ function App() {
     sharedFeatureApp === "opencode" ||
     sharedFeatureApp === "openclaw" ||
     sharedFeatureApp === "kimicode" ||
-    sharedFeatureApp === "reasonix";
+    sharedFeatureApp === "reasonix" ||
+    sharedFeatureApp === "pi";
 
   const {
     addProvider,
@@ -676,6 +682,8 @@ function App() {
         await invalidateHermesProviderCaches(queryClient);
       } else if (activeApp === "reasonix") {
         await invalidateReasonixProviderCaches(queryClient);
+      } else if (activeApp === "pi") {
+        await invalidatePiProviderCaches(queryClient);
       }
       toast.success(
         t("notifications.removeFromConfigSuccess", {
@@ -728,7 +736,8 @@ function App() {
       activeApp === "opencode" ||
       activeApp === "openclaw" ||
       activeApp === "kimicode" ||
-      activeApp === "reasonix"
+      activeApp === "reasonix" ||
+      activeApp === "pi"
     ) {
       let liveProviderIds: string[] = [];
       try {
@@ -748,10 +757,15 @@ function App() {
                     queryKey: reasonixKeys.liveProviderIds,
                     queryFn: () => providersApi.getReasonixLiveProviderIds(),
                   })
-                : await queryClient.ensureQueryData({
-                    queryKey: hermesKeys.liveProviderIds,
-                    queryFn: () => providersApi.getHermesLiveProviderIds(),
-                  });
+                : activeApp === "pi"
+                  ? await queryClient.ensureQueryData({
+                      queryKey: piKeys.liveProviderIds,
+                      queryFn: () => providersApi.getPiLiveProviderIds(),
+                    })
+                  : await queryClient.ensureQueryData({
+                      queryKey: hermesKeys.liveProviderIds,
+                      queryFn: () => providersApi.getHermesLiveProviderIds(),
+                    });
       } catch (error) {
         console.error(
           "[App] Failed to load live provider IDs for duplication",
@@ -1017,7 +1031,8 @@ function App() {
                         activeApp === "opencode" ||
                         activeApp === "openclaw" ||
                         activeApp === "kimicode" ||
-                        activeApp === "reasonix"
+                        activeApp === "reasonix" ||
+                        activeApp === "pi"
                           ? (provider) =>
                               setConfirmAction({ provider, action: "remove" })
                           : undefined
@@ -1041,7 +1056,8 @@ function App() {
                         activeApp === "openclaw"
                           ? setAsDefaultModel
                           : activeApp === "kimicode" ||
-                              activeApp === "reasonix"
+                              activeApp === "reasonix" ||
+                              activeApp === "pi"
                             ? switchProvider
                             : undefined
                       }

@@ -73,7 +73,12 @@ export function EditProviderDialog({
       // Kimi / Reasonix are the same class of additive multi-provider live files:
       // getLiveProviderSettings returns the entire config.toml as `{ config: text }`,
       // not a single-provider fragment. Loading that into the form corrupts settingsConfig.
-      if (appId === "opencode" || appId === "kimicode" || appId === "reasonix") {
+      if (
+        appId === "opencode" ||
+        appId === "kimicode" ||
+        appId === "reasonix" ||
+        appId === "pi"
+      ) {
         if (!cancelled) {
           setLiveSettings(null);
           setHasLoadedLive(true);
@@ -196,7 +201,8 @@ export function EditProviderDialog({
         (appId === "opencode" ||
           appId === "openclaw" ||
           appId === "kimicode" ||
-          appId === "reasonix") &&
+          appId === "reasonix" ||
+          appId === "pi") &&
         values.providerKey?.trim()
           ? values.providerKey.trim()
           : provider.id;

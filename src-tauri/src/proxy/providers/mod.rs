@@ -56,7 +56,8 @@ pub use claude::{
 pub use codex::CodexAdapter;
 pub use codex::{
     apply_codex_chat_upstream_model, apply_codex_upstream_model, apply_kimi_upstream_model,
-    apply_reasonix_upstream_model, clamp_codex_max_output_tokens, codex_provider_upstream_model,
+    apply_pi_upstream_model, apply_reasonix_upstream_model, clamp_codex_max_output_tokens,
+    codex_provider_upstream_model,
     inject_codex_chat_prompt_cache_key, is_codex_official_provider, kimi_wire_protocol,
     reasonix_provider_is_anthropic,
     resolve_codex_catalog_tool_profile, resolve_codex_chat_reasoning_config,
@@ -187,9 +188,11 @@ impl ProviderType {
             // Gemini CLI app removed; Gemini protocol still selected via settings
             // when a Gemini-shaped provider is used under other apps.
             AppType::GrokBuild => ProviderType::Codex,
-            AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix => {
-                ProviderType::Codex
-            }
+            AppType::OpenCode
+            | AppType::OpenClaw
+            | AppType::KimiCode
+            | AppType::Reasonix
+            | AppType::Pi => ProviderType::Codex,
         }
     }
 
@@ -240,9 +243,11 @@ pub fn get_adapter(app_type: &AppType) -> Box<dyn ProviderAdapter> {
         AppType::Claude | AppType::ClaudeDesktop => Box::new(ClaudeAdapter::new()),
         AppType::Codex => Box::new(CodexAdapter::new()),
         AppType::GrokBuild => Box::new(CodexAdapter::new()),
-        AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix => {
-            Box::new(CodexAdapter::new())
-        }
+        AppType::OpenCode
+        | AppType::OpenClaw
+        | AppType::KimiCode
+        | AppType::Reasonix
+        | AppType::Pi => Box::new(CodexAdapter::new()),
     }
 }
 

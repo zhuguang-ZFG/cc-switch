@@ -172,6 +172,27 @@ impl Provider {
                 str_at(settings.get("base_url")),
                 str_at(settings.get("api_key")),
             ),
+            // Pi agent: models.json uses camelCase baseUrl / apiKey.
+            AppType::Pi => {
+                let base_url = {
+                    let camel = str_at(settings.get("baseUrl"));
+                    if camel.is_empty() {
+                        str_at(settings.get("base_url"))
+                    } else {
+                        camel
+                    }
+                };
+                let api_key = {
+                    let camel = str_at(settings.get("apiKey"));
+                    if camel.is_empty() {
+                        str_at(settings.get("api_key"))
+                    } else {
+                        camel
+                    }
+                };
+                (base_url, api_key)
+            }
+
             // OpenClaw (openclaw.json) flattens credentials at the top level, camelCase.
             AppType::OpenClaw => (
                 str_at(settings.get("baseUrl")),

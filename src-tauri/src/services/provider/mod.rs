@@ -25,8 +25,9 @@ pub use live::{
     import_default_config, import_kimicode_providers_from_live,
     import_openclaw_providers_from_live, import_opencode_providers_from_live,
     import_reasonix_providers_from_live, read_live_settings, remove_kimicode_provider_from_live,
-    remove_reasonix_provider_from_live, should_import_default_config_on_startup,
-    sync_current_to_live, update_toml_common_config_snippet,
+    remove_pi_provider_from_live, remove_reasonix_provider_from_live,
+    should_import_default_config_on_startup, sync_current_to_live,
+    update_toml_common_config_snippet,
 };
 
 // Internal re-exports (pub(crate))
@@ -2442,6 +2443,12 @@ impl ProviderService {
             .detect_takeover_in_live_config_for_app(&AppType::Reasonix)
     }
 
+    fn pi_proxy_owns_live(state: &AppState) -> bool {
+        state
+            .proxy_service
+            .detect_takeover_in_live_config_for_app(&AppType::Pi)
+    }
+
     /// Project a Kimi provider into the restore backup while live stays on
     /// `cc-switch-proxy`.
     ///
@@ -2577,6 +2584,59 @@ impl ProviderService {
         Ok(())
     }
 
+    fn pi_update_takeover_backup(
+        state: &AppState,
+        provider: &Provider,
+        force_as_default: bool,
+    ) -> Result<(), AppError> {
+        let backup = futures::executor::block_on(state.db.get_live_backup(AppType::Pi.as_str()))
+            .map_err(|e| AppError::Message(format!("读取 Pi 备份失败: {e}")))?;
+        let Some(backup) = backup else {
+            return Err(AppError::Message(
+                "Pi 代理接管中但缺少恢复备份，无法更新配置；请先关闭再重新开启接管".to_string(),
+            ));
+        };
+
+        let is_current = force_as_default
+            || crate::settings::get_effective_current_provider(&state.db, &AppType::Pi)?
+                .as_deref()
+                == Some(provider.id.as_str());
+
+        let updated = if is_current {
+            crate::pi_config::apply_switch_defaults_to_snapshot_text(
+                &backup.original_config,
+                &provider.id,
+                &provider.settings_config,
+            )
+            .map_err(|e| AppError::Message(format!("更新 Pi 接管备份失败: {e}")))?
+        } else {
+            crate::pi_config::upsert_provider_into_snapshot_text(
+                &backup.original_config,
+                &provider.id,
+                &provider.settings_config,
+            )
+            .map_err(|e| AppError::Message(format!("更新 Pi 接管备份失败: {e}")))?
+        };
+
+        futures::executor::block_on(state.db.save_live_backup(AppType::Pi.as_str(), &updated))
+            .map_err(|e| AppError::Message(format!("写入 Pi 备份失败: {e}")))
+    }
+
+    fn pi_remove_from_takeover_backup(state: &AppState, id: &str) -> Result<(), AppError> {
+        let backup = futures::executor::block_on(state.db.get_live_backup(AppType::Pi.as_str()))
+            .map_err(|e| AppError::Message(format!("读取 Pi 备份失败: {e}")))?;
+        let Some(backup) = backup else {
+            return Ok(());
+        };
+        let updated = crate::pi_config::remove_provider_from_snapshot_text(
+            &backup.original_config,
+            id,
+        )
+        .map_err(|e| AppError::Message(format!("从 Pi 备份移除供应商失败: {e}")))?;
+        futures::executor::block_on(state.db.save_live_backup(AppType::Pi.as_str(), &updated))
+            .map_err(|e| AppError::Message(format!("写入 Pi 备份失败: {e}")))
+    }
+
     fn normalize_usage_script_credential_overrides(app_type: &AppType, provider: &mut Provider) {
         let current_credentials = provider.resolve_usage_credentials(app_type);
 
@@ -2704,8 +2764,10 @@ impl ProviderService {
 
             // Kimi Code maintains Claude/Codex-aligned current SSOT for proxy routing.
             // First provider becomes current; subsequent adds leave current unchanged.
-            let seed_additive_current = matches!(app_type, AppType::KimiCode | AppType::Reasonix)
-                && state.db.get_current_provider(app_type.as_str())?.is_none();
+            let seed_additive_current = matches!(
+                app_type,
+                AppType::KimiCode | AppType::Reasonix | AppType::Pi
+            ) && state.db.get_current_provider(app_type.as_str())?.is_none();
 
             if !add_to_live {
                 if seed_additive_current {
@@ -2740,15 +2802,34 @@ impl ProviderService {
                 }
                 return Ok(true);
             }
+            if matches!(app_type, AppType::Pi) && Self::pi_proxy_owns_live(state) {
+                Self::pi_update_takeover_backup(state, &provider, seed_additive_current)?;
+                if seed_additive_current {
+                    state
+                        .db
+                        .set_current_provider(app_type.as_str(), &provider.id)?;
+                    crate::settings::set_current_provider(&app_type, Some(provider.id.as_str()))?;
+                }
+                return Ok(true);
+            }
 
-            if matches!(app_type, AppType::KimiCode | AppType::Reasonix) && seed_additive_current {
+            if matches!(
+                app_type,
+                AppType::KimiCode | AppType::Reasonix | AppType::Pi
+            ) && seed_additive_current
+            {
                 if matches!(app_type, AppType::KimiCode) {
                     crate::kimi_config::apply_switch_defaults(
                         &provider.id,
                         &provider.settings_config,
                     )?;
-                } else {
+                } else if matches!(app_type, AppType::Reasonix) {
                     crate::reasonix_config::apply_switch_defaults(
+                        &provider.id,
+                        &provider.settings_config,
+                    )?;
+                } else {
+                    crate::pi_config::apply_switch_defaults(
                         &provider.id,
                         &provider.settings_config,
                     )?;
@@ -3003,6 +3084,25 @@ impl ProviderService {
                     }
                 }
             }
+            if matches!(app_type, AppType::Pi) && Self::pi_proxy_owns_live(state) {
+                if flagged_managed == Some(true) {
+                    live_config_managed = true;
+                } else if let Some(backup) = futures::executor::block_on(
+                    state.db.get_live_backup(AppType::Pi.as_str()),
+                )
+                .ok()
+                .flatten()
+                {
+                    if crate::pi_config::provider_exists_in_snapshot_text(
+                        &backup.original_config,
+                        &provider.id,
+                    )
+                    .unwrap_or(false)
+                    {
+                        live_config_managed = true;
+                    }
+                }
+            }
 
             Self::set_provider_live_config_managed(&mut provider, live_config_managed);
 
@@ -3014,7 +3114,7 @@ impl ProviderService {
                 return Ok(true);
             }
 
-            // Kimi/Reasonix takeover: update restore backup only (PRD R5). Live stays on
+            // Takeover: update restore backup only (PRD R5). Live stays on
             // the fixed local proxy projection. Non-current edits must not rewrite
             // default_model (upsert-only inside the helper).
             if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
@@ -3023,6 +3123,10 @@ impl ProviderService {
             }
             if matches!(app_type, AppType::Reasonix) && Self::reasonix_proxy_owns_live(state) {
                 Self::reasonix_update_takeover_backup(state, &provider, false)?;
+                return Ok(true);
+            }
+            if matches!(app_type, AppType::Pi) && Self::pi_proxy_owns_live(state) {
+                Self::pi_update_takeover_backup(state, &provider, false)?;
                 return Ok(true);
             }
 
@@ -3153,9 +3257,12 @@ impl ProviderService {
                 .as_ref()
                 .and_then(Self::provider_live_config_managed);
 
-            // Kimi/Reasonix are hybrid additive + exclusive current (Claude/Codex
+            // Kimi/Reasonix/Pi are hybrid additive + exclusive current (Claude/Codex
             // parity for routing SSOT). Always refuse deleting the current target.
-            if matches!(app_type, AppType::KimiCode | AppType::Reasonix) {
+            if matches!(
+                app_type,
+                AppType::KimiCode | AppType::Reasonix | AppType::Pi
+            ) {
                 let local_current = crate::settings::get_current_provider(&app_type);
                 let db_current = state.db.get_current_provider(app_type.as_str())?;
                 if local_current.as_deref() == Some(id) || db_current.as_deref() == Some(id) {
@@ -3165,7 +3272,7 @@ impl ProviderService {
                 }
             }
 
-            // Kimi/Reasonix under takeover: remove from restore backup only, never live.
+            // Under takeover: remove from restore backup only, never live.
             if matches!(app_type, AppType::KimiCode) && Self::kimi_proxy_owns_live(state) {
                 Self::kimi_remove_from_takeover_backup(state, id)?;
                 state.db.delete_provider(app_type.as_str(), id)?;
@@ -3176,6 +3283,11 @@ impl ProviderService {
                 state.db.delete_provider(app_type.as_str(), id)?;
                 return Ok(());
             }
+            if matches!(app_type, AppType::Pi) && Self::pi_proxy_owns_live(state) {
+                Self::pi_remove_from_takeover_backup(state, id)?;
+                state.db.delete_provider(app_type.as_str(), id)?;
+                return Ok(());
+            }
 
             if Self::check_live_config_exists(&app_type, id, live_managed)? {
                 match app_type {
@@ -3183,6 +3295,7 @@ impl ProviderService {
                     AppType::OpenClaw => remove_openclaw_provider_from_live(id)?,
                     AppType::KimiCode => remove_kimicode_provider_from_live(id)?,
                     AppType::Reasonix => remove_reasonix_provider_from_live(id)?,
+                    AppType::Pi => remove_pi_provider_from_live(id)?,
                     _ => {}
                 }
             }
@@ -3282,6 +3395,20 @@ impl ProviderService {
                     Self::reasonix_remove_from_takeover_backup(state, id)?;
                 } else {
                     remove_reasonix_provider_from_live(id)?;
+                }
+            }
+            AppType::Pi => {
+                let local_current = crate::settings::get_current_provider(&app_type);
+                let db_current = state.db.get_current_provider(app_type.as_str())?;
+                if local_current.as_deref() == Some(id) || db_current.as_deref() == Some(id) {
+                    return Err(AppError::Message(
+                        "无法从配置移除当前正在使用的供应商，请先切换到其他供应商".to_string(),
+                    ));
+                }
+                if Self::pi_proxy_owns_live(state) {
+                    Self::pi_remove_from_takeover_backup(state, id)?;
+                } else {
+                    remove_pi_provider_from_live(id)?;
                 }
             }
             _ => {
@@ -3489,7 +3616,12 @@ impl ProviderService {
         // Exclusive apps and Kimi Code maintain current SSOT (settings + DB is_current)
         // so proxy select_providers / tray / UI agree with the selected provider.
         // Pure additive apps (OpenCode / OpenClaw) still skip is_current.
-        if !app_type.is_additive_mode() || matches!(app_type, AppType::KimiCode | AppType::Reasonix) {
+        if !app_type.is_additive_mode()
+            || matches!(
+                app_type,
+                AppType::KimiCode | AppType::Reasonix | AppType::Pi
+            )
+        {
             // Update local settings (device-level, takes priority)
             crate::settings::set_current_provider(&app_type, Some(id))?;
 
@@ -3515,6 +3647,12 @@ impl ProviderService {
             }
         } else if matches!(app_type, AppType::Reasonix) {
             crate::reasonix_config::apply_switch_defaults(&provider.id, &provider.settings_config)?;
+        } else if matches!(app_type, AppType::Pi) {
+            if Self::pi_proxy_owns_live(state) {
+                Self::pi_update_takeover_backup(state, provider, true)?;
+            } else {
+                crate::pi_config::apply_switch_defaults(&provider.id, &provider.settings_config)?;
+            }
         } else {
             // write_gemini_live handles security flag internally for Gemini
             write_live_with_common_config(state.db.as_ref(), &app_type, provider)?;
@@ -3543,6 +3681,7 @@ impl ProviderService {
                     AppType::OpenClaw => remove_openclaw_provider_from_live(&provider.id),
                     AppType::KimiCode => remove_kimicode_provider_from_live(&provider.id),
                     AppType::Reasonix => remove_reasonix_provider_from_live(&provider.id),
+                    AppType::Pi => remove_pi_provider_from_live(&provider.id),
                     _ => Ok(()),
                 };
 
@@ -3832,6 +3971,7 @@ impl ProviderService {
             // Kimi common config is global live tables, not per-provider settings.
             AppType::KimiCode => live::extract_kimi_common_config_from_live(),
             AppType::Reasonix => Ok(String::new()),
+            AppType::Pi => Ok(String::new()),
         }
     }
 
@@ -3850,6 +3990,7 @@ impl ProviderService {
             // Provider settings_config is not the live document; re-read live.
             AppType::KimiCode => live::extract_kimi_common_config_from_live(),
             AppType::Reasonix => Ok(String::new()),
+            AppType::Pi => Ok(String::new()),
         }
     }
 
@@ -4618,6 +4759,56 @@ impl ProviderService {
                     }
                 }
             }
+            AppType::Pi => {
+                let settings = provider.settings_config.as_object().ok_or_else(|| {
+                    AppError::localized(
+                        "provider.pi.settings.not_object",
+                        "Pi 配置必须是 JSON 对象",
+                        "Pi configuration must be a JSON object",
+                    )
+                })?;
+                let base_url = settings
+                    .get("baseUrl")
+                    .or_else(|| settings.get("base_url"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                if base_url.is_none() {
+                    return Err(AppError::localized(
+                        "provider.pi.base_url.missing",
+                        "Pi API 端点不能为空",
+                        "Pi API endpoint is required",
+                    ));
+                }
+                let models = settings.get("models").and_then(Value::as_array);
+                if !models.is_some_and(|m| !m.is_empty()) {
+                    return Err(AppError::localized(
+                        "provider.pi.models.missing",
+                        "Pi 至少需要一个模型",
+                        "Pi requires at least one model",
+                    ));
+                }
+                if let Some(models) = models {
+                    if models.iter().any(|model| {
+                        let id = model.as_str().map(str::trim).filter(|s| !s.is_empty()).or_else(
+                            || {
+                                model
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                            },
+                        );
+                        id.is_none()
+                    }) {
+                        return Err(AppError::localized(
+                            "provider.pi.model_id.missing",
+                            "Pi 模型 ID 不能为空",
+                            "Pi model ID is required",
+                        ));
+                    }
+                }
+            }
         }
 
         // Validate and clean UsageScript configuration (common for all app types)
@@ -4802,7 +4993,7 @@ impl ProviderService {
 
                 Ok((api_key, base_url))
             }
-            AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix => {
+            AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix | AppType::Pi => {
                 let api_key = provider
                     .settings_config
                     .get("apiKey")

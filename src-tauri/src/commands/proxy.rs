@@ -36,6 +36,7 @@ fn takeover_blocks_proxy_stop(takeover: &ProxyTakeoverStatus) -> bool {
         || takeover.grokbuild
         || takeover.kimicode
         || takeover.reasonix
+        || takeover.pi
         || takeover.opencode
         || takeover.openclaw
 }
@@ -472,6 +473,7 @@ mod tests {
             grokbuild: false,
             kimicode: false,
             reasonix: false,
+            pi: false,
             opencode: false,
             openclaw: false,
             reasonix_proxy_warning: None,

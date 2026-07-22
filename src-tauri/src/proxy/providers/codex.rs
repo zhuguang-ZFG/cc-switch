@@ -783,6 +783,111 @@ pub fn apply_reasonix_upstream_model(
     Ok(Some(upstream))
 }
 
+fn pi_model_catalog(provider: &Provider) -> Vec<String> {
+    let mut models = Vec::new();
+    if let Some(arr) = provider
+        .settings_config
+        .get("models")
+        .and_then(|value| value.as_array())
+    {
+        for entry in arr {
+            if let Some(id) = entry.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                models.push(id.to_string());
+            } else if let Some(id) = entry
+                .get("id")
+                .or_else(|| entry.get("model"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                models.push(id.to_string());
+            }
+        }
+    }
+    models
+}
+
+fn resolve_pi_upstream_model(
+    provider: &Provider,
+    request_model: Option<&str>,
+) -> Option<String> {
+    let catalog = pi_model_catalog(provider);
+    let default = provider
+        .settings_config
+        .get("defaultModel")
+        .or_else(|| provider.settings_config.get("default_model"))
+        .or_else(|| provider.settings_config.get("default"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| catalog.first().cloned());
+
+    let Some(request_model) = request_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    else {
+        return default;
+    };
+
+    if is_cc_switch_proxy_model(request_model) {
+        return default;
+    }
+
+    if catalog
+        .iter()
+        .any(|id| id.eq_ignore_ascii_case(request_model))
+    {
+        return Some(request_model.to_string());
+    }
+
+    if let Some((_, suffix)) = request_model.rsplit_once('/') {
+        if catalog
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(suffix))
+        {
+            return Some(suffix.to_string());
+        }
+    }
+
+    None
+}
+
+/// Map Pi proxy placeholders onto the selected attempt's real model id.
+pub fn apply_pi_upstream_model(
+    provider: &Provider,
+    body: &mut JsonValue,
+) -> Result<Option<String>, ProxyError> {
+    let request_model = body
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToString::to_string);
+
+    let Some(upstream) = resolve_pi_upstream_model(provider, request_model.as_deref()) else {
+        if request_model
+            .as_deref()
+            .is_some_and(is_cc_switch_proxy_model)
+        {
+            return Err(ProxyError::ConfigError(format!(
+                "Pi provider '{}' has no models/defaultModel to map proxy placeholder '{}'",
+                provider.id,
+                request_model.as_deref().unwrap_or("")
+            )));
+        }
+        return Ok(request_model);
+    };
+
+    let needs_rewrite = request_model.as_deref().is_none_or(|request| {
+        is_cc_switch_proxy_model(request) || !request.eq_ignore_ascii_case(&upstream)
+    });
+    if needs_rewrite {
+        body["model"] = JsonValue::String(upstream.clone());
+    }
+    Ok(Some(upstream))
+}
+
 pub fn resolve_codex_chat_reasoning_config(
     provider: &Provider,
     body: &JsonValue,
@@ -1742,6 +1847,41 @@ wire_api = "anthropic"
         }));
         let mut body = json!({ "model": "cc-switch-proxy-default", "messages": [] });
         let err = apply_reasonix_upstream_model(&provider, &mut body)
+            .expect_err("unmapped placeholder must fail closed");
+        assert!(matches!(err, ProxyError::ConfigError(_)));
+    }
+
+    #[test]
+    fn pi_object_models_map_proxy_placeholder_to_default_model() {
+        let provider = create_provider(json!({
+            "name": "demo",
+            "baseUrl": "https://example.invalid/v1",
+            "apiKey": "sk-test",
+            "api": "openai-completions",
+            "models": [
+                { "id": "glm-5.2", "name": "GLM 5.2" },
+                { "id": "kimi-k3", "name": "Kimi K3" }
+            ],
+            "defaultModel": "kimi-k3"
+        }));
+        for placeholder in ["cc-switch-proxy-default", "cc-switch-proxy/default"] {
+            let mut body = json!({ "model": placeholder, "messages": [] });
+            let upstream =
+                apply_pi_upstream_model(&provider, &mut body).expect("placeholder must map");
+            assert_eq!(upstream.as_deref(), Some("kimi-k3"), "placeholder {placeholder}");
+            assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("kimi-k3"));
+        }
+    }
+
+    #[test]
+    fn pi_unmapped_proxy_placeholder_fails_closed() {
+        let provider = create_provider(json!({
+            "name": "empty",
+            "baseUrl": "https://example.invalid/v1",
+            "apiKey": "sk-test"
+        }));
+        let mut body = json!({ "model": "cc-switch-proxy-default", "messages": [] });
+        let err = apply_pi_upstream_model(&provider, &mut body)
             .expect_err("unmapped placeholder must fail closed");
         assert!(matches!(err, ProxyError::ConfigError(_)));
     }

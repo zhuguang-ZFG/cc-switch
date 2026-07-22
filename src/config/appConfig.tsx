@@ -19,6 +19,7 @@ export const APP_IDS: AppId[] = [
   "openclaw",
   "kimicode",
   "reasonix",
+  "pi",
 ];
 
 /** App IDs shown in Skills panels (excludes OpenClaw, which has its own workspace tools) */
@@ -126,5 +127,20 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
       "bg-sky-500/10 ring-1 ring-sky-500/20 hover:bg-sky-500/20 text-sky-600 dark:text-sky-400",
     badgeClass:
       "bg-sky-500/10 text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 border-0 gap-1.5",
+  },
+  pi: {
+    label: "Pi",
+    icon: (
+      <ProviderIcon
+        icon="openai"
+        name="Pi"
+        size={14}
+        showFallback={false}
+      />
+    ),
+    activeClass:
+      "bg-emerald-500/10 ring-1 ring-emerald-500/20 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400",
+    badgeClass:
+      "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 border-0 gap-1.5",
   },
 };

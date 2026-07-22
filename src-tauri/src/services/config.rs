@@ -90,6 +90,7 @@ impl ConfigService {
         Self::sync_current_provider_for_app(config, &AppType::GrokBuild)?;
         Self::sync_current_provider_for_app(config, &AppType::KimiCode)?;
         Self::sync_current_provider_for_app(config, &AppType::Reasonix)?;
+        Self::sync_current_provider_for_app(config, &AppType::Pi)?;
         Ok(())
     }
 
@@ -140,6 +141,9 @@ impl ConfigService {
             }
             AppType::Reasonix => {
                 crate::reasonix_config::apply_switch_defaults(&current_id, &provider.settings_config)?;
+            }
+            AppType::Pi => {
+                crate::pi_config::apply_switch_defaults(&current_id, &provider.settings_config)?;
             }
         }
 

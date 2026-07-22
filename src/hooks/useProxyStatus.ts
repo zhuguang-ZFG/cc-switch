@@ -14,6 +14,7 @@ import type {
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { invalidateHermesProviderCaches } from "@/hooks/useHermes";
 import { invalidateReasonixProviderCaches } from "@/hooks/useReasonix";
+import { invalidatePiProviderCaches } from "@/hooks/usePi";
 import { openclawKeys } from "@/hooks/useOpenClaw";
 
 /**
@@ -153,9 +154,11 @@ export function useProxyStatus() {
                   ? "Kimi Code"
                   : variables.appType === "reasonix"
                     ? "Reasonix"
-                    : variables.appType === "opencode"
-                      ? "OpenCode"
-                      : variables.appType;
+                    : variables.appType === "pi"
+                      ? "Pi"
+                      : variables.appType === "opencode"
+                        ? "OpenCode"
+                        : variables.appType;
 
       toast.success(
         variables.enabled
@@ -177,6 +180,8 @@ export function useProxyStatus() {
         void invalidateHermesProviderCaches(queryClient);
       } else if (variables.appType === "reasonix") {
         void invalidateReasonixProviderCaches(queryClient);
+      } else if (variables.appType === "pi") {
+        void invalidatePiProviderCaches(queryClient);
       } else if (variables.appType === "opencode") {
         queryClient.invalidateQueries({
           queryKey: ["opencodeLiveProviderIds"],
@@ -261,6 +266,7 @@ export function useProxyStatus() {
       takeoverStatus?.grokbuild ||
       takeoverStatus?.kimicode ||
       takeoverStatus?.reasonix ||
+      takeoverStatus?.pi ||
       false,
 
     // 启动/停止（总开关）

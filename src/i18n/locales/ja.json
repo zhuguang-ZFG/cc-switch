@@ -881,7 +881,9 @@
     "kimiConfigDir": "Kimi Code 設定ディレクトリ",
     "browsePlaceholderKimi": "Kimi Code 設定ディレクトリを選択 (~/.kimi-code)",
     "reasonixConfigDir": "Reasonix 設定ディレクトリ",
-    "browsePlaceholderReasonix": "Reasonix 設定ディレクトリを選択（Windows: %APPDATA%\\reasonix）"
+    "browsePlaceholderReasonix": "Reasonix 設定ディレクトリを選択（Windows: %APPDATA%\\reasonix）",
+    "piConfigDir": "Pi 設定ディレクトリ",
+    "browsePlaceholderPi": "Pi agent 設定ディレクトリを選択 (~/.pi/agent)"
   },
   "apps": {
     "claude": "Claude",
@@ -895,7 +897,8 @@
     "openclaw": "OpenClaw",
     "kimicode": "Kimi Code",
     "hermes": "Hermes",
-    "reasonix": "Reasonix"
+    "reasonix": "Reasonix",
+    "pi": "Pi"
   },
   "grokBuild": {
     "apiBackend": "API Backend",
@@ -2200,6 +2203,32 @@
       "chatUrlHint": "任意：Chat Completions の完全 URL を上書き。空なら base_url + /chat/completions を使用。",
       "modelsUrl": "Models URL（任意）",
       "modelsUrlHint": "任意：/models プローブ URL を上書き。空なら自動導出。"
+    }
+  },
+  "pi": {
+    "presets": {
+      "openaiCompatible": "OpenAI 互換",
+      "custom": "カスタム"
+    },
+    "form": {
+      "providerName": "プロバイダー ID",
+      "providerNamePlaceholder": "my-provider",
+      "providerNameHint": "小文字・数字・ハイフンのみ。Pi models.json の providers キーに書き込まれます。",
+      "providerNameRequired": "プロバイダー ID は必須です",
+      "providerNameInvalid": "プロバイダー ID は小文字・数字・ハイフンのみ使用できます",
+      "providerNameDuplicate": "このプロバイダー ID は既に存在します",
+      "baseUrl": "API エンドポイント",
+      "baseUrlHint": "OpenAI 互換 base URL。プロキシ接管時はローカル /pi/v1 を指します。",
+      "baseUrlRequired": "API エンドポイントは必須です",
+      "baseUrlScheme": "http:// または https:// で始まる URL を入力してください",
+      "baseUrlInvalid": "API エンドポイントが有効な URL ではありません",
+      "apiKeyRequired": "API Key は必須です",
+      "models": "モデル",
+      "addModel": "モデルを追加",
+      "fetchModels": "モデル取得",
+      "noModelsFetched": "モデルを取得できませんでした。エンドポイントとキーを確認してください",
+      "modelsRequired": "少なくとも 1 つのモデルを追加してください",
+      "defaultModel": "デフォルトモデル"
     }
   },
   "env": {

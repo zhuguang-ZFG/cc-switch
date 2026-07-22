@@ -62,6 +62,12 @@ const APP_CONFIG: Array<{
     nameKey: "apps.reasonix",
     defaultName: "Reasonix",
   },
+  {
+    id: "pi",
+    icon: "openai",
+    nameKey: "apps.pi",
+    defaultName: "Pi",
+  },
 ];
 
 function isAppVisible(visibleApps: VisibleApps, appId: AppId): boolean {
@@ -87,6 +93,7 @@ export function AppVisibilitySettings({
     openclaw: true,
     kimicode: true,
     reasonix: true,
+    pi: true,
   };
 
   const visibleCount = APP_CONFIG.filter((app) =>

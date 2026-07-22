@@ -158,6 +158,10 @@ impl McpService {
                     &server.server,
                 )?;
             }
+            AppType::Pi => {
+                // Pi MCP is out of scope for phase 1.
+                log::debug!("Pi MCP sync is not implemented yet, skipping");
+            }
         }
         Ok(())
     }
@@ -195,6 +199,9 @@ impl McpService {
             }
             AppType::Reasonix => {
                 mcp::remove_server_from_reasonix(id)?;
+            }
+            AppType::Pi => {
+                log::debug!("Pi MCP remove is not implemented yet, skipping");
             }
         }
         Ok(())

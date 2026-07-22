@@ -288,7 +288,8 @@ export function ProviderCard({
     appId === "opencode" ||
     appId === "openclaw" ||
     appId === "kimicode" ||
-    appId === "reasonix"
+    appId === "reasonix" ||
+    appId === "pi"
       ? isInConfig
       : isCurrent;
   const autoQueryInterval = shouldAutoQuery

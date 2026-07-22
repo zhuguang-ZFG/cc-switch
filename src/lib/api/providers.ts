@@ -219,6 +219,23 @@ export const providersApi = {
   async importReasonixProvidersFromLive(): Promise<number> {
     return await invoke("import_reasonix_providers_from_live");
   },
+
+  /** Pi live models.json provider IDs */
+  async getPiLiveProviderIds(): Promise<string[]> {
+    return await invoke("get_pi_live_provider_ids");
+  },
+
+  async getPiDefaultProvider(): Promise<string | null> {
+    return await invoke("get_pi_default_provider");
+  },
+
+  async getPiDefaultModel(): Promise<string | null> {
+    return await invoke("get_pi_default_model");
+  },
+
+  async importPiProvidersFromLive(): Promise<number> {
+    return await invoke("import_pi_providers_from_live");
+  },
 };
 
 // ============================================================================

@@ -149,6 +149,7 @@ pub(crate) fn build_provider_from_request(
         AppType::OpenClaw => build_additive_app_settings(request),
         AppType::KimiCode => build_kimi_settings(request),
         AppType::Reasonix => build_reasonix_settings(request),
+        AppType::Pi => build_pi_settings(request),
     };
 
     // Build usage script configuration if provided
@@ -582,6 +583,40 @@ fn build_reasonix_settings(request: &DeepLinkImportRequest) -> serde_json::Value
     if let Some(model) = &request.model {
         config.insert("models".to_string(), json!([model]));
         config.insert("default".to_string(), json!(model));
+    }
+
+    json!(config)
+}
+
+/// Build Pi agent `models.json` provider projection (camelCase openai-completions).
+fn build_pi_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
+    let endpoint = get_primary_endpoint(request);
+    let provider_name = request
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("custom");
+
+    let mut config = serde_json::Map::new();
+    config.insert("name".to_string(), json!(provider_name));
+
+    if !endpoint.is_empty() {
+        config.insert("baseUrl".to_string(), json!(endpoint));
+    }
+
+    if let Some(api_key) = &request.api_key {
+        config.insert("apiKey".to_string(), json!(api_key));
+    }
+
+    config.insert("api".to_string(), json!("openai-completions"));
+
+    if let Some(model) = &request.model {
+        config.insert(
+            "models".to_string(),
+            json!([{ "id": model, "name": model }]),
+        );
+        config.insert("defaultModel".to_string(), json!(model));
     }
 
     json!(config)

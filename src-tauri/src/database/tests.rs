@@ -735,6 +735,65 @@ fn fork_migration_adds_reasonix_proxy_row_without_schema_bump() -> Result<(), Ap
 }
 
 #[test]
+fn fork_migration_adds_pi_proxy_row_without_schema_bump() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    let schema_version = {
+        let conn = lock_conn!(db.conn);
+        Database::get_user_version(&conn)?
+    };
+
+    db.apply_fork_data_migrations()?;
+    db.apply_fork_data_migrations()?;
+
+    let conn = lock_conn!(db.conn);
+    assert_eq!(Database::get_user_version(&conn)?, schema_version);
+    let rows: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'pi'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(rows, 1);
+    let reasonix_rows: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'reasonix'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(reasonix_rows, 1, "pi migration must retain reasonix");
+    let defaults: (i64, i64, i64, i64, i64) = conn.query_row(
+        "SELECT max_retries, streaming_first_byte_timeout, streaming_idle_timeout,
+                circuit_failure_threshold, circuit_min_requests
+         FROM proxy_config WHERE app_type = 'pi'",
+        [],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    assert_eq!(defaults, (3, 60, 120, 4, 10));
+    let marker: String = conn.query_row(
+        "SELECT value FROM settings WHERE key = 'fork_migration_pi_proxy_v1'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(marker, "done");
+    let table_sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert!(
+        table_sql.contains("'pi'"),
+        "proxy_config CHECK must include pi"
+    );
+    Ok(())
+}
+
+#[test]
 fn fork_migration_rebuilds_kimicode_only_proxy_config_for_reasonix() -> Result<(), AppError> {
     let db = Database::memory()?;
     {

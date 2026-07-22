@@ -881,7 +881,9 @@
     "kimiConfigDir": "Kimi Code config directory",
     "browsePlaceholderKimi": "Select Kimi Code config directory (~/.kimi-code)",
     "reasonixConfigDir": "Reasonix config directory",
-    "browsePlaceholderReasonix": "Select Reasonix config directory (Windows: %APPDATA%\\reasonix)"
+    "browsePlaceholderReasonix": "Select Reasonix config directory (Windows: %APPDATA%\\reasonix)",
+    "piConfigDir": "Pi config directory",
+    "browsePlaceholderPi": "Select Pi agent config directory (~/.pi/agent)"
   },
   "apps": {
     "claude": "Claude",
@@ -895,7 +897,8 @@
     "openclaw": "OpenClaw",
     "kimicode": "Kimi Code",
     "hermes": "Hermes",
-    "reasonix": "Reasonix"
+    "reasonix": "Reasonix",
+    "pi": "Pi"
   },
   "grokBuild": {
     "apiBackend": "API backend",
@@ -2212,6 +2215,32 @@
       "chatUrlHint": "Optional full Chat Completions URL override; leave empty to use base_url + /chat/completions.",
       "modelsUrl": "Models URL (optional)",
       "modelsUrlHint": "Optional /models probe URL override; leave empty to auto-derive."
+    }
+  },
+  "pi": {
+    "presets": {
+      "openaiCompatible": "OpenAI Compatible",
+      "custom": "Custom"
+    },
+    "form": {
+      "providerName": "Provider ID",
+      "providerNamePlaceholder": "my-provider",
+      "providerNameHint": "Lowercase letters, numbers, and hyphens only. Written as the providers key in Pi models.json.",
+      "providerNameRequired": "Provider ID is required",
+      "providerNameInvalid": "Provider ID may only contain lowercase letters, numbers, and hyphens",
+      "providerNameDuplicate": "This provider ID already exists",
+      "baseUrl": "API endpoint",
+      "baseUrlHint": "OpenAI-compatible base URL. Proxy takeover points this to local /pi/v1.",
+      "baseUrlRequired": "API endpoint is required",
+      "baseUrlScheme": "URL must start with http:// or https://",
+      "baseUrlInvalid": "API endpoint is not a valid URL",
+      "apiKeyRequired": "API Key is required",
+      "models": "Models",
+      "addModel": "Add model",
+      "fetchModels": "Fetch models",
+      "noModelsFetched": "No models returned; check the endpoint and API key",
+      "modelsRequired": "Add at least one model",
+      "defaultModel": "Default model"
     }
   },
   "env": {

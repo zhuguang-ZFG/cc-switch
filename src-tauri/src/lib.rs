@@ -17,6 +17,7 @@ mod gemini_mcp;
 mod grok_config;
 mod init_status;
 pub mod kimi_config;
+pub mod pi_config;
 pub mod reasonix_config;
 mod lightweight;
 #[cfg(target_os = "linux")]
@@ -1489,6 +1490,11 @@ pub fn run() {
             commands::get_reasonix_live_provider_ids,
             commands::get_reasonix_live_provider,
             commands::get_reasonix_default_model,
+            commands::import_pi_providers_from_live,
+            commands::get_pi_live_provider_ids,
+            commands::get_pi_live_provider,
+            commands::get_pi_default_provider,
+            commands::get_pi_default_model,
             commands::get_kimicode_live_provider_ids,
             commands::get_kimicode_live_provider,
             commands::get_kimicode_default_model,
@@ -1787,7 +1793,8 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 // Must include every app that supports proxy takeover. Omitting an app means
 // its `proxy_config.enabled=true` survives a restart without re-takeover
 // (Kimi would keep a dead local route in config.toml).
-const PROXY_STARTUP_APP_TYPES: [&str; 5] = ["claude", "codex", "grokbuild", "kimicode", "reasonix"];
+const PROXY_STARTUP_APP_TYPES: [&str; 6] =
+    ["claude", "codex", "grokbuild", "kimicode", "reasonix", "pi"];
 
 async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static str> {
     let mut apps = Vec::new();

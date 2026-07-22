@@ -881,7 +881,9 @@
     "kimiConfigDir": "Kimi Code 配置目录",
     "browsePlaceholderKimi": "选择 Kimi Code 配置目录 (~/.kimi-code)",
     "reasonixConfigDir": "Reasonix 配置目录",
-    "browsePlaceholderReasonix": "选择 Reasonix 配置目录（Windows: %APPDATA%\\reasonix）"
+    "browsePlaceholderReasonix": "选择 Reasonix 配置目录（Windows: %APPDATA%\\reasonix）",
+    "piConfigDir": "Pi 配置目录",
+    "browsePlaceholderPi": "选择 Pi agent 配置目录 (~/.pi/agent)"
   },
   "apps": {
     "claude": "Claude",
@@ -895,7 +897,8 @@
     "openclaw": "OpenClaw",
     "kimicode": "Kimi Code",
     "hermes": "Hermes",
-    "reasonix": "Reasonix"
+    "reasonix": "Reasonix",
+    "pi": "Pi"
   },
   "grokBuild": {
     "apiBackend": "API Backend",
@@ -2212,6 +2215,32 @@
       "chatUrlHint": "可选：完全覆盖 Chat Completions 请求 URL；留空则使用 base_url + /chat/completions。",
       "modelsUrl": "Models URL（可选）",
       "modelsUrlHint": "可选：覆盖 /models 探测 URL；留空则自动推导。"
+    }
+  },
+  "pi": {
+    "presets": {
+      "openaiCompatible": "OpenAI 兼容",
+      "custom": "自定义"
+    },
+    "form": {
+      "providerName": "供应商标识",
+      "providerNamePlaceholder": "my-provider",
+      "providerNameHint": "只能使用小写字母、数字和连字符。写入 Pi models.json 的 providers 键。",
+      "providerNameRequired": "请填写供应商标识",
+      "providerNameInvalid": "供应商标识只能使用小写字母、数字和连字符",
+      "providerNameDuplicate": "供应商标识已存在",
+      "baseUrl": "API 端点",
+      "baseUrlHint": "OpenAI-compatible base URL。代理接管时将指向本地 /pi/v1。",
+      "baseUrlRequired": "请填写 API 端点",
+      "baseUrlScheme": "API 端点必须以 http:// 或 https:// 开头",
+      "baseUrlInvalid": "API 端点格式无效",
+      "apiKeyRequired": "请填写 API Key",
+      "models": "模型",
+      "addModel": "添加模型",
+      "fetchModels": "拉取模型",
+      "noModelsFetched": "未拉取到模型，请检查端点与密钥",
+      "modelsRequired": "至少添加一个模型",
+      "defaultModel": "默认模型"
     }
   },
   "env": {

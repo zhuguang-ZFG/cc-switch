@@ -709,6 +709,14 @@ pub async fn handle_reasonix_chat_completions(
         .await
 }
 
+/// Pi agent always enters through the local OpenAI Chat Completions boundary.
+pub async fn handle_pi_chat_completions(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::Pi, "Pi", "pi").await
+}
+
 async fn handle_chat_completions_for_app(
     state: ProxyState,
     request: axum::extract::Request,
@@ -1196,6 +1204,94 @@ pub async fn handle_reasonix_models(
     };
 
     Ok(Json(json!({"object": "list", "data": data})))
+}
+
+/// GET /pi/v1/models — stable catalog for the local Pi proxy ingress.
+pub async fn handle_pi_models(
+    State(state): State<ProxyState>,
+) -> Result<Json<Value>, ProxyError> {
+    let db_enabled = state
+        .db
+        .get_proxy_config_for_app("pi")
+        .await
+        .map(|c| c.enabled)
+        .unwrap_or(false);
+    let live_takeover = crate::pi_config::is_proxy_takeover_active().unwrap_or(false);
+    let takeover = db_enabled || live_takeover;
+    let data = if takeover {
+        let routed = state
+            .provider_router
+            .select_providers("pi")
+            .await
+            .unwrap_or_default();
+        let providers = if routed.is_empty() {
+            state
+                .db
+                .get_all_providers("pi")
+                .map_err(|e| ProxyError::Internal(format!("读取 Pi 供应商失败: {e}")))?
+                .into_values()
+                .collect::<Vec<_>>()
+        } else {
+            routed
+        };
+        pi_models_from_db_providers(&providers)
+    } else {
+        let providers = crate::pi_config::get_providers()
+            .map_err(|e| ProxyError::Internal(format!("读取 Pi 模型目录失败: {e}")))?;
+        let mut data = Vec::new();
+        for (name, value) in providers {
+            if name == crate::pi_config::PI_PROXY_PROVIDER || name.starts_with("cc-switch-") {
+                continue;
+            }
+            for id in pi_model_ids_from_settings(&value) {
+                data.push(json!({"id": id, "object": "model", "owned_by": name}));
+            }
+        }
+        data
+    };
+
+    Ok(Json(json!({"object": "list", "data": data})))
+}
+
+fn pi_model_ids_from_settings(settings: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(models) = settings.get("models").and_then(Value::as_array) {
+        for model in models {
+            if let Some(id) = model.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                ids.push(id.to_string());
+            } else if let Some(id) = model
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
+fn pi_models_from_db_providers(providers: &[crate::provider::Provider]) -> Vec<Value> {
+    let mut data = Vec::new();
+    for provider in providers {
+        if provider.id == crate::pi_config::PI_PROXY_PROVIDER
+            || provider.id.starts_with("cc-switch-")
+        {
+            continue;
+        }
+        for id in pi_model_ids_from_settings(&provider.settings_config) {
+            if id == crate::pi_config::PI_PROXY_MODEL {
+                continue;
+            }
+            data.push(json!({
+                "id": id,
+                "object": "model",
+                "owned_by": provider.id,
+            }));
+        }
+    }
+    data
 }
 
 /// 处理 /v1/responses 请求（OpenAI Responses API - Codex CLI 透传）

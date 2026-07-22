@@ -56,6 +56,8 @@ export interface ProxyTakeoverStatus {
   kimicode: boolean;
   /** Reasonix local proxy takeover */
   reasonix: boolean;
+  /** Pi agent local proxy takeover */
+  pi?: boolean;
   /** Reasonix custom 代理且 no_proxy 未覆盖 loopback 时的风险提示（后端检测） */
   reasonix_proxy_warning?: string;
 }

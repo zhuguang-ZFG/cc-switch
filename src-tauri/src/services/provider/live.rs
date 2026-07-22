@@ -189,6 +189,8 @@ pub(crate) fn provider_exists_in_live_config(
         }
         AppType::Reasonix => crate::reasonix_config::get_providers()
             .map(|providers| providers.contains_key(provider_id)),
+        AppType::Pi => crate::pi_config::get_providers()
+            .map(|providers| providers.contains_key(provider_id)),
         _ => Ok(false),
     }
 }
@@ -518,6 +520,7 @@ fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet:
         | AppType::OpenClaw
         | AppType::KimiCode
         | AppType::Reasonix
+        | AppType::Pi
         | AppType::ClaudeDesktop => false,
     }
 }
@@ -584,6 +587,7 @@ pub(crate) fn remove_common_config_from_settings(
         | AppType::OpenClaw
         | AppType::KimiCode
         | AppType::Reasonix
+        | AppType::Pi
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
@@ -633,6 +637,7 @@ fn apply_common_config_to_settings(
         | AppType::OpenClaw
         | AppType::KimiCode
         | AppType::Reasonix
+        | AppType::Pi
         | AppType::ClaudeDesktop => Ok(settings.clone()),
     }
 }
@@ -1381,6 +1386,10 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
                 provider.id
             );
         }
+        AppType::Pi => {
+            crate::pi_config::set_provider(&provider.id, provider.settings_config.clone())?;
+            log::debug!("Pi provider '{}' written to live config", provider.id);
+        }
     }
     Ok(())
 }
@@ -1480,6 +1489,11 @@ fn sync_all_providers_to_takeover_backup(
                 &provider.id,
                 &provider.settings_config,
             ),
+            AppType::Pi => crate::pi_config::upsert_provider_into_snapshot_text(
+                &text,
+                &provider.id,
+                &provider.settings_config,
+            ),
             _ => continue,
         };
 
@@ -1527,6 +1541,11 @@ fn sync_all_providers_to_takeover_backup(
                         &current.id,
                         &current.settings_config,
                     ),
+                    AppType::Pi => crate::pi_config::apply_switch_defaults_to_snapshot_text(
+                        &text,
+                        &current.id,
+                        &current.settings_config,
+                    ),
                     _ => Ok(text.clone()),
                 };
                 match switched {
@@ -1560,13 +1579,19 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
         AppType::Reasonix => {
             crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false)
         }
+        AppType::Pi => crate::pi_config::is_proxy_takeover_active().unwrap_or(false),
         _ => false,
     };
 
-    // Kimi/Reasonix under takeover: bulk-upsert into the restore backup without
+    // Kimi/Reasonix/Pi under takeover: bulk-upsert into the restore backup without
     // calling apply_switch_defaults per provider (that would stomp default_model
     // to whichever HashMap entry is last). Current SSOT is applied once at end.
-    if takeover_owns_live && matches!(app_type, AppType::KimiCode | AppType::Reasonix) {
+    if takeover_owns_live
+        && matches!(
+            app_type,
+            AppType::KimiCode | AppType::Reasonix | AppType::Pi
+        )
+    {
         synced_count = sync_all_providers_to_takeover_backup(state, app_type, &providers)?;
         log::info!("Synced {synced_count} {app_type:?} providers to takeover backup");
         return Ok(());
@@ -1795,6 +1820,17 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
                 .map_err(|e| AppError::io(&config_path, e))?;
             Ok(serde_json::json!({ "config": text }))
         }
+        AppType::Pi => {
+            if !crate::pi_config::has_live_config() {
+                return Err(AppError::localized(
+                    "pi.config.missing",
+                    "Pi 配置文件不存在",
+                    "Pi configuration file not found",
+                ));
+            }
+            let text = crate::pi_config::read_snapshot_text()?;
+            Ok(serde_json::json!({ "config": text }))
+        }
     }
 }
 
@@ -1860,8 +1896,12 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
                 "Claude Desktop 3P config cannot be imported through the generic import flow. Use 'Import compatible providers from Claude' instead.",
             ));
         }
-        // OpenCode, OpenClaw and Hermes use additive mode and are handled by early return above
-        AppType::OpenCode | AppType::OpenClaw | AppType::KimiCode | AppType::Reasonix => {
+        // OpenCode, OpenClaw, Kimi, Reasonix, Pi use additive mode (early return above)
+        AppType::OpenCode
+        | AppType::OpenClaw
+        | AppType::KimiCode
+        | AppType::Reasonix
+        | AppType::Pi => {
             unreachable!("additive mode apps are handled by early return")
         }
     };
@@ -2371,6 +2411,20 @@ pub fn remove_reasonix_provider_from_live(provider_id: &str) -> Result<(), AppEr
 
     crate::reasonix_config::remove_provider(provider_id)?;
     log::info!("Reasonix provider '{provider_id}' removed from live config");
+    Ok(())
+}
+
+/// Remove a Pi provider from live models.json / auth.json.
+pub fn remove_pi_provider_from_live(provider_id: &str) -> Result<(), AppError> {
+    if !crate::pi_config::get_pi_dir().exists() {
+        log::debug!(
+            "Pi config directory doesn't exist, skipping removal of '{provider_id}'"
+        );
+        return Ok(());
+    }
+
+    crate::pi_config::remove_provider(provider_id)?;
+    log::info!("Pi provider '{provider_id}' removed from live config");
     Ok(())
 }
 
