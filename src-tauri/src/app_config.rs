@@ -120,7 +120,7 @@ pub struct SkillApps {
     pub hermes: bool,
     #[serde(default)]
     pub reasonix: bool,
-    /// Pi agent skills flag (not projected in phase 1).
+    /// Pi agent skills flag（Pi 无 MCP 支持，仅 skills 投影）.
     #[serde(default)]
     pub pi: bool,
 }

@@ -61,7 +61,7 @@ export function AppSwitcher({
     openclaw: "openclaw",
     kimicode: "kimi",
     reasonix: "deepseek",
-    pi: "openai",
+    pi: "pi",
   };
   const appDisplayName: Record<AppId, string> = {
     claude: "Claude Code",

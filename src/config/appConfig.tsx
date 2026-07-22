@@ -30,10 +30,18 @@ export const SKILLS_APP_IDS: AppId[] = [
   "opencode",
   "kimicode",
   "reasonix",
+  "pi",
 ];
 
-/** App IDs shown in MCP panels (excludes OpenClaw, which has its own workspace tools) */
-export const MCP_APP_IDS: AppId[] = [...SKILLS_APP_IDS];
+/** App IDs shown in MCP panels (Pi 无 MCP 支持，不含 pi) */
+export const MCP_APP_IDS: AppId[] = [
+  "claude",
+  "codex",
+  "grokbuild",
+  "opencode",
+  "kimicode",
+  "reasonix",
+];
 
 export const APP_ICON_MAP: Record<AppId, AppConfig> = {
   claude: {
@@ -132,7 +140,7 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
     label: "Pi",
     icon: (
       <ProviderIcon
-        icon="openai"
+        icon="pi"
         name="Pi"
         size={14}
         showFallback={false}

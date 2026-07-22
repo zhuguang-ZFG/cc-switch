@@ -99,6 +99,7 @@ impl Database {
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
             enabled_reasonix BOOLEAN NOT NULL DEFAULT 0,
+            enabled_pi BOOLEAN NOT NULL DEFAULT 0,
             installed_at INTEGER NOT NULL DEFAULT 0,
             content_hash TEXT,
             updated_at INTEGER NOT NULL DEFAULT 0
@@ -549,6 +550,11 @@ impl Database {
                         log::info!("迁移数据库从 v15 到 v16（Skills/MCP 添加 Reasonix 支持）");
                         Self::migrate_v15_to_v16(conn)?;
                         Self::set_user_version(conn, 16)?;
+                    }
+                    16 => {
+                        log::info!("迁移数据库从 v16 到 v17（Skills 添加 Pi 支持）");
+                        Self::migrate_v16_to_v17(conn)?;
+                        Self::set_user_version(conn, 17)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -2193,6 +2199,19 @@ impl Database {
         Ok(())
     }
 
+    /// v16 -> v17: persist Pi enablement for unified Skills (Pi 无 MCP 支持，不动 mcp_servers).
+    fn migrate_v16_to_v17(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "skills")? {
+            Self::add_column_if_missing(
+                conn,
+                "skills",
+                "enabled_pi",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
+        Ok(())
+    }
+
     /// v15 -> v16: persist Reasonix enablement for unified Skills and MCP.
     fn migrate_v15_to_v16(conn: &Connection) -> Result<(), AppError> {
         if Self::table_exists(conn, "mcp_servers")? {
@@ -3800,6 +3819,37 @@ mod tests {
         )?;
         assert_eq!(mcp_values, (1, 1, 0));
         assert_eq!(skill_values, (1, 0, 0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v16_to_v17_adds_pi_flag() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE skills (
+                id TEXT PRIMARY KEY,
+                enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+                enabled_reasonix BOOLEAN NOT NULL DEFAULT 0
+            );",
+        )?;
+        conn.execute(
+            "INSERT INTO skills (id, enabled_codex, enabled_reasonix) VALUES ('skill-1', 1, 1)",
+            [],
+        )?;
+        Database::set_user_version(&conn, 16)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "skills", "enabled_pi")?);
+        // 存量数据保留，新列默认 0；mcp_servers 不受影响（无该表也不报错）
+        let values: (i64, i64, i64) = conn.query_row(
+            "SELECT enabled_codex, enabled_reasonix, enabled_pi FROM skills WHERE id = 'skill-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(values, (1, 1, 0));
 
         Ok(())
     }
