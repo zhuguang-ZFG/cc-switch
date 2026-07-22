@@ -1309,6 +1309,10 @@ impl RequestForwarder {
         };
 
         // 与 CCH 对齐：请求前不做 thinking 主动改写（仅保留兼容入口）
+        // 角色路由标记：子代理 brief 里的 [[route:MODEL]] 显式指定上游模型。
+        // 优先于 provider 目录映射，未携带标记时为零成本 no-op。
+        let mapped_body = super::role_router::apply_role_route(mapped_body);
+
         let mut mapped_body = normalize_thinking_type(mapped_body);
 
         // Grok Build exposes a stable client-side model profile in config.toml.
