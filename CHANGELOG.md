@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Pi agent — 9th managed app)
+
+- **Pi agent is now a first-class managed app** (`app_type = "pi"`, commits `e20af799..44814712`): provider CRUD with live projection into `~/.pi/agent/models.json` + typed `auth.json`, additive switch, lossless proxy takeover via `/pi/v1` (chat completions + models), failover queue, Skills panel sync to `~/.pi/agent/skills`, tray section, env check with `pi update self`, and usage statistics (new `session_usage_pi.rs` incremental jsonl sync + dashboard/i18n slots in four locales).
+- **Role-level model routing via `[[route:MODEL]]` markers** (`proxy/role_router.rs`): a marker in a subagent brief (chat `messages` or Responses `input`) rewrites the request model before upstream mapping, giving clients without per-subagent model support (kimi-code #568) true per-role routing. 7 unit tests.
+
+### Fixed (Pi / Kimi hardening rounds)
+
+- **`CodexAdapter::extract_base_url` accepts camelCase `baseUrl`** — Pi providers store camelCase throughout, so `/pi/v1` forwarding previously failed 100% with ConfigError and burned the failover queue; plus 17 frontend tsc errors closed (PiFormFields signatures, AppSwitcher registration, `Record<AppId>` slots) and provider id derivation / cache invalidation paths.
+- **Pi config layer losslessness**: deep-merge with the live provider entry (live model metadata and compat keys preserved; normalize fill-defaults no longer clobber explicit live values), shape validation aborts on non-object auth/settings instead of silently resetting, remove/clear paths always persist auth+settings cleanup, live import fail-closed (empty baseUrl / empty models / non-openai-completions), reimport preserves DB-side defaultModel, and ProviderForm preserved-merge (was a lossy rebuild).
+- **Directory/settings robustness**: per-app `getConfigDir` failures degrade individually instead of blanking the whole page; `piConfigDir` survives the settings refresh/save cycle; env check lists Pi.
+- **Kimi config hardening**: the `cc-switch-proxy` projection is managed-protected (UI edits/removals rejected, takeover-restore symmetry preserved), and `ensure_table_mut`/`ensure_nested_table_mut` error on non-table shapes instead of silently resetting whole sections.
+- **Pi guard tightening**: polluted-backup detection uses conjunctive semantics (provider name + `/pi/v1`, or `PROXY_MANAGED` alone) so chain-proxy backups are not false-positives; `sync_current_providers_to_live` short-circuits additive apps during takeover.
+
 ### Documentation
 
 - **README tool lists now include Reasonix (8 tools)** across all four languages (EN/ZH/JA/DE): title, intro, feature bullets, and FAQ previously listed only seven tools and predated the Reasonix app type.

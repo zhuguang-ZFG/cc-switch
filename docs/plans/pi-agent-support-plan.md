@@ -50,3 +50,22 @@
 - models.json 与 models-store.json 的关系要写对（pi 同时读两个，provider 注册只写 models.json）
 - auth.json 的 typed credential 格式是硬约束（本次踩过）
 - pi 无官方"多 provider 切换"概念，current 语义 = 改 models.json 里 defaultProvider/defaultModel
+
+---
+
+## 实施状态（2026-07-23，已完成）
+
+本规划已全部落地并超出原范围，见 CHANGELOG [Unreleased] → Added (Pi agent)：
+
+- `AppType::Pi` + DB v17 迁移（skills.enabled_pi）+ fork 迁移（proxy_config 'pi' 行）
+- `pi_config.rs`：deep-merge 无损写入、形状校验、typed auth、接管/恢复
+- 代理 `/pi/v1`（chat/completions + models），camelCase baseUrl 识别
+- Skills 面板（MCP 故意除外：pi 核心无 MCP）、failover UI、使用统计（session_usage_pi）
+- 前端全套：表单/预设/环境检查/托盘/用量看板/四语言 i18n
+- 关联产出：`proxy/role_router.rs`（`[[route:MODEL]]` 角色级模型路由标记）
+
+## 后续候选（未做）
+
+- 通用供应商同步到 pi（后端 `to_pi_provider`）
+- Profiles/项目分组、Session 管理页、Deeplink `app=pi` 导入
+- 非 openai-completions 协议的协议桥（导入已 fail-closed 拦截）

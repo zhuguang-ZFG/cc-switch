@@ -2,7 +2,7 @@
 
 # CC Switch
 
-### The All-in-One Manager for Claude Code, Claude Desktop, Codex, Grok Build, OpenCode, OpenClaw, Kimi Code & Reasonix
+### The All-in-One Manager for Claude Code, Claude Desktop, Codex, Grok Build, OpenCode, OpenClaw, Kimi Code, Reasonix & Pi
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
@@ -195,11 +195,11 @@ TeamoRouter also offers enterprise features including centralized billing, team 
 
 ## Why CC Switch?
 
-Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex, Grok Build, OpenCode, OpenClaw, Kimi Code, and Reasonix — but each has its own configuration format. Switching API providers means manually editing JSON and TOML files, and there is no unified way to manage MCP and Skills across multiple tools.
+Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex, Grok Build, OpenCode, OpenClaw, Kimi Code, Reasonix, and Pi — but each has its own configuration format. Switching API providers means manually editing JSON and TOML files, and there is no unified way to manage MCP and Skills across multiple tools.
 
 **CC Switch** gives you a single desktop app to manage all supported AI tools. Instead of editing config files by hand, you get a visual interface to import providers with one click, switch between them instantly, with 50+ built-in provider presets, unified MCP and Skills management, and system tray quick switching — all backed by a reliable SQLite database with atomic writes that protect your configs from corruption.
 
-- **One App, Eight Tools** — Manage Claude Code, Claude Desktop, Codex, Grok Build, OpenCode, OpenClaw, Kimi Code, and Reasonix from a single interface
+- **One App, Nine Tools** — Manage Claude Code, Claude Desktop, Codex, Grok Build, OpenCode, OpenClaw, Kimi Code, Reasonix, and Pi from a single interface
 - **No More Manual Editing** — 50+ provider presets including AWS Bedrock, NVIDIA NIM, and community relays; just pick and switch
 - **Unified MCP & Skills Management** — One panel to manage MCP servers and Skills across Claude, Codex, Grok Build, and OpenCode with bidirectional sync
 - **System Tray Quick Switch** — Switch providers instantly from the tray menu, no need to open the full app
@@ -219,7 +219,7 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 
 ### Provider Management
 
-- **8 supported tools, 50+ presets** — Claude Code, Claude Desktop, Codex, Grok Build, OpenCode, OpenClaw, Kimi Code, Reasonix; copy your key and import with one click
+- **9 supported tools, 50+ presets** — Claude Code, Claude Desktop, Codex, Grok Build, OpenCode, OpenClaw, Kimi Code, Reasonix, Pi; copy your key and import with one click
 - **Universal providers** — One config syncs to Claude Code and Codex
 - One-click switching, system tray quick access, drag-and-drop sorting, import/export
 
@@ -254,7 +254,7 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 <details>
 <summary><strong>Which AI tools does CC Switch support?</strong></summary>
 
-CC Switch supports eight tools: **Claude Code**, **Claude Desktop**, **Codex**, **Grok Build**, **OpenCode**, **OpenClaw**, **Kimi Code**, and **Reasonix**. Each tool has dedicated provider presets and configuration management.
+CC Switch supports nine tools: **Claude Code**, **Claude Desktop**, **Codex**, **Grok Build**, **OpenCode**, **OpenClaw**, **Kimi Code**, **Reasonix**, and **Pi**. Each tool has dedicated provider presets and configuration management.
 
 </details>
 
