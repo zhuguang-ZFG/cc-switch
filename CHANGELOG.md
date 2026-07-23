@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Pi agent — feature completion)
+
+- **Deeplink import for `app=pi`** (`1a4497ed`): the parser accepts `app=pi` in provider/prompt deeplinks and MCP `apps=` lists, `build_pi_settings` is wired for additive base64 config merge, `parse_mcp_apps` maps `pi`, and the import dialog previews pi configs. Parse + DB-persist round-trip tests.
+- **Universal provider → Pi conversion** (`253e33f5`): `to_pi_provider` (camelCase `contextWindow`/`maxTokens`) gated on `apps.pi`, universal-to-pi sync/delete of child providers, the universal tab is now visible for pi in AddProviderDialog, and the form modal gains a pi toggle + model config + JSON preview. i18n in 4 locales.
+- **Profiles （项目分组） + Session manager support for Pi** (`a7c272aa`): `ProfileScope::Pi` with a `PerApp` slot, tray label, and current-provider guard via pi `settings.json` `defaultProvider`; a new `session_manager/providers/pi.rs` (slug-dir scan, header-uuid ids, first-user-message titles, containment-checked delete) wired into the page filter. Tests for slot merge and scan/load/delete round-trips.
+
+### Fixed (Kimi / Reasonix / usage hardening)
+
+- **W1 — provider save no longer deletes hand-authored Kimi models** (`f4f9fb7f`): the stale-model sweep now only removes pure cc-switch projections (provider/model/display_name/max_context_size keys only); user models carrying extra keys (capabilities etc.) survive.
+- **W8 — `KimiOAuthToken` preserves unknown fields**: a `#[serde(flatten)] extra` map keeps future CLI fields across the read-modify-write round trip; refresh/login paths merge incoming unknown payload fields.
+- **W2 — inline-table merge losslessness** (`9e0e2e2c`): `ensure_nested_table_mut` converts inline tables (`oauth = {...}`) to regular tables in place, so nested merges preserve existing keys on the CLI's own valid output shape.
+- **W7 — camelCase keys blocked from TOML**: model merge skips `displayName`/`maxContextSize`/`contextLength` and maps them to the snake_case keys the CLI expects, preventing unknown-key writes.
+- **W3 — takeover backups read under the write lock**: `read_config_text_locked` (kimi + reasonix) so a concurrent `set_provider` cannot leave a torn snapshot in the restore backup.
+- **Kimi wire sync no longer misses appends on coarse mtime** (`7c1aa946`): the `<=` skip check wrongly reported files as unchanged when Windows mtime granularity left `file_modified == last_modified` after an append; a strict `<` comparison plus line-level offset dedup keeps it correct and idempotent.
+- **Test suite un-broken**: 13 `McpApps` initializers now use `..Default::default()` so future fields no longer break compilation, and `KimiOAuthToken` test initializers updated for the `extra` field.
+
 ### Added (Pi agent — 9th managed app)
 
 - **Pi agent is now a first-class managed app** (`app_type = "pi"`, commits `e20af799..44814712`): provider CRUD with live projection into `~/.pi/agent/models.json` + typed `auth.json`, additive switch, lossless proxy takeover via `/pi/v1` (chat completions + models), failover queue, Skills panel sync to `~/.pi/agent/skills`, tray section, env check with `pi update self`, and usage statistics (new `session_usage_pi.rs` incremental jsonl sync + dashboard/i18n slots in four locales).
