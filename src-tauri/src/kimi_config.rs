@@ -223,6 +223,16 @@ pub fn read_config_text() -> Result<String, AppError> {
     fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))
 }
 
+/// W3: lock-aware variant for takeover backups. Reading without the write
+/// lock can capture a torn state while a concurrent `set_provider` write is
+/// in flight, and that torn snapshot then becomes the restore backup.
+pub fn read_config_text_locked() -> Result<String, AppError> {
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
+    read_config_text()
+}
+
 /// Restore an exact TOML snapshot captured before proxy takeover.
 pub fn write_config_text(text: &str) -> Result<(), AppError> {
     let _guard = write_lock()
@@ -465,9 +475,22 @@ fn ensure_table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut T
 
 fn ensure_nested_table_mut<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Table, AppError> {
     if parent.contains_key(key) && !parent[key].is_table() {
-        return Err(AppError::Message(format!(
-            "Kimi config.toml 的条目 '{key}' 形状异常（非表），已中止写入以防清盘；请手动检查该文件"
-        )));
+        // W2: an inline table (`oauth = { key = "..." }`) is a valid shape the
+        // CLI itself writes. Convert it to a regular table in place so nested
+        // merges preserve existing keys instead of erroring out (or, before
+        // the C1 guard, silently rebuilding and dropping fields).
+        if let Some(inline) = parent[key].as_value().and_then(|v| v.as_inline_table()) {
+            let mut t = Table::new();
+            for (k, v) in inline {
+                t.insert(k, Item::Value(v.clone()));
+            }
+            t.set_implicit(false);
+            parent.insert(key, Item::Table(t));
+        } else {
+            return Err(AppError::Message(format!(
+                "Kimi config.toml 的条目 '{key}' 形状异常（非表），已中止写入以防清盘；请手动检查该文件"
+            )));
+        }
     }
     if !parent.contains_key(key) {
         let mut t = Table::new();
@@ -800,19 +823,32 @@ fn upsert_provider_into_document(
                 merge_json_object_into_table(
                     mt,
                     object,
-                    &["id", "alias", "name", "context_length"],
+                    // W7: skip camelCase duplicates too — a DB projection carrying
+                    // `displayName`/`maxContextSize` must not be written into TOML
+                    // as unknown keys the CLI cannot parse.
+                    &[
+                        "id",
+                        "alias",
+                        "name",
+                        "context_length",
+                        "displayName",
+                        "maxContextSize",
+                        "contextLength",
+                    ],
                 )?;
             }
             mt.insert("provider", Item::Value(TomlEditValue::from(name)));
             // Map the form's `name` to the CLI's `display_name` so custom
             // model display names survive the round trip (schema.ts maps
             // display_name → displayName).
-            if let Some(display) = model
+            let display = model
                 .get("name")
                 .and_then(Value::as_str)
+                .or_else(|| model.get("displayName").and_then(Value::as_str))
+                .or_else(|| model.get("display_name").and_then(Value::as_str))
                 .map(str::trim)
-                .filter(|s| !s.is_empty())
-            {
+                .filter(|s| !s.is_empty());
+            if let Some(display) = display {
                 mt.insert("display_name", Item::Value(TomlEditValue::from(display)));
             }
             let model_id = model
@@ -832,6 +868,13 @@ fn upsert_provider_into_document(
                 .or_else(|| {
                     model
                         .get("max_context_size")
+                        .and_then(|v| v.as_u64())
+                        .map(|u| u as i64)
+                })
+                .or_else(|| model.get("maxContextSize").and_then(|v| v.as_i64()))
+                .or_else(|| {
+                    model
+                        .get("maxContextSize")
                         .and_then(|v| v.as_u64())
                         .map(|u| u as i64)
                 })

@@ -1402,7 +1402,9 @@ impl ProxyService {
         }
 
         // Kimi Code uses a lossless TOML snapshot rather than a JSON projection.
-        if let Ok(text) = crate::kimi_config::read_config_text() {
+        // W3: read under the write lock so a concurrent set_provider cannot
+        // leave a torn snapshot in the restore backup.
+        if let Ok(text) = crate::kimi_config::read_config_text_locked() {
             if !text.trim().is_empty()
                 && !crate::kimi_config::is_proxy_takeover_active().unwrap_or(false)
             {
@@ -1414,7 +1416,7 @@ impl ProxyService {
         }
 
         // Reasonix uses a lossless TOML snapshot rather than a JSON projection.
-        if let Ok(text) = crate::reasonix_config::read_config_text() {
+        if let Ok(text) = crate::reasonix_config::read_config_text_locked() {
             if !text.trim().is_empty()
                 && !crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false)
             {
@@ -1446,7 +1448,7 @@ impl ProxyService {
     /// 备份指定应用的 Live 配置（严格模式：目标配置不存在则返回错误）
     async fn backup_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
         if matches!(app_type, AppType::KimiCode) {
-            let text = crate::kimi_config::read_config_text()
+            let text = crate::kimi_config::read_config_text_locked()
                 .map_err(|e| format!("读取 Kimi Code 配置失败: {e}"))?;
             if text.trim().is_empty() {
                 return Err("Kimi Code config.toml 不存在或为空".to_string());
@@ -1460,7 +1462,7 @@ impl ProxyService {
             return Ok(());
         }
         if matches!(app_type, AppType::Reasonix) {
-            let text = crate::reasonix_config::read_config_text()
+            let text = crate::reasonix_config::read_config_text_locked()
                 .map_err(|e| format!("读取 Reasonix 配置失败: {e}"))?;
             if text.trim().is_empty() {
                 return Err("Reasonix config.toml 不存在或为空".to_string());

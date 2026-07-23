@@ -187,6 +187,14 @@ pub fn read_config_text() -> Result<String, AppError> {
     fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))
 }
 
+/// W3: lock-aware variant for takeover backups — see kimi_config::read_config_text_locked.
+pub fn read_config_text_locked() -> Result<String, AppError> {
+    let _guard = write_lock()
+        .lock()
+        .map_err(|_| AppError::Message("Reasonix config write lock poisoned".into()))?;
+    read_config_text()
+}
+
 pub fn write_config_text(text: &str) -> Result<(), AppError> {
     let _guard = write_lock()
         .lock()
