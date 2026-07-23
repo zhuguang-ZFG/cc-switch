@@ -48,6 +48,7 @@ pub struct CurrentProfileIds {
     pub codex: Option<String>,
     pub kimicode: Option<String>,
     pub reasonix: Option<String>,
+    pub pi: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +118,10 @@ pub fn list_profiles(state: State<'_, AppState>) -> Result<ProfilesResponse, Str
         reasonix: state
             .db
             .get_current_profile_id(ProfileScope::Reasonix.as_str())
+            .map_err(|e| e.to_string())?,
+        pi: state
+            .db
+            .get_current_profile_id(ProfileScope::Pi.as_str())
             .map_err(|e| e.to_string())?,
     };
     Ok(ProfilesResponse {

@@ -11,6 +11,7 @@ const emptySlots = {
   codex: null,
   kimicode: null,
   reasonix: null,
+  pi: null,
 };
 
 describe("Kimi Code profile scope", () => {
@@ -56,6 +57,29 @@ describe("Reasonix profile scope", () => {
 
     expect(hasScopeSnapshot(profile, "reasonix")).toBe(true);
     expect(hasScopeSnapshot(profile, "kimicode")).toBe(false);
+    expect(hasScopeSnapshot(profile, "claude")).toBe(false);
+  });
+});
+
+describe("Pi profile scope", () => {
+  it("maps the Pi app to its own profile scope", () => {
+    expect(APP_PROFILE_SCOPE.pi).toBe("pi");
+  });
+
+  it("detects only Pi snapshot slots", () => {
+    const profile: Profile = {
+      id: "project-pi",
+      name: "Pi Project",
+      payload: {
+        providers: { ...emptySlots, pi: "pi-provider" },
+        mcp: { ...emptySlots },
+        skills: { ...emptySlots },
+        prompts: { ...emptySlots },
+      },
+    };
+
+    expect(hasScopeSnapshot(profile, "pi")).toBe(true);
+    expect(hasScopeSnapshot(profile, "reasonix")).toBe(false);
     expect(hasScopeSnapshot(profile, "claude")).toBe(false);
   });
 });

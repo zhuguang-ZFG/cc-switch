@@ -1910,7 +1910,8 @@
       "claude-desktop": "專案：一鍵切換 Claude Desktop 的供應商",
       "codex": "專案：一鍵切換 Codex 的供應商 / MCP / Skills / 記憶檔案",
       "kimicode": "專案：一鍵切換 Kimi Code 的供應商 / MCP / Skills / 記憶檔案",
-      "reasonix": "專案：一鍵切換 Reasonix 的供應商 / MCP / Skills / 記憶檔案"
+      "reasonix": "專案：一鍵切換 Reasonix 的供應商 / MCP / Skills / 記憶檔案",
+      "pi": "專案：一鍵切換 Pi 的供應商 / Skills / 記憶檔案"
     },
     "none": "不使用專案",
     "searchPlaceholder": "搜尋專案",
@@ -1921,7 +1922,8 @@
       "claude-desktop": "把 Claude Desktop 目前的供應商儲存為一個專案，之後可一鍵切換。",
       "codex": "把 Codex 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。",
       "kimicode": "把 Kimi Code 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。",
-      "reasonix": "把 Reasonix 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。"
+      "reasonix": "把 Reasonix 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。",
+      "pi": "把 Pi 目前的供應商、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。"
     },
     "manage": "管理專案…",
     "manageTitle": "管理專案",

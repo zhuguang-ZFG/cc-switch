@@ -88,7 +88,8 @@ type ProviderFilter =
   | "opencode"
   | "openclaw"
   | "kimicode"
-  | "reasonix";
+  | "reasonix"
+  | "pi";
 
 type SessionListViewMode = "flat" | "grouped";
 
@@ -1136,6 +1137,16 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                   size={14}
                                 />
                                 <span>Reasonix</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="pi">
+                              <div className="flex items-center gap-2">
+                                <ProviderIcon
+                                  icon="pi"
+                                  name="pi"
+                                  size={14}
+                                />
+                                <span>Pi</span>
                               </div>
                             </SelectItem>
                           </SelectContent>

@@ -12,6 +12,7 @@ export const APP_PROFILE_SCOPE: Partial<Record<AppId, ProfileScope>> = {
   codex: "codex",
   kimicode: "kimicode",
   reasonix: "reasonix",
+  pi: "pi",
 };
 
 /** 分组内的 payload 槽位 key（后端 ProfileScope::apps 的前端镜像） */
@@ -21,6 +22,7 @@ const SCOPE_SLOT_KEYS: Record<ProfileScope, (keyof PerApp<unknown>)[]> = {
   codex: ["codex"],
   kimicode: ["kimicode"],
   reasonix: ["reasonix"],
+  pi: ["pi"],
 };
 
 /**

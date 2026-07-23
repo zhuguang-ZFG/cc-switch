@@ -1938,7 +1938,8 @@
       "claude-desktop": "Projects: switch the Claude Desktop provider in one click",
       "codex": "Projects: switch the Codex provider / MCP / Skills / memory files in one click",
       "kimicode": "Projects: switch the Kimi Code provider / MCP / Skills / memory files in one click",
-      "reasonix": "Projects: switch the Reasonix provider / MCP / Skills / memory files in one click"
+      "reasonix": "Projects: switch the Reasonix provider / MCP / Skills / memory files in one click",
+      "pi": "Projects: switch the Pi provider / Skills / memory files in one click"
     },
     "none": "No project",
     "searchPlaceholder": "Search projects",
@@ -1949,7 +1950,8 @@
       "claude-desktop": "Save the current Claude Desktop provider as a project you can switch to later.",
       "codex": "Save the current Codex provider, MCP, Skills and memory file configuration as a project you can switch to later.",
       "kimicode": "Save the current Kimi Code provider, MCP, Skills and memory file configuration as a project you can switch to later.",
-      "reasonix": "Save the current Reasonix provider, MCP, Skills and memory file configuration as a project you can switch to later."
+      "reasonix": "Save the current Reasonix provider, MCP, Skills and memory file configuration as a project you can switch to later.",
+      "pi": "Save the current Pi provider, Skills and memory file configuration as a project you can switch to later."
     },
     "manage": "Manage projects…",
     "manageTitle": "Manage Projects",

@@ -1938,7 +1938,8 @@
       "claude-desktop": "项目：一键切换 Claude Desktop 的供应商",
       "codex": "项目：一键切换 Codex 的供应商 / MCP / Skills / 记忆文件",
       "kimicode": "项目：一键切换 Kimi Code 的供应商 / MCP / Skills / 记忆文件",
-      "reasonix": "项目：一键切换 Reasonix 的供应商 / MCP / Skills / 记忆文件"
+      "reasonix": "项目：一键切换 Reasonix 的供应商 / MCP / Skills / 记忆文件",
+      "pi": "项目：一键切换 Pi 的供应商 / Skills / 记忆文件"
     },
     "none": "不使用项目",
     "searchPlaceholder": "搜索项目",
@@ -1949,7 +1950,8 @@
       "claude-desktop": "把 Claude Desktop 当前的供应商保存为一个项目，之后可一键切换。",
       "codex": "把 Codex 当前的供应商、MCP、Skills 和记忆文件配置保存为一个项目，之后可一键切换。",
       "kimicode": "把 Kimi Code 当前的供应商、MCP、Skills 和记忆文件配置保存为一个项目，之后可一键切换。",
-      "reasonix": "把 Reasonix 当前的供应商、MCP、Skills 和记忆文件配置保存为一个项目，之后可一键切换。"
+      "reasonix": "把 Reasonix 当前的供应商、MCP、Skills 和记忆文件配置保存为一个项目，之后可一键切换。",
+      "pi": "把 Pi 当前的供应商、Skills 和记忆文件配置保存为一个项目，之后可一键切换。"
     },
     "manage": "管理项目…",
     "manageTitle": "管理项目",
