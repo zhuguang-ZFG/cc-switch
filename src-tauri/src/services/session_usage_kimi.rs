@@ -252,8 +252,12 @@ fn sync_single_kimi_file(db: &Database, file_path: &Path) -> Result<(u32, u32), 
     // 检查同步状态
     let (last_modified, mut last_offset) = get_sync_state(db, &file_path_str)?;
 
-    // 文件未变化则跳过
-    if file_modified <= last_modified {
+    // 文件未变化则跳过。注意必须用严格小于：Windows 的 mtime 粒度较粗，
+    // 追加写入后 mtime 可能原地不动（== last_modified），用 <= 会把新增
+    // 内容误判为"未变化"而漏同步（test_sync_single_kimi_file_is_incremental
+    // 的间歇性失败即源于此）。相等时放行全量扫描即可——行级 offset 去重
+    // 保证幂等，未变化的文件仍然返回 (0, 0)。
+    if file_modified < last_modified {
         return Ok((0, 0));
     }
 
