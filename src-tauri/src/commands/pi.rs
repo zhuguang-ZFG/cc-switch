@@ -70,6 +70,32 @@ fn import_pi_from_live(state: &crate::store::AppState) -> Result<usize, AppError
             continue;
         }
 
+        // fail-closed 校验：缺 baseUrl / 空 models / 非 openai-completions 协议的
+        // 条目导入后永远无法投影（无协议桥），跳过并告警，不做僵尸行
+        if base_url.trim().is_empty() {
+            log::warn!("Skip importing Pi provider '{name}': missing baseUrl");
+            continue;
+        }
+        let models_empty = config
+            .get("models")
+            .and_then(|v| v.as_array())
+            .map(|a| a.is_empty())
+            .unwrap_or(true);
+        if models_empty {
+            log::warn!("Skip importing Pi provider '{name}': empty models list");
+            continue;
+        }
+        let api = config
+            .get("api")
+            .and_then(|v| v.as_str())
+            .unwrap_or("openai-completions");
+        if api != "openai-completions" {
+            log::warn!(
+                "Skip importing Pi provider '{name}': api '{api}' has no proxy bridge support yet"
+            );
+            continue;
+        }
+
         let display_name = config
             .get("name")
             .and_then(|v| v.as_str())
@@ -82,6 +108,14 @@ fn import_pi_from_live(state: &crate::store::AppState) -> Result<usize, AppError
                 continue;
             }
             if let Ok(Some(mut provider)) = state.db.get_provider_by_id(&name, "pi") {
+                // 再导入整体替换会抹掉 DB 侧 defaultModel（live 条目不含该键，
+                // 它在 settings.json 顶层）——live 缺失时保留 DB 现值
+                let mut config = config;
+                if config.get("defaultModel").is_none() {
+                    if let Some(dm) = provider.settings_config.get("defaultModel").cloned() {
+                        config["defaultModel"] = dm;
+                    }
+                }
                 provider.settings_config = config;
                 provider.name = display_name;
                 if let Err(e) = state.db.save_provider("pi", &provider) {

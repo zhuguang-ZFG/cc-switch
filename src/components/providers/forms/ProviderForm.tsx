@@ -1249,7 +1249,9 @@ function ProviderFormFull({
         );
         return;
       }
-      if (!keyPattern.test(piForm.piProviderName)) {
+      if (!isEditMode && !keyPattern.test(piForm.piProviderName)) {
+        // 编辑模式下输入框已禁用（导入的 live key 可能含大写/下划线），
+        // 硬校验会把这类 provider 锁死在"永远无法保存"，跳过
         toast.error(
           t("pi.form.providerNameInvalid", {
             defaultValue: "供应商标识只能使用小写字母、数字和连字符",
@@ -1583,19 +1585,51 @@ function ProviderFormFull({
         models.includes(piForm.piDefaultModel.trim())
           ? piForm.piDefaultModel.trim()
           : (models[0] ?? "");
+      // preserved 合并（照 kimicode 模式）：表单只拥有 name/baseUrl/apiKey/models/
+      // defaultModel 五个键，api/compat/模型对象元数据（reasoning/contextWindow 等）
+      // 及任何未知键都从现有配置保留——编辑导入的富 catalog provider 不再丢数据。
+      const piFieldOwned = new Set([
+        "name",
+        "baseUrl",
+        "apiKey",
+        "models",
+        "defaultModel",
+      ]);
+      let existingPi: Record<string, unknown> = {};
+      try {
+        existingPi = JSON.parse(values.settingsConfig.trim() || "{}") as Record<
+          string,
+          unknown
+        >;
+      } catch {
+        existingPi = {};
+      }
+      const preservedPi: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(existingPi)) {
+        if (!piFieldOwned.has(key) && value !== undefined) {
+          preservedPi[key] = value;
+        }
+      }
+      // 模型列表：按 id 匹配保留原对象（含元数据），新增 id 才落为 {id, name}
+      const existingModels = Array.isArray(existingPi.models)
+        ? (existingPi.models as Array<Record<string, unknown>>)
+        : [];
+      const mergedModels = models.map((id) => {
+        const found = existingModels.find((m) => m && m.id === id);
+        return found ?? { id, name: id };
+      });
       const piConfig: Record<string, unknown> = {
+        ...preservedPi,
         name: piForm.piProviderName.trim(),
         baseUrl: piForm.piBaseUrl.trim().replace(/\/+$/, ""),
-        api: "openai-completions",
         apiKey: piForm.piApiKey,
-        models: models.map((id) => ({ id, name: id })),
+        models: mergedModels,
         defaultModel,
-        compat: {
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          maxTokensField: "max_tokens",
-        },
       };
+      // 新建（现有配置为空）时给 api 默认值；编辑时保留原值（含异协议）
+      if (!("api" in piConfig)) {
+        piConfig.api = "openai-completions";
+      }
       settingsConfig = JSON.stringify(piConfig);
     } else if (appId === "kimicode") {
       // Rebuild from Kimi field state; providerKey is applied separately.

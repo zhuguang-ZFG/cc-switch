@@ -246,18 +246,24 @@ pub fn write_snapshot_text(text: &str) -> Result<PiWriteOutcome, AppError> {
 // Providers
 // ============================================================================
 
-fn providers_map_mut(models: &mut Value) -> &mut Map<String, Value> {
+fn shape_error(file: &str) -> AppError {
+    AppError::Message(format!(
+        "Pi {file} 内容形状异常（非对象），已中止写入以防清盘；请手动检查该文件"
+    ))
+}
+
+fn providers_map_mut(models: &mut Value) -> Result<&mut Map<String, Value>, AppError> {
     if !models.is_object() {
-        *models = json!({});
+        return Err(shape_error("models.json"));
     }
     let root = models.as_object_mut().expect("object");
     let entry = root
         .entry("providers".to_string())
         .or_insert_with(|| json!({}));
     if !entry.is_object() {
-        *entry = json!({});
+        return Err(shape_error("models.json 的 providers"));
     }
-    entry.as_object_mut().expect("providers object")
+    Ok(entry.as_object_mut().expect("providers object"))
 }
 
 fn providers_map_ref(models: &Value) -> Option<&Map<String, Value>> {
@@ -387,6 +393,77 @@ fn resolve_default_model(settings_config: &Value, models: &[Value]) -> Option<St
         .map(str::to_string)
 }
 
+/// 以 live 现有条目为底、SSOT 构建结果为覆盖层的深合并：
+/// 保留 live 侧多出的字段（用户手改 / 更丰富的元数据），SSOT 键覆盖冲突项。
+/// models 数组按 id 逐对象合并（live 对象元数据如 reasoning/contextWindow 不丢）。
+fn deep_merge_provider_entry(existing: &Value, built: Value) -> Value {
+    if !built.is_object() {
+        return built;
+    }
+    let Some(base) = existing.as_object() else {
+        return built;
+    };
+    let Value::Object(over) = built else {
+        unreachable!("checked is_object above")
+    };
+    let mut merged = base.clone();
+    for (k, v) in over {
+        match (k.as_str(), merged.get(&k).cloned(), v) {
+            ("models", Some(Value::Array(old)), Value::Array(new)) => {
+                merged.insert(k, Value::Array(merge_models_by_id(&old, &new)));
+            }
+            ("compat", Some(Value::Object(old)), Value::Object(new)) => {
+                let mut c = old;
+                for (ck, cv) in new {
+                    c.insert(ck, cv);
+                }
+                merged.insert(k, Value::Object(c));
+            }
+            (_, _, v) => {
+                merged.insert(k, v);
+            }
+        }
+    }
+    Value::Object(merged)
+}
+
+fn merge_models_by_id(old: &[Value], new: &[Value]) -> Vec<Value> {
+    // normalize_models_array 会给 SSOT 模型对象填默认值（contextWindow 128000、
+    // maxTokens 8192、零 cost、input ["text"]）。这些填充值不代表用户意图，
+    // 合并时不得覆盖 live 侧的显式值；SSOT 值与填充默认不同才算显式配置。
+    fn is_fill_default(key: &str, v: &Value) -> bool {
+        match key {
+            "contextWindow" => *v == json!(128000),
+            "maxTokens" => *v == json!(8192),
+            "cost" => *v == json!({ "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }),
+            "input" => *v == json!(["text"]),
+            _ => false,
+        }
+    }
+    new.iter()
+        .map(|nm| {
+            if let Some(id) = nm.get("id").and_then(|i| i.as_str()) {
+                if let Some(om) = old
+                    .iter()
+                    .find(|o| o.get("id").and_then(|i| i.as_str()) == Some(id))
+                {
+                    if let (Some(ob), Value::Object(nb)) = (om.as_object(), nm.clone()) {
+                        let mut m = ob.clone();
+                        for (k, v) in nb {
+                            if m.contains_key(&k) && is_fill_default(&k, &v) {
+                                continue; // 填充默认值让位给 live 显式值
+                            }
+                            m.insert(k, v);
+                        }
+                        return Value::Object(m);
+                    }
+                }
+            }
+            nm.clone()
+        })
+        .collect()
+}
+
 fn build_provider_entry(name: &str, settings_config: &Value) -> Result<(Value, Option<String>), AppError> {
     let object = settings_config.as_object().ok_or_else(|| {
         AppError::localized(
@@ -472,9 +549,9 @@ fn build_provider_entry(name: &str, settings_config: &Value) -> Result<(Value, O
     Ok((Value::Object(entry), api_key))
 }
 
-fn upsert_auth_key(auth: &mut Value, provider_id: &str, api_key: &str) {
+fn upsert_auth_key(auth: &mut Value, provider_id: &str, api_key: &str) -> Result<(), AppError> {
     if !auth.is_object() {
-        *auth = json!({});
+        return Err(shape_error("auth.json"));
     }
     let root = auth.as_object_mut().expect("object");
     root.insert(
@@ -484,6 +561,7 @@ fn upsert_auth_key(auth: &mut Value, provider_id: &str, api_key: &str) {
             "key": api_key
         }),
     );
+    Ok(())
 }
 
 fn remove_auth_key(auth: &mut Value, provider_id: &str) {
@@ -492,9 +570,13 @@ fn remove_auth_key(auth: &mut Value, provider_id: &str) {
     }
 }
 
-fn set_settings_defaults(settings: &mut Value, provider_id: &str, model_id: Option<&str>) {
+fn set_settings_defaults(
+    settings: &mut Value,
+    provider_id: &str,
+    model_id: Option<&str>,
+) -> Result<(), AppError> {
     if !settings.is_object() {
-        *settings = json!({});
+        return Err(shape_error("settings.json"));
     }
     let root = settings.as_object_mut().expect("object");
     root.insert(
@@ -504,6 +586,7 @@ fn set_settings_defaults(settings: &mut Value, provider_id: &str, model_id: Opti
     if let Some(model) = model_id.map(str::trim).filter(|s| !s.is_empty()) {
         root.insert("defaultModel".into(), Value::String(model.to_string()));
     }
+    Ok(())
 }
 
 pub fn set_provider(name: &str, settings_config: Value) -> Result<PiWriteOutcome, AppError> {
@@ -522,12 +605,17 @@ pub fn set_provider(name: &str, settings_config: Value) -> Result<PiWriteOutcome
 
     let (entry, api_key) = build_provider_entry(name, &settings_config)?;
     let mut models = read_models()?;
-    let providers = providers_map_mut(&mut models);
+    let providers = providers_map_mut(&mut models)?;
+    // deep-merge：以 live 现有条目为底，SSOT 构建结果覆盖，保住 live 侧元数据
+    let entry = match providers.get(name) {
+        Some(existing) => deep_merge_provider_entry(existing, entry),
+        None => entry,
+    };
     providers.insert(name.to_string(), entry);
 
     let mut auth = read_auth()?;
     if let Some(ref key) = api_key {
-        upsert_auth_key(&mut auth, name, key);
+        upsert_auth_key(&mut auth, name, key)?;
     }
 
     let models_bak = write_json_file(&get_models_path(), &models, "models.json")?;
@@ -544,7 +632,7 @@ pub fn remove_provider(name: &str) -> Result<PiWriteOutcome, AppError> {
 
     let name = name.trim();
     let mut models = read_models()?;
-    let providers = providers_map_mut(&mut models);
+    let providers = providers_map_mut(&mut models)?;
     let removed = providers.remove(name).is_some();
 
     let mut settings = read_settings()?;
@@ -566,7 +654,7 @@ pub fn remove_provider(name: &str) -> Result<PiWriteOutcome, AppError> {
                 .and_then(|m| m.get("id"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            set_settings_defaults(&mut settings, &next, model.as_deref());
+            set_settings_defaults(&mut settings, &next, model.as_deref())?;
         } else if let Some(root) = settings.as_object_mut() {
             root.remove("defaultProvider");
             root.remove("defaultModel");
@@ -575,6 +663,11 @@ pub fn remove_provider(name: &str) -> Result<PiWriteOutcome, AppError> {
 
     let mut auth = read_auth()?;
     remove_auth_key(&mut auth, name);
+
+    // auth/settings 清理始终落盘（即使 models.json 里本就没有该 provider），
+    // 否则部分写入失败后的残留凭据和悬空 default 永远清不掉
+    let _ = write_json_file(&get_settings_path(), &settings, "settings.json")?;
+    let _ = write_json_file(&get_auth_path(), &auth, "auth.json")?;
 
     if !removed {
         return Ok(PiWriteOutcome::default());
@@ -603,15 +696,21 @@ pub fn apply_switch_defaults(
     let default_model = resolve_default_model(settings_config, &models_list);
 
     let mut models = read_models()?;
-    providers_map_mut(&mut models).insert(provider_id.to_string(), entry);
+    let providers = providers_map_mut(&mut models)?;
+    // deep-merge：以 live 现有条目为底，SSOT 构建结果覆盖，保住 live 侧元数据
+    let entry = match providers.get(provider_id) {
+        Some(existing) => deep_merge_provider_entry(existing, entry),
+        None => entry,
+    };
+    providers.insert(provider_id.to_string(), entry);
 
     let mut auth = read_auth()?;
     if let Some(ref key) = api_key {
-        upsert_auth_key(&mut auth, provider_id, key);
+        upsert_auth_key(&mut auth, provider_id, key)?;
     }
 
     let mut settings = read_settings()?;
-    set_settings_defaults(&mut settings, provider_id, default_model.as_deref());
+    set_settings_defaults(&mut settings, provider_id, default_model.as_deref())?;
 
     let models_bak = write_json_file(&get_models_path(), &models, "models.json")?;
     let _ = write_json_file(&get_auth_path(), &auth, "auth.json")?;
@@ -654,9 +753,9 @@ pub fn upsert_provider_into_snapshot_text(
         AppError::Message(format!("Invalid Pi snapshot: {e}"))
     })?;
     let (entry, api_key) = build_provider_entry(provider_id.trim(), settings_config)?;
-    providers_map_mut(&mut snap.models).insert(provider_id.trim().to_string(), entry);
+    providers_map_mut(&mut snap.models)?.insert(provider_id.trim().to_string(), entry);
     if let Some(key) = api_key {
-        upsert_auth_key(&mut snap.auth, provider_id.trim(), &key);
+        upsert_auth_key(&mut snap.auth, provider_id.trim(), &key)?;
     }
     serde_json::to_string_pretty(&snap)
         .map_err(|e| AppError::Message(format!("Failed to serialize Pi snapshot: {e}")))
@@ -674,11 +773,11 @@ pub fn apply_switch_defaults_to_snapshot_text(
     let (entry, api_key) = build_provider_entry(provider_id, settings_config)?;
     let models_list = normalize_models_array(settings_config);
     let default_model = resolve_default_model(settings_config, &models_list);
-    providers_map_mut(&mut snap.models).insert(provider_id.to_string(), entry);
+    providers_map_mut(&mut snap.models)?.insert(provider_id.to_string(), entry);
     if let Some(key) = api_key {
-        upsert_auth_key(&mut snap.auth, provider_id, &key);
+        upsert_auth_key(&mut snap.auth, provider_id, &key)?;
     }
-    set_settings_defaults(&mut snap.settings, provider_id, default_model.as_deref());
+    set_settings_defaults(&mut snap.settings, provider_id, default_model.as_deref())?;
     serde_json::to_string_pretty(&snap)
         .map_err(|e| AppError::Message(format!("Failed to serialize Pi snapshot: {e}")))
 }
@@ -691,7 +790,7 @@ pub fn remove_provider_from_snapshot_text(
         AppError::Message(format!("Invalid Pi snapshot: {e}"))
     })?;
     let name = name.trim();
-    let providers = providers_map_mut(&mut snap.models);
+    let providers = providers_map_mut(&mut snap.models)?;
     providers.remove(name);
     remove_auth_key(&mut snap.auth, name);
 
@@ -714,7 +813,7 @@ pub fn remove_provider_from_snapshot_text(
                 .and_then(|m| m.get("id"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            set_settings_defaults(&mut snap.settings, &next, model.as_deref());
+            set_settings_defaults(&mut snap.settings, &next, model.as_deref())?;
         } else if let Some(root) = snap.settings.as_object_mut() {
             root.remove("defaultProvider");
             root.remove("defaultModel");
@@ -766,14 +865,14 @@ pub fn apply_proxy_takeover(proxy_base_url: &str) -> Result<PiWriteOutcome, AppE
         .map_err(|_| AppError::Message("Pi config write lock poisoned".into()))?;
 
     let mut models = read_models()?;
-    providers_map_mut(&mut models)
+    providers_map_mut(&mut models)?
         .insert(PI_PROXY_PROVIDER.to_string(), proxy_provider_entry(proxy_base_url));
 
     let mut auth = read_auth()?;
-    upsert_auth_key(&mut auth, PI_PROXY_PROVIDER, PI_PROXY_API_KEY);
+    upsert_auth_key(&mut auth, PI_PROXY_PROVIDER, PI_PROXY_API_KEY)?;
 
     let mut settings = read_settings()?;
-    set_settings_defaults(&mut settings, PI_PROXY_PROVIDER, Some(PI_PROXY_MODEL));
+    set_settings_defaults(&mut settings, PI_PROXY_PROVIDER, Some(PI_PROXY_MODEL))?;
 
     let models_bak = write_json_file(&get_models_path(), &models, "models.json")?;
     let _ = write_json_file(&get_auth_path(), &auth, "auth.json")?;
@@ -843,7 +942,7 @@ pub fn clear_proxy_takeover() -> Result<PiWriteOutcome, AppError> {
         .map_err(|_| AppError::Message("Pi config write lock poisoned".into()))?;
 
     let mut models = read_models()?;
-    let providers = providers_map_mut(&mut models);
+    let providers = providers_map_mut(&mut models)?;
     let removed = providers.remove(PI_PROXY_PROVIDER).is_some();
 
     let mut auth = read_auth()?;
@@ -869,13 +968,17 @@ pub fn clear_proxy_takeover() -> Result<PiWriteOutcome, AppError> {
                 .and_then(|m| m.get("id"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            set_settings_defaults(&mut settings, &next, model.as_deref());
+            set_settings_defaults(&mut settings, &next, model.as_deref())?;
         } else if let Some(root) = settings.as_object_mut() {
             root.remove("defaultProvider");
             root.remove("defaultModel");
         }
         settings_changed = true;
     }
+
+    // auth 里的 PROXY_MANAGED 凭据始终落盘清除（即使 models/settings 已无接管痕迹），
+    // 否则部分清理后的残留 key 永远清不掉
+    let _ = write_json_file(&get_auth_path(), &auth, "auth.json")?;
 
     if !removed && !settings_changed {
         return Ok(PiWriteOutcome::default());
@@ -1005,7 +1108,7 @@ mod tests {
         // Localhost without /pi/v1 must not count as takeover.
         {
             let mut m = read_models().unwrap();
-            if let Some(p) = providers_map_mut(&mut m).get_mut(PI_PROXY_PROVIDER) {
+            if let Some(p) = providers_map_mut(&mut m).unwrap().get_mut(PI_PROXY_PROVIDER) {
                 p["baseUrl"] = json!("http://127.0.0.1:9999/v1");
             }
             write_json_file(&get_models_path(), &m, "models.json").unwrap();
@@ -1038,6 +1141,69 @@ mod tests {
         assert!(models.pointer("/providers/cc-switch-proxy").is_none());
         assert!(models.pointer("/providers/demo").is_some());
         assert_eq!(get_default_provider().unwrap().as_deref(), Some("demo"));
+    }
+
+    #[test]
+    fn shape_error_on_array_auth_aborts_write() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::set_temp_home(tmp.path());
+
+        // auth.json 形状异常（数组）时必须报错中止，不能静默清盘
+        fs::create_dir_all(tmp.path()).unwrap();
+        fs::write(get_auth_path(), "[]").unwrap();
+        let original = fs::read_to_string(get_auth_path()).unwrap();
+
+        let err = set_provider("demo", sample_settings("gpt-test")).unwrap_err();
+        assert!(err.to_string().contains("auth.json"), "{err}");
+        assert_eq!(
+            fs::read_to_string(get_auth_path()).unwrap(),
+            original,
+            "auth.json 必须原样保留"
+        );
+    }
+
+    #[test]
+    fn shape_error_on_array_settings_aborts_write() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::set_temp_home(tmp.path());
+
+        fs::write(get_settings_path(), "[]").unwrap();
+        let original = fs::read_to_string(get_settings_path()).unwrap();
+
+        let err = apply_switch_defaults("demo", &sample_settings("gpt-test")).unwrap_err();
+        assert!(err.to_string().contains("settings.json"), "{err}");
+        assert_eq!(
+            fs::read_to_string(get_settings_path()).unwrap(),
+            original,
+            "settings.json 必须原样保留"
+        );
+    }
+
+    #[test]
+    fn deep_merge_preserves_live_model_metadata() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::set_temp_home(tmp.path());
+
+        // 先在 live 造一个带元数据的条目（模拟用户手改 / 更丰富的 live 配置）
+        set_provider("demo", sample_settings("gpt-test")).unwrap();
+        let mut models = read_models().unwrap();
+        models["providers"]["demo"]["models"][0]["reasoning"] = json!(true);
+        models["providers"]["demo"]["models"][0]["contextWindow"] = json!(1048576);
+        models["providers"]["demo"]["compat"]["supportsReasoningEffort"] = json!(true);
+        models["providers"]["demo"]["customField"] = json!("keep-me");
+        write_json_file(&get_models_path(), &models, "models.json").unwrap();
+
+        // SSOT 侧只有裸字段，再次写入不应抹掉 live 元数据
+        set_provider("demo", sample_settings("gpt-test")).unwrap();
+        let after = read_models().unwrap();
+        let p = &after["providers"]["demo"];
+        assert_eq!(p["models"][0]["reasoning"], json!(true));
+        assert_eq!(p["models"][0]["contextWindow"], json!(1048576));
+        assert_eq!(p["compat"]["supportsReasoningEffort"], json!(true));
+        assert_eq!(p["customField"], json!("keep-me"));
     }
 
     #[test]
