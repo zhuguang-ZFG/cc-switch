@@ -2488,10 +2488,12 @@ impl ProxyService {
                     .and_then(Value::as_str)
                     .or_else(|| config.as_str())
                     .unwrap_or("");
+                // 与 Reasonix 对齐的合取语义：须同时出现代理 provider 名和 /pi/v1 路径，
+                // 避免误伤链式代理（baseUrl 指向另一台 cc-switch）的合法备份；
+                // PROXY_MANAGED 占位符单独即可作证（用户不会合法持有该值）
                 if !text.trim().is_empty()
-                    && (text.contains("cc-switch-proxy")
-                        || text.contains(PROXY_TOKEN_PLACEHOLDER)
-                        || text.contains("/pi/v1"))
+                    && ((text.contains("cc-switch-proxy") && text.contains("/pi/v1"))
+                        || text.contains(PROXY_TOKEN_PLACEHOLDER))
                 {
                     return true;
                 }

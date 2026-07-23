@@ -240,14 +240,14 @@ pub fn apply_proxy_takeover(
         .lock()
         .map_err(|_| AppError::Message("Kimi config write lock poisoned".into()))?;
     let mut doc = read_document()?;
-    let providers = ensure_table_mut(&mut doc, "providers");
-    let provider = ensure_nested_table_mut(providers, "cc-switch-proxy");
+    let providers = ensure_table_mut(&mut doc, "providers")?;
+    let provider = ensure_nested_table_mut(providers, "cc-switch-proxy")?;
     provider.insert("type", Item::Value(TomlEditValue::from("openai_responses")));
     provider.insert("base_url", Item::Value(TomlEditValue::from(proxy_base_url)));
     provider.insert("api_key", Item::Value(TomlEditValue::from(api_key)));
 
-    let models = ensure_table_mut(&mut doc, "models");
-    let model = ensure_nested_table_mut(models, "cc-switch-proxy/default");
+    let models = ensure_table_mut(&mut doc, "models")?;
+    let model = ensure_nested_table_mut(models, "cc-switch-proxy/default")?;
     model.insert(
         "provider",
         Item::Value(TomlEditValue::from("cc-switch-proxy")),
@@ -445,23 +445,34 @@ fn table_str(table: &Table, key: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn ensure_table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
-    if !doc.contains_key(key) || !doc[key].is_table() {
+fn ensure_table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut Table, AppError> {
+    if doc.contains_key(key) && !doc[key].is_table() {
+        // 形状异常（键存在但不是表）：报错中止，不能静默清空整个段
+        return Err(AppError::Message(format!(
+            "Kimi config.toml 的 [{key}] 段形状异常（非表），已中止写入以防清盘；请手动检查该文件"
+        )));
+    }
+    if !doc.contains_key(key) {
         doc[key] = Item::Table(Table::new());
     }
-    doc[key].as_table_mut().expect("just inserted table")
+    Ok(doc[key].as_table_mut().expect("just inserted table"))
 }
 
-fn ensure_nested_table_mut<'a>(parent: &'a mut Table, key: &str) -> &'a mut Table {
-    if !parent.contains_key(key) || !parent[key].is_table() {
+fn ensure_nested_table_mut<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Table, AppError> {
+    if parent.contains_key(key) && !parent[key].is_table() {
+        return Err(AppError::Message(format!(
+            "Kimi config.toml 的条目 '{key}' 形状异常（非表），已中止写入以防清盘；请手动检查该文件"
+        )));
+    }
+    if !parent.contains_key(key) {
         let mut t = Table::new();
         t.set_implicit(true);
         parent.insert(key, Item::Table(t));
     }
-    parent
+    Ok(parent
         .get_mut(key)
         .and_then(Item::as_table_mut)
-        .expect("just inserted nested table")
+        .expect("just inserted nested table"))
 }
 
 fn json_to_toml_value(value: &Value) -> Option<TomlEditValue> {
@@ -500,7 +511,11 @@ fn json_to_toml_value(value: &Value) -> Option<TomlEditValue> {
     }
 }
 
-fn merge_json_object_into_table(table: &mut Table, object: &Map<String, Value>, skipped: &[&str]) {
+fn merge_json_object_into_table(
+    table: &mut Table,
+    object: &Map<String, Value>,
+    skipped: &[&str],
+) -> Result<(), AppError> {
     for (key, value) in object {
         if skipped.contains(&key.as_str()) {
             continue;
@@ -514,8 +529,8 @@ fn merge_json_object_into_table(table: &mut Table, object: &Map<String, Value>, 
         }
         match value {
             Value::Object(object) => {
-                let nested = ensure_nested_table_mut(table, key);
-                merge_json_object_into_table(nested, object, &[]);
+                let nested = ensure_nested_table_mut(table, key)?;
+                merge_json_object_into_table(nested, object, &[])?;
             }
             _ => {
                 if let Some(value) = json_to_toml_value(value) {
@@ -524,6 +539,7 @@ fn merge_json_object_into_table(table: &mut Table, object: &Map<String, Value>, 
             }
         }
     }
+    Ok(())
 }
 
 fn provider_table_is_managed(name: &str, table: Option<&Table>) -> bool {
@@ -531,6 +547,10 @@ fn provider_table_is_managed(name: &str, table: Option<&Table>) -> bool {
     // specific `oauth.key = "oauth/kimi-code"` credential reference. A custom
     // provider carrying some other user-configured `oauth` table is valid per
     // the CLI schema and must stay editable/removable.
+    //
+    // The `cc-switch-proxy` projection (api_key = PROXY_MANAGED) is also
+    // protected: editing/removing it via UI breaks takeover-restore symmetry
+    // (is_proxy_takeover_active flips false while the proxy still owns 15721).
     name.starts_with("managed:")
         || table.is_some_and(|table| {
             table
@@ -539,6 +559,9 @@ fn provider_table_is_managed(name: &str, table: Option<&Table>) -> bool {
                 .and_then(|oauth| oauth.get("key"))
                 .and_then(Item::as_str)
                 == Some(KIMI_OAUTH_KEY)
+        })
+        || table.is_some_and(|table| {
+            table.get("api_key").and_then(Item::as_str) == Some("PROXY_MANAGED")
         })
 }
 
@@ -705,8 +728,8 @@ fn upsert_provider_into_document(
     if provider_table_is_managed(name, existing) {
         return Err(managed_provider_error(name));
     }
-    let providers = ensure_table_mut(doc, "providers");
-    let entry = ensure_nested_table_mut(providers, name);
+    let providers = ensure_table_mut(doc, "providers")?;
+    let entry = ensure_nested_table_mut(providers, name)?;
 
     let object = provider_config.as_object().ok_or_else(|| {
         AppError::localized(
@@ -719,7 +742,7 @@ fn upsert_provider_into_document(
         entry,
         object,
         &["name", "models", "api_mode", "_cc_managed"],
-    );
+    )?;
 
     // Legacy payloads may only carry api_mode. Native type always wins.
     if !object.contains_key("type") {
@@ -754,18 +777,18 @@ fn upsert_provider_into_document(
                 models_root.remove(&alias);
             }
         }
-        let models_root = ensure_table_mut(doc, "models");
+        let models_root = ensure_table_mut(doc, "models")?;
         for model in models {
             let Some(alias) = model_alias_for_entry(name, model) else {
                 continue;
             };
-            let mt = ensure_nested_table_mut(models_root, &alias);
+            let mt = ensure_nested_table_mut(models_root, &alias)?;
             if let Some(object) = model.as_object() {
                 merge_json_object_into_table(
                     mt,
                     object,
                     &["id", "alias", "name", "context_length"],
-                );
+                )?;
             }
             mt.insert("provider", Item::Value(TomlEditValue::from(name)));
             // Map the form's `name` to the CLI's `display_name` so custom
@@ -1504,15 +1527,15 @@ pub fn provision_managed_provider(models_payload: &Value) -> Result<KimiWriteOut
     let mut doc = read_document()?;
     let previous_default = get_default_model()?;
 
-    let providers = ensure_table_mut(&mut doc, "providers");
-    let provider = ensure_nested_table_mut(providers, MANAGED_KIMI_PROVIDER);
+    let providers = ensure_table_mut(&mut doc, "providers")?;
+    let provider = ensure_nested_table_mut(providers, MANAGED_KIMI_PROVIDER)?;
     provider.insert("type", Item::Value(TomlEditValue::from("kimi")));
     provider.insert(
         "base_url",
         Item::Value(TomlEditValue::from(KIMI_API_BASE_URL)),
     );
     provider.insert("api_key", Item::Value(TomlEditValue::from("")));
-    let oauth = ensure_nested_table_mut(provider, "oauth");
+    let oauth = ensure_nested_table_mut(provider, "oauth")?;
     oauth.insert("storage", Item::Value(TomlEditValue::from("file")));
     oauth.insert("key", Item::Value(TomlEditValue::from(KIMI_OAUTH_KEY)));
 
@@ -1541,7 +1564,7 @@ pub fn provision_managed_provider(models_payload: &Value) -> Result<KimiWriteOut
         }
     }
 
-    let root = ensure_table_mut(&mut doc, "models");
+    let root = ensure_table_mut(&mut doc, "models")?;
     for model in models {
         let Some(id) = model.get("id").and_then(Value::as_str) else {
             continue;
@@ -1554,7 +1577,7 @@ pub fn provision_managed_provider(models_payload: &Value) -> Result<KimiWriteOut
                 AppError::Message(format!("Kimi model '{id}' has no valid context_length"))
             })?;
         let alias = format!("kimi-code/{id}");
-        let entry = ensure_nested_table_mut(root, &alias);
+        let entry = ensure_nested_table_mut(root, &alias)?;
         entry.insert(
             "provider",
             Item::Value(TomlEditValue::from(MANAGED_KIMI_PROVIDER)),
@@ -1649,9 +1672,9 @@ pub fn provision_managed_provider(models_payload: &Value) -> Result<KimiWriteOut
         doc["default_model"] = Item::Value(TomlEditValue::from(incoming_aliases[0].as_str()));
     }
 
-    let services = ensure_table_mut(&mut doc, "services");
+    let services = ensure_table_mut(&mut doc, "services")?;
     for (name, suffix) in [("moonshot_search", "search"), ("moonshot_fetch", "fetch")] {
-        let service = ensure_nested_table_mut(services, name);
+        let service = ensure_nested_table_mut(services, name)?;
         service.insert(
             "base_url",
             Item::Value(TomlEditValue::from(
@@ -1659,7 +1682,7 @@ pub fn provision_managed_provider(models_payload: &Value) -> Result<KimiWriteOut
             )),
         );
         service.insert("api_key", Item::Value(TomlEditValue::from("")));
-        let oauth = ensure_nested_table_mut(service, "oauth");
+        let oauth = ensure_nested_table_mut(service, "oauth")?;
         oauth.insert("storage", Item::Value(TomlEditValue::from("file")));
         oauth.insert("key", Item::Value(TomlEditValue::from(KIMI_OAUTH_KEY)));
     }
