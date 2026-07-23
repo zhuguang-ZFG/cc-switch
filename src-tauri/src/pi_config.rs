@@ -851,8 +851,12 @@ fn proxy_provider_entry(proxy_base_url: &str) -> Value {
             "id": PI_PROXY_MODEL,
             "name": "CC Switch Proxy",
             "input": ["text"],
-            "contextWindow": 128000,
-            "maxTokens": 8192,
+            // 与 kimi proxy 投影一致（262144）；上游真实模型多为 256k
+            // (kimi-for-coding / glm-5.2)。128000 会让 pi 提前触发压缩。
+            "contextWindow": 262144,
+            // 输出上限：低于常见上游 clamp（capi.cun.ai 131072），
+            // 避免 thinking 长输出被 8192 截断。
+            "maxTokens": 32768,
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }]
     })

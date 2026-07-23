@@ -42,6 +42,11 @@ pub struct KimiOAuthToken {
     pub token_type: String,
     #[serde(default)]
     pub expires_in: i64,
+    /// W8: preserve unknown fields the CLI may add in future versions
+    /// (e.g. new OAuth metadata) instead of silently dropping them on
+    /// the read-modify-write round trip.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 fn default_token_type() -> String {
@@ -764,13 +769,21 @@ fn upsert_provider_into_document(
             .filter_map(|model| model_alias_for_entry(name, model))
             .collect();
         if let Some(models_root) = doc.get_mut("models").and_then(Item::as_table_mut) {
+            // W1: only sweep entries that look like pure cc-switch projections
+            // (only the keys we project). Hand-authored models carrying extra
+            // keys (capabilities, custom fields) are preserved — deleting them
+            // on every provider save was destroying user data.
+            const PROJECTION_KEYS: &[&str] =
+                &["provider", "model", "display_name", "max_context_size"];
             let stale: Vec<String> = models_root
                 .iter()
                 .filter_map(|(alias, item)| {
                     let table = item.as_table()?;
-                    (table_str(table, "provider").as_deref() == Some(name)
-                        && !aliases.iter().any(|incoming| incoming == alias))
-                    .then(|| alias.to_string())
+                    let is_ours = table_str(table, "provider").as_deref() == Some(name);
+                    let not_incoming = !aliases.iter().any(|incoming| incoming == alias);
+                    let is_pure_projection =
+                        table.iter().all(|(k, _)| PROJECTION_KEYS.contains(&k));
+                    (is_ours && not_incoming && is_pure_projection).then(|| alias.to_string())
                 })
                 .collect();
             for alias in stale {
@@ -1396,6 +1409,7 @@ async fn ensure_fresh_oauth_token_with_expected(
                 scope: String::new(),
                 token_type: "Bearer".to_string(),
                 expires_in: 0,
+                extra: Default::default(),
             };
             match tokio::task::spawn_blocking(move || save_oauth_token(&tombstone)).await {
                 Ok(Ok(())) => {}
@@ -1451,6 +1465,21 @@ async fn ensure_fresh_oauth_token_with_expected(
             .unwrap_or(&current.token_type)
             .to_string(),
         expires_in,
+        // W8: carry forward unknown fields from the stored token; merge any
+        // new unknown fields the refresh payload introduced.
+        extra: {
+            let mut extra = current.extra.clone();
+            for (k, v) in payload.as_object().into_iter().flatten() {
+                if !matches!(
+                    k.as_str(),
+                    "access_token" | "refresh_token" | "expires_at" | "expires_in" | "scope"
+                        | "token_type"
+                ) {
+                    extra.insert(k.clone(), v.clone());
+                }
+            }
+            extra
+        },
     };
     // save_oauth_token shells out to icacls on Windows; keep it off the
     // async worker since this runs on the proxy request hot path.
@@ -2211,7 +2240,8 @@ model = "real-model"
                 scope: "".to_string(),
                 token_type: "Bearer".to_string(),
                 expires_in: 3600,
-            };
+                    extra: Default::default(),
+                };
             save_oauth_token(&token).unwrap();
             let value: Value =
                 serde_json::from_slice(&fs::read(get_kimi_credentials_path()).unwrap()).unwrap();
@@ -2251,6 +2281,7 @@ model = "real-model"
                     scope: "coding".into(),
                     token_type: "Bearer".into(),
                     expires_in: 3600,
+                    extra: Default::default(),
                 })
                 .unwrap();
                 assert_eq!(
@@ -2266,6 +2297,7 @@ model = "real-model"
                     scope: String::new(),
                     token_type: "Bearer".into(),
                     expires_in: 3600,
+                    extra: Default::default(),
                 })
                 .unwrap();
                 assert_eq!(
@@ -2291,6 +2323,7 @@ model = "real-model"
                     scope: String::new(),
                     token_type: "Bearer".into(),
                     expires_in: 3600,
+                    extra: Default::default(),
                 })
                 .unwrap();
                 let results = join_all((0..8).map(|_| ensure_fresh_oauth_token(false))).await;
@@ -2315,6 +2348,7 @@ model = "real-model"
                     scope: String::new(),
                     token_type: "Bearer".into(),
                     expires_in: 3600,
+                    extra: Default::default(),
                 })
                 .unwrap();
                 let error = refresh_oauth_token_after_unauthorized(Some("access-expired-3"))

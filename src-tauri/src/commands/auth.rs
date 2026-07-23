@@ -233,6 +233,21 @@ async fn kimi_poll_device_flow(
             .unwrap_or("Bearer")
             .to_string(),
         expires_in,
+        // W8: retain any unknown fields the OAuth payload carries so future
+        // CLI fields survive the save round trip.
+        extra: payload
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    "access_token" | "refresh_token" | "expires_at" | "expires_in" | "scope"
+                        | "token_type"
+                )
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
     };
     kimi_config::save_oauth_token(&token).map_err(|e| e.to_string())?;
 
