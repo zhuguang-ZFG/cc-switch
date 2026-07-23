@@ -222,7 +222,7 @@ export function DeepLinkImportDialog() {
 
   // Parse config file content for display
   interface ParsedConfig {
-    type: "claude" | "codex" | "gemini" | "kimicode" | "reasonix";
+    type: "claude" | "codex" | "gemini" | "kimicode" | "reasonix" | "pi";
     env?: Record<string, string>;
     auth?: Record<string, string>;
     tomlConfig?: string;
@@ -292,8 +292,9 @@ export function DeepLinkImportDialog() {
           env,
           raw: parsed,
         };
-      } else if (request.app === "reasonix") {
+      } else if (request.app === "reasonix" || request.app === "pi") {
         // Reasonix 格式: { kind, base_url, api_key, models: [...] }
+        // Pi 格式: camelCase { name, baseUrl, apiKey, api, models: [{ id, name }] }
         const env: Record<string, string> = {};
         for (const [key, value] of Object.entries(parsed)) {
           if (typeof value === "string") {
@@ -317,7 +318,7 @@ export function DeepLinkImportDialog() {
             .join(", ");
         }
         return {
-          type: "reasonix",
+          type: request.app === "pi" ? "pi" : "reasonix",
           env,
           raw: parsed,
         };
@@ -636,10 +637,11 @@ export function DeepLinkImportDialog() {
                             </div>
                           )}
 
-                          {/* Gemini / Kimi Code / Reasonix config */}
+                          {/* Gemini / Kimi Code / Reasonix / Pi config */}
                           {(parsedConfig.type === "gemini" ||
                             parsedConfig.type === "kimicode" ||
-                            parsedConfig.type === "reasonix") &&
+                            parsedConfig.type === "reasonix" ||
+                            parsedConfig.type === "pi") &&
                             parsedConfig.env && (
                               <div className="space-y-1.5">
                                 {Object.entries(parsedConfig.env).map(

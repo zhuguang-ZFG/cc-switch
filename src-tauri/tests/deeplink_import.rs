@@ -84,3 +84,49 @@ fn deeplink_import_codex_provider_builds_auth_and_config() {
         "config.toml content should contain model setting"
     );
 }
+
+#[test]
+fn deeplink_import_pi_provider_persists_to_db() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let url = "ccswitch://v1/import?resource=provider&app=pi&name=DeepLink%20Pi&homepage=https%3A%2F%2Fexample.com&endpoint=https%3A%2F%2Fapi.example.com%2Fv1&apiKey=sk-test-pi-key&model=gpt-4o&icon=pi";
+    let request = parse_deeplink_url(url).expect("parse deeplink url");
+
+    let db = Arc::new(Database::memory().expect("create memory db"));
+    let state = AppState::new(db.clone());
+
+    let provider_id = import_provider_from_deeplink(&state, request.clone())
+        .expect("import provider from deeplink");
+
+    // Verify DB state
+    let providers = db.get_all_providers("pi").expect("get providers");
+    let provider = providers
+        .get(&provider_id)
+        .expect("provider created via deeplink");
+
+    assert_eq!(provider.name, request.name.clone().unwrap());
+    assert_eq!(provider.website_url.as_deref(), request.homepage.as_deref());
+    assert_eq!(provider.icon.as_deref(), Some("pi"));
+    let base_url = provider
+        .settings_config
+        .get("baseUrl")
+        .and_then(|v| v.as_str());
+    let api_key = provider
+        .settings_config
+        .get("apiKey")
+        .and_then(|v| v.as_str());
+    let api = provider
+        .settings_config
+        .get("api")
+        .and_then(|v| v.as_str());
+    assert_eq!(base_url, request.endpoint.as_deref());
+    assert_eq!(api_key, request.api_key.as_deref());
+    assert_eq!(api, Some("openai-completions"));
+    let model_id = provider
+        .settings_config
+        .pointer("/models/0/id")
+        .and_then(|v| v.as_str());
+    assert_eq!(model_id, request.model.as_deref());
+}

@@ -93,6 +93,7 @@ fn parse_provider_deeplink(
             | "hermes"
             | "reasonix"
             | "reasonix-cli"
+            | "pi"
     ) {
         return Err(AppError::InvalidInput(format!(
             "Invalid app type: expected a supported app id, got '{app}'"
@@ -213,6 +214,7 @@ fn parse_prompt_deeplink(
             | "hermes"
             | "reasonix"
             | "reasonix-cli"
+            | "pi"
     ) {
         return Err(AppError::InvalidInput(format!(
             "Invalid app type: expected a supported app id, got '{app}'"
@@ -297,6 +299,7 @@ fn parse_mcp_deeplink(
                 | "hermes"
                 | "reasonix"
                 | "reasonix-cli"
+                | "pi"
         ) {
             return Err(AppError::InvalidInput(format!(
                 "Invalid app in 'apps': expected a supported app id, got '{trimmed}'"

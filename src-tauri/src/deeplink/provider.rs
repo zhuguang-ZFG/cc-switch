@@ -686,7 +686,7 @@ pub fn parse_and_merge_config(
         "grokbuild" => merge_grokbuild_config(&mut merged, &config_value)?,
         // Additive mode apps use JSON config directly; pass through as-is
         "openclaw" | "opencode" | "hermes" | "kimicode" | "kimi-code" | "kimi" | "reasonix"
-        | "reasonix-cli" => {
+        | "reasonix-cli" | "pi" => {
             merge_additive_config(&mut merged, &config_value)?;
         }
         "" => {

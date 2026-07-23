@@ -179,6 +179,35 @@ fn test_parse_reasonix_provider() {
 }
 
 #[test]
+fn test_parse_pi_provider() {
+    use super::provider::build_provider_from_request;
+
+    let url = "ccswitch://v1/import?resource=provider&app=pi&name=Pi%20Relay&endpoint=https%3A%2F%2Fapi.example.com%2Fv1&apiKey=sk-pi&model=gpt-4o";
+
+    let request = parse_deeplink_url(url).unwrap();
+
+    assert_eq!(request.app.as_deref(), Some("pi"));
+    assert_eq!(request.name.as_deref(), Some("Pi Relay"));
+    assert_eq!(
+        request.endpoint.as_deref(),
+        Some("https://api.example.com/v1")
+    );
+    assert_eq!(request.api_key.as_deref(), Some("sk-pi"));
+    assert_eq!(request.model.as_deref(), Some("gpt-4o"));
+
+    let provider = build_provider_from_request(&AppType::Pi, &request).unwrap();
+    let config = provider.settings_config.as_object().unwrap();
+
+    assert_eq!(config["name"], "Pi Relay");
+    assert_eq!(config["baseUrl"], "https://api.example.com/v1");
+    assert_eq!(config["apiKey"], "sk-pi");
+    assert_eq!(config["api"], "openai-completions");
+    assert_eq!(config["models"][0]["id"], "gpt-4o");
+    assert_eq!(config["models"][0]["name"], "gpt-4o");
+    assert_eq!(config["defaultModel"], "gpt-4o");
+}
+
+#[test]
 fn test_parse_kimicode_aliases_through_full_deeplink_parser() {
     for alias in ["kimicode", "kimi-code", "kimi", "hermes"] {
         let provider = format!(
