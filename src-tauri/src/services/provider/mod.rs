@@ -5167,6 +5167,10 @@ impl ProviderService {
                 let reasonix_id = format!("universal-reasonix-{id}");
                 let _ = state.db.delete_provider("reasonix", &reasonix_id);
             }
+            if p.apps.pi {
+                let pi_id = format!("universal-pi-{id}");
+                let _ = state.db.delete_provider("pi", &pi_id);
+            }
         }
 
         Ok(true)
@@ -5271,6 +5275,26 @@ impl ProviderService {
                 .is_some()
             {
                 let _ = Self::delete(state, AppType::Reasonix, &reasonix_id);
+            }
+        }
+
+        // 同步到 Pi（加法模式：必须走 add/update 才能写入 live）
+        if let Some(mut pi_provider) = provider.to_pi_provider() {
+            if let Some(existing) = state.db.get_provider_by_id(&pi_provider.id, "pi")? {
+                let mut merged = existing.settings_config.clone();
+                Self::merge_json(&mut merged, &pi_provider.settings_config);
+                pi_provider.settings_config = merged;
+                if pi_provider.meta.is_none() {
+                    pi_provider.meta = existing.meta.clone();
+                }
+                Self::update(state, AppType::Pi, None, pi_provider)?;
+            } else {
+                Self::add(state, AppType::Pi, pi_provider, true)?;
+            }
+        } else {
+            let pi_id = format!("universal-pi-{id}");
+            if state.db.get_provider_by_id(&pi_id, "pi")?.is_some() {
+                let _ = Self::delete(state, AppType::Pi, &pi_id);
             }
         }
 

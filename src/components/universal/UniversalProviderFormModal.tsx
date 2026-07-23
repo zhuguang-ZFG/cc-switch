@@ -67,6 +67,7 @@ export function UniversalProviderFormModal({
   const [geminiEnabled, setGeminiEnabled] = useState(true);
   const [kimiEnabled, setKimiEnabled] = useState(false);
   const [reasonixEnabled, setReasonixEnabled] = useState(false);
+  const [piEnabled, setPiEnabled] = useState(false);
 
   // 模型配置
   const [models, setModels] = useState<UniversalProviderModels>({});
@@ -90,6 +91,7 @@ export function UniversalProviderFormModal({
       setGeminiEnabled(!!editingProvider.apps.gemini);
       setKimiEnabled(!!editingProvider.apps.kimicode);
       setReasonixEnabled(!!editingProvider.apps.reasonix);
+      setPiEnabled(!!editingProvider.apps.pi);
       setModels(editingProvider.models || {});
 
       // 尝试匹配预设
@@ -111,6 +113,7 @@ export function UniversalProviderFormModal({
       setGeminiEnabled(!!defaultPreset.defaultApps.gemini);
       setKimiEnabled(!!defaultPreset.defaultApps.kimicode);
       setReasonixEnabled(!!defaultPreset.defaultApps.reasonix);
+      setPiEnabled(!!defaultPreset.defaultApps.pi);
       setModels(deepClone(defaultPreset.defaultModels));
     }
   }, [editingProvider, initialPreset, isOpen]);
@@ -126,6 +129,7 @@ export function UniversalProviderFormModal({
         setGeminiEnabled(!!preset.defaultApps.gemini);
         setKimiEnabled(!!preset.defaultApps.kimicode);
         setReasonixEnabled(!!preset.defaultApps.reasonix);
+        setPiEnabled(!!preset.defaultApps.pi);
         setModels(deepClone(preset.defaultModels));
       }
     },
@@ -135,7 +139,7 @@ export function UniversalProviderFormModal({
   // 更新模型配置
   const updateModel = useCallback(
     (
-      app: "claude" | "codex" | "gemini" | "kimicode" | "reasonix",
+      app: "claude" | "codex" | "gemini" | "kimicode" | "reasonix" | "pi",
       field: string,
       value: string | number | undefined,
     ) => {
@@ -240,6 +244,27 @@ requires_openai_auth = true`;
     };
   }, [reasonixEnabled, baseUrl, apiKey, models.reasonix]);
 
+  // 计算 Pi 配置 JSON 预览（与后端 to_pi_provider 生成的结构一致）
+  const piConfigJson = useMemo(() => {
+    if (!piEnabled) return null;
+    const model = models.pi?.model || "gpt-5.5";
+    const modelEntry: Record<string, unknown> = { id: model, name: model };
+    if (models.pi?.contextWindow) {
+      modelEntry.contextWindow = models.pi.contextWindow;
+    }
+    if (models.pi?.maxTokens) {
+      modelEntry.maxTokens = models.pi.maxTokens;
+    }
+    return {
+      name: name.trim() || "custom",
+      baseUrl: baseUrl.replace(/\/+$/, ""),
+      api: "openai-completions",
+      apiKey: apiKey,
+      models: [modelEntry],
+      defaultModel: model,
+    };
+  }, [piEnabled, name, baseUrl, apiKey, models.pi]);
+
   // 提交表单
   const handleSubmit = useCallback(() => {
     if (!name.trim() || !baseUrl.trim() || !apiKey.trim()) {
@@ -260,6 +285,7 @@ requires_openai_auth = true`;
             gemini: geminiEnabled,
             kimicode: kimiEnabled,
             reasonix: reasonixEnabled,
+            pi: piEnabled,
           },
           models,
         }
@@ -279,6 +305,7 @@ requires_openai_auth = true`;
         gemini: geminiEnabled,
         kimicode: kimiEnabled,
         reasonix: reasonixEnabled,
+        pi: piEnabled,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -299,6 +326,7 @@ requires_openai_auth = true`;
     geminiEnabled,
     kimiEnabled,
     reasonixEnabled,
+    piEnabled,
     models,
     selectedPreset,
     onSave,
@@ -325,6 +353,7 @@ requires_openai_auth = true`;
             gemini: geminiEnabled,
             kimicode: kimiEnabled,
             reasonix: reasonixEnabled,
+            pi: piEnabled,
           },
           models,
         }
@@ -344,6 +373,7 @@ requires_openai_auth = true`;
         gemini: geminiEnabled,
         kimicode: kimiEnabled,
         reasonix: reasonixEnabled,
+        pi: piEnabled,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -363,6 +393,7 @@ requires_openai_auth = true`;
     geminiEnabled,
     kimiEnabled,
     reasonixEnabled,
+    piEnabled,
     models,
     selectedPreset,
   ]);
@@ -611,6 +642,13 @@ requires_openai_auth = true`;
                 onCheckedChange={setReasonixEnabled}
               />
             </div>
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="flex items-center gap-2">
+                <ProviderIcon icon="pi" name="Pi" size={20} />
+                <span className="font-medium">Pi</span>
+              </div>
+              <Switch checked={piEnabled} onCheckedChange={setPiEnabled} />
+            </div>
           </div>
         </div>
 
@@ -842,6 +880,70 @@ requires_openai_auth = true`;
               </div>
             </div>
           )}
+
+          {/* Pi 模型 */}
+          {piEnabled && (
+            <div className="space-y-3 rounded-lg border p-4">
+              <div className="flex items-center gap-2 font-medium">
+                <ProviderIcon icon="pi" name="Pi" size={16} />
+                Pi
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    {t("universalProvider.model", { defaultValue: "模型" })}
+                  </Label>
+                  <Input
+                    value={models.pi?.model || ""}
+                    onChange={(e) => updateModel("pi", "model", e.target.value)}
+                    placeholder="gpt-5.5"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    {t("universalProvider.maxContextSize", {
+                      defaultValue: "上下文长度",
+                    })}
+                  </Label>
+                  <Input
+                    type="number"
+                    value={models.pi?.contextWindow ?? ""}
+                    onChange={(e) =>
+                      updateModel(
+                        "pi",
+                        "contextWindow",
+                        e.target.value
+                          ? parseInt(e.target.value, 10)
+                          : undefined,
+                      )
+                    }
+                    placeholder="128000"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    {t("universalProvider.maxTokens", {
+                      defaultValue: "最大输出 Tokens",
+                    })}
+                  </Label>
+                  <Input
+                    type="number"
+                    value={models.pi?.maxTokens ?? ""}
+                    onChange={(e) =>
+                      updateModel(
+                        "pi",
+                        "maxTokens",
+                        e.target.value
+                          ? parseInt(e.target.value, 10)
+                          : undefined,
+                      )
+                    }
+                    placeholder="8192"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 配置 JSON 预览 */}
@@ -850,7 +952,8 @@ requires_openai_auth = true`;
             codexEnabled ||
             geminiEnabled ||
             kimiEnabled ||
-            reasonixEnabled) && (
+            reasonixEnabled ||
+            piEnabled) && (
             <div className="space-y-4">
               <Label>
                 {t("universalProvider.configJsonPreview", {
@@ -943,6 +1046,22 @@ requires_openai_auth = true`;
                   />
                 </div>
               )}
+
+              {/* Pi JSON */}
+              {piConfigJson && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <ProviderIcon icon="pi" name="Pi" size={16} />
+                    Pi
+                  </div>
+                  <JsonEditor
+                    value={JSON.stringify(piConfigJson, null, 2)}
+                    onChange={() => {}}
+                    height={200}
+                    darkMode={isDarkMode}
+                  />
+                </div>
+              )}
             </div>
           )}
       </div>
@@ -954,7 +1073,7 @@ requires_openai_auth = true`;
           defaultValue: "同步统一供应商",
         })}
         message={t("universalProvider.syncConfirmDescription", {
-          defaultValue: `同步 "${name}" 将会覆盖 Claude、Codex、Gemini、Kimi Code 和 Reasonix 中关联的供应商配置。确定要继续吗？`,
+          defaultValue: `同步 "${name}" 将会覆盖 Claude、Codex、Gemini、Kimi Code、Reasonix 和 Pi 中关联的供应商配置。确定要继续吗？`,
           name: name,
         })}
         confirmText={t("universalProvider.saveAndSync", {

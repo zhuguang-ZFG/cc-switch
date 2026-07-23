@@ -614,6 +614,8 @@ pub struct UniversalProviderApps {
     pub kimicode: bool,
     #[serde(default)]
     pub reasonix: bool,
+    #[serde(default)]
+    pub pi: bool,
 }
 
 /// Claude 模型配置
@@ -675,6 +677,22 @@ pub struct ReasonixModelConfig {
     pub model: Option<String>,
 }
 
+/// Pi 模型配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PiModelConfig {
+    /// 模型名称
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// 上下文窗口
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contextWindow")]
+    pub context_window: Option<i64>,
+    /// 最大输出 token 数
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxTokens")]
+    pub max_tokens: Option<i64>,
+}
+
 /// Gemini 模型配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GeminiModelConfig {
@@ -696,6 +714,8 @@ pub struct UniversalProviderModels {
     pub kimicode: Option<KimiCodeModelConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasonix: Option<ReasonixModelConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pi: Option<PiModelConfig>,
 }
 
 /// 统一供应商（跨应用共享配置）
@@ -978,6 +998,55 @@ impl UniversalProvider {
         })
     }
 
+    /// 生成 Pi 供应商配置
+    pub fn to_pi_provider(&self) -> Option<Provider> {
+        if !self.apps.pi {
+            return None;
+        }
+
+        let models = self.models.pi.as_ref();
+        let model = models
+            .and_then(|m| m.model.clone())
+            .unwrap_or_else(|| "gpt-5.5".to_string());
+
+        // Pi 的 settings_config 由 pi_config 投影到 ~/.pi/agent/models.json + auth.json：
+        // name/baseUrl/api/apiKey 进 provider 条目，models 数组逐对象合并，defaultModel 为默认模型
+        let mut model_entry = serde_json::json!({
+            "id": model,
+            "name": model,
+        });
+        if let Some(ctx) = models.and_then(|m| m.context_window).filter(|v| *v > 0) {
+            model_entry["contextWindow"] = serde_json::json!(ctx);
+        }
+        if let Some(max) = models.and_then(|m| m.max_tokens).filter(|v| *v > 0) {
+            model_entry["maxTokens"] = serde_json::json!(max);
+        }
+
+        let settings_config = serde_json::json!({
+            "name": self.name,
+            "baseUrl": self.base_url.trim_end_matches('/'),
+            "api": "openai-completions",
+            "apiKey": self.api_key,
+            "models": [model_entry],
+            "defaultModel": model,
+        });
+
+        Some(Provider {
+            id: format!("universal-pi-{}", self.id),
+            name: self.name.clone(),
+            settings_config,
+            website_url: self.website_url.clone(),
+            category: Some("aggregator".to_string()),
+            created_at: self.created_at,
+            sort_index: self.sort_index,
+            notes: self.notes.clone(),
+            meta: self.meta.clone(),
+            icon: self.icon.clone(),
+            icon_color: self.icon_color.clone(),
+            in_failover_queue: false,
+        })
+    }
+
     /// 生成 Gemini 供应商配置
     pub fn to_gemini_provider(&self) -> Option<Provider> {
         if !self.apps.gemini {
@@ -1115,8 +1184,8 @@ pub struct OpenCodeModelLimit {
 mod tests {
     use super::{
         ClaudeModelConfig, CodexModelConfig, GeminiModelConfig, KimiCodeModelConfig,
-        LocalProxyRequestOverrides, OpenCodeProviderConfig, Provider, ProviderManager,
-        ProviderMeta, UniversalProvider,
+        LocalProxyRequestOverrides, OpenCodeProviderConfig, PiModelConfig, Provider,
+        ProviderManager, ProviderMeta, UniversalProvider,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -1526,6 +1595,135 @@ mod tests {
         );
 
         assert!(universal.to_kimi_provider().is_none());
+    }
+
+    #[test]
+    fn universal_provider_to_pi_provider_uses_models() {
+        let mut universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com/".to_string(),
+            "api-key".to_string(),
+        );
+        universal.apps.pi = true;
+        universal.models.pi = Some(PiModelConfig {
+            model: Some("gpt-5.5".to_string()),
+            context_window: Some(262144),
+            max_tokens: Some(8192),
+        });
+
+        let provider = universal.to_pi_provider().expect("pi provider");
+
+        assert_eq!(provider.id, "universal-pi-u1");
+        assert_eq!(provider.name, "Universal");
+        assert_eq!(provider.category.as_deref(), Some("aggregator"));
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/name")
+                .and_then(|item| item.as_str()),
+            Some("Universal")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/baseUrl")
+                .and_then(|item| item.as_str()),
+            Some("https://api.example.com")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/api")
+                .and_then(|item| item.as_str()),
+            Some("openai-completions")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/apiKey")
+                .and_then(|item| item.as_str()),
+            Some("api-key")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/models/0/id")
+                .and_then(|item| item.as_str()),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/models/0/contextWindow")
+                .and_then(|item| item.as_i64()),
+            Some(262144)
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/models/0/maxTokens")
+                .and_then(|item| item.as_i64()),
+            Some(8192)
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/defaultModel")
+                .and_then(|item| item.as_str()),
+            Some("gpt-5.5")
+        );
+    }
+
+    #[test]
+    fn universal_provider_to_pi_provider_defaults() {
+        let mut universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "api-key".to_string(),
+        );
+        universal.apps.pi = true;
+
+        let provider = universal.to_pi_provider().expect("pi provider");
+
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/models/0/id")
+                .and_then(|item| item.as_str()),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/defaultModel")
+                .and_then(|item| item.as_str()),
+            Some("gpt-5.5")
+        );
+        assert!(provider
+            .settings_config
+            .pointer("/models/0/contextWindow")
+            .is_none());
+        assert!(provider
+            .settings_config
+            .pointer("/models/0/maxTokens")
+            .is_none());
+    }
+
+    #[test]
+    fn universal_provider_to_pi_provider_disabled_returns_none() {
+        let universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "api-key".to_string(),
+        );
+
+        assert!(universal.to_pi_provider().is_none());
     }
 
     #[test]

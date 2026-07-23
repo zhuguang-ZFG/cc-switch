@@ -52,8 +52,7 @@ export function AddProviderDialog({
     appId !== "openclaw" &&
     appId !== "kimicode" &&
     appId !== "grokbuild" &&
-    appId !== "claude-desktop" &&
-    appId !== "pi"; // 通用供应商后端暂不支持 pi（无 to_pi_provider）
+    appId !== "claude-desktop";
   const [activeTab, setActiveTab] = useState<"app-specific" | "universal">(
     "app-specific",
   );

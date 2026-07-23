@@ -616,6 +616,15 @@ export interface ReasonixModelConfig {
   model?: string;
 }
 
+// Pi 模型配置
+export interface PiModelConfig {
+  model?: string;
+  /** 上下文窗口 */
+  contextWindow?: number;
+  /** 最大输出 token 数 */
+  maxTokens?: number;
+}
+
 // 各应用的模型配置
 export interface UniversalProviderModels {
   claude?: ClaudeModelConfig;
@@ -623,6 +632,7 @@ export interface UniversalProviderModels {
   gemini?: GeminiModelConfig;
   kimicode?: KimiCodeModelConfig;
   reasonix?: ReasonixModelConfig;
+  pi?: PiModelConfig;
 }
 
 // 统一供应商（跨应用共享配置）
