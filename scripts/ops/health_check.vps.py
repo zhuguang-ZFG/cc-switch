@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""new-api 渠道健康检查 v5 (dx-hardened)
+"""new-api 渠道健康检查 v5.1 (dx-hardened)
 
-Scope (2026-07-26):
+Scope (2026-07-26 / v5.1):
 - ONLY probe OPUS_POOL (#9/#10/#20/#60)
-- Connectivity fails → count + disable at threshold (Opus only)
-- NO global AUTO-REACTIVATE (no flap)
-- NO DISABLE-QUOTA shortcut (quota text → same fail path; avoid false 额度 bans)
+- Probe model prefers claude-opus-5[1M] (matches live traffic)
+- No HTTP→HTTPS sing-box fallback (was false 400 noise)
+- Community transient (no available accounts / bare 503) → log only, do NOT fail-count toward disable
+- Hard fails → count + disable at threshold (Opus only); no auto-reactivate
+- NO DISABLE-QUOTA shortcut
 - Slow probe → Telegram alert only (priority/weight left to analyze_newapi_dx)
 - set_channel_status does NOT blanket-toggle abilities
-- 降智探针 off
-- EXCLUDE pinned channels never touched
+- PINNED_EXCLUDE never touched
 
 状态: /opt/new-api/health_state.json
 cron: */30 flock health_check.py
@@ -49,15 +50,22 @@ def _secret(k, default=""):
 
 ADMIN_USER = _secret("admin_user", "admin")
 ADMIN_PASS = _secret("admin_pass")
-FAIL_THRESHOLD = 6
-# Never probe / mutate these (pinned or parked).
-AUTO_REACTIVATE_EXCLUDE = {11, 75, 77, 78, 79, 80, 81, 118, 119, 120}
+# Higher bar: community flaps are normal; only hard consecutive fails disable.
+FAIL_THRESHOLD = 12
+# Never probe / mutate these (pinned or parked). Name kept for older STATUS notes.
+PINNED_EXCLUDE = {11, 75, 77, 78, 79, 80, 81, 118, 119, 120}
+AUTO_REACTIVATE_EXCLUDE = PINNED_EXCLUDE  # alias
 TIMEOUT = 45
-SINGBOX = "http://127.0.0.1:7890"
 SLOW_MS = 20000
 SLOW_HITS_NEED = 2
 # Opus hot pool only (channel_id -> label priority for messages)
 OPUS_POOL = {9: 45, 10: 45, 20: 45, 60: 45}
+PREFERRED_PROBE_MODELS = (
+    "claude-opus-5[1M]",
+    "claude-opus-5",
+    "claude-opus-4-8[1M]",
+    "claude-opus-4-8",
+)
 
 
 def sh(cmd, timeout=TIMEOUT + 5):
@@ -214,22 +222,54 @@ def probe_once(base, key, model, ctype, hdr_override, proxy=None, timeout=TIMEOU
 
 
 def channel_alive(base, key, model, ctype, hdr_override, setting_proxy):
-    """Return (ok, lat_ms_of_successful_probe_or_last_try)."""
+    """Return (ok, lat_ms, last_http_code, last_snippet).
+
+    Proxy order: channel setting proxy (if any), then direct. No global sing-box
+    fallback — HTTPS upstreams via :7890 previously produced false HTTP 400s.
+    """
     last_ms = 0.0
-    for px in [setting_proxy, None, SINGBOX]:
+    last_code = 0
+    last_snippet = ""
+    proxies = []
+    if setting_proxy:
+        proxies.append(setting_proxy)
+    proxies.append(None)
+    for px in proxies:
         ok, ms, code, snippet = probe_once(base, key, model, ctype, hdr_override, px)
-        last_ms = ms
+        last_ms, last_code, last_snippet = ms, code, snippet
         if ok:
-            return True, ms
+            return True, ms, code, snippet
         print(f"  probe fail proxy={px!r} http={code} ms={ms:.0f} {snippet[:120]!r}")
-    return False, last_ms
+    return False, last_ms, last_code, last_snippet
+
+
+def is_community_transient(code: int, snippet: str) -> bool:
+    """公益站账号池空/过载：预期噪声，不计入禁用阈值。"""
+    s = (snippet or "").lower()
+    if "no available accounts" in s:
+        return True
+    if "auth_unavailable" in s or "no auth available" in s:
+        return True
+    if code == 503 and (
+        "no available" in s or "overloaded" in s or "capacity" in s or not s.strip()
+    ):
+        return True
+    return False
 
 
 def pick_probe_model(models: str) -> str:
-    """Prefer an opus id if present; else first model."""
+    """Prefer live Opus 5 ids; fall back to any opus; else first model."""
     parts = [m.strip() for m in (models or "").split(",") if m.strip()]
     if not parts:
         return ""
+    lower_map = {m.lower(): m for m in parts}
+    for pref in PREFERRED_PROBE_MODELS:
+        if pref.lower() in lower_map:
+            return lower_map[pref.lower()]
+    for m in parts:
+        ml = m.lower()
+        if "opus-5" in ml or "opus_5" in ml:
+            return m
     for m in parts:
         if "opus" in m.lower():
             return m
@@ -254,7 +294,7 @@ def main():
     changed = False
 
     for cid, name, base, key, models, status, hdr, ctype, setting, priority in rows:
-        if cid in AUTO_REACTIVATE_EXCLUDE:
+        if cid in PINNED_EXCLUDE:
             fails[str(cid)] = 0
             continue
 
@@ -270,7 +310,9 @@ def main():
             pass
 
         print(f"CHECK #{cid} {name} model={model} status={status}")
-        ok, lat_ms = channel_alive(base, key, model, ctype, hdr, setting_proxy)
+        ok, lat_ms, code, snippet = channel_alive(
+            base, key, model, ctype, hdr, setting_proxy
+        )
 
         if ok:
             fails[str(cid)] = 0
@@ -295,6 +337,14 @@ def main():
         # fail path
         if status != 1:
             print(f"FAIL-IGNORE #{cid} {name} (already status={status})")
+            continue
+
+        if is_community_transient(code, snippet):
+            # 公益站账号池空/过载：不累计禁用计数（仍打印，便于对照）
+            print(
+                f"FAIL-TRANSIENT #{cid} {name} http={code} "
+                f"(no fail-count; community flap) last_ms={lat_ms:.0f}"
+            )
             continue
 
         fails[str(cid)] = fails.get(str(cid), 0) + 1

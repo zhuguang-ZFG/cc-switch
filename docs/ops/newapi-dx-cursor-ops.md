@@ -87,8 +87,8 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 ## NewAPI 运维姿态（2026-07-26）
 
 - **公益站通断是常态**（`No available accounts` / 502）：不当事故；看主池是否仍能冒烟。
-- 现网 Opus：`#9/#10/#20/#60` = **50/42/12/3**；`#11/#81/#119/#120` status=2；AR `#118` w6。
-- **可选改进（未做也可）**：health 探针改 `claude-opus-5[1M]`；去掉 HTTPS 渠的 HTTP→`:7890` 假 400 回退（减误 FAIL）。勿为单渠 502 开专项。
+- 现网 Opus：`#9/#10/#20/#60` = **50/42/12/3**；`#11/#81/#119/#120` status=2；AR `#118` w6。analyze 按 p50 动态调权（档位如 50/40/28/…），文档数字是**快照**不是硬编码目标。
+- **health v5.1**（已落地镜像 `scripts/ops/health_check.vps.py`）：探针优先 `claude-opus-5[1M]`；去掉 `:7890` 假 400 回退；`no available accounts`/公益站 503 → `FAIL-TRANSIENT` **不累计禁用**；硬失败阈值 **12**。勿为单渠 502 开专项。
 
 ## 建议定时
 
@@ -124,7 +124,7 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | SOFT_LIMIT | `KIRO_GUARD_SOFT_LIMIT=1`：空/半截 tool → Bash 提示继续拆分（非 502） |
 | RetryTimes | NewAPI options **3**（勿回 5；与 guard soft-retry 叠乘） |
 | `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；`#60` pri45 低权重；health **不探 EXCLUDE** |
-| health_check v5 | **仅** Opus `#9/#10/#20/#60`；失败可禁；**无**自动复活 / DISABLE-QUOTA / 改 pri / 整渠 abilities；慢探针只 TG。见 `docs/patches/newapi-dx-health-check-v5-2026-07-26.md` |
+| health_check v5.1 | **仅** Opus `#9/#10/#20/#60`；探针优先 `claude-opus-5[1M]`；公益站 transient **不禁**；硬失败≥12 可禁；**无**自动复活 / DISABLE-QUOTA / 改 pri / 整渠 abilities；慢探针只 TG。见 `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md` |
 | 本机 FQ | ZG → `agentrouter-2`；`max_retries=2`；`ANTHROPIC_MODEL=claude-opus-5[1M]` |
 | 本机直连策略 | **锁死**：林夕 / Sub2API / 百倍 **不进 FQ、不做 current**。经 ZG 的百倍/k40 已有 guard；本机 AR2 直连无 guard（有意：ZG 挂了仍能切）。不加本机 guard、FQ#2 不改回 ZG |
 | 软截断自动改 | journal soft_* 或日志短 completion ≥20 事件 |

@@ -39,6 +39,20 @@ def pwd() -> str:
     return m.group(1)
 
 
+def _ssh_client() -> paramiko.SSHClient:
+    c = paramiko.SSHClient()
+    # Prefer known_hosts when present; still AutoAdd for ops laptops without pin.
+    try:
+        c.load_system_host_keys()
+        known = Path.home() / ".ssh" / "known_hosts"
+        if known.is_file():
+            c.load_host_keys(str(known))
+    except Exception:
+        pass
+    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    return c
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -57,8 +71,7 @@ def main() -> int:
         print(e, file=sys.stderr)
         return 2
 
-    c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    c = _ssh_client()
     try:
         c.connect(
             HOST,
