@@ -18,9 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - FAQ (zh/en/ja): Windows `ERR_CONNECTION_REFUSED` after cargo-only binary swap; “database version too new” after schema bump + UI rollback.
-- Patch note: `docs/patches/schema-v18-created-at-text.md`.
-- **Agnes AI as free OpenAI + NewAPI Haiku tier**: `docs/patches/agnes-haiku-newapi.md` — local Reasonix/Pi/Codex/Kimi providers; ZG `#122 agnes-haiku-free` maps `LongCat-2.0` / `claude-haiku-*` → `agnes-2.0-flash` (pri32, LongCat pri30 fallback). Not for Claude Opus type=14.
-- Ops routing snapshot: `docs/ops/zg-claude-routing.md`.
+- Patch note: `docs/patches/schema-v18-created-at-text.md` (incl. official v3.18.0 = DB v16; fork v17+ downgrade note).
+- **Agnes AI as free OpenAI + NewAPI Haiku tier**: `docs/patches/agnes-haiku-newapi.md` — local Reasonix/Pi/Codex/Kimi providers; ZG `#122 agnes-haiku-free` maps `LongCat-2.0` / `claude-haiku-*` → `agnes-2.0-flash` (pri32, LongCat pri30 fallback). Not for Claude Opus type=14. Bare Agnes pricing fixed in DX pass.
+- **hongshi OpenAI/GLM backup**: `docs/patches/hongshi-openai-newapi.md` — NewAPI `#123` type=1 pri55 (no Claude).
+- **NewAPI DX pass (2026-07-25)**: `docs/patches/newapi-dx-2026-07-25.md` — `glm-5.2[1M]` abilities/prices; zhipu `enable_thinking=false`; Haiku dated id → Agnes; Opus/GLM weight tuning.
+- Ops routing snapshot: `docs/ops/zg-claude-routing.md` (updated for DX + official client note).
 
 ### Added (Pi agent — feature completion)
 

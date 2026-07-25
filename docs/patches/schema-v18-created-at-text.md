@@ -32,4 +32,5 @@ Also retained in the same change set: Reasonix→Anthropic `[1M]` strip + `conte
 - Prefer app-layer millis or `strftime('%s','now')*1000` — never `datetime('now')` on INTEGER timestamp columns.
 - Local binary: use `pnpm tauri build` for anything that must show UI.
 - If a newer build briefly set `user_version=18` and you must run a v17 UI binary again: v18 added **no columns** (data normalize only). After backup, `PRAGMA user_version = 17;` is acceptable. Do not apply this pattern to unknown future migrations.
+- **Official installer (e.g. farion1231 v3.18.0) supports DB v16 only.** Fork v17 (`skills.enabled_pi`) / v18 trips **数据库版本过新**. Daily ops path: use official app; after backup, `PRAGMA user_version = 16;` so official can open the DB (extra columns are ignored). Prefer not maintaining local cargo UI swaps.
 - Proxy health (`http://127.0.0.1:15721/health`) ≠ UI health; both must be checked after a binary swap.

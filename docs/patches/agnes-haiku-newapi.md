@@ -40,12 +40,13 @@ Switch the corresponding app’s current provider in the UI when you want to use
 | Type | `1` (OpenAI) |
 | Priority | `32` (above LongCat `#90` pri30) |
 | Upstream | `https://apihub.agnes-ai.com` |
-| Mapping | `LongCat-2.0` / `claude-haiku-*` → `agnes-2.0-flash` |
+| Mapping | `LongCat-2.0` / `claude-haiku-*` / `claude-haiku-4-5-20251001` / `[1M]` → `agnes-2.0-flash` |
 | Fallback | LongCat `#90` at pri30 |
+| Pricing | `agnes-2.0-flash` (+ alpha) ModelRatio/CompletionRatio set 2026-07-25 |
 
-Claude Code / `zg-gateway-claude` can keep requesting `LongCat-2.0` (or `claude-haiku-4-5`); NewAPI prefers Agnes at pri32.
+Claude Code / `zg-gateway-claude` can keep requesting `LongCat-2.0` (or `claude-haiku-4-5` / dated Haiku); NewAPI prefers Agnes at pri32.
 
-**Note:** Calling the gateway with bare model id `agnes-2.0-flash` may fail with “price not configured” until ops pricing is set. Haiku aliases that map through `#122` do not need that.
+Bare `agnes-2.0-flash` on the gateway is OK after the DX pricing pass (`docs/patches/newapi-dx-2026-07-25.md`).
 
 ## Explicit non-goals
 
