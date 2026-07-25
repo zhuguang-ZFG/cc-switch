@@ -39,7 +39,9 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 | 项 | 值 |
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
-| Opus 主池权重 | 当前 **`#9/#10/#20` = 50/40/32**（pri45）；`#60` w8；单次 \|Δ\|≤15 |
+| Opus 主池权重 | 当前 **`#9/#10/#20/#60` = 50/42/24/8**（pri45）；单次 \|Δ\|≤15；**勿**把 `#81/#11` 加回 `OPUS_POOL` |
+| `#81` / `#11` | **status=2** + abilities off；`AUTO_REACTIVATE_EXCLUDE`∋11,81；analyze `LAST_RESORT=∅` |
+| 卡顿分诊 | 首字慢→`logs.use_time`/渠道；中途停→soft journal；关键词→502 failover。见 `docs/patches/newapi-dx-gov-b-2026-07-26.md` |
 | 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |
 | DX 自动改权重 | **仅** Opus 主池 `#9/#10/#20/#60` 与软截断阈值；勿改 GPT/Haiku/Vyce 梯队 pri，勿把 `w=0` 噪声渠重新 enabled |
 | `#81` | Opus/Fable 已摘（models 空 + abilities off）；渠 pri15；改完 **必须** `podman restart new-api`；**勿** `/status` 弹回 |
@@ -53,7 +55,7 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 | AR Cyrillic | `KIRO_GUARD_CYRILLIC_BYPASS=1`（仅 `kiro-guard-ar-841*`）：`c`→`с` 打散词表；响应还原；勿开到百倍/k40 |
 | SOFT_LIMIT | `KIRO_GUARD_SOFT_LIMIT=1`：空/半截 tool → Bash 提示继续拆分（非 502） |
 | RetryTimes | NewAPI options **3**（勿回 5；与 guard soft-retry 叠乘） |
-| `#11` / `#60` | `#11` status=2 + abilities off；health **勿复活**（`AUTO_REACTIVATE_EXCLUDE`∋11 + SKIP-REENABLE）；`#60` pri45/**w8** |
+| `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；health **勿复活**（EXCLUDE∋11,81）；`#60` pri45/**w8** |
 | health quota | 仅计费语义才 DISABLE-QUOTA；503/no-accounts/disk ≠ 额度 |
 | 本机 FQ | ZG → `agentrouter-2`；`max_retries=2`；`ANTHROPIC_MODEL=claude-opus-5[1M]`（林夕已撤） |
 | 软截断自动改 | journal soft_* 或日志短 completion ≥20 事件 |
