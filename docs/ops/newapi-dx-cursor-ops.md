@@ -41,8 +41,8 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 | 项 | 值 |
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
-| Opus 主池权重 | 当前 **`#9/#10/#20/#60` = 50/42/12/3**；AR `#118` w6；`#119/#120` Opus off；单次 \|Δ\|≤15（stall 可 FORCE_DEMOTE） |
-| `#81` / `#11` / AR `#118–120` | **status=2** 或 park；health EXCLUDE∋11,75,77–81,118–120；analyze `LAST_RESORT=∅` |
+| Opus 主池权重 | 当前 **`#9/#10/#20/#60` = 50/42/12/3**（ZG 内 Opus **不**再 failover 到 AR）；单次 \|Δ\|≤15（stall 可 FORCE_DEMOTE） |
+| `#81` / `#11` / AR `#118–120` | **一律 status=2** + abilities off；health EXCLUDE∋11,75,77–81,118–120；analyze `LAST_RESORT=∅`。AR 仅本机 FQ#2 直连兜底 |
 | 卡顿分诊 | 首字慢→`logs.use_time`/渠道；中途停→soft journal；关键词→502 failover。见 `docs/patches/newapi-dx-gov-b-2026-07-26.md` |
 | 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |
 | DX 自动改权重 | **仅** Opus 主池 `#9/#10/#20/#60` 与软截断阈值；勿改 GPT/Haiku/Vyce 梯队 pri，勿把 `w=0` 噪声渠重新 enabled |
@@ -71,7 +71,7 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 
 ## AgentRouter / AnyRouter
 
-- **AgentRouter**（已复活）：`#118-120` → AR-guard `:841x`（proxy+Cyrillic 在 guard）；本机 FQ#2=`agentrouter-2` 直连（无 guard）。林夕/百倍直连不进 FQ。勿给上游加 `[1m]`。
-- 纪要：`docs/patches/newapi-dx-2026-07-26-night.md`
+- **AgentRouter（NewAPI 内钉死）**：`#118–120` **status=2** + abilities off（防空额度 403 透传）；guard units `:841x` 仍保留。本机 FQ#2=`agentrouter-2` 直连（无 guard）作 ZG 全挂兜底。林夕/百倍直连不进 FQ。勿给上游加 `[1m]`。
+- 纪要：`docs/patches/newapi-dx-2026-07-26-night.md`；钉死：`docs/patches/newapi-dx-ar-pin-2026-07-26.md`
 - **AnyRouter FC `#52`**：配置已就位，站方 503 时保持 `status=2`。冒烟绿后：`POST /api/channel/52/status {"status":1}` 并 `UPDATE abilities SET enabled=1 WHERE channel_id=52`。
 - **anyrouter.top**：若 403「无权访问 …[1m]」，在控制台**重建令牌且模型限制留空**，再写回本机 provider。

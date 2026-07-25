@@ -1,6 +1,6 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (health_check v5 Opus-only; anti-stall w 50/42/12/3; FQ lock)  
+**Updated:** 2026-07-26 (AR `#118–120` pinned; health v5; Opus w 50/42/12/3)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
 **Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`
 
@@ -25,7 +25,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#125` Vyce 35/20 → `#90` LongCat 30/10 |
 | **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
 | **Anthropic Sonnet** | `#125` Vyce 35/20 only |
-| **Opus** | pri45 `#9/#10/#20/#60`（w **50/42/12/3**）→ AR `#118` w6；`#119/#120` Opus abilities off；**`#81/#11` status=2**；analyze 每 4h 自动降慢渠 |
+| **Opus** | pri45 `#9/#10/#20/#60`（w **50/42/12/3**）only；**`#118–120` AR + `#81/#11` status=2**；analyze 每 4h 自动降慢渠 |
 | **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
 
 `#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#11`/`#81` **status=2**；AR `#118–120` health EXCLUDE。Vyce **无** Opus。health_check v5：`docs/patches/newapi-dx-health-check-v5-2026-07-26.md`。防卡顿：`docs/patches/newapi-dx-anti-stall-2026-07-26.md`。
@@ -47,7 +47,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 
 | Surface | State | How it works |
 |---------|--------|----------------|
-| NewAPI `#118/#119/#120` agentrouter-claude | **Live** type=14, pri 30/28/26, w 12/10/8 | base=`127.0.0.1:841x` AR-guard；proxy 在 guard（`KIRO_GUARD_PROXY=7890`），渠 `setting.proxy` 已空；map `claude-opus-5`/`[1M]` → `claude-opus-4-8`（**no** upstream `[1m]`） |
+| NewAPI `#118/#119/#120` agentrouter-claude | **Pinned status=2**（2026-07-26） | 防 AR token 空额度 403 透传；abilities off；guard `:841x` 保留不用。本机 FQ 仍可用 `agentrouter-2` |
 | NewAPI `#83/#84/#86` agentrouter GPT/GLM | **Parked** type=1；`abilities.enabled=0` | 保留渠道配置，不参与 GPT/GLM 路由 |
 | Local `agentrouter-2` | In FQ #2 after ZG | Desktop 直连 AR（**无** VPS guard）；仅 ZG 不可用时兜底；勿 map `[1m]`；勿改指 ZG |
 | NewAPI `#52` anyrouter-anthropic | **Staged, status=2** | Headers + `[1m]` models ready; FC still **503**; `auto_ban=0`; enable only after smoke |
@@ -57,7 +57,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 
 | Claude Code role | Requested model id(s) | Primary NewAPI route | Notes |
 |------------------|----------------------|----------------------|--------|
-| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 w50/42/12/3（`#9/#10/#20/#60`）→ AR `#118` w6 | `#119/#120` Opus off；`#81/#11` pinned；analyze 4h 自动降慢渠 |
+| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 w50/42/12/3（`#9/#10/#20/#60`） | AR `#118–120` + `#81/#11` pinned；analyze 4h 自动降慢渠 |
 | Sonnet / default | `glm-5.2` / `glm-5.2[1M]` | Zhipu `#41/#42` (80) → hongshi `#123` (50) | `enable_thinking=false` on zhipu |
 | Haiku | `claude-haiku-*` / dated | Agnes `#122` (40) → Vyce `#125` (35) → LongCat `#90` (30) | `LongCat-2.0` id → Agnes map `agnes-2.0-flash` |
 | GPT (OpenAI path) | `gpt-5.5` / `gpt-5.6-*` / … | `#21` (60) → `#124` (55) → `#123` (50) | type=1；123458 需浏览器 UA |
