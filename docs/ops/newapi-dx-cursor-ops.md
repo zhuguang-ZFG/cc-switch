@@ -63,6 +63,33 @@ agent --model claude-opus-5-high
 
 IDE 目录被启动刷新冲掉时：用 Cursor `AvailableModels`（带 `additionalModelNames=zg-*`）回写 `availableDefaultModels2`，并强制 `zg-*` 的 `defaultOn=true`。
 
+### Cyber Safeguards / AUP（`Opus 4.8 can't help… Start a new session`）
+
+这是 **Anthropic 服务端**策略拦截，不是 NewAPI / kiro-guard 挂了。文案含 `anthropic.com/.../aup` 或 “cyber-related safeguards” 时同属一类。
+
+| 现象 | 处理 |
+|------|------|
+| 同会话反复拦、点「继续」无效 | **新开会话**；勿 `--continue` / resume 已毒会话 |
+| 状态栏仍是 Opus **4.8** | `/model` 切走；默认用 **Opus 5** 或 Sonnet / glm |
+| 易触发任务（SSH、攻防措辞、大段安全日志） | 先换 **Sonnet / glm-5.2**；少 `cat` 整文件进上下文 |
+| 合法安全研究长期误杀 | 申请 [CVP](https://claude.com/form/cyber-use-case)；社区反馈常无效，勿当银弹 |
+| 要证据给官方 | `/feedback` + 记下 `req_…` |
+
+**社区共识（无可靠“关过滤器”）：**
+
+- GitHub：[#60366](https://github.com/anthropics/claude-code/issues/60366)、[#50916](https://github.com/anthropics/claude-code/issues/50916)、[#61889](https://github.com/anthropics/claude-code/issues/61889)（CVP 仍拦）
+- 官方说明：[Fable safety / fallback](https://support.claude.com/en/articles/15363606)（查整段会话，含工具输出）
+- 操作指南：[yurukusa false-positive](https://yurukusa.github.io/cc-safe-setup/claude-code-cyber-safeguard-false-positive.html)；钩子 `npx cc-safe-setup` **仅预警**，不能绕过
+- 长期干此类活：主用 **ZG glm / 非 Anthropic**，别跟官方 Opus 4.8 硬刚
+
+Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `claude-opus-5-high`。截图里若仍写 Opus 4.8，说明**该会话钉在 4.8**（或 Fable 回落后又被 Opus 拦死）。
+
+## NewAPI 运维姿态（2026-07-26）
+
+- **公益站通断是常态**（`No available accounts` / 502）：不当事故；看主池是否仍能冒烟。
+- 现网 Opus：`#9/#10/#20/#60` = **50/42/12/3**；`#11/#81/#119/#120` status=2；AR `#118` w6。
+- **可选改进（未做也可）**：health 探针改 `claude-opus-5[1M]`；去掉 HTTPS 渠的 HTTP→`:7890` 假 400 回退（减误 FAIL）。勿为单渠 502 开专项。
+
 ## 建议定时
 
 - **已创建** Windows 计划任务：`CCSwitch-NewAPI-DX-Ops`（每 **4 小时**）

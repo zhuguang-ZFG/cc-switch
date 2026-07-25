@@ -96,6 +96,8 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - Auto in-band: soft-trunc env (`KIRO_GUARD_SHORT_*`) + Opus weights; escalate when out of band.
 - 2026-07-26 night: Opus weights **#9/#10/#20 → 50/40/32**; report `dx-20260726-021931.md`.
 - **Client surfaces (2026-07-26):** Claude Code → ZG NewAPI；Cursor IDE BYOK → `zg-*` → NewAPI；**Cursor Agent CLI → Cursor 云端官方模型 only**（默认 `claude-opus-5-high`；勿用 Opus 4.8 踩 Cyber Safeguards）。细节见 runbook「客户端怎么走 NewAPI」。
+- **AUP / Cyber Safeguards:** 官方 Opus 4.8 易拦；新会话 + 换 Opus5/Sonnet/glm；无客户端关过滤。见 runbook「Cyber Safeguards / AUP」与 `docs/patches/cyber-safeguards-opus48-2026-07-26.md`。
+- **公益站抖动：** 预期噪声；勿当 P0。
 
 ## Client note (cc-switch)
 
