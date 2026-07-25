@@ -1,10 +1,34 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (weights 50/40/32; AR-guard+Cyrillic; local FQ lean; RetryTimes=3; #11 pinned)  
+**Updated:** 2026-07-26 (strict failover order; GPT/Haiku/Opus ladders; local FQ ZG→AR2)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
 **Night log:** `docs/patches/newapi-dx-2026-07-26-night.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
+
+## Strict failover order (2026-07-26)
+
+Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequence** — on error NewAPI retries (`RetryTimes=3`) and may draw another channel in the same pri band.
+
+### Local Claude FQ (cc-switch)
+
+1. `zg-gateway-claude` (current, sort 10)  
+2. `agentrouter-2` (sort 20)  
+林夕 / anyrouter **不在** FQ。
+
+### NewAPI ladders
+
+| Ladder | Order (pri/w) |
+|--------|----------------|
+| **GPT** | `#21` 60/40 → `#124` 55/25 → `#123` 50/20（跨 pri 才是严格先后） |
+| **GLM / default Sonnet** | `#41/#42` zhipu 80/50·8 → `#123` hongshi 50/20 |
+| **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#125` Vyce 35/20 → `#90` LongCat 30/10 |
+| **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
+| **Anthropic Sonnet** | `#125` Vyce 35/20 only |
+| **Opus** | pri45 池 `#9/#10/#20/#60`（w 50/40/32/8，加权抽取）→ 失败后再进 AR `#118` 30/12 · `#119` 28/10 · `#120` 26/8 |
+| **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
+
+`#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`（勿只靠 w=0）。`#11` pinned off。Vyce **无** Opus。
 
 ## Local entry (required)
 
@@ -12,9 +36,9 @@ Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — ve
 |------|--------|
 | Current provider | `ZG网关 Claude` (`zg-gateway-claude`) → `https://aliyun.donglicao.com` |
 | Default / Sonnet | `glm-5.2[1M]` (via ZG) |
-| Failover queue | ZG → `agentrouter-2`（林夕已撤，避免直连 k40） |
+| Failover queue | **1.** ZG → **2.** `agentrouter-2`（林夕已撤） |
 | Proxy knobs | `streaming_first_byte_timeout=25`, `max_retries=2` |
-| Daily model | ZG `ANTHROPIC_MODEL=claude-opus-5[1M]`；Sonnet→`glm-5.2[1M]`；Haiku→`LongCat-2.0` |
+| Daily model | ZG `ANTHROPIC_MODEL=claude-opus-5[1M]`；Sonnet→`glm-5.2[1M]`；Haiku 客户端可发 `LongCat-2.0`（Agnes 映射）或 `claude-haiku-*`（梯队 Agnes→Vyce→LongCat） |
 | Do not | Make Sub2API / anyrouter current for daily Claude work until anyrouter smoke is green |
 | Opus-first | Keep `claude-opus-5[1M]` for Opus/Fable/Subagent/Reasoning; **do not** demote to glm for speed. Speed = latency-weighted Opus channels + guard 502 (community / Kiro-Go #141 spirit). Keep `first_byte=25s`, `max_retries=2` — no ad-hoc tighter first_byte. |
 
@@ -23,7 +47,7 @@ Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — ve
 | Surface | State | How it works |
 |---------|--------|----------------|
 | NewAPI `#118/#119/#120` agentrouter-claude | **Live** type=14, pri 30/28/26, w 12/10/8 | base=`127.0.0.1:841x` AR-guard；proxy 在 guard（`KIRO_GUARD_PROXY=7890`），渠 `setting.proxy` 已空；map `claude-opus-5`/`[1M]` → `claude-opus-4-8`（**no** upstream `[1m]`） |
-| NewAPI `#83/#84/#86` agentrouter GPT/GLM | Live type=1, same proxy + UA | Chat completions path |
+| NewAPI `#83/#84/#86` agentrouter GPT/GLM | **Parked** type=1；`abilities.enabled=0` | 保留渠道配置，不参与 GPT/GLM 路由 |
 | Local `agentrouter-2` | In FQ #1 after ZG | Real Claude Code wire-image works from desktop (~2s); do not map `[1m]` |
 | NewAPI `#52` anyrouter-anthropic | **Staged, status=2** | Headers + `[1m]` models ready; FC still **503**; `auto_ban=0`; enable only after smoke |
 | Local `anyrouter.top` | ACL blocked | 403「令牌无权访问 …[1m]」→ rebuild token with unrestricted models |
@@ -32,10 +56,11 @@ Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — ve
 
 | Claude Code role | Requested model id(s) | Primary NewAPI route | Notes |
 |------------------|----------------------|----------------------|--------|
-| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | 主池 `#9/#10/#20`（pri45，**w50/40/32**）+ `#60`（w8）；`#11` status=2；次池 `#118–120`→`8410–8412` | 全链路经 kiro-guard；`RetryTimes=3`；`#81` 已摘。AR 渠勿设 `setting.proxy` |
-| Sonnet / default | `glm-5.2` / `glm-5.2[1M]` | Zhipu `#41` (w50) / `#42` (w8) pri80; hongshi `#123` pri55 backup | **Must** have ability for bare `glm-5.2[1M]`; zhipu `param_override={"enable_thinking":false}` |
-| Haiku | `LongCat-2.0` / `claude-haiku-*` / `claude-haiku-4-5-20251001` | Agnes `#122` → `agnes-2.0-flash` pri32; LongCat `#90` pri30 | Prices configured for bare `agnes-2.0-flash` |
-| GPT (OpenAI path) | `gpt-4o` / `gpt-4o-mini` / … | hongshi `#123` (and other GPT pools) | No Claude on hongshi — type=1 only |
+| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 池 w50/40/32/8（`#9/#10/#20/#60`）→ AR pri30/28/26 | 同 pri 加权非串行；kiro-guard；无 Vyce |
+| Sonnet / default | `glm-5.2` / `glm-5.2[1M]` | Zhipu `#41/#42` (80) → hongshi `#123` (50) | `enable_thinking=false` on zhipu |
+| Haiku | `claude-haiku-*` / dated | Agnes `#122` (40) → Vyce `#125` (35) → LongCat `#90` (30) | `LongCat-2.0` id → Agnes map `agnes-2.0-flash` |
+| GPT (OpenAI path) | `gpt-5.5` / `gpt-5.6-*` / … | `#21` (60) → `#124` (55) → `#123` (50) | type=1；123458 需浏览器 UA |
+| Anthropic-native Sonnet | `claude-sonnet-4-6` / `claude-sonnet-5` | Vyce `#125` (35) | 日常 Sonnet 仍走 glm；`docs/patches/vyceai-newapi.md` |
 
 ## DX fixes (2026-07-25)
 

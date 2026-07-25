@@ -1,3 +1,16 @@
 @echo off
-cd /d D:\Users\cc-switch
-"C:\Users\zhugu\scoop\apps\python313\current\python.exe" "D:\Users\cc-switch\scripts\ops\newapi-dx-analyze.py" >> "D:\Users\cc-switch\.tmp-newapi-dx-ops.log" 2>&1
+setlocal
+rem Repo-relative entry for Task Scheduler / manual runs.
+cd /d "%~dp0..\.."
+if errorlevel 1 exit /b 1
+
+set "LOG=%CD%\.tmp-newapi-dx-ops.log"
+where python >nul 2>&1
+if errorlevel 1 (
+  echo [%DATE% %TIME%] python not found on PATH>> "%LOG%"
+  echo python not found on PATH 1>&2
+  exit /b 1
+)
+
+python "%CD%\scripts\ops\newapi-dx-analyze.py" %* >> "%LOG%" 2>&1
+exit /b %ERRORLEVEL%

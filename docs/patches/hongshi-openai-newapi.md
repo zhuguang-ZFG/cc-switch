@@ -13,7 +13,7 @@ Free OpenAI-compatible upstream for GPT / glm / deepseek backup. **No Claude** �
 |-------|--------|
 | Id / name | `#123` `hongshi-openai-free` |
 | Type | `1` (OpenAI) |
-| Priority | `55` (below zhipu glm pri80) |
+| Priority | `50` (strict: zhipu 80 → GPT `#21/124` → **hongshi 50** → Vyce OpenAI 48) |
 | Base | `https://api.hongshi.cc.cd` |
 | Models | `gpt-4o`, `gpt-4o-mini`, `gpt-4`, `gpt-4-turbo`, `gpt-3.5-turbo`, `glm-5.2`, `z-ai/glm-5.2`, `deepseek-v4-*`, `openai/gpt-oss-*`, `glm-5.2[1M]` (mapped) |
 

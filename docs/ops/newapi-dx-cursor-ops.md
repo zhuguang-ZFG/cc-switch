@@ -26,8 +26,8 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 ## 建议定时
 
 - **已创建** Windows 计划任务：`CCSwitch-NewAPI-DX-Ops`（每天 **09:00**）
-  - 入口：`scripts/ops/newapi-dx-analyze.bat`
-  - 日志：`D:\Users\cc-switch\.tmp-newapi-dx-ops.log`
+  - 入口：`scripts/ops/newapi-dx-analyze.bat`（相对仓库根；用 PATH 上的 `python`；透传 `%*`）
+  - 日志：仓库根 `.tmp-newapi-dx-ops.log`（失败时 bat/`python` 非零退出码）
   - 查询：`schtasks /Query /TN CCSwitch-NewAPI-DX-Ops`
   - 删除：`schtasks /Delete /TN CCSwitch-NewAPI-DX-Ops /F`
 - 亦可 Cursor loop 按需跑：`python scripts/ops/newapi-dx-analyze.py`
@@ -40,6 +40,8 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
 | Opus 主池权重 | 当前 **`#9/#10/#20` = 50/40/32**（pri45）；`#60` w8；单次 \|Δ\|≤15 |
+| 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |
+| DX 自动改权重 | **仅** Opus 主池 `#9/#10/#20/#60` 与软截断阈值；勿改 GPT/Haiku/Vyce 梯队 pri，勿把 `w=0` 噪声渠重新 enabled |
 | `#81` | Opus/Fable 已摘（models 空 + abilities off）；渠 pri15；改完 **必须** `podman restart new-api`；**勿** `/status` 弹回 |
 | SHORT_OUT | 16–64（当前 **64**） |
 | TEXT_HEUR | `KIRO_GUARD_TEXT_HEUR=1`：未闭合 fence / 句尾开放标点 / 有 tools 却只说「我将」无 tool_use |

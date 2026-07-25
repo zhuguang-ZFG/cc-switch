@@ -19,8 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - FAQ (zh/en/ja): Windows `ERR_CONNECTION_REFUSED` after cargo-only binary swap; “database version too new” after schema bump + UI rollback.
 - Patch note: `docs/patches/schema-v18-created-at-text.md` (incl. official v3.18.0 = DB v16; fork v17+ downgrade note).
-- **Agnes AI as free OpenAI + NewAPI Haiku tier**: `docs/patches/agnes-haiku-newapi.md` — local Reasonix/Pi/Codex/Kimi providers; ZG `#122 agnes-haiku-free` maps `LongCat-2.0` / `claude-haiku-*` → `agnes-2.0-flash` (pri32, LongCat pri30 fallback). Not for Claude Opus type=14. Bare Agnes pricing fixed in DX pass.
-- **hongshi OpenAI/GLM backup**: `docs/patches/hongshi-openai-newapi.md` — NewAPI `#123` type=1 pri55 (no Claude).
+- **Agnes AI as free OpenAI + NewAPI Haiku tier**: `docs/patches/agnes-haiku-newapi.md` — local Reasonix/Pi/Codex/Kimi providers; ZG `#122 agnes-haiku-free` maps `LongCat-2.0` / `claude-haiku-*` → `agnes-2.0-flash` (pri40; Haiku ladder Agnes→Vyce→LongCat). Not for Claude Opus type=14. Bare Agnes pricing fixed in DX pass.
+- **hongshi OpenAI/GLM backup**: `docs/patches/hongshi-openai-newapi.md` — NewAPI `#123` type=1 pri50 (no Claude).
+- **GPT 8317 pool on NewAPI**: `docs/patches/gpt8317-openai-newapi.md` — `#21 gpt-8317` → `http://216.195.211.206:8317` (pri60/w40; gpt-5.5/5.6/5.4 + mini).
+- **GPT 123458 + VyceAI on NewAPI**: `docs/patches/gpt123458-openai-newapi.md` / `docs/patches/vyceai-newapi.md` — `#124` GPT front; `#125` Claude sonnet/haiku; `#126` OpenAI side.
+- **Strict NewAPI failover order**: `docs/ops/zg-claude-routing.md` — GPT `#21→#124→#123`; Haiku Agnes→Vyce→LongCat; Opus pri45 weight pool then AR; local FQ ZG→AR2; park AR-GPT abilities off.
 - **NewAPI DX pass (2026-07-25)**: `docs/patches/newapi-dx-2026-07-25.md` — `glm-5.2[1M]` abilities/prices; zhipu `enable_thinking=false`; Haiku dated id → Agnes; Opus/GLM weight tuning.
 - **NewAPI DX exec (2026-07-25 night)**: `docs/patches/newapi-dx-exec-2026-07-25-night.md` — kiro-guard soft-truncation retry/502; abilities↔channels sync; health_check urllib (no key on argv); local ZG restore + FB=25s/retries=3.
 - **NewAPI DX night (2026-07-26)**: `docs/patches/newapi-dx-2026-07-26-night.md` — AR behind kiro-guard + Cyrillic-Bypass; content_block→502; RetryTimes=3; `#11` pinned (health SKIP-REENABLE); Opus weights 50/40/32; local FQ ZG→agentrouter-2, `max_retries=2`, Opus-first `ANTHROPIC_MODEL`.
