@@ -1,8 +1,8 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (AR `#118–120` pinned; health **v5.1**; Opus w 50/42/12/3)  
+**Updated:** 2026-07-26 (AR pinned; health **v5.1**; local clients cleaned; Claude theme Slate Ember)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
-**Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`
+**Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
 
@@ -104,6 +104,7 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - Prefer **official** [farion1231/cc-switch](https://github.com/farion1231/cc-switch/releases) installers for daily use (e.g. v3.18.0 → DB support **v16**).
 - Fork schema v17+ (`enabled_pi`) / v18 will trip **数据库版本过新** on official — after backup, `PRAGMA user_version = 16;` is the known downgrade for this ops path (extra columns ignored).
 - Do not replace the installed UI with `cargo build --release` only.
+- **本机已卸** A2A / Reasonix+Atom / Pi（npm + 配置目录 + DB `app_type` 行）。日常入口仅 Claude Code（`zg-gateway-claude`）与 Cursor IDE BYOK。Claude Code 主题：`custom:slate-ember`（`~\.claude\themes\slate-ember.json`）。见 `docs/patches/local-clients-cleanup-2026-07-26.md`。
 
 ## Explicit do-nots
 

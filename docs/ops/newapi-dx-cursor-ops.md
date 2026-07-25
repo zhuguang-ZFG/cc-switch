@@ -24,13 +24,18 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 
 凭据：本机 `D:\Downloads\VPS.txt`（勿提交）。
 
+## 本机客户端姿态（2026-07-26）
+
+日常只保留：**Claude Code → cc-switch → ZG**，以及 **Cursor IDE BYOK**。已卸 A2A / Reasonix+Atom / Pi（配置目录 + npm + cc-switch DB 对应行）。Claude Code 主题：`custom:slate-ember`。细节：`docs/patches/local-clients-cleanup-2026-07-26.md`。
+
 ## 客户端怎么走 NewAPI（2026-07-26）
 
 | 客户端 | 能否直连 ZG NewAPI | 说明 |
 |--------|-------------------|------|
-| **Claude Code**（cc-switch） | **能** | current=`ZG网关 Claude` → `https://aliyun.donglicao.com`；日常 Opus 用这个 |
+| **Claude Code**（cc-switch） | **能** | current=`ZG网关 Claude` → `https://aliyun.donglicao.com`；日常 Opus 用这个；主题 `custom:slate-ember` |
 | **Cursor IDE BYOK** | **能** | OpenAI Base URL + `zg-*` 自定义模型（见下） |
 | **Cursor Agent CLI**（`agent`） | **基本不能** | 模型表来自 Cursor 云端；隐藏 `--base-url` 仅 `agent-cli-local`，公开入口不可用 |
+| Reasonix / Pi / A2A（本机） | — | **已卸**；勿再当日常入口 |
 
 ### Cursor Agent CLI
 
