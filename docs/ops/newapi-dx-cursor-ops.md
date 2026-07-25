@@ -58,7 +58,8 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 | RetryTimes | NewAPI options **3**（勿回 5；与 guard soft-retry 叠乘） |
 | `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；health **勿复活**（EXCLUDE∋11,81）；`#60` pri45/**w8** |
 | health quota | 仅计费语义才 DISABLE-QUOTA；503/no-accounts/disk ≠ 额度 |
-| 本机 FQ | ZG → `agentrouter-2`；`max_retries=2`；`ANTHROPIC_MODEL=claude-opus-5[1M]`（林夕已撤） |
+| 本机 FQ | ZG → `agentrouter-2`；`max_retries=2`；`ANTHROPIC_MODEL=claude-opus-5[1M]` |
+| 本机直连策略 | **锁死**：林夕 / Sub2API / 百倍 **不进 FQ、不做 current**。经 ZG 的百倍/k40 已有 guard；本机 AR2 直连无 guard（有意：ZG 挂了仍能切）。不加本机 guard、FQ#2 不改回 ZG |
 | 软截断自动改 | journal soft_* 或日志短 completion ≥20 事件 |
 
 ## 回滚
@@ -69,7 +70,7 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 
 ## AgentRouter / AnyRouter
 
-- **AgentRouter**（已复活）：`#118-120` → AR-guard `:841x`（proxy+Cyrillic 在 guard）；本机 FQ 仅 `agentrouter-2`（无林夕）。勿给上游加 `[1m]`。
+- **AgentRouter**（已复活）：`#118-120` → AR-guard `:841x`（proxy+Cyrillic 在 guard）；本机 FQ#2=`agentrouter-2` 直连（无 guard）。林夕/百倍直连不进 FQ。勿给上游加 `[1m]`。
 - 纪要：`docs/patches/newapi-dx-2026-07-26-night.md`
 - **AnyRouter FC `#52`**：配置已就位，站方 503 时保持 `status=2`。冒烟绿后：`POST /api/channel/52/status {"status":1}` 并 `UPDATE abilities SET enabled=1 WHERE channel_id=52`。
 - **anyrouter.top**：若 403「无权访问 …[1m]」，在控制台**重建令牌且模型限制留空**，再写回本机 provider。

@@ -36,10 +36,11 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 |------|--------|
 | Current provider | `ZG网关 Claude` (`zg-gateway-claude`) → `https://aliyun.donglicao.com` |
 | Default / Sonnet | `glm-5.2[1M]` (via ZG) |
-| Failover queue | **1.** ZG → **2.** `agentrouter-2`（林夕已撤） |
+| Failover queue | **1.** ZG → **2.** `agentrouter-2`（林夕 / Sub2API / 百倍直连 **不进 FQ**） |
 | Proxy knobs | `streaming_first_byte_timeout=25`, `max_retries=2` |
 | Daily model | ZG `ANTHROPIC_MODEL=claude-opus-5[1M]`；Sonnet→`glm-5.2[1M]`；Haiku 客户端可发 `LongCat-2.0`（Agnes 映射）或 `claude-haiku-*`（梯队 Agnes→Vyce→LongCat） |
-| Do not | Make Sub2API / anyrouter current for daily Claude work until anyrouter smoke is green |
+| Guard coverage | 经 ZG：百倍 `#9/#10/#20`→`:8403-5`、k40/林夕 `#60`→`:8400` **有** kiro-guard。本机直连林夕/Sub2API/百倍/AR2 **无** guard — **勿手动切 current**；FQ#2 直连 AR 是有意取舍（ZG 全挂时仍有后备，不叠本机 guard） |
+| Do not | Make Sub2API / 林夕 / 百倍直连 / anyrouter current for daily Claude；勿把 FQ#2 也指回 ZG（无真正后备） |
 | Opus-first | Keep `claude-opus-5[1M]` for Opus/Fable/Subagent/Reasoning; **do not** demote to glm for speed. Speed = latency-weighted Opus channels + guard 502 (community / Kiro-Go #141 spirit). Keep `first_byte=25s`, `max_retries=2` — no ad-hoc tighter first_byte. |
 
 ## AgentRouter / AnyRouter (2026-07-26)
@@ -48,7 +49,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 |---------|--------|----------------|
 | NewAPI `#118/#119/#120` agentrouter-claude | **Live** type=14, pri 30/28/26, w 12/10/8 | base=`127.0.0.1:841x` AR-guard；proxy 在 guard（`KIRO_GUARD_PROXY=7890`），渠 `setting.proxy` 已空；map `claude-opus-5`/`[1M]` → `claude-opus-4-8`（**no** upstream `[1m]`） |
 | NewAPI `#83/#84/#86` agentrouter GPT/GLM | **Parked** type=1；`abilities.enabled=0` | 保留渠道配置，不参与 GPT/GLM 路由 |
-| Local `agentrouter-2` | In FQ #1 after ZG | Real Claude Code wire-image works from desktop (~2s); do not map `[1m]` |
+| Local `agentrouter-2` | In FQ #2 after ZG | Desktop 直连 AR（**无** VPS guard）；仅 ZG 不可用时兜底；勿 map `[1m]`；勿改指 ZG |
 | NewAPI `#52` anyrouter-anthropic | **Staged, status=2** | Headers + `[1m]` models ready; FC still **503**; `auto_ban=0`; enable only after smoke |
 | Local `anyrouter.top` | ACL blocked | 403「令牌无权访问 …[1m]」→ rebuild token with unrestricted models |
 
