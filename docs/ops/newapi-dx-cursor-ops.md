@@ -24,6 +24,45 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 
 凭据：本机 `D:\Downloads\VPS.txt`（勿提交）。
 
+## 客户端怎么走 NewAPI（2026-07-26）
+
+| 客户端 | 能否直连 ZG NewAPI | 说明 |
+|--------|-------------------|------|
+| **Claude Code**（cc-switch） | **能** | current=`ZG网关 Claude` → `https://aliyun.donglicao.com`；日常 Opus 用这个 |
+| **Cursor IDE BYOK** | **能** | OpenAI Base URL + `zg-*` 自定义模型（见下） |
+| **Cursor Agent CLI**（`agent`） | **基本不能** | 模型表来自 Cursor 云端；隐藏 `--base-url` 仅 `agent-cli-local`，公开入口不可用 |
+
+### Cursor Agent CLI
+
+| CLI id | 说明 |
+|--------|------|
+| `claude-opus-5-high` | Opus 5 1M（推荐默认；本机 `~/.cursor/cli-config.json`） |
+| `claude-opus-4-8-high` | Opus 4.8 1M — 易触发官方 Cyber Safeguards |
+| `glm-5.2-high` / `composer-2.5` | 非 Anthropic 路径，攻防类任务可作后备 |
+
+```text
+/model claude-opus-5-high
+```
+
+```powershell
+agent --model claude-opus-5-high
+```
+
+改 `cli-config.json` 后需**新开** CLI 会话。不要指望列表里出现 `zg-claude-opus-5`。
+
+### Cursor IDE BYOK（走 ZG NewAPI）
+
+| 项 | 值 |
+|----|-----|
+| Override OpenAI Base URL | `https://aliyun.donglicao.com/v1` |
+| OpenAI API Key | 与 Claude Code 同一 NewAPI 用户令牌（cc-switch `zg-gateway-claude`） |
+| 落盘 | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` → `openAIBaseUrl` / `useOpenAIKey` / `userAddedModels` / `availableDefaultModels2` |
+| 选择器 | 用 **`ZG Opus 5`**（id `zg-claude-opus-5`）。云目录里的官方 **`claude-opus-5` / Opus 4.x** 走 Cursor Anthropic，会触发 Cyber Safeguards——本机已放入 `modelOverrideDisabled` |
+| NewAPI 映射 | `zg-claude-opus-5` → `claude-opus-5[1M]`（及 `zg-glm-5.2` / `zg-gpt-5.5` / `zg-longcat` 等）；改渠道 `models`+`model_mapping`+abilities 后 **`podman restart new-api`** |
+| 可见性坑 | 云端 `additionalModelNames` 返回的 user-added 常 `defaultOn=null`，须写入 `modelOverrideEnabled` 并带 `namedModelSectionIndex`；改完 **Quit 干净再开** IDE |
+
+IDE 目录被启动刷新冲掉时：用 Cursor `AvailableModels`（带 `additionalModelNames=zg-*`）回写 `availableDefaultModels2`，并强制 `zg-*` 的 `defaultOn=true`。
+
 ## 建议定时
 
 - **已创建** Windows 计划任务：`CCSwitch-NewAPI-DX-Ops`（每 **4 小时**）
