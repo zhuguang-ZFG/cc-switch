@@ -1,8 +1,8 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (anti-stall: Opus w 50/42/12/3; AR park 119/120; analyze 4h)  
+**Updated:** 2026-07-26 (health_check v5 Opus-only; anti-stall w 50/42/12/3; FQ lock)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
-**Night / gov logs:** `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`
+**Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
 
@@ -28,7 +28,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | **Opus** | pri45 `#9/#10/#20/#60`（w **50/42/12/3**）→ AR `#118` w6；`#119/#120` Opus abilities off；**`#81/#11` status=2**；analyze 每 4h 自动降慢渠 |
 | **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
 
-`#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#11`/`#81` **status=2** + health `AUTO_REACTIVATE_EXCLUDE`。Vyce **无** Opus。防卡顿：`docs/patches/newapi-dx-anti-stall-2026-07-26.md`（慢渠只降不升 + FORCE_DEMOTE）。
+`#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#11`/`#81` **status=2**；AR `#118–120` health EXCLUDE。Vyce **无** Opus。health_check v5：`docs/patches/newapi-dx-health-check-v5-2026-07-26.md`。防卡顿：`docs/patches/newapi-dx-anti-stall-2026-07-26.md`。
 
 ## Local entry (required)
 
@@ -72,11 +72,12 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | Agnes / dated Haiku | price / ability gaps | Agnes `#122` maps + prices |
 | Ability weight=0 | Channel weight tuning ignored | Sync `abilities.priority/weight` from `channels` for managed pools |
 | Kiro fake-complete stop | HTTP 200 + `end_turn` mid-answer | `kiro_guard`: force non-stream + soft classify → retry → 502; text heuristics; `SHORT_OUT=64`; SOFT_LIMIT for empty tools. Community: Kiro-Go #141/#142/#143 (we don't self-host). |
-| Health-check key on argv | `curl … Authorization: Bearer …` visible in `ps` | `health_check.py` v4 uses urllib; disabled `#13` until key rotated |
-| Fake 「额度耗尽 429」 | `#11` DISABLE-QUOTA on 503 / no accounts | Tighten quota classifier: billing signals only; bare 429/rate_limit → fails path |
+| Health-check key on argv | `curl … Authorization: Bearer …` visible in `ps` | `health_check.py` v5 urllib；只探 Opus 主池 |
+| health_check 误禁 AR / 翻覆 | 全表探测 + AUTO-REACTIVATE + 整渠 abilities | v5：只探 `#9/#10/#20/#60`；无自动复活；不改 abilities；EXCLUDE∋118–120。见 `docs/patches/newapi-dx-health-check-v5-2026-07-26.md` |
+| Fake 「额度耗尽 429」 | `#11` DISABLE-QUOTA on 503 / no accounts | v5 已去掉 DISABLE-QUOTA 捷径 |
 | Nested retries too deep | Guard soft-retry × NewAPI RetryTimes × local retries → 504 | Global `RetryTimes=3`; local `max_retries=2` / FB=25s |
 | Dual k40 high weight | `#11`+#60 both → `8400` fake failover | Keep `#11` disabled; `#60` w8 until k40 stable |
-| `#11` flap back on | health DISABLE-QUOTA then REENABLE / AUTO-REACTIVATE + `/status` re-enables abilities | Pin `status=2`; `AUTO_REACTIVATE_EXCLUDE` incl. 11 + SKIP-REENABLE; do not bounce `/status` |
+| `#11` flap back on | health REENABLE / `/status` 弹 abilities | Pin `status=2`；EXCLUDE∋11；v5 无自动复活；勿 bounce `/status` |
 | `#81` Opus after strip | DB abilities=0 but memory still routes | Always `podman restart new-api` after ability/model strip |
 | AgentRouter keyword / sensitive_words | 400/405 passed through → NewAPI may not switch | `kiro_guard` remaps content-block → **502** immediately (`CONTENT_BLOCK_FAILOVER`) |
 | AgentRouter long-prompt WAF | `500 sensitive_words_detected` (community) | AR-only Cyrillic-Bypass (`KIRO_GUARD_CYRILLIC_BYPASS=1` on 8410–8412); source: marko1olo/agentrouter-setup-guide |

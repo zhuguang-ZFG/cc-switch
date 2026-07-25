@@ -2,6 +2,7 @@
 
 **Owner:** Cursor agent（定时/按需）  
 **VPS script:** `/opt/new-api/analyze_newapi_dx.py`（仓库镜像 `scripts/ops/analyze_newapi_dx.vps.py`）  
+**Health:** `/opt/new-api/health_check.py` v5（镜像 `scripts/ops/health_check.vps.py`；cron `*/30`）  
 **Local entry:** `scripts/ops/newapi-dx-analyze.py`  
 **Reports:** `/opt/new-api/reports/dx-*.md`
 
@@ -41,7 +42,7 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
 | Opus 主池权重 | 当前 **`#9/#10/#20/#60` = 50/42/12/3**；AR `#118` w6；`#119/#120` Opus off；单次 \|Δ\|≤15（stall 可 FORCE_DEMOTE） |
-| `#81` / `#11` | **status=2** + abilities off；`AUTO_REACTIVATE_EXCLUDE`∋11,81；analyze `LAST_RESORT=∅` |
+| `#81` / `#11` / AR `#118–120` | **status=2** 或 park；health EXCLUDE∋11,75,77–81,118–120；analyze `LAST_RESORT=∅` |
 | 卡顿分诊 | 首字慢→`logs.use_time`/渠道；中途停→soft journal；关键词→502 failover。见 `docs/patches/newapi-dx-gov-b-2026-07-26.md` |
 | 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |
 | DX 自动改权重 | **仅** Opus 主池 `#9/#10/#20/#60` 与软截断阈值；勿改 GPT/Haiku/Vyce 梯队 pri，勿把 `w=0` 噪声渠重新 enabled |
@@ -56,8 +57,8 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 | AR Cyrillic | `KIRO_GUARD_CYRILLIC_BYPASS=1`（仅 `kiro-guard-ar-841*`）：`c`→`с` 打散词表；响应还原；勿开到百倍/k40 |
 | SOFT_LIMIT | `KIRO_GUARD_SOFT_LIMIT=1`：空/半截 tool → Bash 提示继续拆分（非 502） |
 | RetryTimes | NewAPI options **3**（勿回 5；与 guard soft-retry 叠乘） |
-| `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；health **勿复活**（EXCLUDE∋11,81）；`#60` pri45/**w8** |
-| health quota | 仅计费语义才 DISABLE-QUOTA；503/no-accounts/disk ≠ 额度 |
+| `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；`#60` pri45 低权重；health **不探 EXCLUDE** |
+| health_check v5 | **仅** Opus `#9/#10/#20/#60`；失败可禁；**无**自动复活 / DISABLE-QUOTA / 改 pri / 整渠 abilities；慢探针只 TG。见 `docs/patches/newapi-dx-health-check-v5-2026-07-26.md` |
 | 本机 FQ | ZG → `agentrouter-2`；`max_retries=2`；`ANTHROPIC_MODEL=claude-opus-5[1M]` |
 | 本机直连策略 | **锁死**：林夕 / Sub2API / 百倍 **不进 FQ、不做 current**。经 ZG 的百倍/k40 已有 guard；本机 AR2 直连无 guard（有意：ZG 挂了仍能切）。不加本机 guard、FQ#2 不改回 ZG |
 | 软截断自动改 | journal soft_* 或日志短 completion ≥20 事件 |
