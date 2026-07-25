@@ -1,7 +1,7 @@
 # Cursor 运维 NewAPI 开发体验
 
 **Owner:** Cursor agent（定时/按需）  
-**VPS script:** `/opt/new-api/analyze_newapi_dx.py`  
+**VPS script:** `/opt/new-api/analyze_newapi_dx.py`（仓库镜像 `scripts/ops/analyze_newapi_dx.vps.py`）  
 **Local entry:** `scripts/ops/newapi-dx-analyze.py`  
 **Reports:** `/opt/new-api/reports/dx-*.md`
 
@@ -25,11 +25,12 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 
 ## 建议定时
 
-- **已创建** Windows 计划任务：`CCSwitch-NewAPI-DX-Ops`（每天 **09:00**）
+- **已创建** Windows 计划任务：`CCSwitch-NewAPI-DX-Ops`（每 **4 小时**）
   - 入口：`scripts/ops/newapi-dx-analyze.bat`（相对仓库根；用 PATH 上的 `python`；透传 `%*`）
   - 日志：仓库根 `.tmp-newapi-dx-ops.log`（失败时 bat/`python` 非零退出码）
   - 查询：`schtasks /Query /TN CCSwitch-NewAPI-DX-Ops`
   - 删除：`schtasks /Delete /TN CCSwitch-NewAPI-DX-Ops /F`
+  - 自动降权：主池按 p50 排名；**慢于 best×1.6 只降不升**；p50≥35s / p90≥90s 硬顶；AR `#119/#120` 可 park；stall 时 **FORCE_DEMOTE** 绕过 6h 冷却
 - 亦可 Cursor loop 按需跑：`python scripts/ops/newapi-dx-analyze.py`
 - 冷却：权重默认 6h 内相同建议不重复写
 - 回看窗口：24h；渠道最少 10 样本才参与排名
@@ -39,7 +40,7 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 | 项 | 值 |
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
-| Opus 主池权重 | 当前 **`#9/#10/#20/#60` = 50/42/24/8**（pri45）；单次 \|Δ\|≤15；**勿**把 `#81/#11` 加回 `OPUS_POOL` |
+| Opus 主池权重 | 当前 **`#9/#10/#20/#60` = 50/42/12/3**；AR `#118` w6；`#119/#120` Opus off；单次 \|Δ\|≤15（stall 可 FORCE_DEMOTE） |
 | `#81` / `#11` | **status=2** + abilities off；`AUTO_REACTIVATE_EXCLUDE`∋11,81；analyze `LAST_RESORT=∅` |
 | 卡顿分诊 | 首字慢→`logs.use_time`/渠道；中途停→soft journal；关键词→502 failover。见 `docs/patches/newapi-dx-gov-b-2026-07-26.md` |
 | 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |

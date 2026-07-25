@@ -1,8 +1,8 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (gov-B: pin #81; Opus w 50/42/24/8; CONTENT_BLOCK env; triage runbook)  
+**Updated:** 2026-07-26 (anti-stall: Opus w 50/42/12/3; AR park 119/120; analyze 4h)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
-**Night log:** `docs/patches/newapi-dx-2026-07-26-night.md`
+**Night / gov logs:** `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
 
@@ -25,10 +25,10 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#125` Vyce 35/20 → `#90` LongCat 30/10 |
 | **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
 | **Anthropic Sonnet** | `#125` Vyce 35/20 only |
-| **Opus** | pri45 池 `#9/#10/#20/#60`（w **50/42/24/8**，加权抽取）→ AR `#118` 30/12 · `#119` 28/10 · `#120` 26/8；**`#81/#11` status=2** |
+| **Opus** | pri45 `#9/#10/#20/#60`（w **50/42/12/3**）→ AR `#118` w6；`#119/#120` Opus abilities off；**`#81/#11` status=2**；analyze 每 4h 自动降慢渠 |
 | **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
 
-`#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#11`/`#81` **status=2** + health `AUTO_REACTIVATE_EXCLUDE`。Vyce **无** Opus。治理纪要：`docs/patches/newapi-dx-gov-b-2026-07-26.md`。
+`#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#11`/`#81` **status=2** + health `AUTO_REACTIVATE_EXCLUDE`。Vyce **无** Opus。防卡顿：`docs/patches/newapi-dx-anti-stall-2026-07-26.md`（慢渠只降不升 + FORCE_DEMOTE）。
 
 ## Local entry (required)
 
@@ -56,7 +56,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 
 | Claude Code role | Requested model id(s) | Primary NewAPI route | Notes |
 |------------------|----------------------|----------------------|--------|
-| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 池 w50/42/24/8（`#9/#10/#20/#60`）→ AR pri30/28/26 | `#81/#11` pinned；同 pri 加权；见 gov-B triage |
+| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 w50/42/12/3（`#9/#10/#20/#60`）→ AR `#118` w6 | `#119/#120` Opus off；`#81/#11` pinned；analyze 4h 自动降慢渠 |
 | Sonnet / default | `glm-5.2` / `glm-5.2[1M]` | Zhipu `#41/#42` (80) → hongshi `#123` (50) | `enable_thinking=false` on zhipu |
 | Haiku | `claude-haiku-*` / dated | Agnes `#122` (40) → Vyce `#125` (35) → LongCat `#90` (30) | `LongCat-2.0` id → Agnes map `agnes-2.0-flash` |
 | GPT (OpenAI path) | `gpt-5.5` / `gpt-5.6-*` / … | `#21` (60) → `#124` (55) → `#123` (50) | type=1；123458 需浏览器 UA |

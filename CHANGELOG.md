@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GPT 123458 + VyceAI on NewAPI**: `docs/patches/gpt123458-openai-newapi.md` / `docs/patches/vyceai-newapi.md` — `#124` GPT front; `#125` Claude sonnet/haiku; `#126` OpenAI side.
 - **Strict NewAPI failover order**: `docs/ops/zg-claude-routing.md` — GPT `#21→#124→#123`; Haiku Agnes→Vyce→LongCat; Opus pri45 weight pool then AR; local FQ ZG→AR2; park AR-GPT abilities off.
 - **NewAPI DX governance B**: `docs/patches/newapi-dx-gov-b-2026-07-26.md` — pin `#81` (was eating Opus, p90~121s); Opus weights 50/42/24/8; CONTENT_BLOCK_FAILOVER in guard env; analyze pool drops 81; stuck-session triage.
+- **NewAPI anti-stall automation**: `docs/patches/newapi-dx-anti-stall-2026-07-26.md` — demote `#20/#60`, park AR `#119/#120` Opus; analyze latency no-raise/FORCE_DEMOTE; schtask every 4h.
 - **NewAPI DX pass (2026-07-25)**: `docs/patches/newapi-dx-2026-07-25.md` — `glm-5.2[1M]` abilities/prices; zhipu `enable_thinking=false`; Haiku dated id → Agnes; Opus/GLM weight tuning.
 - **NewAPI DX exec (2026-07-25 night)**: `docs/patches/newapi-dx-exec-2026-07-25-night.md` — kiro-guard soft-truncation retry/502; abilities↔channels sync; health_check urllib (no key on argv); local ZG restore + FB=25s/retries=3.
 - **NewAPI DX night (2026-07-26)**: `docs/patches/newapi-dx-2026-07-26-night.md` — AR behind kiro-guard + Cyrillic-Bypass; content_block→502; RetryTimes=3; `#11` pinned (health SKIP-REENABLE); Opus weights 50/40/32; local FQ ZG→agentrouter-2, `max_retries=2`, Opus-first `ANTHROPIC_MODEL`.
