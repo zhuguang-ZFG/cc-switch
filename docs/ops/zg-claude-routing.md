@@ -48,7 +48,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | Surface | State | How it works |
 |---------|--------|----------------|
 | NewAPI `#118` agentrouter-claude | **Live** pri30/w6 | AR 已充值；guard `:8410`；次池 |
-| NewAPI `#119/#120` | **status=2** | 防慢尾，非额度；可按需再开 |
+| NewAPI `#119/#120` | **暂时不开** status=2 | 防慢尾；额度已充仍保持钉死，需要时再开 |
 | NewAPI `#83/#84/#86` agentrouter GPT/GLM | **Parked** type=1；`abilities.enabled=0` | 保留渠道配置，不参与 GPT/GLM 路由 |
 | Local `agentrouter-2` | In FQ #2 after ZG | Desktop 直连 AR（**无** VPS guard）；仅 ZG 不可用时兜底；勿 map `[1m]`；勿改指 ZG |
 | NewAPI `#52` anyrouter-anthropic | **Staged, status=2** | Headers + `[1m]` models ready; FC still **503**; `auto_ban=0`; enable only after smoke |

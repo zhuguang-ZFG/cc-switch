@@ -41,7 +41,7 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 | 项 | 值 |
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
-| Opus 主池权重 | **`#9/#10/#20/#60` = 50/42/12/3**；AR 次池 **`#118` w6**（已充值）；`#119/#120` status=2（防慢，非额度） |
+| Opus 主池权重 | **`#9/#10/#20/#60` = 50/42/12/3**；AR 次池 **仅 `#118` w6**；`#119/#120` **暂时不开**（status=2，防慢） |
 | `#81` / `#11` / AR `#119–120` | status=2 + abilities off；`#118` live；health EXCLUDE∋11,75,77–81,118–120（118 不探但仍可路由） |
 | 卡顿分诊 | 首字慢→`logs.use_time`/渠道；中途停→soft journal；关键词→502 failover。见 `docs/patches/newapi-dx-gov-b-2026-07-26.md` |
 | 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |
@@ -71,6 +71,6 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 
 ## AgentRouter / AnyRouter
 
-- **AgentRouter**：`#118` live w6（token 已充值）；`#119/#120` status=2（防慢）。本机 FQ#2=`agentrouter-2` 直连。见 `docs/patches/newapi-dx-ar-pin-2026-07-26.md`。
+- **AgentRouter**：`#118` live w6；`#119/#120` **暂时不开**（status=2，防慢尾）。本机 FQ#2=`agentrouter-2`。见 `docs/patches/newapi-dx-ar-pin-2026-07-26.md`。
 - **AnyRouter FC `#52`**：配置已就位，站方 503 时保持 `status=2`。冒烟绿后：`POST /api/channel/52/status {"status":1}` 并 `UPDATE abilities SET enabled=1 WHERE channel_id=52`。
 - **anyrouter.top**：若 403「无权访问 …[1m]」，在控制台**重建令牌且模型限制留空**，再写回本机 provider。
