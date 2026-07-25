@@ -1,3 +1,4 @@
+use crate::database::timestamp::OptionalUnixMillis;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::provider::{Provider, ProviderMeta};
@@ -35,7 +36,7 @@ impl Database {
                 let settings_config_str: String = row.get(2)?;
                 let website_url: Option<String> = row.get(3)?;
                 let category: Option<String> = row.get(4)?;
-                let created_at: Option<i64> = row.get(5)?;
+                let created_at = row.get::<_, OptionalUnixMillis>(5)?.0;
                 let sort_index: Option<usize> = row.get(6)?;
                 let notes: Option<String> = row.get(7)?;
                 let icon: Option<String> = row.get(8)?;
@@ -142,7 +143,7 @@ impl Database {
                 let settings_config_str: String = row.get(1)?;
                 let website_url: Option<String> = row.get(2)?;
                 let category: Option<String> = row.get(3)?;
-                let created_at: Option<i64> = row.get(4)?;
+                let created_at = row.get::<_, OptionalUnixMillis>(4)?.0;
                 let sort_index: Option<usize> = row.get(5)?;
                 let notes: Option<String> = row.get(6)?;
                 let icon: Option<String> = row.get(7)?;
@@ -198,6 +199,15 @@ impl Database {
         let (is_current, in_failover_queue) =
             existing.unwrap_or((false, provider.in_failover_queue));
 
+        // Never persist NULL/TEXT into created_at: sort + DAO assume INTEGER millis.
+        let created_at = provider.created_at.or_else(|| {
+            if is_update {
+                None
+            } else {
+                Some(chrono::Utc::now().timestamp_millis())
+            }
+        });
+
         if is_update {
             tx.execute(
                 "UPDATE providers SET
@@ -205,7 +215,7 @@ impl Database {
                     settings_config = ?2,
                     website_url = ?3,
                     category = ?4,
-                    created_at = ?5,
+                    created_at = COALESCE(?5, created_at),
                     sort_index = ?6,
                     notes = ?7,
                     icon = ?8,
@@ -221,7 +231,7 @@ impl Database {
                     })?,
                     provider.website_url,
                     provider.category,
-                    provider.created_at,
+                    created_at,
                     provider.sort_index,
                     provider.notes,
                     provider.icon,
@@ -250,7 +260,7 @@ impl Database {
                         .map_err(|e| AppError::Database(format!("Failed to serialize settings_config: {e}")))?,
                     provider.website_url,
                     provider.category,
-                    provider.created_at,
+                    created_at,
                     provider.sort_index,
                     provider.notes,
                     provider.icon,
@@ -456,7 +466,7 @@ impl Database {
                     row.get(1)?,
                     row.get(2)?,
                     row.get(3)?,
-                    row.get(4)?,
+                    row.get::<_, OptionalUnixMillis>(4)?.0,
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
@@ -803,5 +813,28 @@ mod ensure_official_seed_tests {
         let result =
             db.ensure_official_seed_by_id(CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, AppType::Claude);
         assert!(result.is_err(), "(id, app_type) mismatch should be Err");
+    }
+
+    #[test]
+    fn get_all_providers_tolerates_text_created_at() {
+        let db = Database::memory().expect("memory db");
+        {
+            let conn = db.conn.lock().expect("lock");
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, created_at, meta)
+                 VALUES ('text-ts', 'claude', 'Text TS', '{}', '2026-07-25 12:25:03', '{}')",
+                [],
+            )
+            .expect("insert polluted created_at");
+        }
+
+        let providers = db
+            .get_all_providers("claude")
+            .expect("TEXT created_at must not fail setup-style load");
+        let p = providers.get("text-ts").expect("row present");
+        assert!(
+            p.created_at.is_some(),
+            "TEXT datetime should decode to millis"
+        );
     }
 }

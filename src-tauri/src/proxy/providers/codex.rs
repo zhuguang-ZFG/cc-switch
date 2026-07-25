@@ -473,7 +473,9 @@ fn kimi_style_model_entries(provider: &Provider) -> Vec<KimiStyleModelEntry> {
 /// Local proxy placeholders that must never be forwarded upstream.
 fn is_cc_switch_proxy_model(model: &str) -> bool {
     let lower = model.trim().to_ascii_lowercase();
-    lower == "cc-switch-proxy-default"
+    // Bare provider id is Reasonix's takeover `default_model` (`cc-switch-proxy`).
+    lower == "cc-switch-proxy"
+        || lower == "cc-switch-proxy-default"
         || lower == "cc-switch-proxy/default"
         || lower.starts_with("cc-switch-proxy/")
         || lower.starts_with("cc-switch-proxy-")
@@ -1849,7 +1851,7 @@ wire_api = "anthropic"
             "models": ["model-a", "model-b"],
             "default": "model-b"
         }));
-        for placeholder in ["cc-switch-proxy-default", "cc-switch-proxy/default"] {
+        for placeholder in ["cc-switch-proxy", "cc-switch-proxy-default", "cc-switch-proxy/default"] {
             let mut body = json!({ "model": placeholder, "messages": [] });
             let upstream =
                 apply_reasonix_upstream_model(&provider, &mut body).expect("placeholder must map");

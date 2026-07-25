@@ -556,6 +556,13 @@ impl Database {
                         Self::migrate_v16_to_v17(conn)?;
                         Self::set_user_version(conn, 17)?;
                     }
+                    17 => {
+                        log::info!(
+                            "迁移数据库从 v17 到 v18（纠正 providers/prompts/profiles 的 TEXT created_at）"
+                        );
+                        Self::migrate_v17_to_v18(conn)?;
+                        Self::set_user_version(conn, 18)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -2212,6 +2219,35 @@ impl Database {
         Ok(())
     }
 
+    /// v17 -> v18: normalize INTEGER-millis timestamp columns that were polluted
+    /// with SQLite `datetime('now')` TEXT (breaks rusqlite `Option<i64>` reads).
+    fn migrate_v17_to_v18(conn: &Connection) -> Result<(), AppError> {
+        use super::timestamp::normalize_text_millis_sql;
+
+        let targets = [
+            ("providers", "created_at"),
+            ("prompts", "created_at"),
+            ("prompts", "updated_at"),
+            ("profiles", "created_at"),
+            ("profiles", "updated_at"),
+        ];
+        for (table, column) in targets {
+            if !Self::table_exists(conn, table)? {
+                continue;
+            }
+            if !Self::has_column(conn, table, column)? {
+                continue;
+            }
+            conn.execute(&normalize_text_millis_sql(table, column), [])
+                .map_err(|e| {
+                    AppError::Database(format!(
+                        "normalize {table}.{column} TEXT→INTEGER millis failed: {e}"
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
     /// v15 -> v16: persist Reasonix enablement for unified Skills and MCP.
     fn migrate_v15_to_v16(conn: &Connection) -> Result<(), AppError> {
         if Self::table_exists(conn, "mcp_servers")? {
@@ -3850,6 +3886,79 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         assert_eq!(values, (1, 1, 0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v17_to_v18_normalizes_text_created_at() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE providers (
+                id TEXT PRIMARY KEY,
+                app_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                settings_config TEXT NOT NULL,
+                created_at,
+                meta TEXT NOT NULL DEFAULT '{}',
+                is_current BOOLEAN NOT NULL DEFAULT 0
+            );
+            CREATE TABLE prompts (
+                id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at,
+                updated_at,
+                PRIMARY KEY (id, app_type)
+            );
+            CREATE TABLE profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at,
+                updated_at
+            );",
+        )?;
+        conn.execute(
+            "INSERT INTO providers (id, app_type, name, settings_config, created_at)
+             VALUES ('bad', 'claude', 'Bad', '{}', '2026-07-25 12:25:03')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO prompts (id, app_type, name, content, created_at, updated_at)
+             VALUES ('p1', 'claude', 'P', 'c', '2026-07-25 12:25:03', '1700000000')",
+            [],
+        )?;
+        Database::set_user_version(&conn, 17)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        let provider_type: String = conn.query_row(
+            "SELECT typeof(created_at) FROM providers WHERE id = 'bad'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(provider_type, "integer");
+        let prompt_types: (String, String) = conn.query_row(
+            "SELECT typeof(created_at), typeof(updated_at) FROM prompts WHERE id = 'p1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(prompt_types, ("integer".into(), "integer".into()));
+
+        // DAO must load TEXT-legacy rows even before migration (defensive decode).
+        conn.execute(
+            "UPDATE providers SET created_at = '2026-07-26 01:02:03' WHERE id = 'bad'",
+            [],
+        )?;
+        let decoded: crate::database::timestamp::OptionalUnixMillis = conn.query_row(
+            "SELECT created_at FROM providers WHERE id = 'bad'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(decoded.0.is_some());
 
         Ok(())
     }

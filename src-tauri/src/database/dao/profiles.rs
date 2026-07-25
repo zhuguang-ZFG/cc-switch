@@ -4,6 +4,7 @@
 //! payload 为原始 JSON 文本（按 app 分槽），解析在 service 层进行。
 //! 各应用分组（scope）独立的 current 标记存放于 settings 表（key-value）。
 
+use crate::database::timestamp::OptionalUnixMillis;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use rusqlite::params;
@@ -46,8 +47,8 @@ impl Database {
                     name: row.get(1)?,
                     payload: row.get(2)?,
                     sort_order: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    created_at: row.get::<_, OptionalUnixMillis>(4)?.0,
+                    updated_at: row.get::<_, OptionalUnixMillis>(5)?.0,
                 })
             })
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -75,8 +76,8 @@ impl Database {
                 name: row.get(1)?,
                 payload: row.get(2)?,
                 sort_order: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                created_at: row.get::<_, OptionalUnixMillis>(4)?.0,
+                updated_at: row.get::<_, OptionalUnixMillis>(5)?.0,
             })
         }) {
             Ok(profile) => Ok(Some(profile)),

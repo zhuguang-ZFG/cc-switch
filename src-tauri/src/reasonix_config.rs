@@ -1044,6 +1044,10 @@ fn stash_proxy_env_previous_if_needed() -> Result<(), AppError> {
 }
 
 /// Restore the pre-takeover env key (or remove it if it was absent).
+///
+/// When the stash file is missing (already consumed, or takeover never
+/// stashed), leave `.env` untouched — clearing would delete a live
+/// `CC_SWITCH_PROXY_API_KEY` on a repeated restore.
 pub fn restore_proxy_env_placeholder() -> Result<(), AppError> {
     let backup_path = proxy_env_backup_path();
     if backup_path.exists() {
@@ -1057,7 +1061,11 @@ pub fn restore_proxy_env_placeholder() -> Result<(), AppError> {
         let _ = fs::remove_file(&backup_path);
         return Ok(());
     }
-    clear_env_key(REASONIX_PROXY_API_KEY_ENV)
+    log::warn!(
+        "Reasonix proxy env stash missing at {}; skipping env clear to avoid deleting active key",
+        backup_path.display()
+    );
+    Ok(())
 }
 
 const PROXY_NO_PROXY_ABSENT_MARKER: &str = "__ABSENT__";
@@ -1518,6 +1526,24 @@ api_key_env = "DEMO_API_KEY"
                 "previous env value must be restored, got:\n{env_restored}"
             );
             assert!(!proxy_env_backup_path().exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn restore_proxy_env_without_stash_preserves_current_key() {
+        with_temp_home(|| {
+            upsert_env_key(REASONIX_PROXY_API_KEY_ENV, "still-live-secret").unwrap();
+            assert!(!proxy_env_backup_path().exists());
+
+            // Repeated restore / missing stash must not wipe the live key.
+            restore_proxy_env_placeholder().unwrap();
+
+            let env = fs::read_to_string(get_reasonix_env_path()).unwrap();
+            assert!(
+                env.contains("CC_SWITCH_PROXY_API_KEY=still-live-secret"),
+                "missing stash must leave current key intact, got:\n{env}"
+            );
         });
     }
 

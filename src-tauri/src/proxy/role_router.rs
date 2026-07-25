@@ -12,27 +12,39 @@ use serde_json::Value;
 const MARKER_PREFIX: &str = "[[route:";
 const MARKER_SUFFIX: &str = "]]";
 
+fn is_allowed_route_model(model: &str) -> bool {
+    if model.is_empty() || model.len() > 128 {
+        return false;
+    }
+    let core = model
+        .strip_suffix("[1M]")
+        .or_else(|| model.strip_suffix("[1m]"))
+        .unwrap_or(model);
+    !core.is_empty()
+        && core
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
+}
+
 /// 在文本中查找路由标记，返回 (模型名, 剥除标记后的文本)
 fn extract_route_marker(text: &str) -> Option<(String, String)> {
     let start = text.find(MARKER_PREFIX)?;
     let rest = &text[start + MARKER_PREFIX.len()..];
-    let end = rest.find(MARKER_SUFFIX)?;
-    let model = rest[..end].trim();
-    // 模型名白名单字符：字母数字 . _ / -
-    if model.is_empty()
-        || model.len() > 128
-        || !model
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
-    {
-        return None;
+    // `]]` 可能与模型名里的 `[1M]` 重叠；取第一个能通过白名单的候选。
+    let mut search_from = 0;
+    while let Some(rel) = rest[search_from..].find(MARKER_SUFFIX) {
+        let end = search_from + rel;
+        let model = rest[..end].trim();
+        if is_allowed_route_model(model) {
+            let mut cleaned = String::with_capacity(text.len());
+            cleaned.push_str(&text[..start]);
+            cleaned.push_str(&rest[end + MARKER_SUFFIX.len()..]);
+            let cleaned = cleaned.replace("\n\n\n", "\n\n");
+            return Some((model.to_string(), cleaned.trim_end().to_string()));
+        }
+        search_from = end + 1;
     }
-    let mut cleaned = String::with_capacity(text.len());
-    cleaned.push_str(&text[..start]);
-    cleaned.push_str(&rest[end + MARKER_SUFFIX.len()..]);
-    // 剥掉标记遗留的多余空行
-    let cleaned = cleaned.replace("\n\n\n", "\n\n");
-    Some((model.to_string(), cleaned.trim_end().to_string()))
+    None
 }
 
 /// 在 messages 形态的数组（每项可选 "content" 为字符串或 parts 数组）中
@@ -148,6 +160,20 @@ mod tests {
         });
         let out = apply_role_route(body.clone());
         assert_eq!(out, body);
+    }
+
+    #[test]
+    fn rewrites_model_with_one_m_suffix() {
+        let body = json!({
+            "model": "default-model",
+            "messages": [
+                {"role": "user", "content": "review\n\n[[route:claude-opus-5[1M]]]"}
+            ]
+        });
+        let out = apply_role_route(body);
+        assert_eq!(out["model"], "claude-opus-5[1M]");
+        let content = out["messages"][0]["content"].as_str().unwrap();
+        assert!(!content.contains("[[route:"));
     }
 
     #[test]

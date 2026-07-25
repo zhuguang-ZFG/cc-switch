@@ -2,6 +2,7 @@
 //!
 //! 提供提示词（Prompt）的 CRUD 操作。
 
+use crate::database::timestamp::OptionalUnixMillis;
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::prompt::Prompt;
@@ -27,8 +28,8 @@ impl Database {
                 let content: String = row.get(2)?;
                 let description: Option<String> = row.get(3)?;
                 let enabled: bool = row.get(4)?;
-                let created_at: Option<i64> = row.get(5)?;
-                let updated_at: Option<i64> = row.get(6)?;
+                let created_at = row.get::<_, OptionalUnixMillis>(5)?.0;
+                let updated_at = row.get::<_, OptionalUnixMillis>(6)?.0;
 
                 Ok((
                     id.clone(),

@@ -1575,9 +1575,9 @@ impl RequestForwarder {
             .filter(|m| !m.is_empty())
             .map(str::to_string);
 
-        // Codex→Anthropic: when the model name carries the [1m] marker, strip the
-        // suffix and add the context-1m beta header.
-        let mut codex_anthropic_one_m = false;
+        // Codex/Reasonix→Anthropic: when the model name carries the [1m] marker,
+        // strip the suffix and add the context-1m beta header.
+        let mut anthropic_bridge_one_m = false;
 
         // 转换请求体（如果需要）
         let mut request_body = if codex_responses_to_chat {
@@ -1644,7 +1644,7 @@ impl RequestForwarder {
             if let Some(model) = anthropic_body.get("model").and_then(|v| v.as_str()) {
                 let stripped = super::model_mapper::strip_one_m_suffix_for_upstream(model);
                 if stripped != model {
-                    codex_anthropic_one_m = true;
+                    anthropic_bridge_one_m = true;
                     anthropic_body["model"] = Value::String(stripped.to_string());
                 }
             }
@@ -1669,6 +1669,16 @@ impl RequestForwarder {
             )?;
             if !anthropic_body.get("max_tokens").is_some() {
                 anthropic_body["max_tokens"] = Value::from(DEFAULT_REASONIX_ANTHROPIC_MAX_TOKENS);
+            }
+            // Same [1m] contract as Codex→Anthropic: strip for the wire model id and
+            // request the context-1m beta. Without this, `claude-*-5[1M]` reaches the
+            // Anthropic upstream as an invalid model name.
+            if let Some(model) = anthropic_body.get("model").and_then(|v| v.as_str()) {
+                let stripped = super::model_mapper::strip_one_m_suffix_for_upstream(model);
+                if stripped != model {
+                    anthropic_bridge_one_m = true;
+                    anthropic_body["model"] = Value::String(stripped.to_string());
+                }
             }
             anthropic_body
         } else if codex_responses_to_gemini {
@@ -1989,27 +1999,40 @@ impl RequestForwarder {
         // 预计算 anthropic-beta 值（仅 Claude）
         let anthropic_beta_value = if should_send_anthropic_headers {
             const CLAUDE_CODE_BETA: &str = "claude-code-20250219";
+            const CONTEXT_1M_BETA: &str = "context-1m-2025-08-07";
             Some(if let Some(beta) = headers.get("anthropic-beta") {
                 if let Ok(beta_str) = beta.to_str() {
-                    if beta_str.contains(CLAUDE_CODE_BETA) {
+                    let mut value = if beta_str.contains(CLAUDE_CODE_BETA) {
                         beta_str.to_string()
                     } else {
                         format!("{CLAUDE_CODE_BETA},{beta_str}")
+                    };
+                    if anthropic_bridge_one_m && !value.contains(CONTEXT_1M_BETA) {
+                        value.push(',');
+                        value.push_str(CONTEXT_1M_BETA);
                     }
+                    value
                 } else {
-                    CLAUDE_CODE_BETA.to_string()
+                    let mut value = CLAUDE_CODE_BETA.to_string();
+                    if anthropic_bridge_one_m {
+                        value.push(',');
+                        value.push_str(CONTEXT_1M_BETA);
+                    }
+                    value
                 }
+            } else if anthropic_bridge_one_m {
+                format!("{CLAUDE_CODE_BETA},{CONTEXT_1M_BETA}")
             } else {
                 CLAUDE_CODE_BETA.to_string()
             })
-        } else if codex_impersonate_claude_code || codex_anthropic_one_m {
-            // Codex→Anthropic: emulation injects the claude-code marker; a [1m]
-            // model injects the context-1m marker.
+        } else if codex_impersonate_claude_code || anthropic_bridge_one_m {
+            // Codex/Reasonix→Anthropic: emulation injects the claude-code marker;
+            // a [1m] model injects the context-1m marker.
             let mut betas: Vec<&str> = Vec::new();
             if codex_impersonate_claude_code {
                 betas.push("claude-code-20250219");
             }
-            if codex_anthropic_one_m {
+            if anthropic_bridge_one_m {
                 betas.push("context-1m-2025-08-07");
             }
             Some(betas.join(","))
@@ -5401,5 +5424,118 @@ mod tests {
 
         openai_handle.abort();
         anthropic_handle.abort();
+    }
+
+    async fn spawn_anthropic_capture_upstream(
+        captured: Arc<tokio::sync::Mutex<Option<(String, Value, Option<String>)>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use axum::routing::any;
+        use http_body_util::BodyExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind anthropic capture upstream");
+        let address = listener.local_addr().expect("capture upstream address");
+        let app = axum::Router::new().fallback(any(move |request: axum::extract::Request| {
+            let captured = captured.clone();
+            async move {
+                let beta = request
+                    .headers()
+                    .get("anthropic-beta")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let path = request.uri().path().to_string();
+                let body = request
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("read capture request")
+                    .to_bytes();
+                let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                *captured.lock().await = Some((path, value, beta));
+                (
+                    axum::http::StatusCode::OK,
+                    axum::Json(json!({
+                        "id": "msg_reasonix_one_m",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-opus-5",
+                        "content": [{ "type": "text", "text": "ok" }],
+                        "stop_reason": "end_turn",
+                        "usage": { "input_tokens": 3, "output_tokens": 1 }
+                    })),
+                )
+            }
+        }));
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve capture upstream");
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[tokio::test]
+    async fn reasonix_anthropic_strips_one_m_suffix_and_sets_beta() {
+        use http::HeaderMap;
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let captured = Arc::new(tokio::sync::Mutex::new(None));
+        let (base, handle) = spawn_anthropic_capture_upstream(captured.clone()).await;
+
+        let mut anthropic = test_provider_with_type(None);
+        anthropic.id = "reasonix-anthropic-one-m".into();
+        anthropic.name = "Reasonix Anthropic 1M".into();
+        anthropic.settings_config = json!({
+            "kind": "anthropic",
+            "base_url": base,
+            "api_key": "sk-anthropic-ok",
+            "models": ["claude-opus-5[1M]", "claude-opus-5"],
+            "default": "claude-opus-5[1M]"
+        });
+
+        let mut forwarder = test_forwarder(Duration::from_secs(5), Duration::from_secs(5));
+        forwarder.max_attempts = 1;
+
+        let result = match forwarder
+            .forward_with_retry(
+                &AppType::Reasonix,
+                http::Method::POST,
+                "/chat/completions",
+                json!({
+                    "model": "claude-opus-5[1M]",
+                    "stream": false,
+                    "messages": [{ "role": "user", "content": "hi" }]
+                }),
+                HeaderMap::new(),
+                http::Extensions::new(),
+                vec![anthropic],
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => panic!(
+                "reasonix anthropic [1M] forward must succeed: {} (provider={:?})",
+                err.error,
+                err.provider.as_ref().map(|p| p.id.as_str())
+            ),
+        };
+        assert_eq!(result.response.status(), 200);
+        let (path, body, beta) = captured.lock().await.clone().expect("captured upstream");
+        assert!(path.contains("messages"), "path={path}");
+        assert_eq!(
+            body.get("model").and_then(|v| v.as_str()),
+            Some("claude-opus-5"),
+            "wire model must strip [1M], got {}",
+            body
+        );
+        let beta = beta.expect("anthropic-beta must be set for [1M]");
+        assert!(
+            beta.contains("context-1m-2025-08-07"),
+            "context-1m beta required, got {beta}"
+        );
+
+        handle.abort();
     }
 }

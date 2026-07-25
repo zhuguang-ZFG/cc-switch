@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (database / local binary)
+
+- **`providers`/`prompts`/`profiles` TEXT `created_at` no longer bricks startup** (`SCHEMA_VERSION` 18): ad-hoc `datetime('now')` writes caused `Invalid column type Text … created_at` during setup and Claude Code 500 retries. Added `OptionalUnixMillis` lenient decode, a v17→v18 normalize migration, and safer `save_provider` millis defaults. See `docs/patches/schema-v18-created-at-text.md`.
+- **Reasonix→Anthropic `[1M]` bridge**: strip the local suffix for the wire model id and attach `context-1m-2025-08-07` (same contract as Codex→Anthropic).
+- **`[[route:model[1M]]]` markers parse correctly** when `]]` overlaps the `[1M]` suffix.
+- **Reasonix proxy-env restore without a stash file no longer clears a live `CC_SWITCH_PROXY_API_KEY`**.
+- **Bare `cc-switch-proxy` is treated as a local placeholder model** (not forwarded upstream).
+
+### Documentation
+
+- FAQ (zh/en/ja): Windows `ERR_CONNECTION_REFUSED` after cargo-only binary swap; “database version too new” after schema bump + UI rollback.
+- Patch note: `docs/patches/schema-v18-created-at-text.md`.
+
 ### Added (Pi agent — feature completion)
 
 - **Deeplink import for `app=pi`** (`1a4497ed`): the parser accepts `app=pi` in provider/prompt deeplinks and MCP `apps=` lists, `build_pi_settings` is wired for additive base64 config merge, `parse_mcp_apps` maps `pi`, and the import dialog previews pi configs. Parse + DB-persist round-trip tests.
