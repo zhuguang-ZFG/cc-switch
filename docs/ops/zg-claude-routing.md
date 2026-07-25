@@ -1,9 +1,19 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-25 (DX pass)  
+**Updated:** 2026-07-25 (DX exec — guard soft-truncation + local ZG restore)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
+
+## Local entry (required)
+
+| Item | Value |
+|------|--------|
+| Current provider | `ZG网关 Claude` (`zg-gateway-claude`) → `https://aliyun.donglicao.com` |
+| Default / Sonnet | `glm-5.2[1M]` (via ZG) |
+| Failover queue | ZG → `agentrouter-2` → 「林夕」公益站（单条） |
+| Proxy knobs | `streaming_first_byte_timeout=25`, `max_retries=3` |
+| Do not | Make Sub2API / anyrouter current for daily Claude work |
 
 ## Role → upstream (intended)
 
@@ -14,20 +24,29 @@ Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — ve
 | Haiku | `LongCat-2.0` / `claude-haiku-*` / `claude-haiku-4-5-20251001` | Agnes `#122` → `agnes-2.0-flash` pri32; LongCat `#90` pri30 | Prices configured for bare `agnes-2.0-flash` |
 | GPT (OpenAI path) | `gpt-4o` / `gpt-4o-mini` / … | hongshi `#123` (and other GPT pools) | No Claude on hongshi — type=1 only |
 
-## DX fixes (2026-07-25 evening)
+## DX fixes (2026-07-25)
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| `glm-5.2[1M]` missing | `No available channel` if client sends `[1M]` (official CC Switch / no strip) | Abilities + map → `glm-5.2` on `#41/#42/#123`; ModelRatio/CompletionRatio |
-| GLM empty completion | `reasoning_tokens` eats `max_tokens`; empty text / half answers | Zhipu `#41/#42` `param_override={"enable_thinking":false}` |
-| Agnes bare id | `price not configured` | ModelRatio/CompletionRatio for `agnes-2.0-flash` (+ alpha) |
-| Haiku dated id | `claude-haiku-4-5-20251001` had no ability | Map on Agnes `#122` |
-| Slow Opus channel | `#81` avg ~50s in 6h logs | priority 20 / weight 1; `#20` weight 5 |
-| Slow GLM key | `#42` much slower than `#41` | weights 8 vs 50 |
+| `glm-5.2[1M]` missing | `No available channel` if client sends `[1M]` | Abilities + map → `glm-5.2` on `#41/#42/#123`; ModelRatio/CompletionRatio |
+| GLM empty completion | `reasoning_tokens` eats `max_tokens` | Zhipu `#41/#42` `param_override={"enable_thinking":false}` |
+| Agnes / dated Haiku | price / ability gaps | Agnes `#122` maps + prices |
+| Ability weight=0 | Channel weight tuning ignored | Sync `abilities.priority/weight` from `channels` for managed pools |
+| Kiro fake-complete stop | HTTP 200 + `end_turn` mid-answer | Harden `kiro_guard.py`: soft classify → same-upstream retry → 502 |
+| Health-check key on argv | `curl … Authorization: Bearer …` visible in `ps` | `health_check.py` v4 uses urllib; disabled `#13` until key rotated |
+| Broken 03:00 backup | Copies missing `/opt/new-api/one-api.db` | Removed; keep `backup_db.sh` at 03:17 |
+| Local current=Sub2API | Bypasses ZG pool + guard; Sonnet forced to Opus | Restore ZG current; lean FQ; FB=25s / retries=3 |
 
-Smoke after change (gateway `/v1/messages`): `glm-5.2`, `glm-5.2[1M]`, `agnes-2.0-flash`, `claude-haiku-4-5-20251001`, `claude-opus-5[1M]` must return non-empty text under `max_tokens=64`.
+Smoke (gateway `/v1/messages`, `max_tokens=64`): `glm-5.2`, `glm-5.2[1M]`, `claude-haiku-4-5-20251001`, `claude-opus-5[1M]` → 200 + non-empty text.
 
 Detail: `docs/patches/newapi-dx-2026-07-25.md`, `docs/patches/agnes-haiku-newapi.md`, `docs/patches/hongshi-openai-newapi.md`.
+
+## Cursor ops loop (ongoing)
+
+- Runbook: `docs/ops/newapi-dx-cursor-ops.md`
+- Local: `python scripts/ops/newapi-dx-analyze.py`
+- Auto in-band: soft-trunc env (`KIRO_GUARD_SHORT_*`) + Opus weights; escalate when out of band.
+- First live cycle 2026-07-26: `SHORT_OUT` 32→40; Opus weights rebalanced from 24h latency; smoke OK.
 
 ## Client note (cc-switch)
 
