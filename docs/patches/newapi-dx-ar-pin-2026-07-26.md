@@ -1,32 +1,22 @@
-# NewAPI AgentRouter pin (2026-07-26)
+# NewAPI AgentRouter pin / restore (2026-07-26)
 
-## Why
+## Timeline
 
-Failover from百倍 soft/502 onto AR `#119/#120` returned upstream  
-`token quota is not enough (remain ~$0.02 / need ~$0.66)` as client **403**,  
-with Claude Code misleading `Please run /login`.
+1. **Pin (empty token):** Failover hit AR with  
+   `token remain quota ≈ $0.02, need ≈ $0.66` → client 403.  
+   Applied `status=2` on `#118–120`.
 
-ZG `cc-switch` token is unlimited; the empty wallet was the **AR API token**.
+2. **Top-up:** Operator recharged AR API tokens (account/token remain fixed).
 
-## Applied
+3. **Restore (this note):**
+   | Channel | State |
+   |---------|--------|
+   | `#118` | **Live** `status=1` pri30/**w6**, Opus/Fable abilities on（次池） |
+   | `#119` `#120` | **Still status=2** — anti-stall（慢/尾延迟），不是额度 |
 
-| Channel | Action |
-|---------|--------|
-| `#118` `#119` `#120` | `status=2`, `abilities.enabled=0` |
-| health_check v5 | Already EXCLUDE∋118–120 (no probe / no auto-reactivate) |
-| Opus path | `#9/#10/#20/#60` only inside NewAPI |
+Opus 主池仍是 `#9/#10/#20/#60`；`#118` 仅作 NewAPI 内次选。  
+本机 FQ `#2` = `agentrouter-2` 直连不变。
 
-Smoke after pin: `claude-opus-5` → `#9` HTTP 200.
+## Re-enable 119/120 later
 
-## Client fallback
-
-Local FQ remains `ZG → agentrouter-2` (desktop direct AR, no VPS guard)  
-for full ZG outage only — not used for NewAPI in-band Opus failover.
-
-## Re-enable later
-
-Only after AR token remain_quota ≫ typical Opus pre-charge (~$1+ headroom), then:
-
-1. Top up the specific API tokens (`sk-GhabK…` / `sk-vbtBC…` / `sk-BiWMF…`)
-2. `POST /api/channel/{id}/status {"status":1}` + enable needed abilities
-3. Prefer single `#118` with low weight before bringing 119/120 back
+When latency looks good: enable status + Opus abilities at w1, watch soft journal / p50.
