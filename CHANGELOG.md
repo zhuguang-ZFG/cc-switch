@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FAQ (zh/en/ja): Windows `ERR_CONNECTION_REFUSED` after cargo-only binary swap; “database version too new” after schema bump + UI rollback.
 - Patch note: `docs/patches/schema-v18-created-at-text.md`.
 - **Agnes AI as free OpenAI + NewAPI Haiku tier**: `docs/patches/agnes-haiku-newapi.md` — local Reasonix/Pi/Codex/Kimi providers; ZG `#122 agnes-haiku-free` maps `LongCat-2.0` / `claude-haiku-*` → `agnes-2.0-flash` (pri32, LongCat pri30 fallback). Not for Claude Opus type=14.
+- Ops routing snapshot: `docs/ops/zg-claude-routing.md`.
 
 ### Added (Pi agent — feature completion)
 
