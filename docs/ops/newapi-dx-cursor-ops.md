@@ -25,7 +25,12 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 
 ## 建议定时
 
-- Windows 任务计划程序或 Cursor loop：**每天 09:00** 跑上面命令
+- **已创建** Windows 计划任务：`CCSwitch-NewAPI-DX-Ops`（每天 **09:00**）
+  - 入口：`scripts/ops/newapi-dx-analyze.bat`
+  - 日志：`D:\Users\cc-switch\.tmp-newapi-dx-ops.log`
+  - 查询：`schtasks /Query /TN CCSwitch-NewAPI-DX-Ops`
+  - 删除：`schtasks /Delete /TN CCSwitch-NewAPI-DX-Ops /F`
+- 亦可 Cursor loop 按需跑：`python scripts/ops/newapi-dx-analyze.py`
 - 冷却：权重默认 6h 内相同建议不重复写
 - 回看窗口：24h；渠道最少 10 样本才参与排名
 
