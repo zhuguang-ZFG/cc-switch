@@ -1,8 +1,8 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (local Opus5/AR2/RTK align; zhipu stop; health v5.1)  
+**Updated:** 2026-07-26 (Opus5 prefer; weights 50/42/18/3; zhipu stop; health v5.1)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
-**Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`, `docs/patches/local-mcp-skills-slim-2026-07-26.md`
+**Ops logs:** `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`, `docs/patches/local-mcp-skills-slim-2026-07-26.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
 
@@ -25,7 +25,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#125` Vyce 35/20 → `#90` LongCat 30/10 |
 | **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
 | **Anthropic Sonnet** | `#125` Vyce 35/20 only |
-| **Opus** | pri45 `#9/#10/#20/#60`（w **50/42/12/3**）→ AR `#118` w6；**`#119/#120` + `#81/#11` status=2**；analyze 每 4h |
+| **Opus** | pri45 `#9/#10/#20/#60`（w **50/42/18/3**）→ AR `#118` w6；4.x/`4-8` map→**Opus5**；enabled `opus-4-8` abilities=0；**`#119/#120` + `#81/#11` status=2**；analyze 每 4h |
 | **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
 
 `#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#11`/`#81` **status=2**；AR `#118–120` health EXCLUDE。Vyce **无** Opus。health_check v5：`docs/patches/newapi-dx-health-check-v5-2026-07-26.md`。防卡顿：`docs/patches/newapi-dx-anti-stall-2026-07-26.md`。
@@ -58,7 +58,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 
 | Claude Code role | Requested model id(s) | Primary NewAPI route | Notes |
 |------------------|----------------------|----------------------|--------|
-| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 w50/42/12/3 → AR `#118` w6 | `#119/#120`+`#81/#11` pinned |
+| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 w50/42/18/3 → AR `#118` w6 | 4.8→5 map；`#119/#120`+`#81/#11` pinned |
 | Sonnet / default | `glm-5.2` / `glm-5.2[1M]` | Zhipu `#41/#42` (80) → hongshi `#123` (50) | `enable_thinking=false` on zhipu |
 | Haiku | `claude-haiku-*` / dated | Agnes `#122` (40) → Vyce `#125` (35) → LongCat `#90` (30) | `LongCat-2.0` id → Agnes map `agnes-2.0-flash` |
 | GPT (OpenAI path) | `gpt-5.5` / `gpt-5.6-*` / … | `#21` (60) → `#124` (55) → `#123` (50) | type=1；123458 需浏览器 UA |
@@ -71,6 +71,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | `glm-5.2[1M]` missing | `No available channel` if client sends `[1M]` | Abilities + map → `glm-5.2` on `#41/#42/#123`; ModelRatio/CompletionRatio |
 | GLM empty completion | `reasoning_tokens` eats `max_tokens` | Zhipu `#41/#42` `param_override.enable_thinking=false` |
 | GLM `stop` 400 ArrayList | Claude 单条 `stop_sequences` → OpenAI `stop` 字符串；智谱要数组 | `#41/#42` `operations: delete stop`；改完需 `podman restart new-api`。见 `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md` |
+| Opus 4.8 AUP / 毒映射 | 客户端踩 Cyber Safeguards；AR `opus-5`→`4-8` 回灌 | 主池+AR：4.x→Opus5；关 `opus-4-8` abilities；压 `#20`。见 `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md` |
 | Agnes / dated Haiku | price / ability gaps | Agnes `#122` maps + prices |
 | Ability weight=0 | Channel weight tuning ignored | Sync `abilities.priority/weight` from `channels` for managed pools |
 | Kiro fake-complete stop | HTTP 200 + `end_turn` mid-answer | `kiro_guard`: force non-stream + soft classify → retry → 502; text heuristics; `SHORT_OUT=64`; SOFT_LIMIT for empty tools. Community: Kiro-Go #141/#142/#143 (we don't self-host). |
@@ -95,7 +96,7 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - Runbook: `docs/ops/newapi-dx-cursor-ops.md`
 - Local: `python scripts/ops/newapi-dx-analyze.py`
 - Auto in-band: soft-trunc env (`KIRO_GUARD_SHORT_*`) + Opus weights; escalate when out of band.
-- Opus 主池现网快照：**`#9/#10/#20/#60` = 50/42/12/3**（analyze 按 p50 动态档位，非写死；历史报告 `dx-20260726-021931.md` 曾为 50/40/32）。
+- Opus 主池现网快照：**`#9/#10/#20/#60` = 50/42/18/3**（压慢渠 `#20`；analyze 仍可按 p50 微调；见 `newapi-dx-opus5-prefer-2026-07-26.md`）。
 - **Client surfaces (2026-07-26):** Claude Code → ZG NewAPI；Cursor IDE BYOK → `zg-*` → NewAPI；**Cursor Agent CLI → Cursor 云端官方模型 only**（默认 `claude-opus-5-high`；勿用 Opus 4.8 踩 Cyber Safeguards）。细节见 runbook「客户端怎么走 NewAPI」。
 - **AUP / Cyber Safeguards:** 官方 Opus 4.8 易拦；新会话 + 换 Opus5/Sonnet/glm；无客户端关过滤。见 runbook「Cyber Safeguards / AUP」与 `docs/patches/cyber-safeguards-opus48-2026-07-26.md`。
 - **公益站抖动：** 预期噪声；勿当 P0。health v5.1 对 `no available accounts` 不累计禁用。
