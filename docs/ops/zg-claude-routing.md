@@ -1,8 +1,8 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (AR pinned; health **v5.1**; zhipu `stop` delete; local clients cleaned)  
+**Updated:** 2026-07-26 (local Opus5/AR2/RTK align; zhipu stop; health v5.1)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
-**Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`
+**Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
 
@@ -12,8 +12,8 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 
 ### Local Claude FQ (cc-switch)
 
-1. `zg-gateway-claude` (current, sort 10)  
-2. `agentrouter-2` (sort 20)  
+1. `zg-gateway-claude` (current, sort 10) — Opus/Sonnet/Haiku 见 Local entry  
+2. `agentrouter-2` (sort 20) — 全部角色 **`claude-opus-5`（无 `[1M]`）**；勿回 4.8  
 林夕 / anyrouter **不在** FQ。
 
 ### NewAPI ladders
@@ -106,6 +106,8 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - Fork schema v17+ (`enabled_pi`) / v18 will trip **数据库版本过新** on official — after backup, `PRAGMA user_version = 16;` is the known downgrade for this ops path (extra columns ignored).
 - Do not replace the installed UI with `cargo build --release` only.
 - **本机已卸** A2A / Reasonix+Atom / Pi（npm + 配置目录 + DB `app_type` 行）。日常入口仅 Claude Code（`zg-gateway-claude`）与 Cursor IDE BYOK。Claude Code 主题：`custom:slate-ember`（`~\.claude\themes\slate-ember.json`）。见 `docs/patches/local-clients-cleanup-2026-07-26.md`。
+- **本机模型对齐（2026-07-26）：** `~\.claude\settings.json` 与 ZG 一致（Opus5 / Sonnet=`glm-5.2[1M]` / Haiku=`LongCat-2.0`）；FQ#2 AR2 全角色 Opus5（无 1M）。见 `docs/patches/local-claude-rtk-align-2026-07-26.md`。
+- **RTK：** 全局 hook `rtk hook claude` 已装（rtk-ai/rtk ≥0.42）；**关键 git 必须** `rtk proxy git …`，勿只信过滤后的 `git status`/`log`。
 
 ## Explicit do-nots
 

@@ -26,7 +26,15 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 
 ## 本机客户端姿态（2026-07-26）
 
-日常只保留：**Claude Code → cc-switch → ZG**，以及 **Cursor IDE BYOK**。已卸 A2A / Reasonix+Atom / Pi（配置目录 + npm + cc-switch DB 对应行）。Claude Code 主题：`custom:slate-ember`。细节：`docs/patches/local-clients-cleanup-2026-07-26.md`。
+日常只保留：**Claude Code → cc-switch → ZG**，以及 **Cursor IDE BYOK**。已卸 A2A / Reasonix+Atom / Pi。Claude Code 主题：`custom:slate-ember`。
+
+模型对齐 + RTK hook：`docs/patches/local-claude-rtk-align-2026-07-26.md`（Opus **必须** 5；关键 git 用 `rtk proxy`）。客户端清理：`docs/patches/local-clients-cleanup-2026-07-26.md`。
+
+| 检查 | 期望 |
+|------|------|
+| `~\.claude\settings.json` Opus | `claude-opus-5[1M]`（勿 4.8） |
+| cc-switch FQ#2 AR2 | `claude-opus-5` 无 `[1M]` |
+| `rtk init --show` | Hook `[ok]`；版本 rtk-ai（非 crates.io 0.1.0） |
 
 ## 客户端怎么走 NewAPI（2026-07-26）
 
