@@ -96,10 +96,26 @@ impl ModelMapping {
             }
         }
 
-        // Claude Code 会把角色 env 解析成真实上游 id 再请求（例如 sonnet →
-        // glm-5.2[1M]）。这些 id 不含 sonnet/opus 关键字，旧逻辑会误落到
-        // ANTHROPIC_MODEL（常为 Opus），导致 auto-mode 分类器/Sonnet 角色
-        // 全挤进 Opus 池，一抖就报「glm temporarily unavailable」。
+        // Claude Code / takeover 可能直接发送已解析的上游 id（glm-5.2[1M]、
+        // LongCat-2.0 等）。这些 id 不含角色关键字；若再落到 ANTHROPIC_MODEL
+        // （常为 Opus），Sonnet/auto-mode 会挤进 Opus 池。
+        if self.matches_configured_upstream(original_model) {
+            return original_model.to_string();
+        }
+
+        // 2. ANTHROPIC_MODEL 只承接「Claude 族、又未命中角色档」的残留别名
+        // （如 claude-instant）。禁止把第三方/显式上游 id 强改成默认 Opus。
+        if let Some(ref m) = self.default_model {
+            if looks_like_claude_family_model(original_model) {
+                return m.clone();
+            }
+        }
+
+        // 3. 无映射，保持原样
+        original_model.to_string()
+    }
+
+    fn matches_configured_upstream(&self, original_model: &str) -> bool {
         for configured in [
             &self.haiku_model,
             &self.sonnet_model,
@@ -112,19 +128,23 @@ impl ModelMapping {
                 if strip_one_m_suffix_for_upstream(original_model)
                     .eq_ignore_ascii_case(strip_one_m_suffix_for_upstream(m))
                 {
-                    return original_model.to_string();
+                    return true;
                 }
             }
         }
-
-        // 2. 默认模型（仅未知别名）
-        if let Some(ref m) = self.default_model {
-            return m.clone();
-        }
-
-        // 3. 无映射，保持原样
-        original_model.to_string()
+        false
     }
+}
+
+/// Claude Code 稳定角色别名 / Anthropic 族 id。第三方上游（glm、LongCat、gpt…）
+/// 不得被 ANTHROPIC_MODEL 默认回落改写。
+fn looks_like_claude_family_model(model: &str) -> bool {
+    let normalized = strip_one_m_suffix_for_upstream(model)
+        .trim()
+        .to_ascii_lowercase();
+    normalized.starts_with("claude")
+        || normalized.starts_with("anthropic/")
+        || normalized.contains("/claude")
 }
 
 /// 对请求体应用模型映射
@@ -347,12 +367,39 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_model_uses_default() {
+    fn test_unknown_non_claude_model_passthrough_not_default() {
         let provider = create_provider_with_mapping();
         let body = json!({"model": "some-unknown-model"});
+        let (result, original, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "some-unknown-model");
+        assert_eq!(original, Some("some-unknown-model".to_string()));
+        assert!(mapped.is_none());
+    }
+
+    #[test]
+    fn test_unknown_claude_family_uses_default() {
+        let provider = create_provider_with_mapping();
+        let body = json!({"model": "claude-instant-1.2"});
         let (result, _, mapped) = apply_model_mapping(body, &provider);
         assert_eq!(result["model"], "default-model");
         assert_eq!(mapped, Some("default-model".to_string()));
+    }
+
+    #[test]
+    fn test_unlisted_glm_not_rewritten_to_default_opus() {
+        // 回归：即使 glm 不是当前 sonnet 配置值，也绝不能因 ANTHROPIC_MODEL 改成 Opus。
+        let mut provider = create_provider_with_mapping();
+        provider.settings_config = json!({
+            "env": {
+                "ANTHROPIC_MODEL": "claude-opus-5[1M]",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1M]",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1M]"
+            }
+        });
+        let body = json!({"model": "glm-5.1"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "glm-5.1");
+        assert!(mapped.is_none());
     }
 
     #[test]

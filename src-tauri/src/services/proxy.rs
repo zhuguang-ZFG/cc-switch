@@ -105,11 +105,10 @@ impl ProxyService {
             ClaudeTakeoverAuthPolicy::PreserveExistingOrAuthToken
         };
         // Copilot/Codex 接管时 live config 可能还是旧供应商；显示模型必须跟随目标 provider。
-        let takeover_model_fields = if provider.uses_managed_account_auth() {
-            Self::build_claude_takeover_model_fields(&provider.settings_config)
-        } else {
-            Self::build_claude_takeover_model_fields(config)
-        };
+        // 普通 Claude 供应商同样必须读 provider：takeover 启动时传入的是已含别名的
+        // live settings，若从 live 取「上游」会丢掉 glm/Opus5 等真实映射与 [1M] 能力。
+        let takeover_model_fields =
+            Self::build_claude_takeover_model_fields(&provider.settings_config);
 
         Self::apply_claude_takeover_fields_with_policy_and_models(
             config,
@@ -5101,6 +5100,80 @@ api_key_env = "DEMO_API_KEY"
             .expect("env should exist");
         assert_env_str(env, "ANTHROPIC_API_KEY", Some(PROXY_TOKEN_PLACEHOLDER));
         assert_env_str(env, "ANTHROPIC_AUTH_TOKEN", None);
+    }
+
+    #[test]
+    fn normal_claude_takeover_sources_role_models_from_provider_not_stale_live() {
+        // 回归：takeover 启动时 live 已是别名；必须从 provider 读真实上游以保留 [1M]/显示名。
+        let provider = Provider::with_id(
+            "zg".to_string(),
+            "ZG".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://aliyun.example.com",
+                    "ANTHROPIC_AUTH_TOKEN": "sk-real",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1M]",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "claude-sonnet-4-6",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1M]",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "claude-opus-5",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "LongCat-2.0",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "claude-haiku-4-5"
+                }
+            }),
+            None,
+        );
+
+        let mut live_config = json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721",
+                "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-6",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "Stale Sonnet",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Stale Opus",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "Stale Haiku"
+            }
+        });
+
+        ProxyService::apply_claude_takeover_fields_for_provider(
+            &mut live_config,
+            "http://127.0.0.1:15721",
+            &provider,
+        );
+
+        let env = live_config
+            .get("env")
+            .and_then(|value| value.as_object())
+            .expect("env should exist");
+        assert_env_str(
+            env,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            Some("claude-sonnet-4-6[1M]"),
+        );
+        assert_env_str(
+            env,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+            Some("claude-sonnet-4-6"),
+        );
+        assert_env_str(
+            env,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            Some("claude-opus-5[1M]"),
+        );
+        assert_env_str(
+            env,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+            Some("claude-opus-5"),
+        );
+        assert_env_str(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL", Some("claude-haiku-4-5"));
+        assert_env_str(
+            env,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+            Some("claude-haiku-4-5"),
+        );
+        assert_env_str(env, "ANTHROPIC_AUTH_TOKEN", Some(PROXY_TOKEN_PLACEHOLDER));
+        assert!(env.get("ANTHROPIC_MODEL").is_none());
     }
 
     #[test]
