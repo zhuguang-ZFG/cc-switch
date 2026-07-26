@@ -1,6 +1,6 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (ops-only; **do not modify cc-switch**; Opus5 prefer; weights **50/40/28/3**; Fable→jianzhile)  
+**Updated:** 2026-07-26 night (ops-only; **do not modify cc-switch**; Opus5 prefer; weights **50/40/28/3**; Fable→jianzhile; kiro-guard trunc-ctx+compress)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
 **Ops logs:** `docs/ops/do-not-modify-cc-switch.md`, `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md`, `docs/patches/jianzhile-fable-newapi-2026-07-26.md`, `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`, `docs/patches/local-mcp-skills-slim-2026-07-26.md`
 
@@ -80,7 +80,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | Live settings「漂」成 opus-4-8 / sonnet-4-6 | 误以为配置坏了 | **takeover 故意写官方别名**，代理再映射到 glm/Opus5；勿把上游 id 写进 settings。见 `docs/patches/local-claude-takeover-aliases-2026-07-26.md` |
 | Agnes / dated Haiku | price / ability gaps | Agnes `#122` maps + prices |
 | Ability weight=0 | Channel weight tuning ignored | Sync `abilities.priority/weight` from `channels` for managed pools |
-| Kiro fake-complete stop | HTTP 200 + `end_turn` mid-answer | `kiro_guard`: force non-stream + soft classify → retry → 502; text heuristics; `SHORT_OUT=64`; SOFT_LIMIT for empty tools. Community: Kiro-Go #141/#142/#143 (we don't self-host). |
+| Kiro fake-complete stop | HTTP 200 + `end_turn` mid-answer | `kiro_guard`: force non-stream + soft classify → **trunc-context continuation retry** (inject truncated content as context, model continues, merge responses) → 502; text heuristics; `SHORT_OUT=64`; SOFT_LIMIT for empty tools; **MAX_TOKENS_CAP=4096** (proactive); **gzip** responses. Community: Kiro-Go #141/#142/#143 (we don't self-host). See `docs/patches/kiro-guard-trunc-ctx-compress-2026-07-26.md`. |
 | Health-check key on argv | `curl … Authorization: Bearer …` visible in `ps` | `health_check.py` v5 urllib；只探 Opus 主池 |
 | health_check 误禁 AR / 翻覆 | 全表探测 + AUTO-REACTIVATE + 整渠 abilities | v5.1：只探 `#9/#10/#20/#60`；探针优先 `claude-opus-5[1M]`；无自动复活；不改 abilities；PINNED∋118–120；公益站 `no available accounts`/503 **不计入禁用**。见 `docs/patches/newapi-dx-health-check-v5-2026-07-26.md` |
 | Fake 「额度耗尽 429」 | `#11` DISABLE-QUOTA on 503 / no accounts | v5 已去掉 DISABLE-QUOTA 捷径 |
