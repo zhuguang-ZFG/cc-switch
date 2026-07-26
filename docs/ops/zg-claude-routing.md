@@ -1,8 +1,8 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (ops-only; **do not modify cc-switch**; Opus5 prefer; weights 50/42/18/3)  
+**Updated:** 2026-07-26 (ops-only; **do not modify cc-switch**; Opus5 prefer; weights **50/40/28/3**; Fable→jianzhile)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
-**Ops logs:** `docs/ops/do-not-modify-cc-switch.md`, `docs/patches/jianzhile-fable-newapi-2026-07-26.md`, `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`, `docs/patches/local-mcp-skills-slim-2026-07-26.md`
+**Ops logs:** `docs/ops/do-not-modify-cc-switch.md`, `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md`, `docs/patches/jianzhile-fable-newapi-2026-07-26.md`, `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`, `docs/patches/local-mcp-skills-slim-2026-07-26.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
 
@@ -27,8 +27,8 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#125` Vyce 35/20 → `#90` LongCat 30/10 |
 | **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
 | **Anthropic Sonnet** | `#125` Vyce 35/20 only |
-| **Opus** | pri45 `#9/#10/#20/#60`（w **50/42/18/3**）→ AR `#118` w6；4.x/`4-8` map→**Opus5**；enabled `opus-4-8` abilities=0；**`#119/#120` + `#81/#11` status=2**；analyze 每 4h |
-| **Fable** (`claude-fable-5` / `[1M]`) | `#127` jianzhile pri50/w20（仅 fable；头 `New-Api-Group: Claude-CC-MAX`）→ 其下仍可能落到主池若仍挂 fable 能力。见 `docs/patches/jianzhile-fable-newapi-2026-07-26.md` |
+| **Opus** | pri45 `#9/#10/#20/#60`（w **50/40/28/3**）→ AR `#118` w6；4.x/`4-8` map→**Opus5**；`[1M]` 在百倍池 **upstream→裸 `claude-opus-5`**（价表拒 `[1M]`）；`#118` 仍保留 `[1M]` identity。见 `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md` |
+| **Fable** (`claude-fable-5` / `[1M]`) | `#127` jianzhile pri50/w20（仅 fable；头 `New-Api-Group: Claude-CC-MAX`）→ 其下仍可能落到主池若仍挂 fable 能力。本机 Fable 角色 → `claude-fable-5`。见 `docs/patches/jianzhile-fable-newapi-2026-07-26.md` |
 | **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
 
 `#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#11`/`#81` **status=2**；AR `#118–120` health EXCLUDE。Vyce **无** Opus。health_check v5：`docs/patches/newapi-dx-health-check-v5-2026-07-26.md`。防卡顿：`docs/patches/newapi-dx-anti-stall-2026-07-26.md`。
@@ -41,10 +41,10 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | Default / Sonnet | `glm-5.2[1M]` (via ZG) |
 | Failover queue | **1.** ZG → **2.** `agentrouter-2`（林夕 / Sub2API / 百倍直连 **不进 FQ**） |
 | Proxy knobs | `streaming_first_byte_timeout=25`, `max_retries=2` |
-| Daily model | ZG `ANTHROPIC_MODEL=claude-opus-5[1M]`；Sonnet→`glm-5.2[1M]`；Haiku 客户端可发 `LongCat-2.0`（Agnes 映射）或 `claude-haiku-*`（梯队 Agnes→Vyce→LongCat） |
+| Daily model | ZG **`ANTHROPIC_MODEL` unset**；Opus→`claude-opus-5[1M]`；Fable→`claude-fable-5`；Sonnet→`glm-5.2[1M]`；Haiku→`LongCat-2.0`（或 `claude-haiku-*`） |
 | Guard coverage | 经 ZG：百倍 `#9/#10/#20`→`:8403-5`、k40/林夕 `#60`→`:8400` **有** kiro-guard。本机直连林夕/Sub2API/百倍/AR2 **无** guard — **勿手动切 current**；FQ#2 直连 AR 是有意取舍（ZG 全挂时仍有后备，不叠本机 guard） |
 | Do not | Make Sub2API / 林夕 / 百倍直连 / anyrouter current for daily Claude；勿把 FQ#2 也指回 ZG（无真正后备） |
-| Opus-first | Keep `claude-opus-5[1M]` for Opus/Fable/Subagent/Reasoning; **do not** demote to glm for speed. Speed = latency-weighted Opus channels + guard 502 (community / Kiro-Go #141 spirit). Keep `first_byte=25s`, `max_retries=2` — no ad-hoc tighter first_byte. |
+| Opus-first | Keep `claude-opus-5[1M]` for Opus/Subagent/Reasoning；**Fable** 用 `claude-fable-5`（`#127`）。**do not** demote Opus to glm for speed. Keep `first_byte=25s`, `max_retries=2`. |
 
 ## AgentRouter / AnyRouter (2026-07-26)
 
@@ -61,7 +61,8 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 
 | Claude Code role | Requested model id(s) | Primary NewAPI route | Notes |
 |------------------|----------------------|----------------------|--------|
-| Opus / Fable / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 w50/42/18/3 → AR `#118` w6 | 4.8→5 map；`#119/#120`+`#81/#11` pinned |
+| Opus / Subagent / Reasoning | `claude-opus-5` / `claude-opus-5[1M]` | pri45 w50/40/28/3 → AR `#118` w6 | `[1M]`→裸 opus-5 on `#9–60`；`#118` keep `[1M]` |
+| Fable | `claude-fable-5` / `[1M]` | `#127` pri50/w20 | 本机 `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5` |
 | Sonnet / default | `glm-5.2` / `glm-5.2[1M]` | Zhipu `#41/#42` (80) → hongshi `#123` (50) | `enable_thinking=false` on zhipu |
 | Haiku | `claude-haiku-*` / dated | Agnes `#122` (40) → Vyce `#125` (35) → LongCat `#90` (30) | `LongCat-2.0` id → Agnes map `agnes-2.0-flash` |
 | GPT (OpenAI path) | `gpt-5.5` / `gpt-5.6-*` / … | `#21` (60) → `#124` (55) → `#123` (50) | type=1；123458 需浏览器 UA |
@@ -101,7 +102,7 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - Runbook: `docs/ops/newapi-dx-cursor-ops.md`
 - Local: `python scripts/ops/newapi-dx-analyze.py`
 - Auto in-band: soft-trunc env (`KIRO_GUARD_SHORT_*`) + Opus weights; escalate when out of band.
-- Opus 主池现网快照：**`#9/#10/#20/#60` = 50/42/18/3**（压慢渠 `#20`；analyze 仍可按 p50 微调；见 `newapi-dx-opus5-prefer-2026-07-26.md`）。
+- Opus 主池现网快照：**`#9/#10/#20/#60` = 50/40/28/3**（见 `opus1m-map-and-fable-provider-2026-07-26.md` / 历史 `newapi-dx-opus5-prefer-2026-07-26.md`）。
 - **Client surfaces (2026-07-26):** Claude Code → ZG NewAPI；Cursor IDE BYOK → `zg-*` → NewAPI；**Cursor Agent CLI → Cursor 云端官方模型 only**（默认 `claude-opus-5-high`；勿用 Opus 4.8 踩 Cyber Safeguards）。细节见 runbook「客户端怎么走 NewAPI」。
 - **AUP / Cyber Safeguards:** 官方 Opus 4.8 易拦；新会话 + 换 Opus5/Sonnet/glm；无客户端关过滤。见 runbook「Cyber Safeguards / AUP」与 `docs/patches/cyber-safeguards-opus48-2026-07-26.md`。
 - **公益站抖动：** 预期噪声；勿当 P0。health v5.1 对 `no available accounts` 不累计禁用。

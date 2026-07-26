@@ -33,7 +33,7 @@ Forbidden without an explicit new user request:
 |-------|-------------|
 | App | Official installer binary; DB `user_version=16` |
 | Provider Sonnet upstream | `glm-5.2[1M]` |
-| Provider Opus / Haiku | `claude-opus-5[1M]` / `LongCat-2.0` |
+| Provider Opus / Fable / Haiku | `claude-opus-5[1M]` / **`claude-fable-5`** / `LongCat-2.0` |
 | Provider `ANTHROPIC_MODEL` | **unset** |
 | Live Sonnet / Opus / Haiku | `claude-sonnet-4-6[1M]` / `claude-opus-5[1M]` / `claude-haiku-4-5` |
 | Auto-mode Bash | Uses Sonnet **alias** → proxy keyword map → glm (Zhipu) |

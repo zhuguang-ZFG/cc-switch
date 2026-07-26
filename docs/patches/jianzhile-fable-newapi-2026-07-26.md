@@ -36,7 +36,7 @@ Via ZG gateway: `claude-fable-5` / `[1M]` after `podman restart new-api`.
 ## Ops notes
 
 - Key lives only in NewAPI DB — **never** commit to git / patches.
-- Stock cc-switch: Fable role still maps via provider `ANTHROPIC_DEFAULT_FABLE_MODEL` (often Opus5). To *use* 肥波5, client must request `claude-fable-5` (or set Fable upstream to that id in provider env — config only, no cc-switch rebuild).
+- Local ZG provider now sets `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5` (config only). See also `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md`.
 - Policy: `docs/ops/do-not-modify-cc-switch.md`.
 
 ## Related
