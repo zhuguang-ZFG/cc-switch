@@ -168,13 +168,72 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | 服务 | 脚本 | 说明 |
 |------|------|------|
 | `newapi-tg-bot` | `/opt/new-api/tg_bot_daemon.py` | ZG 网关交互机器人：`/status` `/report` `/channels` `/weights` `/enable N` `/disable N` |
-| `tg-forward` | `/opt/tg_forward/forward.py` | 频道转发：`sliverkiss_blog,wzxylh,piracy6` → `aishowti`（Telethon userbot） |
+| `tg-forward` | `/opt/tg_forward/forward.py` | 频道转发：9 频道 → `aishowti`（Telethon userbot） |
 
 - **Bot**: `@lima_gallery_xyz_bot`，chat_id `5345665818`（liusi67）
 - **保护渠道**: `{11, 60, 81, 97, 98}` — `/enable` 拒绝复活，按钮不显示
 - **enable/disable**: 直接 SQLite UPDATE（不走危险的 `/api/channel/:id/status`）+ `podman restart new-api`
 - **tg-forward**: FloodWaitError 处理 + 每小时心跳日志；proxy `socks5://127.0.0.1:7891`
 - **管理**: `systemctl restart tg-forward` / `systemctl restart newapi-tg-bot`；日志 `journalctl -u tg-forward -f`
+
+### TG 频道转发列表（2026-07-27）
+
+9 个源频道 → `@aishowti`：
+
+| 频道 | 内容 |
+|------|------|
+| `sliverkiss_blog` | 银吻博客（软件/工具） |
+| `wzxylh` | 往者行也联合（软件/优惠） |
+| `piracy6` | 数字海盗（资源） |
+| `LptTech` | LPT 科技（AI/科技新闻） |
+| `AI_News_CN` | AI 中文新闻 |
+| `aigc1024` | AIGC 前线（AI 资讯/教程） |
+| `NewlearnerChannel` | 新学者频道（软件/效率工具） |
+| `geekshare` | 极客分享（科技/开源） |
+| `abskoop` | ABS 酷品（数码/折扣） |
+
+**启动回填**：`state.json` 持久化每频道 `last_id`；重启后自动 `get_messages(min_id=last_id)` 补漏。首次加入新频道时锚定当前最新 msg_id，不回填历史。
+
+## NewAPI 健康监控（2026-07-27）
+
+**脚本**: `/opt/new-api/newapi_monitor.py`  
+**Bot**: `@lima_gallery_xyz_bot`（复用 TG bot token）
+
+| 模式 | Cron | 说明 |
+|------|------|------|
+| `probe` | `*/5 * * * *` | 向 NewAPI 发真实 completion（`qwen3.7-max`），连续 2 次失败告警，恢复通知 |
+| `scan` | `*/30 * * * *` | 直接查 SQLite `channels` 表，报告各渠道状态/余额/异常 |
+| `guard` | `*/10 * * * *` | 检查 guard 端口 `/metrics`，hard-reject 率 >50% 告警 |
+| `daily` | `0 9 * * *` | 综合日报：渠道状态 + 24h 请求量 + 错误率 + guard 健康 |
+
+- 使用 `curl` 子进程（非 urllib）确保可靠性
+- `scan` 直接读 SQLite（绕过 NewAPI admin API 鉴权问题）
+- 自动检测可用模型（从 `abilities` 表查询）
+
+## Sub2API 自动签到（2026-07-27）
+
+**脚本**: `/opt/new-api/sub2api_checkin.py`  
+**Cron**: `0 8 * * *`
+
+### 林夕（k40.shengqainbang.cn）— 全自动
+
+| 账号 | 状态 |
+|------|------|
+| `1171933076@qq.com` | token 自动续期 ✓ |
+| `barbarhonmamxi20@gmail.com` | token 自动续期 ✓ |
+
+- Sub2API 系统（非 NewAPI/one-api）
+- 流程：`POST /api/v1/check-in`（Bearer access_token）→ 401 时用 refresh_token 刷新 → 保存新 token
+- Refresh token 是**一次性**的，每次刷新返回新 token
+- 需走 socks 代理（`socks5h://127.0.0.1:7891`）访问 shengqainbang.cn
+- Token 保存在 `/opt/new-api/sub2api_accounts.json`
+
+### 百倍（sub.100xlabs.space）— 手动
+
+5 个账号，Cloudflare Turnstile 阻止 API 登录和 headless 浏览器。方案：
+
+- **浏览器插件 [All API Hub](https://allapihub.com)**：本机浏览器手动签到
+- 已尝试的方案（均被 CF 拦截）：API login、urllib+proxy、Playwright headless
 
 ## 回滚
 

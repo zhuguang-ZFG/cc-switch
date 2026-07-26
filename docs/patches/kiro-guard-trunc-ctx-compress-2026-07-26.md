@@ -169,6 +169,11 @@ AnyRouter requires `anthropic-beta: context-1m-2025-08-07` header for 1M context
 | `anyrouter_squeeze.py` | `*/10 * * * *` | AnyRouter 1M 挤进去：5 tries/run, auto-enable #52 on success |
 | `anyrouter_checkin.py` | `0 9 * * *` | AnyRouter 每日签到 ($25/day) |
 | `autoweight.py` | `30 */2 * * *` | 基于 guard metrics 自动调权 (p50/成功率 → weight ±5~8, 3h cooldown) |
+| `newapi_monitor.py probe` | `*/5 * * * *` | NewAPI 健康探针 (qwen3.7-max completion) |
+| `newapi_monitor.py scan` | `*/30 * * * *` | 渠道状态扫描 (SQLite 直查) |
+| `newapi_monitor.py guard` | `*/10 * * * *` | Guard 端口 hard-reject 率监控 |
+| `newapi_monitor.py daily` | `0 9 * * *` | 综合日报 |
+| `sub2api_checkin.py` | `0 8 * * *` | 林夕 Sub2API 自动签到 (2 账号, token 自动续期) |
 
 ## Defense layers (after)
 
