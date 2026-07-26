@@ -134,7 +134,8 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | SHORT_OUT | 16–64（当前 **40**） |
 | MAX_TOKENS_CAP | **4096** 默认 / **8192** Write / **budget+2048** thinking（`_effective_cap` 自适应；0=不限） |
 | SYNTH_STREAM | 渐进式 SSE：text 80 字符/块 12ms 间隔（`KIRO_GUARD_SYNTH_CHUNK` / `SYNTH_DELAY`）；thinking 块 160/6ms |
-| TRUNC_CONTEXT | **1**（截断续写 → 合并 + `_dedup_overlap` ≥20 字符去重；journal `recovered_merged:*` / `dedup_overlap`） |
+| TRUNC_CONTEXT | **1**（截断续写 → 轻量续写窗口 6 轮 + 合并 + dedup；journal `recovered_merged:*` / `continuation_trimmed`） |
+| 错误标准化 | 所有客户端错误使用 Anthropic 标准 shape（`overloaded_error` / `rate_limit_error`），不泄露 guard 内部 reason |
 | GZIP | 响应体 >1KB 自动 gzip（`KIRO_GUARD_GZIP_MIN=1024`；SSE 除外） |
 | TEXT_HEUR | `KIRO_GUARD_TEXT_HEUR=1`：未闭合 fence / 句尾开放标点 / 有 tools 却只说「我将」无 tool_use |
 | SOFT_RETRY_BACKOFF_MS | **700**（Kiro-Go #143；即时重试易同溃） |

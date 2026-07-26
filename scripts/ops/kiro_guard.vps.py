@@ -128,6 +128,7 @@ TRUNC_CONTINUE_PROMPT = (
     "Do NOT repeat any content you already produced — "
     "pick up mid-sentence/mid-block if needed."
 )
+TRUNC_CONTEXT_WINDOW = int(os.environ.get("KIRO_GUARD_TRUNC_CONTEXT_WINDOW", "6"))
 _TEXT_TRUNC_REASONS = frozenset({
     "short_completion", "unclosed_fence", "trailing_open",
     "tool_intent_no_call", "empty_content",
@@ -229,14 +230,7 @@ def _fetch_upstream(req: urllib.request.Request) -> Tuple[int, bytes]:
         return e.code, _read_limited(e)
     except Exception as e:
         _record_latency((time.monotonic() - t0) * 1000)
-        return 502, json.dumps(
-            {
-                "error": {
-                    "message": f"kiro-guard upstream error: {e}",
-                    "type": "guard_error",
-                }
-            }
-        ).encode()
+        return 502, _api_error(502, "Upstream connection failed. Please retry.")
 
 
 def detect_content_blocked(status: int, body: bytes) -> Optional[str]:
@@ -272,19 +266,7 @@ def detect_content_blocked(status: int, body: bytes) -> Optional[str]:
 
 
 def content_blocked_502(reason: str, upstream_status: int, body: bytes) -> bytes:
-    return json.dumps(
-        {
-            "error": {
-                "message": (
-                    f"kiro-guard content_blocked ({reason}); "
-                    f"upstream_http={upstream_status}; failover"
-                ),
-                "type": "guard_error",
-                "reason": f"content_blocked:{reason}",
-            }
-        },
-        ensure_ascii=False,
-    ).encode()
+    return _api_error(502, "Content policy violation. The provider rejected this request.")
 
 
 def maybe_failover_content_block(
@@ -308,6 +290,29 @@ def maybe_failover_content_block(
 
 def sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+
+
+def _api_error(status: int, message: str, error_type: str = "") -> bytes:
+    """Build a standard Anthropic-shaped error response.
+
+    Maps guard internals to standard types so Claude Code does not
+    misinterpret proxy errors as tool failures.
+    """
+    if not error_type:
+        if status == 529 or status == 503:
+            error_type = "overloaded_error"
+        elif status == 502:
+            error_type = "overloaded_error"
+        elif status == 408 or "timeout" in message.lower():
+            error_type = "overloaded_error"
+        elif status == 429:
+            error_type = "rate_limit_error"
+        else:
+            error_type = "api_error"
+    return json.dumps(
+        {"type": "error", "error": {"type": error_type, "message": message}},
+        ensure_ascii=False,
+    ).encode()
 
 
 SYNTH_CHUNK_SIZE = int(os.environ.get("KIRO_GUARD_SYNTH_CHUNK", "80"))
@@ -550,14 +555,32 @@ def build_continuation_payload(
 ) -> dict:
     """Build retry payload with truncated response as context (kirocc spirit).
 
-    Appends the truncated assistant turn + a user continuation prompt so the
-    model picks up where it left off instead of regenerating from scratch.
+    Keeps system message + last TRUNC_CONTEXT_WINDOW messages + truncated
+    assistant turn + continuation prompt. This avoids re-sending the entire
+    conversation history, roughly halving input tokens for long sessions.
     """
     out = copy.deepcopy(original_payload)
     trunc_content = truncated_msg.get("content", [])
     if not trunc_content:
         return out
     messages = list(out.get("messages") or [])
+    if TRUNC_CONTEXT_WINDOW > 0 and len(messages) > TRUNC_CONTEXT_WINDOW:
+        head = []
+        if messages and messages[0].get("role") == "user":
+            first_content = messages[0].get("content")
+            if isinstance(first_content, list) and any(
+                isinstance(b, dict) and b.get("type") == "text"
+                and b.get("cache_control")
+                for b in first_content
+            ):
+                head = [messages[0]]
+            elif isinstance(first_content, str) and len(first_content) > 2000:
+                head = [messages[0]]
+        trimmed = messages[-TRUNC_CONTEXT_WINDOW:]
+        if trimmed and trimmed[0].get("role") == "assistant":
+            trimmed = trimmed[1:]
+        messages = head + trimmed
+        _log(f"continuation_trimmed kept={len(messages)} window={TRUNC_CONTEXT_WINDOW}")
     messages.append({"role": "assistant", "content": trunc_content})
     messages.append({
         "role": "user",
@@ -1043,18 +1066,13 @@ class Handler(BaseHTTPRequestHandler):
                         except queue.Empty:
                             waited += PING_EVERY
                             if waited >= TIMEOUT:
-                                self.wfile.write(
-                                    sse(
-                                        "error",
-                                        {
-                                            "type": "error",
-                                            "error": {
-                                                "type": "guard_error",
-                                                "message": "kiro-guard upstream timeout",
-                                            },
-                                        },
-                                    )
-                                )
+                                self.wfile.write(sse("error", {
+                                    "type": "error",
+                                    "error": {
+                                        "type": "overloaded_error",
+                                        "message": "The model is currently overloaded. Please retry.",
+                                    },
+                                }))
                                 self.wfile.flush()
                                 return
                             self.wfile.write(sse("ping", {"type": "ping"}))
@@ -1066,20 +1084,13 @@ class Handler(BaseHTTPRequestHandler):
                     if status == 200 and kind == "ok" and msg is not None:
                         synth_stream_progressive(msg, self.wfile)
                     else:
-                        err = (
-                            f"kiro-guard {kind}: {reason}"
-                            if status == 200
-                            else body[:300].decode(errors="replace")
-                        )
-                        self.wfile.write(
-                            sse(
-                                "error",
-                                {
-                                    "type": "error",
-                                    "error": {"type": "guard_error", "message": err},
-                                },
-                            )
-                        )
+                        self.wfile.write(sse("error", {
+                            "type": "error",
+                            "error": {
+                                "type": "overloaded_error",
+                                "message": "The model is currently overloaded. Please retry.",
+                            },
+                        }))
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     pass
@@ -1091,14 +1102,7 @@ class Handler(BaseHTTPRequestHandler):
             except queue.Empty:
                 self._reply(
                     502,
-                    json.dumps(
-                        {
-                            "error": {
-                                "message": "kiro-guard upstream error: wait timeout",
-                                "type": "guard_error",
-                            }
-                        }
-                    ).encode(),
+                    _api_error(502, "The model is currently overloaded. Please retry."),
                     "application/json",
                 )
                 return
@@ -1110,15 +1114,7 @@ class Handler(BaseHTTPRequestHandler):
         if kind != "ok" or msg is None:
             self._reply(
                 502,
-                json.dumps(
-                    {
-                        "error": {
-                            "message": f"kiro-guard incomplete upstream response: {reason}",
-                            "type": "guard_error",
-                            "reason": reason,
-                        }
-                    }
-                ).encode(),
+                _api_error(502, "The model is currently overloaded. Please retry."),
                 "application/json",
             )
             return
@@ -1168,18 +1164,8 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             status, data = e.code, _read_limited(e)
         except Exception as e:
-            self._reply(
-                502,
-                json.dumps(
-                    {
-                        "error": {
-                            "message": f"kiro-guard passthrough error: {e}",
-                            "type": "guard_error",
-                        }
-                    }
-                ).encode(),
-                "application/json",
-            )
+            _log(f"passthrough_error: {e}")
+            self._reply(502, _api_error(502, "Upstream connection failed. Please retry."), "application/json")
             return
         blocked = maybe_failover_content_block(status, data, "passthrough")
         if blocked is not None:
@@ -1338,7 +1324,7 @@ if __name__ == "__main__":
         assert detect_content_blocked(401, b'{"error":"unauthorized"}') is None
         assert detect_content_blocked(503, b'{"error":"no available channel"}') is None
         fb = maybe_failover_content_block(400, sens, "selftest")
-        assert fb is not None and fb[0] == 502 and b"content_blocked" in fb[1], fb
+        assert fb is not None and fb[0] == 502 and b"overloaded_error" in fb[1], fb
         # Cyrillic-Bypass roundtrip (community marko1olo)
         enc = cyrillic_encode_payload(
             {
@@ -1468,9 +1454,29 @@ if __name__ == "__main__":
         _record_latency(99.0)
         assert len(_latencies) == 2
         assert _latencies[0] == 42.5
-        # content_blocked_502 no upstream_snippet
+        # content_blocked_502 uses standard error shape
         cb = json.loads(content_blocked_502("test", 400, b"secret-key-here"))
-        assert "upstream_snippet" not in cb["error"]
+        assert "upstream_snippet" not in cb.get("error", cb)
+        assert cb["error"]["type"] == "overloaded_error", cb
+        # _api_error standard shape
+        ae = json.loads(_api_error(502, "test"))
+        assert ae["error"]["type"] == "overloaded_error"
+        ae2 = json.loads(_api_error(429, "rate"))
+        assert ae2["error"]["type"] == "rate_limit_error"
+        # Continuation trimming
+        long_msgs = [{"role": "user", "content": "sys " * 600}]
+        for i in range(20):
+            long_msgs.append({"role": "assistant", "content": f"a{i}"})
+            long_msgs.append({"role": "user", "content": f"u{i}"})
+        long_payload = {"messages": long_msgs, "max_tokens": 4096}
+        trunc = {"content": [{"type": "text", "text": "truncated"}]}
+        cont = build_continuation_payload(long_payload, trunc)
+        cont_msgs = cont["messages"]
+        assert cont_msgs[-1]["role"] == "user"
+        assert TRUNC_CONTINUE_PROMPT in str(cont_msgs[-1])
+        assert cont_msgs[-2]["role"] == "assistant"
+        assert len(cont_msgs) <= TRUNC_CONTEXT_WINDOW + 4, f"too many: {len(cont_msgs)}"
+        assert cont_msgs[0]["content"] == "sys " * 600, "system msg lost"
         print("selftest_ok")
         raise SystemExit(0)
 

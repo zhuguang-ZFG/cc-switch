@@ -79,6 +79,25 @@ Replaces one-shot `synth_stream` with `synth_stream_progressive`: text blocks ar
 
 `_effective_cap` now inspects `thinking.budget_tokens`. When extended thinking is enabled, cap = max(base_cap, budget + 2048) to ensure visible output room on top of thinking tokens. Prevents the 4096 default from starving models that use thinking budgets.
 
+### 10. Error message standardization (2026-07-27)
+
+All client-facing errors now use standard Anthropic error shapes via `_api_error()`:
+- 502/timeout/truncation → `overloaded_error` ("The model is currently overloaded. Please retry.")
+- 429 → `rate_limit_error`
+- content_blocked → `overloaded_error` (triggers NewAPI channel failover)
+
+Internal guard reasons (`retry_exhausted:unclosed_fence`, etc.) no longer leak to Claude Code, preventing the model from misinterpreting proxy errors as tool failures.
+
+### 11. Continuation payload lightweighting (2026-07-27)
+
+`build_continuation_payload` now keeps only system message + last N turns (default 6) instead of the full conversation history. Roughly halves input tokens for long sessions.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_TRUNC_CONTEXT_WINDOW` | `6` | Max recent messages to keep in continuation retry |
+
+System message detection: preserves the first message if it has `cache_control` markers or is >2000 chars (likely system prompt). Ensures alternating user/assistant by trimming a leading assistant message.
+
 ## Defense layers (after)
 
 ```
@@ -86,18 +105,20 @@ Request in
   |
 1. adaptive max_tokens cap: thinking-aware / Write-aware / default
   |
-2. Truncation detect + continuation retry + overlap dedup + merge
+2. Truncation detect + lightweight continuation retry + overlap dedup + merge
   |
 3. Response body size limit (10MB) + upstream latency tracking
   |
 4. Progressive SSE synthesis (chunked text output)
   |
-5. HTTP gzip: compress response to NewAPI (reduce transfer size)
+5. Standard Anthropic error shapes (no guard internals leaked)
+  |
+6. HTTP gzip: compress response to NewAPI (reduce transfer size)
 ```
 
 ## Verification
 
-- Selftest: all classify + merge + dedup + adaptive cap (including thinking) + progressive SSE + size limit + latency + snippet redaction tests pass
+- Selftest: all classify + merge + dedup + adaptive cap (thinking) + progressive SSE + size limit + latency + error shapes + continuation trimming tests pass
 - 5 guard units: all active, all health=200
 
 ## Tuning
@@ -107,6 +128,7 @@ Request in
 - Disable continuation retry: `KIRO_GUARD_TRUNC_CONTEXT=0`
 - Response size limit: `KIRO_GUARD_MAX_RESPONSE_BYTES=20971520` (20MB)
 - SSE chunk tuning: `KIRO_GUARD_SYNTH_CHUNK=120` (bigger), `KIRO_GUARD_SYNTH_DELAY=0.005` (faster)
+- Continuation window: `KIRO_GUARD_TRUNC_CONTEXT_WINDOW=10` (keep more context, costs more tokens)
 
 ## Rollback
 
