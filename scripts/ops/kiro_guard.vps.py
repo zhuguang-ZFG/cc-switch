@@ -310,67 +310,76 @@ def sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
-def synth_stream(msg: dict) -> bytes:
-    out = []
+SYNTH_CHUNK_SIZE = int(os.environ.get("KIRO_GUARD_SYNTH_CHUNK", "80"))
+SYNTH_CHUNK_DELAY = float(os.environ.get("KIRO_GUARD_SYNTH_DELAY", "0.012"))
+
+
+def synth_stream_progressive(msg: dict, wfile) -> None:
+    """Write SSE events progressively with small delays for natural feel."""
+    def _w(data: bytes):
+        wfile.write(data)
+        wfile.flush()
+
     stub = {k: v for k, v in msg.items() if k != "content"}
     stub["content"] = []
-    out.append(sse("message_start", {"type": "message_start", "message": stub}))
+    _w(sse("message_start", {"type": "message_start", "message": stub}))
     for idx, block in enumerate(msg.get("content") or []):
         btype = block.get("type", "text")
-        out.append(
-            sse(
-                "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": idx,
-                    "content_block": block,
-                },
-            )
-        )
+        start_block = dict(block)
         if btype == "text":
-            out.append(
-                sse(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": idx,
-                        "delta": {"type": "text_delta", "text": block.get("text", "")},
-                    },
-                )
-            )
+            start_block = {"type": "text", "text": ""}
+        _w(sse("content_block_start", {
+            "type": "content_block_start", "index": idx,
+            "content_block": start_block,
+        }))
+        if btype == "text":
+            text = block.get("text", "")
+            pos = 0
+            while pos < len(text):
+                chunk = text[pos:pos + SYNTH_CHUNK_SIZE]
+                _w(sse("content_block_delta", {
+                    "type": "content_block_delta", "index": idx,
+                    "delta": {"type": "text_delta", "text": chunk},
+                }))
+                pos += SYNTH_CHUNK_SIZE
+                if pos < len(text) and SYNTH_CHUNK_DELAY > 0:
+                    time.sleep(SYNTH_CHUNK_DELAY)
+        elif btype == "thinking":
+            text = block.get("thinking", "")
+            pos = 0
+            while pos < len(text):
+                chunk = text[pos:pos + SYNTH_CHUNK_SIZE * 2]
+                _w(sse("content_block_delta", {
+                    "type": "content_block_delta", "index": idx,
+                    "delta": {"type": "thinking_delta", "thinking": chunk},
+                }))
+                pos += SYNTH_CHUNK_SIZE * 2
+                if pos < len(text) and SYNTH_CHUNK_DELAY > 0:
+                    time.sleep(SYNTH_CHUNK_DELAY / 2)
         elif btype == "tool_use":
-            out.append(
-                sse(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": idx,
-                        "delta": {
-                            "type": "input_json_delta",
-                            "partial_json": json.dumps(
-                                block.get("input", {}), ensure_ascii=False
-                            ),
-                        },
-                    },
-                )
-            )
-        out.append(sse("content_block_stop", {"type": "content_block_stop", "index": idx}))
-    usage = msg.get("usage") or {}
-    out.append(
-        sse(
-            "message_delta",
-            {
-                "type": "message_delta",
+            _w(sse("content_block_delta", {
+                "type": "content_block_delta", "index": idx,
                 "delta": {
-                    "stop_reason": msg.get("stop_reason"),
-                    "stop_sequence": msg.get("stop_sequence"),
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(
+                        block.get("input", {}), ensure_ascii=False
+                    ),
                 },
-                "usage": {"output_tokens": usage.get("output_tokens", 0)},
+            }))
+        _w(sse("content_block_stop", {"type": "content_block_stop", "index": idx}))
+    usage = msg.get("usage") or {}
+    _w(sse(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": msg.get("stop_reason"),
+                "stop_sequence": msg.get("stop_sequence"),
             },
-        )
-    )
-    out.append(sse("message_stop", {"type": "message_stop"}))
-    return b"".join(out)
+            "usage": {"output_tokens": usage.get("output_tokens", 0)},
+        },
+    ))
+    _w(sse("message_stop", {"type": "message_stop"}))
 
 
 def _content_nonempty(content: Any) -> bool:
@@ -785,15 +794,27 @@ def cyrillic_decode_bytes(body: bytes) -> bytes:
 
 
 def _effective_cap(payload: dict) -> int:
-    """Return the adaptive max_tokens cap for this request."""
+    """Return the adaptive max_tokens cap for this request.
+
+    Priority: thinking budget → Write tools → default cap.
+    When extended thinking is active, cap must leave room for visible output
+    on top of thinking budget tokens.
+    """
     if MAX_TOKENS_CAP <= 0:
         return 0
+    base = MAX_TOKENS_CAP
     tools = payload.get("tools")
     if isinstance(tools, list):
         for t in tools:
             if isinstance(t, dict) and t.get("name") in _WRITE_TOOL_NAMES:
-                return MAX_TOKENS_WRITE_CAP
-    return MAX_TOKENS_CAP
+                base = MAX_TOKENS_WRITE_CAP
+                break
+    thinking = payload.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+        budget = thinking.get("budget_tokens", 0)
+        if isinstance(budget, int) and budget > 0:
+            return max(base, budget + 2048)
+    return base
 
 
 def build_messages_request(payload: dict, header_map: Dict[str, str]) -> urllib.request.Request:
@@ -1043,7 +1064,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 try:
                     if status == 200 and kind == "ok" and msg is not None:
-                        self.wfile.write(synth_stream(msg))
+                        synth_stream_progressive(msg, self.wfile)
                     else:
                         err = (
                             f"kiro-guard {kind}: {reason}"
@@ -1103,7 +1124,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if want_stream:
-            self._reply(200, synth_stream(msg), "text/event-stream")
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                synth_stream_progressive(msg, self.wfile)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         else:
             self._reply(200, json.dumps(msg, ensure_ascii=False).encode(), "application/json")
 
@@ -1395,6 +1424,37 @@ if __name__ == "__main__":
         assert _effective_cap(plain_req) == MAX_TOKENS_CAP
         no_tools = {"max_tokens": 16384}
         assert _effective_cap(no_tools) == MAX_TOKENS_CAP
+        # Thinking budget aware cap
+        think_req = {
+            "max_tokens": 16384,
+            "thinking": {"type": "enabled", "budget_tokens": 10000},
+        }
+        assert _effective_cap(think_req) == 10000 + 2048, _effective_cap(think_req)
+        think_write = {
+            "max_tokens": 16384,
+            "thinking": {"type": "enabled", "budget_tokens": 5000},
+            "tools": [{"name": "Write"}],
+        }
+        cap_tw = _effective_cap(think_write)
+        assert cap_tw == max(MAX_TOKENS_WRITE_CAP, 5000 + 2048), cap_tw
+        think_disabled = {
+            "max_tokens": 16384,
+            "thinking": {"type": "disabled"},
+        }
+        assert _effective_cap(think_disabled) == MAX_TOKENS_CAP
+        # Progressive SSE synthesis
+        buf = io.BytesIO()
+        test_msg = {
+            "content": [{"type": "text", "text": "hello world " * 20}],
+            "stop_reason": "end_turn",
+            "usage": {"output_tokens": 10},
+        }
+        synth_stream_progressive(test_msg, buf)
+        sse_out = buf.getvalue().decode()
+        assert "message_start" in sse_out
+        assert "text_delta" in sse_out
+        assert "message_stop" in sse_out
+        assert sse_out.count("text_delta") > 1, "should have multiple chunks"
         # Response size limit
         assert _read_limited(io.BytesIO(b"x" * 100), 100) == b"x" * 100
         try:

@@ -66,23 +66,38 @@ Every `fetch_classified` call generates a 12-char hex `req_id` (uuid4). Threaded
 
 `content_blocked_502` no longer returns first 240 bytes of upstream body to the client. Prevents leaking internal error details or key fragments.
 
+### 8. Progressive SSE synthesis (2026-07-27)
+
+Replaces one-shot `synth_stream` with `synth_stream_progressive`: text blocks are chunked (80 chars, 12ms delay) so users see output appearing gradually instead of a wall of text after long silence. Thinking blocks use double chunk size and half delay. Tool_use blocks remain single-shot.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_SYNTH_CHUNK` | `80` | Chars per SSE text_delta chunk |
+| `KIRO_GUARD_SYNTH_DELAY` | `0.012` | Seconds between text chunks |
+
+### 9. Thinking budget aware cap (2026-07-27)
+
+`_effective_cap` now inspects `thinking.budget_tokens`. When extended thinking is enabled, cap = max(base_cap, budget + 2048) to ensure visible output room on top of thinking tokens. Prevents the 4096 default from starving models that use thinking budgets.
+
 ## Defense layers (after)
 
 ```
 Request in
   |
-1. adaptive max_tokens cap: 4096 default / 8192 for Write tools
+1. adaptive max_tokens cap: thinking-aware / Write-aware / default
   |
 2. Truncation detect + continuation retry + overlap dedup + merge
   |
 3. Response body size limit (10MB) + upstream latency tracking
   |
-4. HTTP gzip: compress response to NewAPI (reduce transfer size)
+4. Progressive SSE synthesis (chunked text output)
+  |
+5. HTTP gzip: compress response to NewAPI (reduce transfer size)
 ```
 
 ## Verification
 
-- Selftest: all classify + merge + dedup + adaptive cap + size limit + latency + snippet redaction tests pass
+- Selftest: all classify + merge + dedup + adaptive cap (including thinking) + progressive SSE + size limit + latency + snippet redaction tests pass
 - 5 guard units: all active, all health=200
 
 ## Tuning
@@ -91,6 +106,7 @@ Request in
 - If gzip causes issues with NewAPI: `KIRO_GUARD_GZIP_MIN=999999` (effectively off)
 - Disable continuation retry: `KIRO_GUARD_TRUNC_CONTEXT=0`
 - Response size limit: `KIRO_GUARD_MAX_RESPONSE_BYTES=20971520` (20MB)
+- SSE chunk tuning: `KIRO_GUARD_SYNTH_CHUNK=120` (bigger), `KIRO_GUARD_SYNTH_DELAY=0.005` (faster)
 
 ## Rollback
 
