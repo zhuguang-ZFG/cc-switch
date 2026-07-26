@@ -330,9 +330,14 @@ def synth_stream_progressive(msg: dict, wfile) -> None:
     _w(sse("message_start", {"type": "message_start", "message": stub}))
     for idx, block in enumerate(msg.get("content") or []):
         btype = block.get("type", "text")
-        start_block = dict(block)
         if btype == "text":
             start_block = {"type": "text", "text": ""}
+        elif btype == "thinking":
+            start_block = {"type": "thinking", "thinking": ""}
+        elif btype == "tool_use":
+            start_block = {"type": "tool_use", "id": block.get("id", ""), "name": block.get("name", ""), "input": {}}
+        else:
+            start_block = dict(block)
         _w(sse("content_block_start", {
             "type": "content_block_start", "index": idx,
             "content_block": start_block,
@@ -579,6 +584,8 @@ def build_continuation_payload(
         trimmed = messages[-TRUNC_CONTEXT_WINDOW:]
         if trimmed and trimmed[0].get("role") == "assistant":
             trimmed = trimmed[1:]
+        if head and trimmed and head[-1].get("role") == trimmed[0].get("role"):
+            trimmed = trimmed[1:]
         messages = head + trimmed
         _log(f"continuation_trimmed kept={len(messages)} window={TRUNC_CONTEXT_WINDOW}")
     messages.append({"role": "assistant", "content": trunc_content})
@@ -658,6 +665,8 @@ def merge_responses(first_msg: dict, cont_msg: dict) -> dict:
     for k in ("cache_read_input_tokens", "cache_creation_input_tokens"):
         if k in u2:
             merged["usage"][k] = u2[k]
+        elif k in u1:
+            merged["usage"][k] = u1[k]
 
     return merged
 
@@ -1083,6 +1092,12 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     if status == 200 and kind == "ok" and msg is not None:
                         synth_stream_progressive(msg, self.wfile)
+                    elif 400 <= status < 500:
+                        try:
+                            err_obj = json.loads(body)
+                        except Exception:
+                            err_obj = {"type": "error", "error": {"type": "api_error", "message": body[:500].decode("utf-8", "replace")}}
+                        self.wfile.write(sse("error", err_obj))
                     else:
                         self.wfile.write(sse("error", {
                             "type": "error",
@@ -1428,10 +1443,14 @@ if __name__ == "__main__":
             "thinking": {"type": "disabled"},
         }
         assert _effective_cap(think_disabled) == MAX_TOKENS_CAP
-        # Progressive SSE synthesis
+        # Progressive SSE synthesis — no content doubling
         buf = io.BytesIO()
         test_msg = {
-            "content": [{"type": "text", "text": "hello world " * 20}],
+            "content": [
+                {"type": "thinking", "thinking": "Let me think about this carefully."},
+                {"type": "text", "text": "hello world " * 20},
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "/a"}},
+            ],
             "stop_reason": "end_turn",
             "usage": {"output_tokens": 10},
         }
@@ -1441,6 +1460,11 @@ if __name__ == "__main__":
         assert "text_delta" in sse_out
         assert "message_stop" in sse_out
         assert sse_out.count("text_delta") > 1, "should have multiple chunks"
+        # Verify thinking block start is empty (no doubling)
+        assert '"thinking": ""' in sse_out, "thinking start should be empty"
+        assert sse_out.count("Let me think") == 1, "thinking text should appear once only"
+        # Verify tool_use block start has empty input
+        assert '"input": {}' in sse_out, "tool_use start should have empty input"
         # Response size limit
         assert _read_limited(io.BytesIO(b"x" * 100), 100) == b"x" * 100
         try:
@@ -1477,6 +1501,18 @@ if __name__ == "__main__":
         assert cont_msgs[-2]["role"] == "assistant"
         assert len(cont_msgs) <= TRUNC_CONTEXT_WINDOW + 4, f"too many: {len(cont_msgs)}"
         assert cont_msgs[0]["content"] == "sys " * 600, "system msg lost"
+        # Verify alternation: no two consecutive same-role messages
+        for i in range(len(cont_msgs) - 1):
+            assert cont_msgs[i]["role"] != cont_msgs[i + 1]["role"], (
+                f"alternation broken at {i}: {cont_msgs[i]['role']}, {cont_msgs[i+1]['role']}"
+            )
+        # merge_responses preserves cache tokens from first response
+        r1 = {"content": [{"type": "text", "text": "a"}], "stop_reason": "end_turn",
+               "usage": {"input_tokens": 100, "output_tokens": 10, "cache_read_input_tokens": 50}}
+        r2 = {"content": [{"type": "text", "text": "b"}], "stop_reason": "end_turn",
+               "usage": {"input_tokens": 100, "output_tokens": 5}}
+        m = merge_responses(r1, r2)
+        assert m["usage"].get("cache_read_input_tokens") == 50, m["usage"]
         print("selftest_ok")
         raise SystemExit(0)
 
