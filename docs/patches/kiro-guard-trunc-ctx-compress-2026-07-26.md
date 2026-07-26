@@ -98,27 +98,83 @@ Internal guard reasons (`retry_exhausted:unclosed_fence`, etc.) no longer leak t
 
 System message detection: preserves the first message if it has `cache_control` markers or is >2000 chars (likely system prompt). Ensures alternating user/assistant by trimming a leading assistant message.
 
+### 12. Journal rotation (2026-07-27)
+
+Auto-rotates the JSONL journal file when it exceeds a size threshold. Keeps up to N rotated backups (`.1`, `.2`, etc.). Rotation runs under `_journal_lock` before each write.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_JOURNAL_MAX_BYTES` | `5242880` | Rotate when journal exceeds this size (5MB) |
+| `KIRO_GUARD_JOURNAL_KEEP` | `3` | Number of rotated backups to keep |
+
+### 13. Prompt cache tracking (2026-07-27)
+
+All "ok" responses now log `cache_read_input_tokens` and `cache_creation_input_tokens` from the response's `usage` dict into journal events. This enables ops tracking of prompt cache hit rates across channels and time. Merged/recovered responses also include usage fields.
+
+### 14. Metrics persistence (2026-07-27)
+
+In-memory metrics (ok/soft/hard counts, latencies) are saved to a JSON snapshot file every 5 minutes. On restart, the snapshot is restored so counters survive across restarts.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_METRICS_SNAPSHOT` | `kiro-guard-metrics-{port}.json` | Snapshot file path |
+| `KIRO_GUARD_METRICS_SNAPSHOT_INTERVAL` | `300` | Save interval in seconds |
+
+### 15. TG alerting (2026-07-27)
+
+When consecutive hard failures reach a threshold, sends a Telegram bot message with port, upstream, and last failure reason. Cooldown: 60s between alerts.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_TG_BOT_TOKEN` | _(empty)_ | Telegram bot token (empty = disabled) |
+| `KIRO_GUARD_TG_CHAT_ID` | _(empty)_ | Telegram chat ID to alert |
+| `KIRO_GUARD_TG_ALERT_THRESHOLD` | `5` | Consecutive hard fails before alert |
+
+### 16. Upstream concurrency limiter (2026-07-27)
+
+Semaphore-based limiter on simultaneous upstream requests. Prevents overloading kiro under concurrent load.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_UPSTREAM_CONCURRENCY` | `3` | Max concurrent upstream requests (0 = unlimited) |
+
+### 17. Streaming passthrough mode (2026-07-27)
+
+When enabled, forwards `stream:true` requests directly to upstream as real streaming, bypassing the stream:false + SSE synthesis guard. Use when kiro fixes its truncation issue. Max_tokens cap still applies.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_STREAM_PASSTHROUGH` | `0` | Enable direct stream forwarding (default OFF) |
+
 ## Defense layers (after)
 
 ```
 Request in
   |
+0. [optional] Stream passthrough: bypass guard, forward SSE directly
+  |
 1. adaptive max_tokens cap: thinking-aware / Write-aware / default
   |
-2. Truncation detect + lightweight continuation retry + overlap dedup + merge
+2. Concurrency limiter (semaphore, default 3)
   |
-3. Response body size limit (10MB) + upstream latency tracking
+3. Truncation detect + lightweight continuation retry + overlap dedup + merge
   |
-4. Progressive SSE synthesis (chunked text output)
+4. Response body size limit (10MB) + upstream latency tracking
   |
-5. Standard Anthropic error shapes (no guard internals leaked)
+5. Progressive SSE synthesis (chunked text output)
   |
-6. HTTP gzip: compress response to NewAPI (reduce transfer size)
+6. Standard Anthropic error shapes (no guard internals leaked)
+  |
+7. HTTP gzip: compress response to NewAPI (reduce transfer size)
+  |
+8. Journal: auto-rotation (5MB) + cache token tracking
+  |
+9. Metrics persistence (5min snapshots) + TG alerting (consecutive hard fails)
 ```
 
 ## Verification
 
-- Selftest: all classify + merge + dedup + adaptive cap (thinking) + progressive SSE + size limit + latency + error shapes + continuation trimming tests pass
+- Selftest: all classify + merge + dedup + adaptive cap (thinking) + progressive SSE + size limit + latency + error shapes + continuation trimming + journal rotation + cache tracking + metrics snapshot + concurrency + TG alert tests pass
 - 5 guard units: all active, all health=200
 
 ## Tuning
@@ -129,6 +185,12 @@ Request in
 - Response size limit: `KIRO_GUARD_MAX_RESPONSE_BYTES=20971520` (20MB)
 - SSE chunk tuning: `KIRO_GUARD_SYNTH_CHUNK=120` (bigger), `KIRO_GUARD_SYNTH_DELAY=0.005` (faster)
 - Continuation window: `KIRO_GUARD_TRUNC_CONTEXT_WINDOW=10` (keep more context, costs more tokens)
+- Journal rotation threshold: `KIRO_GUARD_JOURNAL_MAX_BYTES=10485760` (10MB)
+- Journal backup count: `KIRO_GUARD_JOURNAL_KEEP=5` (keep 5 rotated files)
+- Metrics snapshot interval: `KIRO_GUARD_METRICS_SNAPSHOT_INTERVAL=60` (every 1min)
+- Concurrency limit: `KIRO_GUARD_UPSTREAM_CONCURRENCY=5` (or 0 for unlimited)
+- Enable streaming passthrough: `KIRO_GUARD_STREAM_PASSTHROUGH=1` (when kiro is fixed)
+- TG alert sensitivity: `KIRO_GUARD_TG_ALERT_THRESHOLD=3` (alert sooner)
 
 ## Rollback
 

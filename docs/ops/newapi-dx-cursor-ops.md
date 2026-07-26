@@ -105,7 +105,7 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 ## NewAPI 运维姿态（2026-07-26）
 
 - **公益站通断是常态**（`No available accounts` / 502）：不当事故；看主池是否仍能冒烟。
-- 现网 Opus：`#9/#10/#20/#60` = **50/42/12/3**；`#11/#81/#119/#120` status=2；AR `#118` w6。analyze 按 p50 动态调权（档位如 50/40/28/…），文档数字是**快照**不是硬编码目标。
+- 现网 Opus：`#9/#10/#20` = **50/42/12**（百倍 100xlabs，多 key 轮询池）；`#60`（k40/林夕，多 key 轮询池）= **已死**（`No available accounts`，k40 额度耗尽）；`#11/#81/#119/#120` status=2；AR `#118` w6。analyze 按 p50 动态调权（档位如 50/40/28/…），文档数字是**快照**不是硬编码目标。
 - **health v5.1**（已落地镜像 `scripts/ops/health_check.vps.py`）：探针优先 `claude-opus-5[1M]`；去掉 `:7890` 假 400 回退；`no available accounts`/公益站 503 → `FAIL-TRANSIENT` **不累计禁用**；硬失败阈值 **12**。勿为单渠 502 开专项。
 
 ## 建议定时
@@ -125,7 +125,7 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | 项 | 值 |
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
-| Opus 主池权重 | **`#9/#10/#20/#60` = 50/42/12/3**；AR 次池 **仅 `#118` w6**；`#119/#120` **暂时不开**（status=2，防慢） |
+| Opus 主池权重 | **`#9/#10/#20`**（百倍，多 key）= **50/42/12**；**`#60`**（林夕/k40，多 key）= **已死**（额度耗尽，应 status=2）；AR 次池 **仅 `#118` w6**；`#119/#120` **暂时不开**（status=2，防慢） |
 | `#81` / `#11` / AR `#119–120` | status=2 + abilities off；`#118` live；health EXCLUDE∋11,75,77–81,118–120（118 不探但仍可路由） |
 | 卡顿分诊 | 首字慢→`logs.use_time`/渠道；中途停→soft journal；关键词→502 failover。见 `docs/patches/newapi-dx-gov-b-2026-07-26.md` |
 | 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |
@@ -143,17 +143,23 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | MAX_RESP | **10MB**（`KIRO_GUARD_MAX_RESPONSE_BYTES`；防上游异常 OOM） |
 | req_id | 每请求 12 位 hex UUID；贯穿 journal + stderr，支持跨重试链追踪 |
 | latency | `/metrics` → `upstream_latency: {count, p50_ms, p95_ms, max_ms}`（滚动 200 窗口） |
+| journal 轮转 | 超 5MB 自动 rotate（`.1`→`.2`→`.3`，保留 3 份；`KIRO_GUARD_JOURNAL_MAX_BYTES` / `JOURNAL_KEEP`） |
+| cache 追踪 | "ok" journal 事件含 `cache_read_input_tokens` / `cache_creation_input_tokens`，可分析缓存命中率 |
+| metrics 持久化 | 每 5min 快照 ok/soft/hard/latency → `kiro-guard-metrics-{port}.json`；重启自动恢复（`KIRO_GUARD_METRICS_SNAPSHOT_INTERVAL`） |
+| TG 告警 | 连续 ≥5 次 hard fail 推 TG（`KIRO_GUARD_TG_BOT_TOKEN` + `TG_CHAT_ID`；60s 冷却；默认关） |
+| 并发限制 | 上游同时最多 3 请求（`KIRO_GUARD_UPSTREAM_CONCURRENCY=3`；0=不限） |
+| 流式直通 | `KIRO_GUARD_STREAM_PASSTHROUGH=0`（默认关；kiro 修复截断后开启跳过 guard） |
 | soft journal | `/opt/new-api/kiro-guard-soft.jsonl`；进程内 `/metrics` |
 | AR guard | `kiro-guard-ar-8410/11/12`；`KIRO_GUARD_PROXY=http://127.0.0.1:7890`；`#118–120` base=`127.0.0.1:841x` |
 | AR 关键词 | `KIRO_GUARD_CONTENT_BLOCK_FAILOVER=1`：`sensitive_words*` / content policy / 405 → **立即 502** 切渠（不软重试） |
 | AR Cyrillic | `KIRO_GUARD_CYRILLIC_BYPASS=1`（仅 `kiro-guard-ar-841*`）：`c`→`с` 打散词表；响应还原；勿开到百倍/k40 |
 | SOFT_LIMIT | `KIRO_GUARD_SOFT_LIMIT=1`：空/半截 tool → Bash 提示继续拆分（非 502） |
 | RetryTimes | NewAPI options **3**（勿回 5；与 guard soft-retry 叠乘） |
-| `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；`#60` pri45 低权重；health **不探 EXCLUDE** |
+| `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；`#60`（林夕/k40，多 key）**已死**（额度耗尽）应 status=2；health **不探 EXCLUDE** |
 | health_check v5.1 | **仅** Opus `#9/#10/#20/#60`；探针优先 `claude-opus-5[1M]`；公益站 transient **不禁**；硬失败≥12 可禁；**无**自动复活 / DISABLE-QUOTA / 改 pri / 整渠 abilities；慢探针只 TG。见 `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md` |
 | 本机 FQ | ZG → `agentrouter-2`；`max_retries=2`；`ANTHROPIC_MODEL=claude-opus-5[1M]` |
 | Zhipu `#41/#42` | `param_override`：`enable_thinking=false` + **delete `stop`**（防 `</block>` 字符串 400）；改 override 后必须 `podman restart new-api`。见 `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md` |
-| 本机直连策略 | **锁死**：林夕 / Sub2API / 百倍 **不进 FQ、不做 current**。经 ZG 的百倍/k40 已有 guard；本机 AR2 直连无 guard（有意：ZG 挂了仍能切）。不加本机 guard、FQ#2 不改回 ZG |
+| 本机直连策略 | **锁死**：林夕 / Sub2API / 百倍 **不进 FQ、不做 current**。经 ZG 的百倍/k40 已有 guard；本机 AR2 直连无 guard（有意：ZG 挂了仍能切）。不加本机 guard、FQ#2 不改回 ZG。百倍/林夕均为**多 key 轮询池**，NewAPI 自动轮选 |
 | 软截断自动改 | journal soft_* 或日志短 completion ≥20 事件 |
 
 ## 回滚

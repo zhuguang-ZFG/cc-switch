@@ -115,6 +115,24 @@ _WRITE_TOOL_NAMES = frozenset({"Write", "Edit", "NotebookEdit", "write_file", "e
 # HTTP response compression: gzip bodies > GZIP_MIN_BYTES when client accepts.
 GZIP_MIN_BYTES = int(os.environ.get("KIRO_GUARD_GZIP_MIN", "1024"))
 MAX_RESPONSE_BYTES = int(os.environ.get("KIRO_GUARD_MAX_RESPONSE_BYTES", str(10 * 1024 * 1024)))
+JOURNAL_MAX_BYTES = int(os.environ.get("KIRO_GUARD_JOURNAL_MAX_BYTES", str(5 * 1024 * 1024)))
+JOURNAL_KEEP = int(os.environ.get("KIRO_GUARD_JOURNAL_KEEP", "3"))
+METRICS_SNAPSHOT_PATH = os.environ.get(
+    "KIRO_GUARD_METRICS_SNAPSHOT",
+    os.path.join(os.path.dirname(JOURNAL_PATH), f"kiro-guard-metrics-{LISTEN_PORT}.json"),
+)
+METRICS_SNAPSHOT_INTERVAL = int(os.environ.get("KIRO_GUARD_METRICS_SNAPSHOT_INTERVAL", "300"))
+# Concurrency limiter: max simultaneous upstream requests. 0 = unlimited.
+UPSTREAM_CONCURRENCY = int(os.environ.get("KIRO_GUARD_UPSTREAM_CONCURRENCY", "3"))
+# Streaming passthrough: when enabled, forward stream:true directly to upstream
+# instead of stream:false + SSE synthesis. Use when kiro fixes truncation.
+STREAM_PASSTHROUGH = os.environ.get("KIRO_GUARD_STREAM_PASSTHROUGH", "0") not in (
+    "0", "false", "False",
+)
+# TG alert: notify on consecutive hard failures.
+TG_BOT_TOKEN = os.environ.get("KIRO_GUARD_TG_BOT_TOKEN", "")
+TG_CHAT_ID = os.environ.get("KIRO_GUARD_TG_CHAT_ID", "")
+TG_ALERT_THRESHOLD = int(os.environ.get("KIRO_GUARD_TG_ALERT_THRESHOLD", "5"))
 
 # Truncation-aware retry (kirocc spirit): on text truncation, inject the
 # truncated response as assistant context + continuation prompt so the model
@@ -149,6 +167,9 @@ _hard_counts: Dict[str, int] = {}
 _ok_count = 0
 _latencies: list = []
 _LATENCY_WINDOW = 200
+_upstream_sem = threading.Semaphore(UPSTREAM_CONCURRENCY) if UPSTREAM_CONCURRENCY > 0 else None
+_consecutive_hard = 0
+_last_tg_alert_ts = 0.0
 
 
 def _log(msg: str) -> None:
@@ -159,14 +180,130 @@ def _bump(counter: Dict[str, int], key: str) -> None:
     counter[key] = counter.get(key, 0) + 1
 
 
+def _save_metrics_snapshot() -> None:
+    """Persist in-memory metrics to disk. Called periodically by background thread."""
+    try:
+        snap = {
+            "ts": int(time.time()),
+            "port": LISTEN_PORT,
+            "ok": _ok_count,
+            "soft": dict(_soft_counts),
+            "hard": dict(_hard_counts),
+            "latencies": list(_latencies),
+        }
+        tmp = METRICS_SNAPSHOT_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snap, f, ensure_ascii=False)
+        os.replace(tmp, METRICS_SNAPSHOT_PATH)
+    except Exception as e:
+        _log(f"metrics_snapshot_error {type(e).__name__}:{e}")
+
+
+def _load_metrics_snapshot() -> None:
+    """Restore metrics from last snapshot on startup."""
+    global _ok_count
+    try:
+        if not os.path.exists(METRICS_SNAPSHOT_PATH):
+            return
+        with open(METRICS_SNAPSHOT_PATH, "r", encoding="utf-8") as f:
+            snap = json.load(f)
+        if snap.get("port") != LISTEN_PORT:
+            return
+        _ok_count = snap.get("ok", 0)
+        _soft_counts.update(snap.get("soft", {}))
+        _hard_counts.update(snap.get("hard", {}))
+        saved_lat = snap.get("latencies", [])
+        if saved_lat:
+            _latencies.extend(saved_lat[-_LATENCY_WINDOW:])
+        _log(f"metrics_restored ok={_ok_count} soft={sum(_soft_counts.values())} "
+             f"hard={sum(_hard_counts.values())} latencies={len(_latencies)}")
+    except Exception as e:
+        _log(f"metrics_restore_error {type(e).__name__}:{e}")
+
+
+def _metrics_snapshot_loop() -> None:
+    """Background thread: save metrics snapshot every METRICS_SNAPSHOT_INTERVAL seconds."""
+    while True:
+        time.sleep(METRICS_SNAPSHOT_INTERVAL)
+        _save_metrics_snapshot()
+
+
+def _tg_alert(message: str) -> None:
+    """Send a TG bot alert via tg_notify (reuses VPS proxy + token). Never raises."""
+    global _last_tg_alert_ts
+    now = time.time()
+    if now - _last_tg_alert_ts < 60:
+        return
+    _last_tg_alert_ts = now
+    try:
+        from tg_notify import send_tg
+        send_tg(message, markdown=False)
+        _log(f"tg_alert_sent len={len(message)}")
+    except ImportError:
+        if not TG_BOT_TOKEN or not TG_CHAT_ID:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+            data = json.dumps({"chat_id": TG_CHAT_ID, "text": message}).encode()
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=10)
+            _log(f"tg_alert_sent len={len(message)} (direct)")
+        except Exception as e:
+            _log(f"tg_alert_error {type(e).__name__}:{e}")
+    except Exception as e:
+        _log(f"tg_alert_error {type(e).__name__}:{e}")
+
+
+def _check_hard_alert(reason: str) -> None:
+    """Increment consecutive hard counter; alert if threshold reached."""
+    global _consecutive_hard
+    _consecutive_hard += 1
+    if _consecutive_hard >= TG_ALERT_THRESHOLD:
+        _tg_alert(
+            f"[kiro-guard:{LISTEN_PORT}] {_consecutive_hard} consecutive hard failures\n"
+            f"last: {reason}\nupstream: {UPSTREAM}"
+        )
+        _consecutive_hard = 0
+
+
+def _reset_hard_counter() -> None:
+    """Reset consecutive hard counter on success."""
+    global _consecutive_hard
+    _consecutive_hard = 0
+
+
+def _rotate_journal() -> None:
+    """Rotate journal file when it exceeds JOURNAL_MAX_BYTES. Caller holds _journal_lock."""
+    try:
+        if not os.path.exists(JOURNAL_PATH):
+            return
+        sz = os.path.getsize(JOURNAL_PATH)
+        if sz < JOURNAL_MAX_BYTES:
+            return
+        for i in range(JOURNAL_KEEP - 1, 0, -1):
+            src = f"{JOURNAL_PATH}.{i}"
+            dst = f"{JOURNAL_PATH}.{i + 1}"
+            if os.path.exists(src):
+                if i + 1 >= JOURNAL_KEEP:
+                    os.remove(src)
+                else:
+                    os.replace(src, dst)
+        os.replace(JOURNAL_PATH, f"{JOURNAL_PATH}.1")
+        _log(f"journal_rotated size={sz}")
+    except Exception as e:
+        _log(f"journal_rotate_error {type(e).__name__}:{e}")
+
+
 def journal_event(kind: str, reason: str, extra: Optional[dict] = None,
                    req_id: str = "") -> None:
-    """Append soft/hard classify events for ops (JSONL). Never raise."""
+    """Append classify events for ops (JSONL). Auto-rotates on size threshold."""
     global _ok_count
     try:
         if kind == "ok":
             _ok_count += 1
-            return
         if kind == "soft":
             _bump(_soft_counts, reason.split(":", 1)[0])
         elif kind == "hard":
@@ -184,6 +321,7 @@ def journal_event(kind: str, reason: str, extra: Optional[dict] = None,
             rec.update(extra)
         line = json.dumps(rec, ensure_ascii=False) + "\n"
         with _journal_lock:
+            _rotate_journal()
             with open(JOURNAL_PATH, "a", encoding="utf-8") as f:
                 f.write(line)
         _log(f"classify_event kind={kind} reason={reason}"
@@ -219,6 +357,8 @@ def _record_latency(elapsed_ms: float) -> None:
 
 
 def _fetch_upstream(req: urllib.request.Request) -> Tuple[int, bytes]:
+    if _upstream_sem is not None:
+        _upstream_sem.acquire()
     t0 = time.monotonic()
     try:
         with _UPSTREAM_OPENER.open(req, timeout=TIMEOUT) as resp:
@@ -231,6 +371,9 @@ def _fetch_upstream(req: urllib.request.Request) -> Tuple[int, bytes]:
     except Exception as e:
         _record_latency((time.monotonic() - t0) * 1000)
         return 502, _api_error(502, "Upstream connection failed. Please retry.")
+    finally:
+        if _upstream_sem is not None:
+            _upstream_sem.release()
 
 
 def detect_content_blocked(status: int, body: bytes) -> Optional[str]:
@@ -868,6 +1011,21 @@ def build_messages_request(payload: dict, header_map: Dict[str, str]) -> urllib.
     return req
 
 
+def _usage_extra(msg: Optional[dict]) -> Optional[dict]:
+    """Extract usage/cache fields from response for journal tracking."""
+    if msg is None:
+        return None
+    u = msg.get("usage")
+    if not isinstance(u, dict):
+        return None
+    extra: dict = {}
+    for k in ("input_tokens", "output_tokens",
+              "cache_read_input_tokens", "cache_creation_input_tokens"):
+        if k in u:
+            extra[k] = u[k]
+    return extra or None
+
+
 def fetch_classified(
     payload: dict, header_map: Dict[str, str], req_id: str = ""
 ) -> Tuple[int, bytes, str, str, Optional[dict]]:
@@ -886,13 +1044,15 @@ def fetch_classified(
         return blocked
     if status != 200:
         journal_event("hard", f"upstream_http_{status}", req_id=req_id)
+        _check_hard_alert(f"upstream_http_{status}")
         return status, body, "hard", f"upstream_http_{status}", None
     if CYRILLIC_BYPASS:
         body = cyrillic_decode_bytes(body)
 
     kind, reason, msg = classify_response(body, payload)
     if kind == "ok":
-        journal_event("ok", "ok", req_id=req_id)
+        _reset_hard_counter()
+        journal_event("ok", "ok", _usage_extra(msg), req_id=req_id)
         return status, body, kind, reason, msg
     if kind == "hard":
         if (
@@ -911,6 +1071,7 @@ def fetch_classified(
                 recovered,
             )
         journal_event("hard", reason, req_id=req_id)
+        _check_hard_alert(reason)
         _log(f"hard_fail reason={reason}")
         return status, body, kind, reason, msg
 
@@ -951,16 +1112,20 @@ def fetch_classified(
             return blocked2
         if status2 != 200:
             journal_event("hard", f"upstream_http_{status2}_after_soft", req_id=req_id)
+            _check_hard_alert(f"upstream_http_{status2}_after_soft")
             return status2, body2, "hard", f"upstream_http_{status2}_after_soft", None
         if CYRILLIC_BYPASS:
             body2 = cyrillic_decode_bytes(body2)
         kind2, reason2, msg2 = classify_response(body2, payload)
         if kind2 == "ok":
+            _reset_hard_counter()
             if use_continuation and first_trunc_msg is not None:
                 merged = merge_responses(first_trunc_msg, msg2)
+                _extra_m = {"phase": "retry_ok_merged"}
+                _extra_m.update(_usage_extra(merged) or {})
                 journal_event(
                     "soft", f"recovered_merged:{reason}",
-                    {"phase": "retry_ok_merged"}, req_id=req_id,
+                    _extra_m, req_id=req_id,
                 )
                 _log(f"trunc_context merged reason={reason}")
                 return (
@@ -970,7 +1135,9 @@ def fetch_classified(
                     f"merged:{reason}",
                     merged,
                 )
-            journal_event("soft", f"recovered:{reason}", {"phase": "retry_ok"}, req_id=req_id)
+            _extra_r = {"phase": "retry_ok"}
+            _extra_r.update(_usage_extra(msg2) or {})
+            journal_event("soft", f"recovered:{reason}", _extra_r, req_id=req_id)
             return status2, body2, kind2, reason2, msg2
         if kind2 == "hard":
             if (
@@ -990,6 +1157,7 @@ def fetch_classified(
                     recovered,
                 )
             journal_event("hard", reason2, {"phase": "after_soft"}, req_id=req_id)
+            _check_hard_alert(reason2)
             _log(f"hard_fail_after_soft reason={reason2}")
             return status2, body2, kind2, reason2, msg2
         journal_event("soft", reason2, {"phase": f"retry_{attempt + 1}"}, req_id=req_id)
@@ -1044,6 +1212,9 @@ class Handler(BaseHTTPRequestHandler):
 
         want_stream = bool(payload.get("stream"))
         header_map = self._header_map()
+
+        if STREAM_PASSTHROUGH and want_stream:
+            return self._stream_passthrough(payload, header_map)
 
         result_q: queue.Queue = queue.Queue(maxsize=1)
 
@@ -1164,6 +1335,55 @@ class Handler(BaseHTTPRequestHandler):
         est = max(1, length // 4)
         self._reply(200, json.dumps({"input_tokens": est}).encode(), "application/json")
 
+    def _stream_passthrough(self, payload, header_map):
+        """Forward stream:true directly to upstream and relay SSE chunks as-is."""
+        cap = _effective_cap(payload)
+        if cap > 0 and payload.get("max_tokens", 0) > cap:
+            payload["max_tokens"] = cap
+        data = json.dumps(payload, ensure_ascii=False).encode()
+        req = urllib.request.Request(
+            UPSTREAM.rstrip("/") + "/v1/messages", data=data, method="POST"
+        )
+        for h, v in header_map.items():
+            req.add_header(h, v)
+        req.add_header("Content-Type", "application/json")
+        if _upstream_sem is not None:
+            _upstream_sem.acquire()
+        try:
+            resp = _UPSTREAM_OPENER.open(req, timeout=TIMEOUT)
+        except urllib.error.HTTPError as e:
+            if _upstream_sem is not None:
+                _upstream_sem.release()
+            self._reply(e.code, _read_limited(e), "application/json")
+            return
+        except Exception:
+            if _upstream_sem is not None:
+                _upstream_sem.release()
+            self._reply(502, _api_error(502, "Upstream connection failed. Please retry."), "application/json")
+            return
+        try:
+            self.send_response(resp.status)
+            ct = resp.headers.get("Content-Type", "text/event-stream")
+            self.send_header("Content-Type", ct)
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            while True:
+                chunk = resp.read(4096)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            _reset_hard_counter()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:
+            _log(f"stream_passthrough_error: {e}")
+        finally:
+            resp.close()
+            if _upstream_sem is not None:
+                _upstream_sem.release()
+
     def _passthrough(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length)
@@ -1241,7 +1461,12 @@ class Handler(BaseHTTPRequestHandler):
                     "max_tokens_cap": MAX_TOKENS_CAP,
                     "max_tokens_write_cap": MAX_TOKENS_WRITE_CAP,
                     "max_response_bytes": MAX_RESPONSE_BYTES,
+                    "journal_max_bytes": JOURNAL_MAX_BYTES,
+                    "journal_keep": JOURNAL_KEEP,
                     "gzip_min_bytes": GZIP_MIN_BYTES,
+                    "upstream_concurrency": UPSTREAM_CONCURRENCY,
+                    "stream_passthrough": STREAM_PASSTHROUGH,
+                    "tg_alert_threshold": TG_ALERT_THRESHOLD,
                     "content_block_failover": CONTENT_BLOCK_FAILOVER,
                     "cyrillic_bypass": CYRILLIC_BYPASS,
                 },
@@ -1513,7 +1738,62 @@ if __name__ == "__main__":
                "usage": {"input_tokens": 100, "output_tokens": 5}}
         m = merge_responses(r1, r2)
         assert m["usage"].get("cache_read_input_tokens") == 50, m["usage"]
+        # _usage_extra extracts cache fields
+        ue = _usage_extra({"usage": {"input_tokens": 10, "output_tokens": 5,
+                                     "cache_read_input_tokens": 42}})
+        assert ue == {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 42}, ue
+        assert _usage_extra(None) is None
+        assert _usage_extra({"usage": {}}) is None
+        # Journal rotation: creates .1 backup
+        import tempfile, types
+        _mod = sys.modules[__name__]
+        with tempfile.TemporaryDirectory() as td:
+            jp = os.path.join(td, "test.jsonl")
+            old_jp, old_max = _mod.JOURNAL_PATH, _mod.JOURNAL_MAX_BYTES
+            try:
+                _mod.JOURNAL_PATH = jp
+                _mod.JOURNAL_MAX_BYTES = 50
+                with open(jp, "w") as f:
+                    f.write("x" * 60 + "\n")
+                _rotate_journal()
+                assert os.path.exists(jp + ".1"), "rotation did not create .1"
+                assert not os.path.exists(jp), "original not moved"
+            finally:
+                _mod.JOURNAL_PATH, _mod.JOURNAL_MAX_BYTES = old_jp, old_max
+        # Metrics snapshot: save and restore
+        with tempfile.TemporaryDirectory() as td:
+            snap_path = os.path.join(td, "metrics.json")
+            old_snap = _mod.METRICS_SNAPSHOT_PATH
+            try:
+                _mod.METRICS_SNAPSHOT_PATH = snap_path
+                _save_metrics_snapshot()
+                assert os.path.exists(snap_path), "snapshot not saved"
+                with open(snap_path) as f:
+                    s = json.load(f)
+                assert s["port"] == LISTEN_PORT
+                assert "ok" in s and "soft" in s and "hard" in s
+            finally:
+                _mod.METRICS_SNAPSHOT_PATH = old_snap
+        # Concurrency semaphore exists
+        if UPSTREAM_CONCURRENCY > 0:
+            assert _upstream_sem is not None
+        # TG alert: _check_hard_alert increments counter
+        old_ch = _mod._consecutive_hard
+        _mod._consecutive_hard = 0
+        _check_hard_alert("test")
+        assert _mod._consecutive_hard == 1
+        _reset_hard_counter()
+        assert _mod._consecutive_hard == 0
+        _mod._consecutive_hard = old_ch
         print("selftest_ok")
         raise SystemExit(0)
 
+    _load_metrics_snapshot()
+    threading.Thread(target=_metrics_snapshot_loop, daemon=True).start()
+    _log(f"metrics_snapshot every {METRICS_SNAPSHOT_INTERVAL}s → {METRICS_SNAPSHOT_PATH}")
+    if STREAM_PASSTHROUGH:
+        _log("stream_passthrough=ON (direct upstream streaming, no guard classify)")
+    if UPSTREAM_CONCURRENCY > 0:
+        _log(f"upstream_concurrency={UPSTREAM_CONCURRENCY}")
+    _log(f"tg_alert threshold={TG_ALERT_THRESHOLD}")
     ThreadingHTTPServer(("127.0.0.1", LISTEN_PORT), Handler).serve_forever()
