@@ -131,6 +131,7 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；`#60` pri45 低权重；health **不探 EXCLUDE** |
 | health_check v5.1 | **仅** Opus `#9/#10/#20/#60`；探针优先 `claude-opus-5[1M]`；公益站 transient **不禁**；硬失败≥12 可禁；**无**自动复活 / DISABLE-QUOTA / 改 pri / 整渠 abilities；慢探针只 TG。见 `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md` |
 | 本机 FQ | ZG → `agentrouter-2`；`max_retries=2`；`ANTHROPIC_MODEL=claude-opus-5[1M]` |
+| Zhipu `#41/#42` | `param_override`：`enable_thinking=false` + **delete `stop`**（防 `</block>` 字符串 400）；改 override 后必须 `podman restart new-api`。见 `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md` |
 | 本机直连策略 | **锁死**：林夕 / Sub2API / 百倍 **不进 FQ、不做 current**。经 ZG 的百倍/k40 已有 guard；本机 AR2 直连无 guard（有意：ZG 挂了仍能切）。不加本机 guard、FQ#2 不改回 ZG |
 | 软截断自动改 | journal soft_* 或日志短 completion ≥20 事件 |
 

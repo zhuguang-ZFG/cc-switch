@@ -1,8 +1,8 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (AR pinned; health **v5.1**; local clients cleaned; Claude theme Slate Ember)  
+**Updated:** 2026-07-26 (AR pinned; health **v5.1**; zhipu `stop` delete; local clients cleaned)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
-**Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`
+**Ops logs:** `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
 
@@ -69,7 +69,8 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | Issue | Symptom | Fix |
 |-------|---------|-----|
 | `glm-5.2[1M]` missing | `No available channel` if client sends `[1M]` | Abilities + map → `glm-5.2` on `#41/#42/#123`; ModelRatio/CompletionRatio |
-| GLM empty completion | `reasoning_tokens` eats `max_tokens` | Zhipu `#41/#42` `param_override={"enable_thinking":false}` |
+| GLM empty completion | `reasoning_tokens` eats `max_tokens` | Zhipu `#41/#42` `param_override.enable_thinking=false` |
+| GLM `stop` 400 ArrayList | Claude 单条 `stop_sequences` → OpenAI `stop` 字符串；智谱要数组 | `#41/#42` `operations: delete stop`；改完需 `podman restart new-api`。见 `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md` |
 | Agnes / dated Haiku | price / ability gaps | Agnes `#122` maps + prices |
 | Ability weight=0 | Channel weight tuning ignored | Sync `abilities.priority/weight` from `channels` for managed pools |
 | Kiro fake-complete stop | HTTP 200 + `end_turn` mid-answer | `kiro_guard`: force non-stream + soft classify → retry → 502; text heuristics; `SHORT_OUT=64`; SOFT_LIMIT for empty tools. Community: Kiro-Go #141/#142/#143 (we don't self-host). |
