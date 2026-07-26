@@ -1,10 +1,12 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 (Opus5 prefer; weights 50/42/18/3; zhipu stop; health v5.1)  
+**Updated:** 2026-07-26 (ops-only; **do not modify cc-switch**; Opus5 prefer; weights 50/42/18/3)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
-**Ops logs:** `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`, `docs/patches/local-mcp-skills-slim-2026-07-26.md`
+**Ops logs:** `docs/ops/do-not-modify-cc-switch.md`, `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`, `docs/patches/local-mcp-skills-slim-2026-07-26.md`
 
 Ops snapshot for Claude Code through ZG NewAPI. Channel IDs/weights drift — verify on live admin UI after changes. Prefer fixing NewAPI for developer experience; do not assume “healthy” without smoke.
+
+**Policy:** daily fixes go through **NewAPI + provider env + `~\.claude\settings.json` only**. Do **not** rebuild/replace cc-switch or migrate its DB schema — see `docs/ops/do-not-modify-cc-switch.md`.
 
 ## Strict failover order (2026-07-26)
 
@@ -115,6 +117,7 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 
 ## Explicit do-nots
 
+- **Do not modify / rebuild / replace cc-switch** for ops fixes — `docs/ops/do-not-modify-cc-switch.md`.
 - Do not promote Agnes / GPT-only free keys into type=14 Opus.
 - Do not invent fake `claude-*` aliases on LongCat (tool JSON 400s).
 - Do not leave `glm-5.2[1M]` without NewAPI ability (proxy strip is not always present).
