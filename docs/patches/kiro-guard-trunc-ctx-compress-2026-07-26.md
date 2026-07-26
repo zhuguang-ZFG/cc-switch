@@ -173,7 +173,7 @@ AnyRouter requires `anthropic-beta: context-1m-2025-08-07` header for 1M context
 | `newapi_monitor.py scan` | `*/30 * * * *` | 渠道状态扫描 (SQLite 直查) |
 | `newapi_monitor.py guard` | `*/10 * * * *` | Guard 端口 hard-reject 率监控 |
 | `newapi_monitor.py daily` | `0 9 * * *` | 综合日报 |
-| `sub2api_checkin.py` | `0 8 * * *` | 林夕 Sub2API 自动签到 (2 账号, token 自动续期) |
+| ~~`sub2api_checkin.py`~~ | ~~`0 8 * * *`~~ | 已移除：林夕改用 TG Bot `@InformationButlerBot` 签到 |
 
 ## Defense layers (after)
 

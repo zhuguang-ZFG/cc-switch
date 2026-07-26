@@ -210,32 +210,30 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 - `scan` 直接读 SQLite（绕过 NewAPI admin API 鉴权问题）
 - 自动检测可用模型（从 `abilities` 表查询）
 
-## Sub2API 自动签到（2026-07-27）
+## Sub2API 签到（2026-07-27）
 
-**脚本**: `/opt/new-api/sub2api_checkin.py`  
-**Cron**: `0 8 * * *`
+### 林夕（k40.shengqainbang.cn）— TG Bot 签到
 
-### 林夕（k40.shengqainbang.cn）— 全自动
+- **方案**：`@InformationButlerBot` 私聊 `/bind` 绑定 1 个主账号 → `/checkin` 签到
+- 可用 VPS Telethon 自动发 `/checkin`（待部署）
+- 只支持绑定 1 个账号
 
-| 账号 | 状态 |
-|------|------|
-| `1171933076@qq.com` | token 自动续期 ✓ |
-| `barbarhonmamxi20@gmail.com` | token 自动续期 ✓ |
+### 百倍（sub.100xlabs.space）— All API Hub 插件签到
 
-- Sub2API 系统（非 NewAPI/one-api）
-- 流程：`POST /api/v1/check-in`（Bearer access_token）→ 401 时用 refresh_token 刷新 → 保存新 token
-- Refresh token 是**一次性**的，每次刷新返回新 token
-- 需走 socks 代理（`socks5h://127.0.0.1:7891`）访问 shengqainbang.cn
-- Token 保存在 `/opt/new-api/sub2api_accounts.json`
+5 个账号，Cloudflare Turnstile 阻止 VPS 端 API/headless 登录。
 
-### 百倍（sub.100xlabs.space）— All API Hub 插件自动签到
-
-5 个账号，Cloudflare Turnstile 阻止 VPS 端 API 登录和 headless 浏览器。
-
-- **方案**：本机浏览器安装 [All API Hub](https://github.com/qixing-jk/all-api-hub) 插件（已安装），添加账号后开启自动签到
-- 插件设置 → Auto Check-in → 全局开关开启，时间窗口 02:00~05:00
+- **方案**：本机浏览器 [All API Hub](https://github.com/qixing-jk/all-api-hub) 插件（已安装），添加账号后自动签到
+- 插件设置 → Auto Check-in → 全局开关，时间窗口 02:00~05:00
 - 浏览器需保持后台运行
+- 百倍官方 bot `@Lbas100xxxxxxBot` 暂不支持签到，仅支持公益站状态查询
 - 已尝试的 VPS 方案（均被 CF 拦截）：API login、urllib+proxy、Playwright headless
+
+### 相关 TG Bot
+
+| Bot | 用途 |
+|-----|------|
+| `@InformationButlerBot` | 林夕公益站：`/bind` `/checkin` `/account` 余额查询 |
+| `@Lbas100xxxxxxBot` | 百倍公益站：状态查询、`/ai` 编程提问（暂无签到） |
 
 ## VPS 维护（2026-07-27）
 
