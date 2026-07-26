@@ -163,11 +163,26 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | 本机直连策略 | **锁死**：林夕 / Sub2API / 百倍 **不进 FQ、不做 current**。经 ZG 的百倍/k40 已有 guard；本机 AR2 直连无 guard（有意：ZG 挂了仍能切）。不加本机 guard、FQ#2 不改回 ZG。百倍/林夕均为**多 key 轮询池**，NewAPI 自动轮选 |
 | 软截断自动改 | journal soft_* 或日志短 completion ≥20 事件 |
 
+## TG 服务（VPS systemd）
+
+| 服务 | 脚本 | 说明 |
+|------|------|------|
+| `newapi-tg-bot` | `/opt/new-api/tg_bot_daemon.py` | ZG 网关交互机器人：`/status` `/report` `/channels` `/weights` `/enable N` `/disable N` |
+| `tg-forward` | `/opt/tg_forward/forward.py` | 频道转发：`sliverkiss_blog,wzxylh,piracy6` → `aishowti`（Telethon userbot） |
+
+- **Bot**: `@lima_gallery_xyz_bot`，chat_id `5345665818`（liusi67）
+- **保护渠道**: `{11, 60, 81, 97, 98}` — `/enable` 拒绝复活，按钮不显示
+- **enable/disable**: 直接 SQLite UPDATE（不走危险的 `/api/channel/:id/status`）+ `podman restart new-api`
+- **tg-forward**: FloodWaitError 处理 + 每小时心跳日志；proxy `socks5://127.0.0.1:7891`
+- **管理**: `systemctl restart tg-forward` / `systemctl restart newapi-tg-bot`；日志 `journalctl -u tg-forward -f`
+
 ## 回滚
 
 - 权重：`/opt/new-api/backups/one-api.before-dx-weights-*.db`
 - 软截断：`/opt/new-api/kiro-guard.env` 改回后 `systemctl restart kiro-guard*`
 - Guard 代码：`/opt/new-api/kiro_guard.py.bak.p0-*` → `cp` 回 `kiro_guard.py` 后重启 units
+- TG Bot：`/opt/new-api/tg_bot_daemon.py.bak` → `cp` 回后 `systemctl restart newapi-tg-bot`
+- TG Forward：`/opt/tg_forward/forward.py.bak` → `cp` 回后 `systemctl restart tg-forward`
 
 ## AgentRouter / AnyRouter
 
