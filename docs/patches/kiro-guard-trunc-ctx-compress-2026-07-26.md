@@ -19,22 +19,24 @@ When text truncation is detected (unclosed_fence, trailing_open, short_completio
 3. Model continues from the truncation point instead of regenerating
 4. `merge_responses` concatenates the truncated + continuation text, preserves tool_use blocks, sums usage tokens
 
-New functions: `build_continuation_payload`, `merge_responses`.
-Journal tag: `recovered_merged:*`.
+New functions: `build_continuation_payload`, `merge_responses`, `_dedup_overlap`.
+`_dedup_overlap` strips ≥20-char suffix/prefix overlap when merging to avoid duplicated text.
+Journal tags: `recovered_merged:*`, `dedup_overlap`.
 
 | Env var | Default | Description |
 |---------|---------|-------------|
 | `KIRO_GUARD_TRUNC_CONTEXT` | `1` | Enable truncation-aware retry |
 
-### 2. Proactive max_tokens cap (MAX_TOKENS_CAP)
+### 2. Adaptive max_tokens cap
 
-Caps `max_tokens` before sending to upstream kiro. Reduces the probability of generating output that exceeds kiro's buffer limit.
+Caps `max_tokens` before sending to upstream kiro. When the request includes Write/Edit/NotebookEdit tools, uses a higher cap (8192) to avoid choking file-write operations; otherwise 4096.
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `KIRO_GUARD_MAX_TOKENS_CAP` | `4096` | Max tokens cap (0 = no cap) |
+| `KIRO_GUARD_MAX_TOKENS_CAP` | `4096` | Default max tokens cap (0 = no cap) |
+| `KIRO_GUARD_MAX_TOKENS_WRITE_CAP` | `8192` | Cap when Write/Edit tools present |
 
-Logged as `max_tokens capped {orig} -> {cap}` when applied.
+New function: `_effective_cap`. Logged as `max_tokens capped {orig} -> {cap}` when applied.
 
 ### 3. HTTP gzip compression (GZIP_MIN_BYTES)
 
@@ -49,22 +51,22 @@ Compresses response bodies > 1KB when client sends `Accept-Encoding: gzip`. SSE 
 ```
 Request in
   |
-1. max_tokens cap: 4096 (prevent overly long output)
+1. adaptive max_tokens cap: 4096 default / 8192 for Write tools
   |
-2. Truncation detect + continuation retry + merge (recover if still truncated)
+2. Truncation detect + continuation retry + overlap dedup + merge
   |
 3. HTTP gzip: compress response to NewAPI (reduce transfer size)
 ```
 
 ## Verification
 
-- Selftest: all existing + new `build_continuation_payload` + `merge_responses` tests pass
+- Selftest: all existing + `build_continuation_payload` + `merge_responses` + `_dedup_overlap` + `_effective_cap` tests pass
 - 5 guard units: all active, all health=200
-- `/metrics` shows `trunc_context=True`, `max_tokens_cap=4096`, `gzip_min_bytes=1024`
+- `/metrics` shows `trunc_context=True`, `max_tokens_cap=4096`, `max_tokens_write_cap=8192`, `gzip_min_bytes=1024`
 
 ## Tuning
 
-- If 4096 cap is too tight for long file writes: `KIRO_GUARD_MAX_TOKENS_CAP=8192`
+- Write cap too tight: `KIRO_GUARD_MAX_TOKENS_WRITE_CAP=16384`; default cap: `KIRO_GUARD_MAX_TOKENS_CAP=8192`
 - If gzip causes issues with NewAPI: `KIRO_GUARD_GZIP_MIN=999999` (effectively off)
 - Disable continuation retry: `KIRO_GUARD_TRUNC_CONTEXT=0`
 

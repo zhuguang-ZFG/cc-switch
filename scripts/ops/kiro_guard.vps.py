@@ -106,9 +106,11 @@ _LATIN_C = "c"
 _CYRILLIC_C = "\u0441"  # Cyrillic small es — visually identical to latin c
 
 # Proactive output cap: reduce max_tokens before sending upstream to keep
-# responses under kiro's ~9KB buffer limit. 0 = no cap (default).
-# Suggested: 4096 (≈16KB text, safe margin).
+# responses under kiro's ~9KB buffer limit. 0 = no cap.
+# Adaptive: requests with Write/Edit tools get WRITE_CAP (higher); others get base CAP.
 MAX_TOKENS_CAP = int(os.environ.get("KIRO_GUARD_MAX_TOKENS_CAP", "4096"))
+MAX_TOKENS_WRITE_CAP = int(os.environ.get("KIRO_GUARD_MAX_TOKENS_WRITE_CAP", "8192"))
+_WRITE_TOOL_NAMES = frozenset({"Write", "Edit", "NotebookEdit", "write_file", "edit_file"})
 # HTTP response compression: gzip bodies > GZIP_MIN_BYTES when client accepts.
 GZIP_MIN_BYTES = int(os.environ.get("KIRO_GUARD_GZIP_MIN", "1024"))
 
@@ -532,8 +534,28 @@ def build_continuation_payload(
     return out
 
 
+def _dedup_overlap(tail: str, head: str, min_match: int = 20) -> str:
+    """Remove overlapping text between truncated tail and continuation head.
+
+    The model may repeat the last few lines from the truncated response when
+    continuing. Find the longest suffix of `tail` that matches a prefix of
+    `head` (>= min_match chars) and strip it from `head`.
+    """
+    if not tail or not head:
+        return head
+    max_check = min(len(tail), len(head), 500)
+    best = 0
+    for length in range(min_match, max_check + 1):
+        if tail.endswith(head[:length]):
+            best = length
+    if best >= min_match:
+        _log(f"dedup_overlap stripped {best} chars")
+        return head[best:]
+    return head
+
+
 def merge_responses(first_msg: dict, cont_msg: dict) -> dict:
-    """Merge truncated first response with its continuation."""
+    """Merge truncated first response with its continuation (with dedup)."""
     merged = copy.deepcopy(first_msg)
     first_content = list(merged.get("content") or [])
     cont_content = list(cont_msg.get("content") or [])
@@ -559,10 +581,10 @@ def merge_responses(first_msg: dict, cont_msg: dict) -> dict:
             rest_cont.append(block)
 
     if last_text_idx is not None and first_cont_text is not None:
-        first_content[last_text_idx]["text"] = (
-            first_content[last_text_idx].get("text", "")
-            + first_cont_text.get("text", "")
-        )
+        tail = first_content[last_text_idx].get("text", "")
+        head = first_cont_text.get("text", "")
+        head = _dedup_overlap(tail, head)
+        first_content[last_text_idx]["text"] = tail + head
     elif first_cont_text is not None:
         first_content.append(first_cont_text)
 
@@ -738,14 +760,27 @@ def cyrillic_decode_bytes(body: bytes) -> bytes:
         return body
 
 
+def _effective_cap(payload: dict) -> int:
+    """Return the adaptive max_tokens cap for this request."""
+    if MAX_TOKENS_CAP <= 0:
+        return 0
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        for t in tools:
+            if isinstance(t, dict) and t.get("name") in _WRITE_TOOL_NAMES:
+                return MAX_TOKENS_WRITE_CAP
+    return MAX_TOKENS_CAP
+
+
 def build_messages_request(payload: dict, header_map: Dict[str, str]) -> urllib.request.Request:
     body = dict(payload)
     body["stream"] = False
-    if MAX_TOKENS_CAP > 0:
+    cap = _effective_cap(body)
+    if cap > 0:
         orig = body.get("max_tokens")
-        if isinstance(orig, int) and orig > MAX_TOKENS_CAP:
-            body["max_tokens"] = MAX_TOKENS_CAP
-            _log(f"max_tokens capped {orig} → {MAX_TOKENS_CAP}")
+        if isinstance(orig, int) and orig > cap:
+            body["max_tokens"] = cap
+            _log(f"max_tokens capped {orig} → {cap}")
     req = urllib.request.Request(
         UPSTREAM.rstrip("/") + "/v1/messages",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
@@ -1137,6 +1172,7 @@ class Handler(BaseHTTPRequestHandler):
                     "soft_limit": SOFT_LIMIT,
                     "trunc_context": TRUNC_CONTEXT,
                     "max_tokens_cap": MAX_TOKENS_CAP,
+                    "max_tokens_write_cap": MAX_TOKENS_WRITE_CAP,
                     "gzip_min_bytes": GZIP_MIN_BYTES,
                     "content_block_failover": CONTENT_BLOCK_FAILOVER,
                     "cyrillic_bypass": CYRILLIC_BYPASS,
@@ -1304,6 +1340,23 @@ if __name__ == "__main__":
         assert merged["stop_reason"] == "tool_use", merged
         assert merged["usage"]["output_tokens"] == 37, merged["usage"]
         assert any(b.get("name") == "Write" for b in merged["content"]), merged
+        # Dedup overlap: model repeats tail of truncated text (overlap >= 20 chars)
+        deduped = _dedup_overlap(
+            "The quick brown fox jumps over the lazy dog and sleeps",
+            "over the lazy dog and sleeps until morning comes",
+        )
+        assert deduped == " until morning comes", repr(deduped)
+        no_overlap = _dedup_overlap("aaa bbb ccc", "ddd eee fff")
+        assert no_overlap == "ddd eee fff", repr(no_overlap)
+        short_overlap = _dedup_overlap("x" * 10, "x" * 10)
+        assert short_overlap == "x" * 10, repr(short_overlap)  # < min_match
+        # Adaptive cap: Write tool → higher cap
+        write_req = {"max_tokens": 16384, "tools": [{"name": "Write"}]}
+        assert _effective_cap(write_req) == MAX_TOKENS_WRITE_CAP
+        plain_req = {"max_tokens": 16384, "tools": [{"name": "Read"}]}
+        assert _effective_cap(plain_req) == MAX_TOKENS_CAP
+        no_tools = {"max_tokens": 16384}
+        assert _effective_cap(no_tools) == MAX_TOKENS_CAP
         print("selftest_ok")
         raise SystemExit(0)
 

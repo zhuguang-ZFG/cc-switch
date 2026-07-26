@@ -132,8 +132,8 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | DX 自动改权重 | **仅** Opus 主池 `#9/#10/#20/#60` 与软截断阈值；勿改 GPT/Haiku/Vyce 梯队 pri，勿把 `w=0` 噪声渠重新 enabled |
 | `#81` | Opus/Fable 已摘（models 空 + abilities off）；渠 pri15；改完 **必须** `podman restart new-api`；**勿** `/status` 弹回 |
 | SHORT_OUT | 16–64（当前 **40**） |
-| MAX_TOKENS_CAP | **4096**（主动限长防截断；0=不限；调大若长写入受限） |
-| TRUNC_CONTEXT | **1**（截断续写：注入截断内容为上下文 → 模型续写 → 合并；journal `recovered_merged:*`） |
+| MAX_TOKENS_CAP | **4096** 默认 / **8192** Write/Edit 工具（`_effective_cap` 自适应；0=不限） |
+| TRUNC_CONTEXT | **1**（截断续写 → 合并 + `_dedup_overlap` ≥20 字符去重；journal `recovered_merged:*` / `dedup_overlap`） |
 | GZIP | 响应体 >1KB 自动 gzip（`KIRO_GUARD_GZIP_MIN=1024`；SSE 除外） |
 | TEXT_HEUR | `KIRO_GUARD_TEXT_HEUR=1`：未闭合 fence / 句尾开放标点 / 有 tools 却只说「我将」无 tool_use |
 | SOFT_RETRY_BACKOFF_MS | **700**（Kiro-Go #143；即时重试易同溃） |
