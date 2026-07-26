@@ -228,18 +228,31 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 - 需走 socks 代理（`socks5h://127.0.0.1:7891`）访问 shengqainbang.cn
 - Token 保存在 `/opt/new-api/sub2api_accounts.json`
 
-### 百倍（sub.100xlabs.space）— 手动
+### 百倍（sub.100xlabs.space）— All API Hub 插件自动签到
 
-5 个账号，Cloudflare Turnstile 阻止 API 登录和 headless 浏览器。方案：
+5 个账号，Cloudflare Turnstile 阻止 VPS 端 API 登录和 headless 浏览器。
 
-- **浏览器插件 [All API Hub](https://allapihub.com)**：本机浏览器手动签到
-- 已尝试的方案（均被 CF 拦截）：API login、urllib+proxy、Playwright headless
+- **方案**：本机浏览器安装 [All API Hub](https://github.com/qixing-jk/all-api-hub) 插件（已安装），添加账号后开启自动签到
+- 插件设置 → Auto Check-in → 全局开关开启，时间窗口 02:00~05:00
+- 浏览器需保持后台运行
+- 已尝试的 VPS 方案（均被 CF 拦截）：API login、urllib+proxy、Playwright headless
+
+## VPS 维护（2026-07-27）
+
+定期清理策略（已执行首次清理）：
+
+| 项目 | 策略 |
+|------|------|
+| DB 备份 `/opt/new-api/backups/` | 保留最新 3 个，删旧的（每个 ~5MB） |
+| `kiro_guard.py.bak*` | 保留最新 2 个 |
+| `/tmp/*.py` | 全删（临时部署脚本） |
+| Podman 镜像 | 删无用 rollback tag（`podman rmi`） |
 
 ## 回滚
 
-- 权重：`/opt/new-api/backups/one-api.before-dx-weights-*.db`
+- 权重：`/opt/new-api/backups/one-api.before-dx-weights-*.db`（保留最新 3 个）
 - 软截断：`/opt/new-api/kiro-guard.env` 改回后 `systemctl restart kiro-guard*`
-- Guard 代码：`/opt/new-api/kiro_guard.py.bak.p0-*` → `cp` 回 `kiro_guard.py` 后重启 units
+- Guard 代码：`/opt/new-api/kiro_guard.py.bak.*` → `cp` 回 `kiro_guard.py` 后重启 units（保留最新 2 个）
 - TG Bot：`/opt/new-api/tg_bot_daemon.py.bak` → `cp` 回后 `systemctl restart newapi-tg-bot`
 - TG Forward：`/opt/tg_forward/forward.py.bak` → `cp` 回后 `systemctl restart tg-forward`
 
