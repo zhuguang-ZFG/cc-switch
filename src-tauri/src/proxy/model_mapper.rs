@@ -110,7 +110,7 @@ impl ModelMapping {
         ] {
             if let Some(ref m) = configured {
                 if strip_one_m_suffix_for_upstream(original_model)
-                    == strip_one_m_suffix_for_upstream(m)
+                    .eq_ignore_ascii_case(strip_one_m_suffix_for_upstream(m))
                 {
                     return original_model.to_string();
                 }
@@ -392,9 +392,9 @@ mod tests {
         assert_eq!(original, Some("glm-5.2[1M]".to_string()));
         assert!(mapped.is_none());
 
-        let body = json!({"model": "glm-5.2"});
+        let body = json!({"model": "GLM-5.2"});
         let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "glm-5.2");
+        assert_eq!(result["model"], "GLM-5.2");
         assert!(mapped.is_none());
 
         let body = json!({"model": "LongCat-2.0"});

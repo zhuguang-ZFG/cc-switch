@@ -73,6 +73,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | GLM `stop` 400 ArrayList | Claude 单条 `stop_sequences` → OpenAI `stop` 字符串；智谱要数组 | `#41/#42` `operations: delete stop`；改完需 `podman restart new-api`。见 `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md` |
 | Opus 4.8 AUP / 毒映射 | 客户端踩 Cyber Safeguards；AR `opus-5`→`4-8` 回灌 | 主池+AR：4.x→Opus5；关 `opus-4-8` abilities；压 `#20`。见 `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md` |
 | auto-mode Bash：`glm-5.2[1M] temporarily unavailable` | 代理把已解析的 `glm-5.2[1M]` 误落到 `ANTHROPIC_MODEL`=Opus；Opus 503 被当成 GLM 挂 | 保留角色上游 id 直通；现网先去掉 `ANTHROPIC_MODEL`。见 `docs/patches/local-glm-passthrough-2026-07-26.md` |
+| Live settings「漂」成 opus-4-8 / sonnet-4-6 | 误以为配置坏了 | **takeover 故意写官方别名**，代理再映射到 glm/Opus5；勿把上游 id 写进 settings。见 `docs/patches/local-claude-takeover-aliases-2026-07-26.md` |
 | Agnes / dated Haiku | price / ability gaps | Agnes `#122` maps + prices |
 | Ability weight=0 | Channel weight tuning ignored | Sync `abilities.priority/weight` from `channels` for managed pools |
 | Kiro fake-complete stop | HTTP 200 + `end_turn` mid-answer | `kiro_guard`: force non-stream + soft classify → retry → 502; text heuristics; `SHORT_OUT=64`; SOFT_LIMIT for empty tools. Community: Kiro-Go #141/#142/#143 (we don't self-host). |
