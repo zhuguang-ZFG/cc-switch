@@ -171,5 +171,9 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 ## AgentRouter / AnyRouter
 
 - **AgentRouter**：`#118` **已恢复** w10（2026-07-27）。Codex CLI header 伪装绕过 WAF；guard-8410 `CODEX_SPOOF=1`；模型 `claude-opus-4-6/4-8`。`#119/#120` 暂不开。
-- **AnyRouter FC `#52`**：`status=2`，账户 1M 额度耗尽（`1m 额度已经全部用完`）。需登录 anyrouter.top 签到或注册新号。自动签到：[millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)。
-- **anyrouter.top**：若 403「无权访问 …[1m]」，在控制台**重建令牌且模型限制留空**，再写回本机 provider。
+- **AnyRouter FC `#52`**：`status=2`（预配置就绪，等待 1M 放行）。账户 `linuxdo_205357`，余额 $549.86。新 key 已配。
+  - **1M 上下文**：需 `anthropic-beta: context-1m-2025-08-07` header；当前 503 过载。
+  - **模型**：`claude-opus-4-6` 已下线，映射 → `claude-opus-4-7`；可用 `opus-4-7/4-8/5`、`sonnet-4`、`fable-5`。
+  - **自动挤进去 cron**：`/opt/new-api/anyrouter_squeeze.py`，cron `*/10`。503 消失后自动 status=1 + restart NewAPI + TG 通知。日志 `/opt/new-api/anyrouter-squeeze.log`。
+  - **手动触发**：`python3 /opt/new-api/anyrouter_squeeze.py`
+- **anyrouter.top**：若 403「无权访问 …[1m]」，在控制台**重建令牌且模型限制留空**，再写回本机 provider。自动签到：[millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)。
