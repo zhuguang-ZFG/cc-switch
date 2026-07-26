@@ -105,7 +105,7 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 ## NewAPI 运维姿态（2026-07-26）
 
 - **公益站通断是常态**（`No available accounts` / 502）：不当事故；看主池是否仍能冒烟。
-- 现网 Opus：`#9/#10/#20` = **50/42/12**（百倍 100xlabs，多 key 轮询池）；`#60`（k40/林夕，多 key 轮询池）= **已死**（`No available accounts`，k40 额度耗尽）；`#11/#81/#119/#120` status=2；AR `#118` w6。analyze 按 p50 动态调权（档位如 50/40/28/…），文档数字是**快照**不是硬编码目标。
+- 现网 Opus：`#9/#10/#20` = **50/40/28**（百倍 100xlabs，多 key 轮询池）；`#60`（k40/林夕，多 key 轮询池）= **已死**（`No available accounts`，k40 额度耗尽）；`#11/#81/#119/#120` status=2；AR `#118` **已恢复** w10（Codex 伪装绕过 WAF，模型 `claude-opus-4-6/4-8`）。analyze 按 p50 动态调权（档位如 50/40/28/…），文档数字是**快照**不是硬编码目标。
 - **health v5.1**（已落地镜像 `scripts/ops/health_check.vps.py`）：探针优先 `claude-opus-5[1M]`；去掉 `:7890` 假 400 回退；`no available accounts`/公益站 503 → `FAIL-TRANSIENT` **不累计禁用**；硬失败阈值 **12**。勿为单渠 502 开专项。
 
 ## 建议定时
@@ -125,7 +125,7 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | 项 | 值 |
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
-| Opus 主池权重 | **`#9/#10/#20`**（百倍，多 key）= **50/42/12**；**`#60`**（林夕/k40，多 key）= **已死**（额度耗尽，应 status=2）；AR 次池 **仅 `#118` w6**；`#119/#120` **暂时不开**（status=2，防慢） |
+| Opus 主池权重 | **`#9/#10/#20`**（百倍，多 key）= **50/40/28**；**`#60`**（林夕/k40，多 key）= **已死**（额度耗尽，status=2）；AR **`#118` w10**（Codex 伪装，`claude-opus-4-6/4-8`，guard-8410）；`#119/#120` **暂不开** |
 | `#81` / `#11` / AR `#119–120` | status=2 + abilities off；`#118` live；health EXCLUDE∋11,75,77–81,118–120（118 不探但仍可路由） |
 | 卡顿分诊 | 首字慢→`logs.use_time`/渠道；中途停→soft journal；关键词→502 failover。见 `docs/patches/newapi-dx-gov-b-2026-07-26.md` |
 | 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |
@@ -150,7 +150,7 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | 并发限制 | 上游同时最多 3 请求（`KIRO_GUARD_UPSTREAM_CONCURRENCY=3`；0=不限） |
 | 流式直通 | `KIRO_GUARD_STREAM_PASSTHROUGH=0`（默认关；kiro 修复截断后开启跳过 guard） |
 | soft journal | `/opt/new-api/kiro-guard-soft.jsonl`；进程内 `/metrics` |
-| AR guard | `kiro-guard-ar-8410/11/12`；`KIRO_GUARD_PROXY=http://127.0.0.1:7890`；`#118–120` base=`127.0.0.1:841x` |
+| AR guard | `kiro-guard-ar-8410`；`KIRO_GUARD_PROXY=http://127.0.0.1:7890`；`KIRO_GUARD_CODEX_SPOOF=1`（Codex 伪装）；`#118` base=`127.0.0.1:8410` |
 | AR 关键词 | `KIRO_GUARD_CONTENT_BLOCK_FAILOVER=1`：`sensitive_words*` / content policy / 405 → **立即 502** 切渠（不软重试） |
 | AR Cyrillic | `KIRO_GUARD_CYRILLIC_BYPASS=1`（仅 `kiro-guard-ar-841*`）：`c`→`с` 打散词表；响应还原；勿开到百倍/k40 |
 | SOFT_LIMIT | `KIRO_GUARD_SOFT_LIMIT=1`：空/半截 tool → Bash 提示继续拆分（非 502） |
@@ -170,6 +170,6 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 
 ## AgentRouter / AnyRouter
 
-- **AgentRouter**：`#118` live w6；`#119/#120` **暂时不开**（status=2，防慢尾）。本机 FQ#2=`agentrouter-2`。见 `docs/patches/newapi-dx-ar-pin-2026-07-26.md`。
-- **AnyRouter FC `#52`**：配置已就位，站方 503 时保持 `status=2`。冒烟绿后：`POST /api/channel/52/status {"status":1}` 并 `UPDATE abilities SET enabled=1 WHERE channel_id=52`。
+- **AgentRouter**：`#118` **已恢复** w10（2026-07-27）。Codex CLI header 伪装绕过 WAF；guard-8410 `CODEX_SPOOF=1`；模型 `claude-opus-4-6/4-8`。`#119/#120` 暂不开。
+- **AnyRouter FC `#52`**：`status=2`，账户 1M 额度耗尽（`1m 额度已经全部用完`）。需登录 anyrouter.top 签到或注册新号。自动签到：[millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)。
 - **anyrouter.top**：若 403「无权访问 …[1m]」，在控制台**重建令牌且模型限制留空**，再写回本机 provider。

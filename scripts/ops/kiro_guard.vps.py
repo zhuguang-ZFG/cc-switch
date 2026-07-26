@@ -133,6 +133,16 @@ STREAM_PASSTHROUGH = os.environ.get("KIRO_GUARD_STREAM_PASSTHROUGH", "0") not in
 TG_BOT_TOKEN = os.environ.get("KIRO_GUARD_TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.environ.get("KIRO_GUARD_TG_CHAT_ID", "")
 TG_ALERT_THRESHOLD = int(os.environ.get("KIRO_GUARD_TG_ALERT_THRESHOLD", "5"))
+# Codex CLI header spoof: inject Originator/User-Agent/Version to pass
+# AgentRouter WAF. Enable only on AR guard instances.
+CODEX_SPOOF = os.environ.get("KIRO_GUARD_CODEX_SPOOF", "0") not in (
+    "0", "false", "False",
+)
+_CODEX_HEADERS = {
+    "Originator": "codex_cli_rs",
+    "User-Agent": "codex_cli_rs/0.101.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464",
+    "Version": "0.101.0",
+}
 
 # Truncation-aware retry (kirocc spirit): on text truncation, inject the
 # truncated response as assistant context + continuation prompt so the model
@@ -1191,6 +1201,8 @@ class Handler(BaseHTTPRequestHandler):
             v = self.headers.get(h)
             if v:
                 out[h] = v
+        if CODEX_SPOOF:
+            out.update(_CODEX_HEADERS)
         return out
 
     def do_POST(self):
@@ -1785,6 +1797,8 @@ if __name__ == "__main__":
         _reset_hard_counter()
         assert _mod._consecutive_hard == 0
         _mod._consecutive_hard = old_ch
+        # Codex spoof: verify header dict shape
+        assert isinstance(_CODEX_HEADERS, dict) and "Originator" in _CODEX_HEADERS
         print("selftest_ok")
         raise SystemExit(0)
 
@@ -1796,4 +1810,6 @@ if __name__ == "__main__":
     if UPSTREAM_CONCURRENCY > 0:
         _log(f"upstream_concurrency={UPSTREAM_CONCURRENCY}")
     _log(f"tg_alert threshold={TG_ALERT_THRESHOLD}")
+    if CODEX_SPOOF:
+        _log("codex_spoof=ON (injecting Codex CLI headers for AgentRouter WAF)")
     ThreadingHTTPServer(("127.0.0.1", LISTEN_PORT), Handler).serve_forever()

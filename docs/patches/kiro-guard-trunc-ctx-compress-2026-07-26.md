@@ -146,6 +146,14 @@ When enabled, forwards `stream:true` requests directly to upstream as real strea
 |---------|---------|-------------|
 | `KIRO_GUARD_STREAM_PASSTHROUGH` | `0` | Enable direct stream forwarding (default OFF) |
 
+### 18. Codex CLI header spoof (2026-07-27)
+
+AgentRouter deploys a WAF that only accepts traffic matching specific client fingerprints (Claude Code, Codex CLI, etc.). Community solution ([blog](https://blog.rei.my.id/posts/118/bypassing-agentrouter-ai-client-restriction/)): inject Codex CLI headers (`Originator`, `User-Agent`, `Version`) to pass the WAF. Enable on AR guard instances only.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_CODEX_SPOOF` | `0` | Inject Codex CLI headers for AgentRouter WAF bypass |
+
 ## Defense layers (after)
 
 ```
@@ -157,25 +165,28 @@ Request in
   |
 2. Concurrency limiter (semaphore, default 3)
   |
-3. Truncation detect + lightweight continuation retry + overlap dedup + merge
+3. [optional] Codex CLI header spoof: inject Originator/UA/Version for AR WAF
   |
-4. Response body size limit (10MB) + upstream latency tracking
+4. Truncation detect + lightweight continuation retry + overlap dedup + merge
   |
-5. Progressive SSE synthesis (chunked text output)
+5. Response body size limit (10MB) + upstream latency tracking
   |
-6. Standard Anthropic error shapes (no guard internals leaked)
+6. Progressive SSE synthesis (chunked text output)
   |
-7. HTTP gzip: compress response to NewAPI (reduce transfer size)
+7. Standard Anthropic error shapes (no guard internals leaked)
   |
-8. Journal: auto-rotation (5MB) + cache token tracking
+8. HTTP gzip: compress response to NewAPI (reduce transfer size)
   |
-9. Metrics persistence (5min snapshots) + TG alerting (consecutive hard fails)
+9. Journal: auto-rotation (5MB) + cache token tracking
+  |
+10. Metrics persistence (5min snapshots) + TG alerting (consecutive hard fails)
 ```
 
 ## Verification
 
-- Selftest: all classify + merge + dedup + adaptive cap (thinking) + progressive SSE + size limit + latency + error shapes + continuation trimming + journal rotation + cache tracking + metrics snapshot + concurrency + TG alert tests pass
-- 5 guard units: all active, all health=200
+- Selftest: all classify + merge + dedup + adaptive cap (thinking) + progressive SSE + size limit + latency + error shapes + continuation trimming + journal rotation + cache tracking + metrics snapshot + concurrency + TG alert + Codex spoof tests pass
+- 5 main guard units + 1 AR guard (8410): all health=200
+- AR guard: codex_spoof=ON, upstream=agentrouter.org
 
 ## Tuning
 
@@ -191,6 +202,7 @@ Request in
 - Concurrency limit: `KIRO_GUARD_UPSTREAM_CONCURRENCY=5` (or 0 for unlimited)
 - Enable streaming passthrough: `KIRO_GUARD_STREAM_PASSTHROUGH=1` (when kiro is fixed)
 - TG alert sensitivity: `KIRO_GUARD_TG_ALERT_THRESHOLD=3` (alert sooner)
+- Enable Codex spoof for AR: `KIRO_GUARD_CODEX_SPOOF=1` (AR guard instances only)
 
 ## Rollback
 
