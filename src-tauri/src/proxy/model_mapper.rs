@@ -96,14 +96,28 @@ impl ModelMapping {
             }
         }
 
-        if let Some(ref m) = self.subagent_model {
-            if strip_one_m_suffix_for_upstream(original_model) == strip_one_m_suffix_for_upstream(m)
-            {
-                return original_model.to_string();
+        // Claude Code 会把角色 env 解析成真实上游 id 再请求（例如 sonnet →
+        // glm-5.2[1M]）。这些 id 不含 sonnet/opus 关键字，旧逻辑会误落到
+        // ANTHROPIC_MODEL（常为 Opus），导致 auto-mode 分类器/Sonnet 角色
+        // 全挤进 Opus 池，一抖就报「glm temporarily unavailable」。
+        for configured in [
+            &self.haiku_model,
+            &self.sonnet_model,
+            &self.opus_model,
+            &self.fable_model,
+            &self.subagent_model,
+            &self.default_model,
+        ] {
+            if let Some(ref m) = configured {
+                if strip_one_m_suffix_for_upstream(original_model)
+                    == strip_one_m_suffix_for_upstream(m)
+                {
+                    return original_model.to_string();
+                }
             }
         }
 
-        // 2. 默认模型
+        // 2. 默认模型（仅未知别名）
         if let Some(ref m) = self.default_model {
             return m.clone();
         }
@@ -356,6 +370,36 @@ mod tests {
 
         assert_eq!(result["model"], "gpt-5.4-mini");
         assert_eq!(original, Some("gpt-5.4-mini".to_string()));
+        assert!(mapped.is_none());
+    }
+
+    #[test]
+    fn test_sonnet_upstream_id_preserved_before_default_fallback() {
+        // 回归：Sonnet 配成 glm-5.2[1M] 后，客户端直接发该 id，不得再落到 Opus。
+        let mut provider = create_provider_with_mapping();
+        provider.settings_config = json!({
+            "env": {
+                "ANTHROPIC_MODEL": "claude-opus-5[1M]",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1M]",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1M]",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "LongCat-2.0"
+            }
+        });
+
+        let body = json!({"model": "glm-5.2[1M]"});
+        let (result, original, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "glm-5.2[1M]");
+        assert_eq!(original, Some("glm-5.2[1M]".to_string()));
+        assert!(mapped.is_none());
+
+        let body = json!({"model": "glm-5.2"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "glm-5.2");
+        assert!(mapped.is_none());
+
+        let body = json!({"model": "LongCat-2.0"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "LongCat-2.0");
         assert!(mapped.is_none());
     }
 
