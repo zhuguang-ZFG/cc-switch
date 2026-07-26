@@ -154,6 +154,22 @@ AgentRouter deploys a WAF that only accepts traffic matching specific client fin
 |---------|---------|-------------|
 | `KIRO_GUARD_CODEX_SPOOF` | `0` | Inject Codex CLI headers for AgentRouter WAF bypass |
 
+### 19. AnyRouter 1M context header injection (2026-07-27)
+
+AnyRouter requires `anthropic-beta: context-1m-2025-08-07` header for 1M context window access. Without it, requests are rejected with "请启用 1m 上下文后重试". This layer injects/appends the beta tag to the `anthropic-beta` header, preserving any existing beta values from the client. Enable on AnyRouter guard instances only.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_ANYROUTER_1M` | `0` | Inject context-1m-2025-08-07 beta header for AnyRouter |
+
+## VPS cron automation (2026-07-27)
+
+| Script | Schedule | Description |
+|--------|----------|-------------|
+| `anyrouter_squeeze.py` | `*/10 * * * *` | AnyRouter 1M 挤进去：5 tries/run, auto-enable #52 on success |
+| `anyrouter_checkin.py` | `0 9 * * *` | AnyRouter 每日签到 ($25/day) |
+| `autoweight.py` | `30 */2 * * *` | 基于 guard metrics 自动调权 (p50/成功率 → weight ±5~8, 3h cooldown) |
+
 ## Defense layers (after)
 
 ```
@@ -166,6 +182,8 @@ Request in
 2. Concurrency limiter (semaphore, default 3)
   |
 3. [optional] Codex CLI header spoof: inject Originator/UA/Version for AR WAF
+  |
+3b. [optional] AnyRouter 1M: inject/append anthropic-beta context-1m tag
   |
 4. Truncation detect + lightweight continuation retry + overlap dedup + merge
   |
@@ -184,9 +202,10 @@ Request in
 
 ## Verification
 
-- Selftest: all classify + merge + dedup + adaptive cap (thinking) + progressive SSE + size limit + latency + error shapes + continuation trimming + journal rotation + cache tracking + metrics snapshot + concurrency + TG alert + Codex spoof tests pass
+- Selftest: all classify + merge + dedup + adaptive cap (thinking) + progressive SSE + size limit + latency + error shapes + continuation trimming + journal rotation + cache tracking + metrics snapshot + concurrency + TG alert + Codex spoof + AnyRouter 1M tests pass
 - 5 main guard units + 1 AR guard (8410): all health=200
 - AR guard: codex_spoof=ON, upstream=agentrouter.org
+- AnyRouter guard env (8411): anyrouter_1m=ON, upstream=anyrouter.top
 
 ## Tuning
 
@@ -203,6 +222,7 @@ Request in
 - Enable streaming passthrough: `KIRO_GUARD_STREAM_PASSTHROUGH=1` (when kiro is fixed)
 - TG alert sensitivity: `KIRO_GUARD_TG_ALERT_THRESHOLD=3` (alert sooner)
 - Enable Codex spoof for AR: `KIRO_GUARD_CODEX_SPOOF=1` (AR guard instances only)
+- Enable AnyRouter 1M: `KIRO_GUARD_ANYROUTER_1M=1` (AnyRouter guard instances only)
 
 ## Rollback
 

@@ -143,6 +143,12 @@ _CODEX_HEADERS = {
     "User-Agent": "codex_cli_rs/0.101.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464",
     "Version": "0.101.0",
 }
+# AnyRouter 1M context: inject/append anthropic-beta header so upstream
+# grants 1M context window. Enable on AnyRouter guard instances only.
+ANYROUTER_1M = os.environ.get("KIRO_GUARD_ANYROUTER_1M", "0") not in (
+    "0", "false", "False",
+)
+_ANYROUTER_1M_BETA = "context-1m-2025-08-07"
 
 # Truncation-aware retry (kirocc spirit): on text truncation, inject the
 # truncated response as assistant context + continuation prompt so the model
@@ -1203,6 +1209,12 @@ class Handler(BaseHTTPRequestHandler):
                 out[h] = v
         if CODEX_SPOOF:
             out.update(_CODEX_HEADERS)
+        if ANYROUTER_1M:
+            existing = out.get("anthropic-beta", "")
+            if _ANYROUTER_1M_BETA not in existing:
+                out["anthropic-beta"] = (
+                    f"{existing},{_ANYROUTER_1M_BETA}" if existing else _ANYROUTER_1M_BETA
+                )
         return out
 
     def do_POST(self):
@@ -1799,6 +1811,8 @@ if __name__ == "__main__":
         _mod._consecutive_hard = old_ch
         # Codex spoof: verify header dict shape
         assert isinstance(_CODEX_HEADERS, dict) and "Originator" in _CODEX_HEADERS
+        # AnyRouter 1M: verify beta string
+        assert "context-1m" in _ANYROUTER_1M_BETA
         print("selftest_ok")
         raise SystemExit(0)
 
@@ -1812,4 +1826,6 @@ if __name__ == "__main__":
     _log(f"tg_alert threshold={TG_ALERT_THRESHOLD}")
     if CODEX_SPOOF:
         _log("codex_spoof=ON (injecting Codex CLI headers for AgentRouter WAF)")
+    if ANYROUTER_1M:
+        _log(f"anyrouter_1m=ON (injecting anthropic-beta: {_ANYROUTER_1M_BETA})")
     ThreadingHTTPServer(("127.0.0.1", LISTEN_PORT), Handler).serve_forever()

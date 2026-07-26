@@ -102,10 +102,11 @@ IDE 目录被启动刷新冲掉时：用 Cursor `AvailableModels`（带 `additio
 
 Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `claude-opus-5-high`。截图里若仍写 Opus 4.8，说明**该会话钉在 4.8**（或 Fable 回落后又被 Opus 拦死）。
 
-## NewAPI 运维姿态（2026-07-26）
+## NewAPI 运维姿态（2026-07-27）
 
 - **公益站通断是常态**（`No available accounts` / 502）：不当事故；看主池是否仍能冒烟。
-- 现网 Opus：`#9/#10/#20` = **50/40/28**（百倍 100xlabs，多 key 轮询池）；`#60`（k40/林夕，多 key 轮询池）= **已死**（`No available accounts`，k40 额度耗尽）；`#11/#81/#119/#120` status=2；AR `#118` **已恢复** w10（Codex 伪装绕过 WAF，模型 `claude-opus-4-6/4-8`）。analyze 按 p50 动态调权（档位如 50/40/28/…），文档数字是**快照**不是硬编码目标。
+- 现网 Opus：`#9/#10/#20` = **50/动态/28**（百倍 100xlabs，多 key 轮询池；#10 由 autoweight 动态调）；`#60`（k40/林夕，多 key 轮询池）= **已死**（`No available accounts`，k40 额度耗尽）；`#11/#81/#119/#120` status=2；AR `#118` **已恢复** w10（Codex 伪装绕过 WAF，模型 `claude-opus-4-6/4-8`）。analyze 按 p50 动态调权（档位如 50/40/28/…），文档数字是**快照**不是硬编码目标。
+- **autoweight cron**（`/opt/new-api/autoweight.py`，cron `30 */2`）：读 guard `/metrics` p50+成功率 → 自动加权/降权（±5~8，3h 冷却，上限 50 下限 5）。TG 通知变更。
 - **health v5.1**（已落地镜像 `scripts/ops/health_check.vps.py`）：探针优先 `claude-opus-5[1M]`；去掉 `:7890` 假 400 回退；`no available accounts`/公益站 503 → `FAIL-TRANSIENT` **不累计禁用**；硬失败阈值 **12**。勿为单渠 502 开专项。
 
 ## 建议定时
