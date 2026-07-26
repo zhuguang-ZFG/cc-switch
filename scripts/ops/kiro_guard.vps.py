@@ -1811,8 +1811,25 @@ if __name__ == "__main__":
         _mod._consecutive_hard = old_ch
         # Codex spoof: verify header dict shape
         assert isinstance(_CODEX_HEADERS, dict) and "Originator" in _CODEX_HEADERS
-        # AnyRouter 1M: verify beta string
+        # AnyRouter 1M: verify beta string + header injection logic
         assert "context-1m" in _ANYROUTER_1M_BETA
+        _saved_1m = ANYROUTER_1M
+        try:
+            _mod.ANYROUTER_1M = True
+            _h = Handler.__new__(Handler)
+            _h.headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
+            _hm = _h._header_map()
+            assert _ANYROUTER_1M_BETA in _hm.get("anthropic-beta", ""), \
+                f"1M beta not injected: {_hm.get('anthropic-beta')}"
+            assert "prompt-caching" in _hm["anthropic-beta"], \
+                "existing beta lost after 1M injection"
+            _h2 = Handler.__new__(Handler)
+            _h2.headers = {}
+            _hm2 = _h2._header_map()
+            assert _hm2.get("anthropic-beta") == _ANYROUTER_1M_BETA, \
+                f"1M beta not set when no existing: {_hm2.get('anthropic-beta')}"
+        finally:
+            _mod.ANYROUTER_1M = _saved_1m
         print("selftest_ok")
         raise SystemExit(0)
 
