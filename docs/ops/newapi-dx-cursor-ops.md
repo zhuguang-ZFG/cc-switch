@@ -138,6 +138,9 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | TEXT_HEUR | `KIRO_GUARD_TEXT_HEUR=1`：未闭合 fence / 句尾开放标点 / 有 tools 却只说「我将」无 tool_use |
 | SOFT_RETRY_BACKOFF_MS | **700**（Kiro-Go #143；即时重试易同溃） |
 | empty tool | `input:{}` / `tool_use` 无 block → soft（kiro-gateway #56） |
+| MAX_RESP | **10MB**（`KIRO_GUARD_MAX_RESPONSE_BYTES`；防上游异常 OOM） |
+| req_id | 每请求 12 位 hex UUID；贯穿 journal + stderr，支持跨重试链追踪 |
+| latency | `/metrics` → `upstream_latency: {count, p50_ms, p95_ms, max_ms}`（滚动 200 窗口） |
 | soft journal | `/opt/new-api/kiro-guard-soft.jsonl`；进程内 `/metrics` |
 | AR guard | `kiro-guard-ar-8410/11/12`；`KIRO_GUARD_PROXY=http://127.0.0.1:7890`；`#118–120` base=`127.0.0.1:841x` |
 | AR 关键词 | `KIRO_GUARD_CONTENT_BLOCK_FAILOVER=1`：`sensitive_words*` / content policy / 405 → **立即 502** 切渠（不软重试） |

@@ -46,6 +46,26 @@ Compresses response bodies > 1KB when client sends `Accept-Encoding: gzip`. SSE 
 |---------|---------|-------------|
 | `KIRO_GUARD_GZIP_MIN` | `1024` | Minimum body size for gzip (bytes) |
 
+### 4. Response body size limit (2026-07-27)
+
+Caps `resp.read()` to 10MB via `_read_limited()`. Prevents OOM from misbehaving upstream.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `KIRO_GUARD_MAX_RESPONSE_BYTES` | `10485760` | Max upstream response body (bytes) |
+
+### 5. Request correlation ID (2026-07-27)
+
+Every `fetch_classified` call generates a 12-char hex `req_id` (uuid4). Threaded through all `journal_event` calls and stderr logs, enabling cross-retry-chain tracing in journal.
+
+### 6. Upstream latency tracking (2026-07-27)
+
+`_fetch_upstream` records elapsed ms per call into a rolling 200-entry window. `/metrics` exposes `upstream_latency: {count, p50_ms, p95_ms, max_ms}`.
+
+### 7. Upstream snippet redaction (2026-07-27)
+
+`content_blocked_502` no longer returns first 240 bytes of upstream body to the client. Prevents leaking internal error details or key fragments.
+
 ## Defense layers (after)
 
 ```
@@ -55,24 +75,26 @@ Request in
   |
 2. Truncation detect + continuation retry + overlap dedup + merge
   |
-3. HTTP gzip: compress response to NewAPI (reduce transfer size)
+3. Response body size limit (10MB) + upstream latency tracking
+  |
+4. HTTP gzip: compress response to NewAPI (reduce transfer size)
 ```
 
 ## Verification
 
-- Selftest: all existing + `build_continuation_payload` + `merge_responses` + `_dedup_overlap` + `_effective_cap` tests pass
+- Selftest: all classify + merge + dedup + adaptive cap + size limit + latency + snippet redaction tests pass
 - 5 guard units: all active, all health=200
-- `/metrics` shows `trunc_context=True`, `max_tokens_cap=4096`, `max_tokens_write_cap=8192`, `gzip_min_bytes=1024`
 
 ## Tuning
 
 - Write cap too tight: `KIRO_GUARD_MAX_TOKENS_WRITE_CAP=16384`; default cap: `KIRO_GUARD_MAX_TOKENS_CAP=8192`
 - If gzip causes issues with NewAPI: `KIRO_GUARD_GZIP_MIN=999999` (effectively off)
 - Disable continuation retry: `KIRO_GUARD_TRUNC_CONTEXT=0`
+- Response size limit: `KIRO_GUARD_MAX_RESPONSE_BYTES=20971520` (20MB)
 
 ## Rollback
 
 ```bash
-cp /opt/new-api/kiro_guard.py.bak.trunc-ctx-20260726-230657 /opt/new-api/kiro_guard.py
+cp /opt/new-api/kiro_guard.py.bak.trunc-ctx-20260727-000813 /opt/new-api/kiro_guard.py
 systemctl restart kiro-guard kiro-guard-100xlabs kiro-guard-100x-8403 kiro-guard-100x-8404 kiro-guard-100x-8405
 ```

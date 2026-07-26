@@ -34,6 +34,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
@@ -113,6 +114,7 @@ MAX_TOKENS_WRITE_CAP = int(os.environ.get("KIRO_GUARD_MAX_TOKENS_WRITE_CAP", "81
 _WRITE_TOOL_NAMES = frozenset({"Write", "Edit", "NotebookEdit", "write_file", "edit_file"})
 # HTTP response compression: gzip bodies > GZIP_MIN_BYTES when client accepts.
 GZIP_MIN_BYTES = int(os.environ.get("KIRO_GUARD_GZIP_MIN", "1024"))
+MAX_RESPONSE_BYTES = int(os.environ.get("KIRO_GUARD_MAX_RESPONSE_BYTES", str(10 * 1024 * 1024)))
 
 # Truncation-aware retry (kirocc spirit): on text truncation, inject the
 # truncated response as assistant context + continuation prompt so the model
@@ -144,6 +146,8 @@ _journal_lock = threading.Lock()
 _soft_counts: Dict[str, int] = {}
 _hard_counts: Dict[str, int] = {}
 _ok_count = 0
+_latencies: list = []
+_LATENCY_WINDOW = 200
 
 
 def _log(msg: str) -> None:
@@ -154,7 +158,8 @@ def _bump(counter: Dict[str, int], key: str) -> None:
     counter[key] = counter.get(key, 0) + 1
 
 
-def journal_event(kind: str, reason: str, extra: Optional[dict] = None) -> None:
+def journal_event(kind: str, reason: str, extra: Optional[dict] = None,
+                   req_id: str = "") -> None:
     """Append soft/hard classify events for ops (JSONL). Never raise."""
     global _ok_count
     try:
@@ -172,13 +177,16 @@ def journal_event(kind: str, reason: str, extra: Optional[dict] = None) -> None:
             "reason": reason,
             "upstream": UPSTREAM,
         }
+        if req_id:
+            rec["req_id"] = req_id
         if extra:
             rec.update(extra)
         line = json.dumps(rec, ensure_ascii=False) + "\n"
         with _journal_lock:
             with open(JOURNAL_PATH, "a", encoding="utf-8") as f:
                 f.write(line)
-        _log(f"classify_event kind={kind} reason={reason}")
+        _log(f"classify_event kind={kind} reason={reason}"
+             + (f" req_id={req_id}" if req_id else ""))
     except Exception as e:
         _log(f"journal_error {type(e).__name__}:{e}")
 
@@ -196,13 +204,31 @@ def _opener() -> urllib.request.OpenerDirector:
 _UPSTREAM_OPENER = _opener()
 
 
+def _read_limited(fp, limit: int = MAX_RESPONSE_BYTES) -> bytes:
+    data = fp.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"response body exceeds {limit} bytes")
+    return data
+
+
+def _record_latency(elapsed_ms: float) -> None:
+    _latencies.append(elapsed_ms)
+    if len(_latencies) > _LATENCY_WINDOW:
+        del _latencies[: len(_latencies) - _LATENCY_WINDOW]
+
+
 def _fetch_upstream(req: urllib.request.Request) -> Tuple[int, bytes]:
+    t0 = time.monotonic()
     try:
         with _UPSTREAM_OPENER.open(req, timeout=TIMEOUT) as resp:
-            return resp.status, resp.read()
+            data = _read_limited(resp)
+            _record_latency((time.monotonic() - t0) * 1000)
+            return resp.status, data
     except urllib.error.HTTPError as e:
-        return e.code, e.read()
+        _record_latency((time.monotonic() - t0) * 1000)
+        return e.code, _read_limited(e)
     except Exception as e:
+        _record_latency((time.monotonic() - t0) * 1000)
         return 502, json.dumps(
             {
                 "error": {
@@ -246,7 +272,6 @@ def detect_content_blocked(status: int, body: bytes) -> Optional[str]:
 
 
 def content_blocked_502(reason: str, upstream_status: int, body: bytes) -> bytes:
-    snippet = body[:240].decode("utf-8", errors="replace") if body else ""
     return json.dumps(
         {
             "error": {
@@ -256,7 +281,6 @@ def content_blocked_502(reason: str, upstream_status: int, body: bytes) -> bytes
                 ),
                 "type": "guard_error",
                 "reason": f"content_blocked:{reason}",
-                "upstream_snippet": snippet,
             }
         },
         ensure_ascii=False,
@@ -792,9 +816,12 @@ def build_messages_request(payload: dict, header_map: Dict[str, str]) -> urllib.
 
 
 def fetch_classified(
-    payload: dict, header_map: Dict[str, str]
+    payload: dict, header_map: Dict[str, str], req_id: str = ""
 ) -> Tuple[int, bytes, str, str, Optional[dict]]:
     """Fetch upstream with soft retry + backoff. Returns status, body, kind, reason, msg."""
+    if not req_id:
+        req_id = uuid.uuid4().hex[:12]
+    _log(f"req_start req_id={req_id}")
     # Original payload kept for classify heuristics (tools, max_tokens).
     upstream_payload = cyrillic_encode_payload(payload) if CYRILLIC_BYPASS else payload
     if CYRILLIC_BYPASS:
@@ -805,14 +832,14 @@ def fetch_classified(
     if blocked is not None:
         return blocked
     if status != 200:
-        journal_event("hard", f"upstream_http_{status}")
+        journal_event("hard", f"upstream_http_{status}", req_id=req_id)
         return status, body, "hard", f"upstream_http_{status}", None
     if CYRILLIC_BYPASS:
         body = cyrillic_decode_bytes(body)
 
     kind, reason, msg = classify_response(body, payload)
     if kind == "ok":
-        journal_event("ok", "ok")
+        journal_event("ok", "ok", req_id=req_id)
         return status, body, kind, reason, msg
     if kind == "hard":
         if (
@@ -821,7 +848,7 @@ def fetch_classified(
             and reason in SOFT_LIMIT_REASONS
         ):
             recovered = apply_soft_limit(msg, reason, payload)
-            journal_event("soft", f"soft_limit:{reason}", {"phase": "hard_to_soft_limit"})
+            journal_event("soft", f"soft_limit:{reason}", {"phase": "hard_to_soft_limit"}, req_id=req_id)
             _log(f"soft_limit from hard reason={reason}")
             return (
                 200,
@@ -830,11 +857,11 @@ def fetch_classified(
                 f"soft_limit:{reason}",
                 recovered,
             )
-        journal_event("hard", reason)
+        journal_event("hard", reason, req_id=req_id)
         _log(f"hard_fail reason={reason}")
         return status, body, kind, reason, msg
 
-    journal_event("soft", reason, {"phase": "first"})
+    journal_event("soft", reason, {"phase": "first"}, req_id=req_id)
     # soft: retry with backoff (Kiro-Go #143). For text truncations, inject
     # truncated content as context so the model continues (kirocc spirit).
     first_trunc_msg = msg
@@ -870,7 +897,7 @@ def fetch_classified(
         if blocked2 is not None:
             return blocked2
         if status2 != 200:
-            journal_event("hard", f"upstream_http_{status2}_after_soft")
+            journal_event("hard", f"upstream_http_{status2}_after_soft", req_id=req_id)
             return status2, body2, "hard", f"upstream_http_{status2}_after_soft", None
         if CYRILLIC_BYPASS:
             body2 = cyrillic_decode_bytes(body2)
@@ -880,7 +907,7 @@ def fetch_classified(
                 merged = merge_responses(first_trunc_msg, msg2)
                 journal_event(
                     "soft", f"recovered_merged:{reason}",
-                    {"phase": "retry_ok_merged"},
+                    {"phase": "retry_ok_merged"}, req_id=req_id,
                 )
                 _log(f"trunc_context merged reason={reason}")
                 return (
@@ -890,7 +917,7 @@ def fetch_classified(
                     f"merged:{reason}",
                     merged,
                 )
-            journal_event("soft", f"recovered:{reason}", {"phase": "retry_ok"})
+            journal_event("soft", f"recovered:{reason}", {"phase": "retry_ok"}, req_id=req_id)
             return status2, body2, kind2, reason2, msg2
         if kind2 == "hard":
             if (
@@ -900,7 +927,7 @@ def fetch_classified(
             ):
                 recovered = apply_soft_limit(msg2, reason2, payload)
                 journal_event(
-                    "soft", f"soft_limit:{reason2}", {"phase": "hard_after_soft"}
+                    "soft", f"soft_limit:{reason2}", {"phase": "hard_after_soft"}, req_id=req_id,
                 )
                 return (
                     200,
@@ -909,16 +936,16 @@ def fetch_classified(
                     f"soft_limit:{reason2}",
                     recovered,
                 )
-            journal_event("hard", reason2, {"phase": "after_soft"})
+            journal_event("hard", reason2, {"phase": "after_soft"}, req_id=req_id)
             _log(f"hard_fail_after_soft reason={reason2}")
             return status2, body2, kind2, reason2, msg2
-        journal_event("soft", reason2, {"phase": f"retry_{attempt + 1}"})
+        journal_event("soft", reason2, {"phase": f"retry_{attempt + 1}"}, req_id=req_id)
         reason, body, msg = reason2, body2, msg2
 
     _log(f"soft_exhausted reason={reason}")
     if SOFT_LIMIT and msg is not None and reason in SOFT_LIMIT_REASONS:
         recovered = apply_soft_limit(msg, reason, payload)
-        journal_event("soft", f"soft_limit:{reason}", {"phase": "exhausted_soft_limit"})
+        journal_event("soft", f"soft_limit:{reason}", {"phase": "exhausted_soft_limit"}, req_id=req_id)
         _log(f"soft_limit after exhausted reason={reason}")
         return (
             200,
@@ -927,7 +954,7 @@ def fetch_classified(
             f"soft_limit:{reason}",
             recovered,
         )
-    journal_event("soft", f"retry_exhausted:{reason}", {"phase": "exhausted"})
+    journal_event("soft", f"retry_exhausted:{reason}", {"phase": "exhausted"}, req_id=req_id)
     return status, body, "soft", f"retry_exhausted:{reason}", msg
 
 
@@ -1090,7 +1117,7 @@ class Handler(BaseHTTPRequestHandler):
             req.add_header(h, v)
         try:
             with _UPSTREAM_OPENER.open(req, timeout=30) as resp:
-                self._reply(resp.status, resp.read(), "application/json")
+                self._reply(resp.status, _read_limited(resp), "application/json")
                 return
         except Exception:
             pass
@@ -1107,10 +1134,10 @@ class Handler(BaseHTTPRequestHandler):
             req.add_header(h, v)
         try:
             with _UPSTREAM_OPENER.open(req, timeout=TIMEOUT) as resp:
-                data = resp.read()
+                data = _read_limited(resp)
                 status = resp.status
         except urllib.error.HTTPError as e:
-            status, data = e.code, e.read()
+            status, data = e.code, _read_limited(e)
         except Exception as e:
             self._reply(
                 502,
@@ -1157,6 +1184,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._reply(200, b'{"status":"ok"}', "application/json")
         elif self.path == "/metrics":
+            lat = {}
+            if _latencies:
+                s = sorted(_latencies)
+                lat = {
+                    "count": len(s),
+                    "p50_ms": int(s[len(s) // 2]),
+                    "p95_ms": int(s[int(len(s) * 0.95)]),
+                    "max_ms": int(s[-1]),
+                }
             body = json.dumps(
                 {
                     "status": "ok",
@@ -1165,6 +1201,7 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": _ok_count,
                     "soft": dict(_soft_counts),
                     "hard": dict(_hard_counts),
+                    "upstream_latency": lat,
                     "journal": JOURNAL_PATH,
                     "soft_retry": SOFT_RETRY,
                     "soft_retry_backoff_ms": SOFT_RETRY_BACKOFF_MS,
@@ -1173,6 +1210,7 @@ class Handler(BaseHTTPRequestHandler):
                     "trunc_context": TRUNC_CONTEXT,
                     "max_tokens_cap": MAX_TOKENS_CAP,
                     "max_tokens_write_cap": MAX_TOKENS_WRITE_CAP,
+                    "max_response_bytes": MAX_RESPONSE_BYTES,
                     "gzip_min_bytes": GZIP_MIN_BYTES,
                     "content_block_failover": CONTENT_BLOCK_FAILOVER,
                     "cyrillic_bypass": CYRILLIC_BYPASS,
@@ -1357,6 +1395,22 @@ if __name__ == "__main__":
         assert _effective_cap(plain_req) == MAX_TOKENS_CAP
         no_tools = {"max_tokens": 16384}
         assert _effective_cap(no_tools) == MAX_TOKENS_CAP
+        # Response size limit
+        assert _read_limited(io.BytesIO(b"x" * 100), 100) == b"x" * 100
+        try:
+            _read_limited(io.BytesIO(b"x" * 101), 100)
+            assert False, "should have raised"
+        except ValueError:
+            pass
+        # Latency recording
+        _latencies.clear()
+        _record_latency(42.5)
+        _record_latency(99.0)
+        assert len(_latencies) == 2
+        assert _latencies[0] == 42.5
+        # content_blocked_502 no upstream_snippet
+        cb = json.loads(content_blocked_502("test", 400, b"secret-key-here"))
+        assert "upstream_snippet" not in cb["error"]
         print("selftest_ok")
         raise SystemExit(0)
 
