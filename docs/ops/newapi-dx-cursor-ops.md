@@ -289,6 +289,24 @@ python3 /opt/new-api/sonnet_failover.py && podman restart new-api
 | ~~guard `:8400` 指向已死的林夕 k40~~ | ✅ 已解决（2026-07-27）：林夕 opus-5 复活，`#11/#60` 重新入池 | — |
 | `channel_cache.go` 每分钟刷 `channel_info: unexpected end of JSON input` | 日志噪音（~400 条/6h，2026-07-26 起就有） | 功能正常（缓存照常刷新、渠道正常路由）；DB 全量扫 85 渠道 `channel_info` 均为合法 JSON，疑容器内查询路径/版本差异，未深查 |
 
+## 速度瓶颈分析（2026-07-27 实测）
+
+**结论：TTFT ~14s 是结构性结果，三层拆开后每一层都有主。**
+
+| 层 | 实测 | 说明 |
+|----|------|------|
+| 上游 relay（100x） | TTFB **~7s**（"hi" 小请求也一样）、生成 **~10 t/s** | 支持 `stream=true`（直连实测 200 SSE）；慢在排队/账号调度，非协议 |
+| kiro-guard | 缓冲模式：强制 `stream=false` 整段取回 → `synth_stream` 伪流式回放 | **TTFT = TTFB + 整段生成时间**（短回复 ~14s 的来源）；`STREAM_PASSTHROUGH=1` 可直传（实测上游流式 OK），但丢软重试/截断恢复/内容兜底——当天仍有 9 次 short_completion 靠 guard 救回，开启需权衡 |
+| NewAPI | 开销可忽略（原生 Claude Messages 路径无转换；社区 issue [#4992](https://github.com/QuantumNous/new-api/issues/4992) 的慢是 OpenAI 转换路径） | — |
+
+**探针纪律**：直连 guard/上游必须带 Chrome `User-Agent`，否则 CF **error 1010** 假 403（今天被坑过一次）。
+
+**可选项（未实施）**：
+
+1. guard 加 **tee 模式**（边转发边检测：SSE 直转 + 末尾截断校验 + 必要时续写）——正解，TTFT 省 ~5-6s 且不丢保护，需改 `kiro_guard.py` 排期做
+2. `STREAM_PASSTHROUGH=1` 单 guard A/B（快但丢保护）
+3. 换商业低延迟上游（社区测评 TTFT<1s 的付费站）——花钱选项
+
 ## VPS 维护（2026-07-27）
 
 定期清理策略（已执行首次清理）：
