@@ -237,6 +237,25 @@ def weighted_err_count(c):
             + ERR_W_OTHER * c["other"] + ERR_W_CONTENT * c["content"])
 
 
+def channel_cache_rates(db, ids):
+    """Recent cache hit rate per channel from logs. Returns {cid: pct}."""
+    rates = {cid: None for cid in ids}
+    try:
+        q = ("SELECT channel_id,"
+             " SUM(CAST(json_extract(other,'$.cache_tokens') AS INTEGER)) AS ct,"
+             " SUM(prompt_tokens) AS pt"
+             " FROM logs WHERE model_name LIKE ? AND created_at > ?"
+             " AND channel_id IN (%s)"
+             " GROUP BY channel_id" % ",".join("?" * len(ids)))
+        cutoff = int(time.time()) - 3600
+        for r in db.execute(q, [MODEL_FAMILY, cutoff] + ids):
+            pt = r["pt"] or 0
+            rates[r["channel_id"]] = (r["ct"] / pt * 100.0) if pt > 0 else 0.0
+    except Exception as e:
+        log("WARN cache-rate query failed: %s" % e)
+    return rates
+
+
 def main():
     restore = "--restore" in sys.argv
     st = load_state()
@@ -280,6 +299,7 @@ def main():
 
     err_cls = channel_error_classes(ids)
     errs = {cid: sum(c.values()) for cid, c in err_cls.items()}
+    cache_rates = channel_cache_rates(db, ids)
 
     scores = {}
     for r in tier:
@@ -300,11 +320,17 @@ def main():
         st["ewma_err"][str(cid)] = ew_r
         lat = 0.5 * ew_t + 0.5 * ttft
         quality = 1.0 / (1.0 + ERR_PENALTY * ew_r)
+        # cache penalty: 0% hit channels score halved, >=50% unaffected
+        cr = cache_rates.get(cid)
+        if cr is not None and cr < 50.0:
+            cache_factor = max(0.3, cr / 50.0)
+            quality *= cache_factor
         scores[cid] = quality / max(lat, 0.3)
         c = err_cls[cid]
         cls_note = (" a%d/c%d/o%d/t%d" % (c["auth"], c["conc"], c["other"], c["content"])) if errs[cid] else ""
-        log("ch#%-3d %-26s ttft=%5.1fs lat=%5.1fs err=%.2f q=%.2f (errs=%d%s succ=%d)" % (
-            cid, name, ttft, lat, ew_r, quality, errs[cid], cls_note, succ[cid]))
+        cache_note = " cache=%.0f%%" % cr if cr is not None else ""
+        log("ch#%-3d %-26s ttft=%5.1fs lat=%5.1fs err=%.2f q=%.2f%s (errs=%d%s succ=%d)" % (
+            cid, name, ttft, lat, ew_r, quality, cache_note, errs[cid], cls_note, succ[cid]))
 
     total = sum(scores.values())
     new_w = {}
@@ -350,7 +376,7 @@ def main():
     prev_dead = st.get("dead", [])
     newly = [c for c in dead if c not in prev_dead and c not in MAIN_TIER_MAPPED]
     healed = [c for c in prev_dead
-              if c not in dead and c not in MAIN_TIER_MAPPED]
+              if c not in dead and c not in MAIN_TIER_MAPPED and c in new_w]
     # 全灭告警也按跳变发（v5.1）：持续全灭不重复轰炸，恢复走 healed 分支
     all_dead = bool(dead) and len(dead) == len(tier)
     if all_dead:
