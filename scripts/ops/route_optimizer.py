@@ -13,6 +13,12 @@ v3 (2026-07-27):
   自动换序，同 cron 串行）；--restore 不再连带触发 sonnet 周期
 - 入口 flock（route_optimizer.lock）防 cron 重叠
 
+v4 (2026-07-27):
+- 主池放映射渠（#137 GPT-terra / #138 kimi-k3，priority 45）：探针按渠道
+  type 分流 OpenAI/Anthropic 格式，模型取 model_mapping，UA 吃 header_override
+- 映射渠 margin 门控 + 权重封顶：分数须超最好 Claude 渠 ×MAPPED_MARGIN 才
+  放权重（否则 w0 关门），且封顶 MAPPED_CAP；Claude 全灭时门控失效全开兜底
+
 Only adjusts `weight` within the top-priority tier; never touches
 priority/status/models. Design: docs/plans/newapi-adaptive-routing-2026-07-27.md
 """
@@ -39,6 +45,12 @@ EWMA_ALPHA = 0.4
 ERR_PENALTY = 3.0                       # quality = 1/(1 + ERR_PENALTY*err_rate)
 W_MIN_OK, W_MAX, W_DEAD = 3, 60, 1
 HYSTERESIS = 5
+
+# 主池映射渠（非真 Claude）：margin 门控 + 权重封顶（泄压阀，不当主力）
+MAIN_TIER_MAPPED = {137, 138}
+MAPPED_MARGIN = 1.3                     # 分数须超最好 Claude 渠 ×1.3 才放权重
+MAPPED_CAP = 25
+TYPE_ANTHROPIC = 14
 
 ERR_RE = re.compile(r"channel error \(channel #(\d+)")
 
@@ -95,6 +107,52 @@ def probe_ttft(base_url, key, model=None):
         return None
 
 
+def probe_openai_ttft(base_url, key, model, ua="new-api-route-optimizer/3.0"):
+    """OpenAI /chat/completions 流式 TTFT 秒数，失败返回 None。"""
+    body = json.dumps({"model": model, "max_tokens": 8, "stream": True,
+                       "messages": [{"role": "user", "content": "hi"}]}).encode()
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/v1/chat/completions", data=body,
+        headers={"content-type": "application/json",
+                 "authorization": "Bearer " + key, "user-agent": ua})
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
+            if not (200 <= r.status < 300):
+                return None
+            for chunk in r:
+                if chunk.strip():
+                    return time.time() - t0
+            return None
+    except Exception:
+        return None
+
+
+def _mapped_model(row, req_model):
+    try:
+        mm = json.loads(row["model_mapping"] or "{}")
+    except Exception:
+        mm = {}
+    return mm.get(req_model, req_model)
+
+
+def _hdr_ua(row):
+    try:
+        h = json.loads(row["header_override"] or "{}")
+    except Exception:
+        h = {}
+    return h.get("User-Agent") or "new-api-route-optimizer/3.0"
+
+
+def _probe_channel(r):
+    """按渠道 type 分流探针格式；模型取 model_mapping 映射值；多 key 取首 key。"""
+    key = (r["key"] or "").split("\n")[0].strip()
+    model = _mapped_model(r, PROBE_MODEL)
+    if r["type"] == TYPE_ANTHROPIC:
+        return probe_ttft(r["base_url"], key, model)
+    return probe_openai_ttft(r["base_url"], key, model, _hdr_ua(r))
+
+
 def channel_errors(ids):
     """Per-channel error count from the last LOG_WINDOW of container logs."""
     errs = {cid: 0 for cid in ids}
@@ -118,7 +176,8 @@ def main():
     db.row_factory = sqlite3.Row
 
     rows = db.execute(
-        "SELECT DISTINCT c.id, c.name, c.base_url, c.key, c.weight, c.priority"
+        "SELECT DISTINCT c.id, c.name, c.base_url, c.key, c.weight, c.priority,"
+        " c.type, c.model_mapping, c.header_override"
         " FROM channels c JOIN abilities a ON a.channel_id = c.id"
         " WHERE c.status = 1 AND a.enabled = 1 AND a.model LIKE ?"
         " ORDER BY c.priority DESC", (MODEL_FAMILY,)).fetchall()
@@ -157,7 +216,7 @@ def main():
     for r in tier:
         cid = r["id"]
         name = r["name"][:26]
-        ttft = probe_ttft(r["base_url"], r["key"])
+        ttft = _probe_channel(r)
         if ttft is None:
             scores[cid] = 0.0
             log("probe FAIL ch#%d %s (errs=%d succ=%d)" % (cid, name, errs[cid], succ[cid]))
@@ -181,6 +240,26 @@ def main():
         cid = r["id"]
         new_w[cid] = W_DEAD if (scores[cid] <= 0 or total <= 0) else \
             max(W_MIN_OK, min(W_MAX, round(100 * scores[cid] / total)))
+
+    # 映射渠门控：活着但分数未超最好 Claude 渠 × MAPPED_MARGIN → w0 关门；
+    # 超过则权重封顶 MAPPED_CAP；Claude 全灭时门控失效（兜底服务全开）
+    alive_claude = [scores[c] for c in ids
+                    if c not in MAIN_TIER_MAPPED and scores[c] > 0]
+    best_claude = max(alive_claude) if alive_claude else 0.0
+    for c in ids:
+        if c not in MAIN_TIER_MAPPED or scores[c] <= 0:
+            continue
+        if best_claude > 0 and scores[c] < best_claude * MAPPED_MARGIN:
+            new_w[c] = 0
+        else:
+            new_w[c] = min(MAPPED_CAP, new_w[c])
+    mapped_active = sorted(c for c in ids
+                           if c in MAIN_TIER_MAPPED and new_w[c] > W_DEAD)
+    prev_active = st.get("mapped_active", [])
+    if mapped_active != prev_active and st.get("mapped_active") is not None:
+        send_tg("🎚 主池映射渠门控变化：active=%s（cap=%d margin=%.1f）"
+                % (mapped_active, MAPPED_CAP, MAPPED_MARGIN))
+    st["mapped_active"] = mapped_active
 
     cur_w = {r["id"]: r["weight"] for r in tier}
     if any(abs(new_w[c] - cur_w[c]) >= HYSTERESIS for c in new_w):

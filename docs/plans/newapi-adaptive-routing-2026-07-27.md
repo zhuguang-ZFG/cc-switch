@@ -143,3 +143,22 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
 
 - **自动摘渠/放回**：连续 N 轮判死 → status=2，恢复 M 轮 → status=1（仍待定）
 - **每日体验日报**：p50/p90 TTFT、断流次数、换序/判死事件汇总
+
+## v4：映射渠进主池（GPT/k3 泄压阀，2026-07-27 23:00 上线）
+
+- **#137 gpt-terra-opus-valve**（克隆 #129 8317 池，opus-4-6~5 → gpt-5.6-terra，
+  无 [1M]）与 **#138 kimi-k3-opus**（克隆 #63 kimi 端点，opus 全家族含 [1M]
+  → k3，k3 原生 1M 上下文）以 priority 45 进 Opus 主池层
+- optimizer 探针按渠道 type 分流 OpenAI/Anthropic 格式，模型取 model_mapping，
+  UA 吃 header_override，多 key 取首 key
+- **门控策略**（不当主力、只当泄压阀）：映射渠分数须超最好 Claude 渠 ×1.3
+  才放权重，且封顶 w25；未过门控 w0 关门；Claude 全灭时门控失效全开兜底；
+  门控状态变化发 TG
+- 选型记录：muyuan #46 key 已失效（401）；#130/#123/#83 GPT 池今晚全灭；
+  8317 terra auth 耗尽等自愈（#137 目前 w1 躺着，自愈后门控自动评估）；
+  k3 实测 TTFT 1.0-1.5s 立即上岗
+- 首轮实测（Claude 主池降级夜：#20 死 #60 41s）：`{10:10,20:1,60:3,137:1,138:25}`
+  ——k3 过门控（1.0s vs Claude 9-32s）拿下 25，承担了泄压职责；
+  健康夜 Claude 权重和 ~99 时 k3 占比 ≈20%
+- 副产物验证：flock 生效（cron 与手动跑重叠时干净退出）；Sonnet 链 glm
+  cap 复位后 1.3s 自动爬层，链序收敛 [63, 133, 134, 136, 129]
