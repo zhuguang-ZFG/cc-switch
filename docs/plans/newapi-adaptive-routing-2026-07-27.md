@@ -175,3 +175,22 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   {138 k3:25, 139 grok:25, 10:7, 20:7, 60:8, 137 terra:1(等自愈)}。
 - agentrouter 线确认废弃：GPT 侧 VPS 网络不可达（DNS 污染），Claude 侧
   公益池无货（#118 auto-ban 保留），不再投入。
+
+## 追加（00:30）：muyuan 复活上第一位（0.01 倍率公益站）
+
+- 群里公益站 muyuan.do 改 0.01 倍率 + 新 key。实测：CF 1010 要浏览器 UA 过
+  /v1/models；completions 还有 `channel:client_restricted`——**只认
+  `codex-cli` UA**（claude-cli/浏览器均 403）。该 key 分组可用模型仅
+  gpt-5.4 / gpt-5.5 / MiniMax-M3 / gpt-5.6-sol（terra/luna 无货）。
+- **#140 muyuan-claude-first**（type 1，header_override codex UA，w40）：
+  opus 全家族(含[1M])→gpt-5.5 **priority 60 第一位**；claude-fable-5→
+  gpt-5.6-sol priority 55（fable 层第一）；sonnet→gpt-5.4 priority -18
+  （sonnet 链头）；haiku→MiniMax-M3 priority 45。
+- #46 muyuan.do-new 同步换新 key + codex UA（zg- 别名恢复）。
+- 验证：opus 200/2s 上游 gpt-5.5；fable 200/3s 上游 gpt-5.6-sol；
+  `use_channel=["140"]` 确认。真实 208k 请求 `use_channel=["140","138"]`
+  ——muyuan 拒大上下文后自动落 k3，故障链正确但大请求多付一次失败重试
+  （optimizer 探针是小请求看不见，晨报盯 #140 错误率）。
+- optimizer 已正确接管 60 层（探针走 header_override 的 codex UA）。
+- 8317 Dc 站 key 全作废（401 invalid，非配额），三渠道 #21/#129/#137
+  保持隔离等群里补 key。
