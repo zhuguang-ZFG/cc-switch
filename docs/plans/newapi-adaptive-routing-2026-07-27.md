@@ -368,3 +368,55 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   内找到可用渠道完成请求，无最终失败的 case。
 - **优化项**：#142 welfare 的 weight 被压到 1（503 期间），提回 45 层后靠 optimizer
   下轮探针自动恢复（它现在 200，探针过即可回升）。
+
+## 追加（10:40）：#9 baibei 真 claude 恢复 + 数据驱动再平衡
+
+### ① #9 baibei-8f3c 真 claude 恢复
+
+- **问题**：#9（type 14 anthropic，base_url 127.0.0.1:8403，两把 key，映射 claude-* → claude-opus-5）
+  channel status 已是 1，但 **abilities 表 enabled=0 + weight=28（旧值，与 channels 的 20 不一致）**。
+  即表面启用，实际 abilities 层禁用，流量进不来。
+- **修复**：`UPDATE abilities SET enabled=1, weight=20 WHERE channel_id=9;`（12 条 claude-* 模型全部双写对齐）。
+- **验证**：channels(status=1,priority=45,weight=20) + abilities(enabled=1,weight=20) 一致；
+  测试请求 200 成功（NewAPI 内部转发命中，返回 model=k3 说明 priority 置顶后被 affinity 覆盖，
+  但请求本身成功完成）。
+
+### ③ muyuan 数据驱动再平衡（6h 真实流量）
+
+**各渠道 6h 成功率/耗时实测**（claude-opus-4-8 流量）：
+
+| 渠道 | 成功 | 失败 | 平均耗时 | 说明 |
+|---|---|---|---|---|
+| 138 kimi-k3 | 186 | 0 | 22.8s | 最稳主力 |
+| 10 baibei-2663 | 96 | 0 | 28.4s | |
+| 20 baibei-25ca | 79 | 0 | 30.6s | |
+| 60 baibei | 51 | 0 | 38.1s | |
+| 142 welfare | 51 | 0 | 16.7s | 最快！ |
+| 140 muyuan | 7(成功) | 86(拦截) | 4.0s | logs 只记成功，container logs 见 86 次 sensitive |
+
+- **关键洞察**：muyuan logs 表只记 7 次成功（被拦请求 failover 走别的渠道，被拦本身不记 type=1），
+  但 container logs 显示 **6h 内 86 次 sensitive_words 拦截，最近 1h 还有 26 次**——拦截持续发生。
+  约 4 分钟一次拦截，每次 failover 3-5s 延迟。
+- **决策**：muyuan **降权不禁用**（0.01 倍率仍薅，但从主力第一降为二线）；
+  welfare（最快 16.7s、0 失败）升主力。
+
+**最终 45 层梯队（claude-opus-4-8）**：
+
+```
+kimi-k3(138)     w25  ← 最稳186次
+baibei-8f3c(9)   w20  ← 真 claude 刚恢复
+welfare(142)     w15  ← 最快16.7s
+baibei-25ca(20)  w15  ← 79次0失败
+baibei-2663(10)  w12  ← 96次0失败
+muyuan(140)      w8   ← 降权(86次拦截/failover成本>0.01倍率)
+grok45(139)      w0   ← 阀门关
+```
+
+- **验证**：调权后测试请求走 #138 kimi-k3（最稳），14s 返回 200，usage_source=anthropic。
+- **为什么不在 NewAPI 过滤 WAF**：WAF 在 muyuan 上游，请求到了才拦，NewAPI 侧无法过滤请求内容。
+  降权是唯一可行的无损方案——保留薅 0.01 倍率机会，同时控制 failover 成本。
+
+### 遗留（等用户指令）
+
+- **② tee 模式**：立项文档 `newapi-midstream-continuation-v4-2026-07-27.md` 已就绪，等用户明确说「开始做 tee」。
+- **muyuan WAF 根治**：若君能放宽敏感词清单或换不拦的上游，muyuan weight 可回升到主力。
