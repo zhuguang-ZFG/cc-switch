@@ -47,7 +47,7 @@ W_MIN_OK, W_MAX, W_DEAD = 3, 60, 1
 HYSTERESIS = 5
 
 # 主池映射渠（非真 Claude）：margin 门控 + 权重封顶（泄压阀，不当主力）
-MAIN_TIER_MAPPED = {137, 138}
+MAIN_TIER_MAPPED = {137, 138, 139}
 MAPPED_MARGIN = 1.3                     # 分数须超最好 Claude 渠 ×1.3 才放权重
 MAPPED_CAP = 25
 TYPE_ANTHROPIC = 14

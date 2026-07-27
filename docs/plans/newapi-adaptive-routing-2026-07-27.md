@@ -162,3 +162,16 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   健康夜 Claude 权重和 ~99 时 k3 占比 ≈20%
 - 副产物验证：flock 生效（cron 与手动跑重叠时干净退出）；Sonnet 链 glm
   cap 复位后 1.3s 自动爬层，链序收敛 [63, 133, 134, 136, 129]
+
+## 追加（23:40）：#139 grok45-opus-valve 进主池竞速
+
+- local-cpa 路径放弃后，grok-4.5 改走 NewAPI：盘点现有 relay 发现 #93/#95
+  bazaarlink、#76 imagic、#94 opencode-zen-free 模型表里有 grok-4.5；
+  实测 #95 bazaarlink-2 TTFT 1.8s 最优（#93 4.8s、#76 502、#94 余额不足 401）。
+- 新建 **#139 grok45-opus-valve**（克隆 #95，type 1，priority 45）：
+  Opus 全家族（含 [1M]）→ grok-4.5，加入 optimizer `MAIN_TIER_MAPPED`
+  （cap 25 / margin 1.3 门控，与 #137/#138 同款泄压阀模式）。
+- 首轮即过门控：ttft 2.7s → w25。当前主池权重
+  {138 k3:25, 139 grok:25, 10:7, 20:7, 60:8, 137 terra:1(等自愈)}。
+- agentrouter 线确认废弃：GPT 侧 VPS 网络不可达（DNS 污染），Claude 侧
+  公益池无货（#118 auto-ban 保留），不再投入。
