@@ -149,7 +149,7 @@ def collect_opus_latency(hours: int) -> Dict[int, dict]:
             ut = float(use_time or 0)
         except Exception:
             ut = 0.0
-        ms = ut * 1000.0 if ut < 1000 else ut  # heuristic
+        ms = ut * 1000.0  # use_time is fixed seconds in current schema
         by[cid].append(
             {
                 "ms": ms,
@@ -660,7 +660,7 @@ def main() -> None:
     elif (
         not force_demote
         and time.time() - last_w < WEIGHT_COOLDOWN_S
-        and st.get("last_suggested") == suggested
+        and {int(k): v for k, v in st.get("last_suggested", {}).items()} == suggested
     ):
         escalate.append("weight cooldown active / unchanged suggestion — skip write")
         weights_apply = {"applied": False, "reason": "cooldown", "suggested": suggested}
@@ -682,7 +682,7 @@ def main() -> None:
                 st["last_weight_apply_ts"] = time.time()
                 st["last_suggested"] = suggested
 
-    smoke_res = [] if args.skip_smoke else smoke()
+    smoke_res = [] if (args.skip_smoke or args.dry_run) else smoke()
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     payload = {

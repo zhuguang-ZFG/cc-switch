@@ -372,18 +372,22 @@ def _record_latency(elapsed_ms: float) -> None:
         del _latencies[: len(_latencies) - _LATENCY_WINDOW]
 
 
-def _fetch_upstream(req: urllib.request.Request) -> Tuple[int, bytes]:
+def _fetch_upstream(req: urllib.request.Request, timeout: float = TIMEOUT) -> Tuple[int, bytes]:
     if _upstream_sem is not None:
         _upstream_sem.acquire()
     t0 = time.monotonic()
     try:
-        with _UPSTREAM_OPENER.open(req, timeout=TIMEOUT) as resp:
+        with _UPSTREAM_OPENER.open(req, timeout=timeout) as resp:
             data = _read_limited(resp)
             _record_latency((time.monotonic() - t0) * 1000)
             return resp.status, data
     except urllib.error.HTTPError as e:
         _record_latency((time.monotonic() - t0) * 1000)
-        return e.code, _read_limited(e)
+        try:
+            data = _read_limited(e)
+        except ValueError:
+            data = b""
+        return e.code, data
     except Exception as e:
         _record_latency((time.monotonic() - t0) * 1000)
         return 502, _api_error(502, "Upstream connection failed. Please retry.")
@@ -432,6 +436,10 @@ def maybe_failover_content_block(
     status: int, body: bytes, phase: str
 ) -> Optional[Tuple[int, bytes, str, str, Optional[dict]]]:
     """If content-blocked, return immediate 502 tuple (no soft retry)."""
+    # Block markers only apply to error responses; a 2xx body may legitimately
+    # contain marker words (e.g. the model discussing content policy).
+    if 200 <= status < 300:
+        return None
     why = detect_content_blocked(status, body)
     if not why:
         return None
@@ -1049,6 +1057,9 @@ def fetch_classified(
     if not req_id:
         req_id = uuid.uuid4().hex[:12]
     _log(f"req_start req_id={req_id}")
+    # Overall deadline: the handler only waits TIMEOUT for a result, so the
+    # soft-retry loop below must fit within the same budget (+backoff slack).
+    t0 = time.monotonic()
     # Original payload kept for classify heuristics (tools, max_tokens).
     upstream_payload = cyrillic_encode_payload(payload) if CYRILLIC_BYPASS else payload
     if CYRILLIC_BYPASS:
@@ -1098,6 +1109,12 @@ def fetch_classified(
     for attempt in range(SOFT_RETRY):
         if SOFT_RETRY_BACKOFF_MS > 0:
             time.sleep(SOFT_RETRY_BACKOFF_MS / 1000.0)
+        # Stop once the deadline budget is exhausted; otherwise cap the retry
+        # call at the remaining budget so total time stays <= TIMEOUT (+slack).
+        remaining = TIMEOUT - (time.monotonic() - t0)
+        if remaining <= 0:
+            _log(f"soft_retry skipped reason={reason} deadline_exceeded")
+            break
         use_continuation = (
             TRUNC_CONTEXT
             and reason in _TEXT_TRUNC_REASONS
@@ -1121,7 +1138,7 @@ def fetch_classified(
                 f"mode=replay backoff_ms={SOFT_RETRY_BACKOFF_MS}"
             )
         status2, body2 = _fetch_upstream(
-            build_messages_request(retry_upstream, header_map)
+            build_messages_request(retry_upstream, header_map), timeout=remaining
         )
         blocked2 = maybe_failover_content_block(status2, body2, f"after_soft_{attempt + 1}")
         if blocked2 is not None:
@@ -1243,7 +1260,19 @@ class Handler(BaseHTTPRequestHandler):
         result_q: queue.Queue = queue.Queue(maxsize=1)
 
         def worker():
-            result_q.put(fetch_classified(payload, header_map))
+            try:
+                result_q.put(fetch_classified(payload, header_map))
+            except Exception as e:
+                _log(f"worker_error: {e}")
+                result_q.put(
+                    (
+                        502,
+                        _api_error(502, "The model is currently overloaded. Please retry."),
+                        "hard",
+                        "guard_internal",
+                        None,
+                    )
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1378,7 +1407,11 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             if _upstream_sem is not None:
                 _upstream_sem.release()
-            self._reply(e.code, _read_limited(e), "application/json")
+            try:
+                data = _read_limited(e)
+            except ValueError:
+                data = b""
+            self._reply(e.code, data, "application/json")
             return
         except Exception:
             if _upstream_sem is not None:
@@ -1421,7 +1454,11 @@ class Handler(BaseHTTPRequestHandler):
                 data = _read_limited(resp)
                 status = resp.status
         except urllib.error.HTTPError as e:
-            status, data = e.code, _read_limited(e)
+            status = e.code
+            try:
+                data = _read_limited(e)
+            except ValueError:
+                data = b""
         except Exception as e:
             _log(f"passthrough_error: {e}")
             self._reply(502, _api_error(502, "Upstream connection failed. Please retry."), "application/json")

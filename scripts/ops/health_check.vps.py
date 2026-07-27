@@ -216,7 +216,7 @@ def probe_once(base, key, model, ctype, hdr_override, proxy=None, timeout=TIMEOU
             ok = '"stop_reason"' in out or ('"type":"message"' in out and '"content"' in out)
         else:
             ok = '"choices"' in out
-        return ok, elapsed_ms, code, out[:300]
+        return ok, elapsed_ms, code, out[:2048]
     except Exception as e:
         return False, (time.time() - t0) * 1000, 0, str(e)[:200]
 
@@ -280,6 +280,7 @@ def main():
     state = load_state()
     fails = state.setdefault("fails", {})
     slow_hits = state.setdefault("slow_hits", {})
+    alerted = state.setdefault("alerted", {})
     disabled_by_script = set(state.get("disabled_by_script") or [])
 
     conn = sqlite3.connect(DB)
@@ -316,6 +317,7 @@ def main():
 
         if ok:
             fails[str(cid)] = 0
+            alerted.pop(str(cid), None)
             if lat_ms > SLOW_MS:
                 slow_hits[str(cid)] = slow_hits.get(str(cid), 0) + 1
                 if slow_hits[str(cid)] >= SLOW_HITS_NEED:
@@ -352,6 +354,7 @@ def main():
         if fails[str(cid)] >= FAIL_THRESHOLD:
             if cookie and set_channel_status(cid, 2, cookie):
                 disabled_by_script.add(cid)
+                alerted.pop(str(cid), None)
                 changed = True
                 print(f"DISABLE #{cid} {name} (fails={fails[str(cid)]})")
                 purge_affinity_for_channel(cid)
@@ -362,10 +365,11 @@ def main():
                         [{"text": "📊 渠道状态", "callback_data": "status"}],
                     ],
                 )
-            else:
-                send_tg(
+            elif not alerted.get(str(cid)):
+                if send_tg(
                     f"⚠️ Opus渠道连续失败 #{cid} {name}×{fails[str(cid)]}（禁用 API 未成功）"
-                )
+                ) is not False:
+                    alerted[str(cid)] = True
 
     # Drop stale fail counters for channels we no longer manage
     managed = {str(i) for i in OPUS_POOL}
@@ -375,6 +379,7 @@ def main():
 
     state["fails"] = fails
     state["slow_hits"] = slow_hits
+    state["alerted"] = alerted
     state["disabled_by_script"] = sorted(disabled_by_script)
     # clear legacy degrade keys noise
     state.pop("degraded", None)
