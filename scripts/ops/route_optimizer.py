@@ -19,6 +19,11 @@ v4 (2026-07-27):
 - 映射渠 margin 门控 + 权重封顶：分数须超最好 Claude 渠 ×MAPPED_MARGIN 才
   放权重（否则 w0 关门），且封顶 MAPPED_CAP；Claude 全灭时门控失效全开兜底
 
+v5 (2026-07-27):
+- 错误分级惩罚（借 CRS 分级冷却思路）：429/并发限制 ×0.5 轻罚（瞬时现象），
+  5xx/连接故障 ×2.0，401/403 auth ×3.0；主池打分用 channel_error_classes，
+  sonnet 仍用 channel_errors 总数（不换打分语义）
+
 Only adjusts `weight` within the top-priority tier; never touches
 priority/status/models. Design: docs/plans/newapi-adaptive-routing-2026-07-27.md
 """
@@ -52,7 +57,11 @@ MAPPED_MARGIN = 1.3                     # 分数须超最好 Claude 渠 ×1.3 �
 MAPPED_CAP = 25
 TYPE_ANTHROPIC = 14
 
-ERR_RE = re.compile(r"channel error \(channel #(\d+)")
+ERR_RE = re.compile(r"channel error \(channel #(\d+)(?:, status code: (\d+))?\): ([^\n]*)")
+
+# 错误分级权重（v5, 2026-07-27）：429/并发限制是瞬时现象轻罚（0.5），
+# 5xx/连接故障中罚（2.0），401/403 auth 类重罚（3.0）。参考 CRS 分级冷却模型。
+ERR_W_AUTH, ERR_W_CONC, ERR_W_OTHER = 3.0, 0.5, 2.0
 
 
 def log(msg):
@@ -169,6 +178,35 @@ def channel_errors(ids):
     return errs
 
 
+def channel_error_classes(ids):
+    """Per-channel classified error counts: auth / conc(urrency) / other."""
+    cls = {cid: {"auth": 0, "conc": 0, "other": 0} for cid in ids}
+    try:
+        out = subprocess.run(
+            ["podman", "logs", "--since", LOG_WINDOW, "new-api"],
+            capture_output=True, text=True, timeout=60).stdout
+        for m in ERR_RE.finditer(out):
+            cid = int(m.group(1))
+            if cid not in cls:
+                continue
+            status = int(m.group(2) or 0)
+            msg = (m.group(3) or "").lower()
+            if status in (401, 403):
+                cls[cid]["auth"] += 1
+            elif status == 429 or "concurrency limit" in msg:
+                cls[cid]["conc"] += 1
+            else:
+                cls[cid]["other"] += 1
+    except Exception as e:
+        log("WARN container-log parse failed: %s" % e)
+    return cls
+
+
+def weighted_err_count(c):
+    return (ERR_W_AUTH * c["auth"] + ERR_W_CONC * c["conc"]
+            + ERR_W_OTHER * c["other"])
+
+
 def main():
     restore = "--restore" in sys.argv
     st = load_state()
@@ -210,7 +248,8 @@ def main():
     for r in db.execute(q, [MODEL_FAMILY, int(time.time()) - TRAFFIC_WINDOW_S] + ids):
         succ[r["channel_id"]] = r["n"]
 
-    errs = channel_errors(ids)
+    err_cls = channel_error_classes(ids)
+    errs = {cid: sum(c.values()) for cid, c in err_cls.items()}
 
     scores = {}
     for r in tier:
@@ -224,15 +263,18 @@ def main():
         prev_t = st.setdefault("ewma_ttft", {}).get(str(cid), ttft)
         ew_t = EWMA_ALPHA * ttft + (1 - EWMA_ALPHA) * prev_t
         st["ewma_ttft"][str(cid)] = ew_t
-        rate = errs[cid] / (errs[cid] + succ[cid] + 1.0)
+        werr = weighted_err_count(err_cls[cid])
+        rate = werr / (errs[cid] + succ[cid] + 1.0)
         prev_r = st.setdefault("ewma_err", {}).get(str(cid), rate)
         ew_r = EWMA_ALPHA * rate + (1 - EWMA_ALPHA) * prev_r
         st["ewma_err"][str(cid)] = ew_r
         lat = 0.5 * ew_t + 0.5 * ttft
         quality = 1.0 / (1.0 + ERR_PENALTY * ew_r)
         scores[cid] = quality / max(lat, 0.3)
-        log("ch#%-3d %-26s ttft=%5.1fs lat=%5.1fs err=%.2f q=%.2f (errs=%d succ=%d)" % (
-            cid, name, ttft, lat, ew_r, quality, errs[cid], succ[cid]))
+        c = err_cls[cid]
+        cls_note = (" a%d/c%d/o%d" % (c["auth"], c["conc"], c["other"])) if errs[cid] else ""
+        log("ch#%-3d %-26s ttft=%5.1fs lat=%5.1fs err=%.2f q=%.2f (errs=%d%s succ=%d)" % (
+            cid, name, ttft, lat, ew_r, quality, errs[cid], cls_note, succ[cid]))
 
     total = sum(scores.values())
     new_w = {}
