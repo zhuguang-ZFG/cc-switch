@@ -74,3 +74,15 @@ DB 备份：`/opt/new-api/data/backups/one-api.before-vyce-sonnet-off-*.db`。
   （22:46:47 复位），非配置问题；失败后链路自动 134→60 / 134→132→63 走完，
   恰好实战验证了多层兜底。选 key2 是为与 GLM 主载 key1(#42) 配额隔离。
 - GPT 池此前已在 Claude 路由内（#132/#129/#130），本次补齐的是国模层。
+
+## 追加（23:02）：#134 cap 复位验证 — backstop 可用
+
+- 22:46:47 智谱 key2 的 5h cap 复位后做一次性验证：#134 priority 临时 100，
+  等 fork 同步后打 `claude-opus-5`（max_tokens 16）。
+- 结果：**HTTP 200**，1s 完成，podman 日志确认 `use_channel=["134"]`，
+  映射上游 `glm-5.2`，`stop_reason=max_tokens` 正常。
+- 回退：priority 已还原为 **-22**（注意不是最初文档的 -33——sonnet 换序器
+  当晚已把 #134 从 -33 调至 -22，回退以实际快照值为准）。
+- 结论：#134 GLM 总兜底功能正常，此前 429 确为 cap 期现象。链序当前
+  `[63, 133, 136, 129, 134]`，#129 terra 探针持续 FAIL（公益池 auth 耗尽）
+  分数归零自然沉底，#136 minimax 自动爬过 #129。
