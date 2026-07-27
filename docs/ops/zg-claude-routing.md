@@ -26,8 +26,8 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | **GLM / default Sonnet** | `#41/#42` zhipu 80/50·8 → `#123` hongshi 50/20 |
 | **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#125` Vyce 35/20 → `#90` LongCat 30/10 |
 | **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
-| **Anthropic Sonnet** | `#125` Vyce 35/20 only |
-| **Opus** | pri45 `#9/#10/#20/#60`（w **50/40/28/3**）→ AR `#118` w6 → `#133` freemodel-cc 15/5（**真 Claude 二档**，在 GPT 兜底 -30 系之上；详见 runbook）；4.x/`4-8` map→**Opus5**；`[1M]` 在百倍池 **upstream→裸 `claude-opus-5`**（价表拒 `[1M]`）；`#118` 仍保留 `[1M]` identity。见 `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md` |
+| **Anthropic Sonnet** | `#63` kimi -20 → `#133` freemodel-cc -21 → `#132` GPT -32（vyce `#125` sonnet 已剥离：502 硬挂挡链，详见 runbook） |
+| **Opus** | pri45 `#9/#10/#20/#60`（w **50/40/28/3**）→ AR `#118` w6 → `#133` freemodel-cc -21/5（**真 Claude 二档**，在 GPT 兜底 -30 系之上；详见 runbook）；4.x/`4-8` map→**Opus5**；`[1M]` 在百倍池 **upstream→裸 `claude-opus-5`**（价表拒 `[1M]`）；`#118` 仍保留 `[1M]` identity。见 `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md` |
 | **Fable** (`claude-fable-5` / `[1M]`) | `#127` jianzhile pri50/w20（仅 fable；头 `New-Api-Group: Claude-CC-MAX`）→ 其下仍可能落到主池若仍挂 fable 能力。本机 Fable 角色 → `claude-fable-5`。见 `docs/patches/jianzhile-fable-newapi-2026-07-26.md` |
 | **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
 
