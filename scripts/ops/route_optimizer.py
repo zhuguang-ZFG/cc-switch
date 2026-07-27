@@ -138,6 +138,31 @@ def probe_openai_ttft(base_url, key, model, ua="new-api-route-optimizer/3.0"):
         return None
 
 
+def probe_responses_ttft(base_url, key, model, ua):
+    """OpenAI Responses /v1/responses 流式 TTFT（welfare 站只收此协议）。"""
+    body = json.dumps({"model": model, "max_output_tokens": 8, "stream": True,
+                       "input": "hi"}).encode()
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/v1/responses", data=body,
+        headers={"content-type": "application/json",
+                 "authorization": "Bearer " + key, "user-agent": ua})
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
+            if not (200 <= r.status < 300):
+                return None
+            for chunk in r:
+                if chunk.strip():
+                    return time.time() - t0
+            return None
+    except Exception:
+        return None
+
+
+# 只收 OpenAI Responses 协议的渠道（如 #142 welfare.0xpsyche.me）
+RESPONSES_CHANNELS = {142}
+
+
 def _mapped_model(row, req_model):
     try:
         mm = json.loads(row["model_mapping"] or "{}")
@@ -160,6 +185,8 @@ def _probe_channel(r):
     model = _mapped_model(r, PROBE_MODEL)
     if r["type"] == TYPE_ANTHROPIC:
         return probe_ttft(r["base_url"], key, model)
+    if r["id"] in RESPONSES_CHANNELS:
+        return probe_responses_ttft(r["base_url"], key, model, _hdr_ua(r))
     return probe_openai_ttft(r["base_url"], key, model, _hdr_ua(r))
 
 

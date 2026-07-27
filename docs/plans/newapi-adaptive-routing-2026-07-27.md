@@ -254,3 +254,30 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   已随修复恢复 w10——临时置顶测试后记得核对 weight。
 - code review 遗留（未拍板）：P2 optimizer 管理面塌缩为 60 层单渠道监控，
   45 层（#10/#20/#60/#138/#139）weight 冻结无人管理。
+
+## 追加（01:45）：#142 无名福利站进第一梯队（Claude Messages to Responses 转换首开）
+
+- **站点约束矩阵**（welfare.0xpsyche.me，本地 curl 全部实测，Windows 需 --ssl-no-revoke）：
+  key 分组仅 gpt-5.6-sol；chat/completions 一律 403（无 UA/浏览器 UA 由 nginx 拒，
+  codex UA 得 codex_requires_responses_protocol，claude-cli UA 得
+  claude_requires_anthropic_messages_protocol）；/v1/messages 503 无 claude 模型。
+  **唯一通路：POST /v1/responses + codex UA**。实测安全审计脏句 200 通过——无 WAF
+  （对比 muyuan 的朴素单词黑名单，「插进」都拦），脏会话可放心薅。
+- **打通方式**：fork（v1.0.0-rc.21）内置 claude_messages_to_openai_responses 转换器，
+  由全局策略开关驱动。option key 是**点分键** `global.chat_completions_to_responses_policy`
+  （不是整个 global JSON 一行——前端按 global.xxx 单键 PUT，首轮 INSERT key='global' 无效已踩）。
+  当前值：{"enabled":true,"all_channels":false,"channel_ids":[142],
+  "model_patterns":["^claude-opus","^claude-sonnet","^claude-haiku","^fable"]}。
+  匹配对象是 OriginModelName。改 options 表后必须 podman restart（仅启动加载）。
+- **bash 双引号坑**：ssh 内联 SQL 里 JSON 双引号被 bash 剥掉存成非法 JSON，
+  须 sftp 传 .sql 文件再 sqlite3 < file。
+- **E2E**：use_channel ["142"]，conversion 链 "Claude Messages to OpenAI Compatible
+  to OpenAI Responses"，upstream gpt-5.6-sol，frt 1.5s，200 流式正常。
+- **定案**：#142 wuming-welfare-first priority 60 weight 40（channels+abilities 双写），
+  与 #140 同层竞速。optimizer v5 接管权重：首轮 #140 探针单次 FAIL 被压 w1、#142
+  升 w60，属设计内自适应（探针恢复即回升）。
+- **optimizer 适配**：新增 RESPONSES_CHANNELS={142} + probe_responses_ttft
+  （POST /v1/responses, max_output_tokens=8, input="hi"，带 header_override 的 UA），
+  否则 responses-only 渠道必被 chat/completions 探针判死。已部署 VPS 并跑通一轮
+  （#142 ttft 1.4s q=1.00）。
+- **#21 澄清**：8317 死 key 但 abilities 仅 GPT 模型，不进 claude 故障路由，无影响。
