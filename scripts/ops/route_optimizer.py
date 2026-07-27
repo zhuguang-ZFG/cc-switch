@@ -320,14 +320,10 @@ def main():
         st["ewma_err"][str(cid)] = ew_r
         lat = 0.5 * ew_t + 0.5 * ttft
         quality = 1.0 / (1.0 + ERR_PENALTY * ew_r)
-        # cache penalty: 0% hit channels score halved, >=50% unaffected
-        cr = cache_rates.get(cid)
-        if cr is not None and cr < 50.0:
-            cache_factor = max(0.3, cr / 50.0)
-            quality *= cache_factor
         scores[cid] = quality / max(lat, 0.3)
         c = err_cls[cid]
         cls_note = (" a%d/c%d/o%d/t%d" % (c["auth"], c["conc"], c["other"], c["content"])) if errs[cid] else ""
+        cr = cache_rates.get(cid)
         cache_note = " cache=%.0f%%" % cr if cr is not None else ""
         log("ch#%-3d %-26s ttft=%5.1fs lat=%5.1fs err=%.2f q=%.2f%s (errs=%d%s succ=%d)" % (
             cid, name, ttft, lat, ew_r, quality, cache_note, errs[cid], cls_note, succ[cid]))
