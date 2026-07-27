@@ -325,3 +325,25 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   明确记录 reason="glm trace", channel_id=42。
 - **生效条件**：claude cli trace 规则在流量打到 claude-*/fable-* 模型名时触发；
   当前 Claude Code 默认走 glm-5.2（cc-switch alias 路由），由 glm trace 规则保护。
+
+## 追加（02:30）：GPT 渠道缓存灾难修复 + Claude Code 主力架构定型
+
+- **灾难现象**：affinity 把 Claude Code 流量死死粘在 #142 welfare（gpt-5.6-sol），
+  最近 6 个请求全部 channel=142, cache_tokens=0。每个 27 万 token 全量重算。
+  原因：#142 在 60 层（最高），affinity 首次选中后粘 600s TTL，上游 0% 缓存命中。
+- **根因**：GPT 上游（gpt-5.5/gpt-5.6-sol 公益池）的 prompt cache 对第三方基本不生效，
+  和 Claude 原生（400%+ cache_read 放大）或 kimi（96%）天差地别。GPT 渠道进 claude
+  故障路由的「第一梯队」= affinity 一旦粘住 = 整个会话缓存全废。
+- **修复**：GPT-mapped 渠道（#140 muyuan gpt-5.5, #142 welfare gpt-5.6-sol）从
+  60 层降到 **40 层**（低于真 claude #10/#20 的 45 层和 kimi #138 的 45 层）。
+  channels + abilities 双写。重启清 affinity 内存缓存。
+- **验证（E2E）**：修复后 claude-opus 请求路由到 #10（真 claude-opus-5）和
+  #138（kimi k3），不再进 #142。tier 布局：45 层 = {#10 w9, #20 w5, #138 w25}，
+  40 层 = {#140 w60, #142 w1} 兜底。
+- **Claude Code 主力架构定型**：
+  - 第一梯队（45 层，affinity 首选，高缓存）：真 claude #10/#20（400%+），kimi #138（96%）
+  - 兜底（40 层，45 层全挂才用）：GPT #140/#142（0% 但至少能响应）
+  - 深度兜底（-19 层）：阿里云 #141（qwen3-coder-plus）
+  - GPT 渠道的正确定位是「最后保险丝」，不是「竞速主力」
+- **长期保障**：optimizer 需加 cache 命中率感知（0% 渠道自动降权），避免未来
+  新接入的 GPT 渠道重蹈覆辙。
