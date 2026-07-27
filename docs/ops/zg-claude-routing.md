@@ -1,6 +1,6 @@
 # ZG NewAPI — Claude role routing (ops snapshot)
 
-**Updated:** 2026-07-26 night (ops-only; **do not modify cc-switch**; Opus5 prefer; weights **50/40/28/3**; Fable→jianzhile; kiro-guard trunc-ctx+compress)  
+**Updated:** 2026-07-28 03:20 (ops-only; **do not modify cc-switch**; Opus5 prefer; 真 claude 50 层 / kimi-k3 40 层兜底; kiro-guard max_tokens cap=65536 + 403→503 failover; Fable→jianzhile; kimi-code 收编走 zg-newapi)  
 **Gateway:** `https://aliyun.donglicao.com` (NewAPI on Aliyun `47.112.162.80`)  
 **Ops logs:** `docs/ops/do-not-modify-cc-switch.md`, `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md`, `docs/patches/jianzhile-fable-newapi-2026-07-26.md`, `docs/patches/newapi-dx-opus5-prefer-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5-2026-07-26.md`, `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md`, `docs/patches/newapi-dx-anti-stall-2026-07-26.md`, `docs/patches/newapi-dx-gov-b-2026-07-26.md`, `docs/patches/local-clients-cleanup-2026-07-26.md`, `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md`, `docs/patches/local-claude-rtk-align-2026-07-26.md`, `docs/patches/local-mcp-skills-slim-2026-07-26.md`
 
@@ -116,7 +116,7 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - **主池映射阀（泄压阀，cap 25）**：`#137` gpt-terra（8317 auth 耗尽躺平 w1）、`#138` kimi-k3（ttft ~1.1s，事实主力，真实承接 60%+）、`#139` grok-4.5（bazaarlink-2 上游，ttft 2.7s，2026-07-27 23:40 上岗）。
 - **Sonnet 链序**（自适应，当前）：`[63 kimi, 134 glm, 133 freemodel, 136 minimax, 129 terra]`；#132 work.freemodel 拒绝 Claude Code 已摘渠。
 - **kiro_guard tee+续写全功能在线**（8 实例）：截断检测→自动续写（SOFT_RETRY=1，退避 700ms）→merge 合并；tee_eof/hard 事件记 `last_block` 落 `kiro-guard-soft.jsonl`。2026-07-27 23:49 首个实战 `short_completion → recovered_merged`。
-- **⚠️ Claude Code「停止」真因 = max_tokens cap（2026-07-28 修复）**：tee 续写治不了「停止」——深度诊断证明 eof 不是断流，是 guard `_effective_cap`（kiro_guard.py:1207）把 `max_tokens=64000` 砍到 8192，模型到 8192 触发 `stop_reason=max_tokens` 合法停。6h 数据：240 次 eof 100% 在经 guard 的真 claude 渠道（#10/#20/#60），guard journal 判 78-82% 为 ok（非断流），journalctl 每请求都打 `max_tokens capped 64000 → 8192`。**修复**：8 个 guard 服务 systemd override `KIRO_GUARD_MAX_TOKENS_CAP=16000`（原 4096）/ `KIRO_GUARD_MAX_TOKENS_WRITE_CAP=32000`（原 8192）。验证：restart 后 `capped` 日志归零。详见 `docs/plans/newapi-adaptive-routing-2026-07-27.md` 末尾。
+- **⚠️ Claude Code「停止」真因 = max_tokens cap（2026-07-28 修复）**：tee 续写治不了「停止」——深度诊断证明 eof 不是断流，是 guard `_effective_cap`（kiro_guard.py:1207）把 `max_tokens=64000` 砍到 8192，模型到 8192 触发 `stop_reason=max_tokens` 合法停。6h 数据：240 次 eof 100% 在经 guard 的真 claude 渠道（#10/#20/#60），guard journal 判 78-82% 为 ok（非断流），journalctl 每请求都打 `max_tokens capped 64000 → 8192`。**修复（2026-07-28 03:15 二次提额）**：8 个 guard 服务 systemd override 提到 **`KIRO_GUARD_MAX_TOKENS_CAP=65536`** / **`KIRO_GUARD_MAX_TOKENS_WRITE_CAP=65536`**（不再做 cap，完全透传客户端原始 max_tokens）。验证：restart 后 eof 率从 40% 降到 13%，长任务可连续输出到 65536 token 不再中断。详见 `docs/plans/newapi-adaptive-routing-2026-07-27.md` 末尾。
 - **主池再平衡（2026-07-28 02:30，数据驱动）**：kimi-k3#138 w25(186次0失败最稳) > baibei-8f3c#9 w20(真claude,abilities双写修复) > welfare#142 w15(最快16.7s) = baibei-25ca#20 w15 > baibei-2663#10 w12 > muyuan#140 w8(6h 86次sensitive拦截,failover成本>0.01倍率)。grok#139 w0 阀门关。
 
 - **真 claude 分层（2026-07-28 03:00，用户反馈"打不到真claude"）**：affinity `claude cli trace` 死粘 #138 kimi-k3（switch_on_success=false + TTL 600s + 客户端持续续期），导致真 claude 渠道永远选不到。修复：① 真 claude #9/#10/#20 提 **50 层**（原 45），#138 kimi-k3 降 **40 层**兜底；② affinity TTL 600→60s；③ `switch_on_success` false→**true**（成功后可切换，不死粘）。验证：近 3min #10 claude-opus-5 命中 6 次、#20 claude-opus-5 命中 1 次，真 claude 恢复可达。梯队：**50层=真claude(#20 w45/#10 w29/#9 w26)** > 45层=muyuan/welfare > 40层=kimi-k3(兜底) > -19层=aliyun。
@@ -160,3 +160,14 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - **grok-4.5 配置**：#139 bazaarlink 渠道加 `grok-4.5` 独立模型（model_mapping grok-4.5→grok-4.5），ability priority 45 weight 10。测试 model=x-ai/grok-4.5 通过。
 - **不暴露 kimi-k3 独立别名**：#138 的 kimi-k3 只作 claude 渠道上游（claude-opus-4-8→k3），不对外暴露 kimi-k3 模型（503 是预期）。kimi-code 要用 kimi 走官方 `managed:kimi-code`。
 - **验证**：glm-5.2/claude-opus-5/gpt-5.5/grok-4.5 四模型经 zg-newapi 全部 200。
+
+## 403 failover：guard 403→503 转 NewAPI 重试（2026-07-28 03:20）
+
+**问题**：baibei 真 claude 上游间歇返回 `401/403 "Upstream access forbidden"`（风控/CF 间歇），guard 原样透传给 NewAPI → NewAPI 记 `handler_stop` → Claude Code 显示「停止」（与 max_tokens cap 截断是两个独立痛点）。
+
+**修复**：`/opt/new-api/kiro_guard.py` 两处 `HTTPError` 回复分支（tee 模式 ~1685 行 + passthrough 模式 ~1989 行）patch：上游 `e.code in (401, 403)` 时改回 `_reply(503, _api_error(503, "The model is currently overloaded. Please retry."))`。NewAPI `RetryTimes=2` 收到 503 自动切下一个渠道，不再记 handler_stop。
+
+- backup：`kiro_guard.py.bak.403failover_20260728_032014`
+- 验证：`grep -c '_r_code = 503 if e.code in (401, 403)' kiro_guard.py` = **2**（两处改点都落地）；8 个 guard 重启后全 active；近 10min `handler_stop=0`。
+- 设计权衡：不动 NewAPI fork（镜像 = 上游 calciumion/new-api 无 failover 配置项），guard 层转换最省事；503 是 Anthropic 标准「过载」语义，Claude Code 会自然重试或由 NewAPI 层切渠。
+- 预期收益：baibei 间歇 403 从「Claude Code 停止」降级为「透明 failover 一次切渠」，体感中断大幅减少。
