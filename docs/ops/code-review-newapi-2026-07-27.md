@@ -1,5 +1,7 @@
 # NewAPI 定制代码深度评审（2026-07-27）
 
+> **修复状态（2026-07-27 当日）**：P1-1~10 已全部修复并部署（commit `d60cf80`，guard 滚动重启 + 冒烟通过）。P2/P3 未动，P1-4 相关的 P2-11/13 计划随 tee 模式改造一起做。sonnet_failover 已加废弃守卫。
+
 **范围**：`scripts/ops/` 下 VPS 镜像脚本（kiro_guard / analyze_newapi_dx / health_check / sonnet_failover）。cc-switch 不在范围。
 **方法**：3 个评审代理全文通读 + 关键 finding 人工复核。
 
