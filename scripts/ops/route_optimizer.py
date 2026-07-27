@@ -68,15 +68,17 @@ def save_state(st):
     os.replace(tmp, STATE)
 
 
-def probe_ttft(base_url, key):
+def probe_ttft(base_url, key, model=None, extra_headers=None):
     """Streaming TTFT seconds, or None on failure. Aborts after first SSE chunk."""
-    body = json.dumps({"model": PROBE_MODEL, "max_tokens": 8, "stream": True,
+    body = json.dumps({"model": model or PROBE_MODEL, "max_tokens": 8, "stream": True,
                        "messages": [{"role": "user", "content": "hi"}]}).encode()
+    hdrs = {"content-type": "application/json", "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "user-agent": "claude-cli/2.1.2 (external, cli)"}
+    if extra_headers:
+        hdrs.update(extra_headers)
     req = urllib.request.Request(
-        base_url.rstrip("/") + "/v1/messages", data=body,
-        headers={"content-type": "application/json", "x-api-key": key,
-                 "anthropic-version": "2023-06-01",
-                 "user-agent": "claude-cli/2.1.2 (external, cli)"})
+        base_url.rstrip("/") + "/v1/messages", data=body, headers=hdrs)
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
@@ -210,4 +212,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--restore-sonnet" in sys.argv or "--sonnet-dry" in sys.argv:
+        import route_optimizer_sonnet
+        route_optimizer_sonnet.sonnet_main()
+    else:
+        main()
+        try:
+            import route_optimizer_sonnet
+            route_optimizer_sonnet.sonnet_main()
+        except Exception as e:
+            log("sonnet reorder error: %s" % e)

@@ -108,3 +108,38 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   （对标 LiteLLM cooldown；误摘风险需灰度）
 - **Sonnet 层间自动换序**：#132 连挂时与 #63 自动对调（改变人工故障序策略）
 - **每日体验日报**：p50/p90 TTFT、断流次数、use_channel 重试长度统计
+
+## v3：Sonnet 兜底链层间自动换序（2026-07-27 22:00 上线）
+
+- 新模块 `route_optimizer_sonnet.py`（repo 纳管 `scripts/ops/route_optimizer_sonnet.vps.py`），
+  由 `route_optimizer.py` __main__ 在同一 cron（*/5）内串行调用
+- 打分信号复用 v2：TTFT 流式探针 + 容器日志错误率 EWMA，但按渠道 type 自动
+  选 OpenAI `/chat/completions` 或 Anthropic `/v1/messages` 格式，模型取
+  `model_mapping["claude-sonnet-4-6"]` 的映射值，请求头吃 DB `header_override`
+  （伪装 UA 与生产链路自动一致）；5 渠并行探测
+- **首块超时 ≠ 死**：HTTP 200 但 20s 无首块记 `ttft=20`（慢但活着，参与排序），
+  只有连接失败/4xx/5xx 才判死得 0 分（cc.freemodel 夜间首块 20s+ 的实测教训）
+- 换序策略：每次运行**最多交换一对相邻层**——下层分数超上层 1.5 倍（或上层
+  判死）才交换，渐进收敛防抖动；ladder 用组内现有 priority 值重排，
+  channels + abilities 双写；原始 priority 首跑备份 state，
+  `--restore-sonnet` 一键回滚；`--sonnet-dry` 只打分不落库
+- 换序发 TG；每次打分明细进 `route_optimizer.log`
+- **副作用须知**：priority 是渠道级全局值，Sonnet 换序会同步影响 Opus 兜底
+  序（同渠共享）。当前证据下方向一致（kimi 快、132 死），可接受；如需解耦
+  得用 abilities.priority 按模型族分写，待验证 fork 读取路径后再做
+
+### 上线即验证（cron 自动跑出的两次真实换序）
+
+- 21:50 前后：#63 kimi（TTFT 0.9s）↑ 超过判死的 #132 → 链首
+- 随后：#133（慢但活）↑ 超过 #132 → 收敛为 **#63 → #133 → #129 → #134**
+- 顺带发现 **#132（work.freemodel.dev）对 Claude Code 根本不可用**：上游
+  400「Claude Code is not supported on this endpoint」+ 403「WorkBuddy
+  client only」（Chrome UA 伪装无效，生产 logs 表仅 1 条记录）。已摘渠
+  （models CSV 清空，DB 备份 `one-api.db.bak.ch132-*`），移出 SONNET_GROUP
+- 当前判死原因如实反映渠道状态：#129 key 401（公益池 auth 耗尽自愈型）、
+  #134 glm 5h cap 429（22:46 复位后会自然爬升）
+
+### 待拍板（更新）
+
+- **自动摘渠/放回**：连续 N 轮判死 → status=2，恢复 M 轮 → status=1（仍待定）
+- **每日体验日报**：p50/p90 TTFT、断流次数、换序/判死事件汇总
