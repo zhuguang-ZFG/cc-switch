@@ -25,6 +25,14 @@ HYSTERESIS = 5
 def log(msg):
     line = "%s %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
     print(line)
+    try:
+        if os.path.exists(LOG) and os.path.getsize(LOG) > 512 * 1024:
+            with open(LOG, encoding="utf-8", errors="replace") as f:
+                tail = f.readlines()[-1000:]
+            with open(LOG, "w", encoding="utf-8") as f:
+                f.writelines(tail)
+    except Exception:
+        pass
     with open(LOG, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
@@ -85,7 +93,8 @@ def main():
         bw = st.get("backup_weights") or {}
         for cid, w in bw.items():
             db.execute("UPDATE channels SET weight=? WHERE id=?", (w, int(cid)))
-            db.execute("UPDATE abilities SET weight=? WHERE channel_id=?", (w, int(cid)))
+            db.execute("UPDATE abilities SET weight=? WHERE channel_id=? AND model LIKE ?",
+                       (w, int(cid), MODEL_FAMILY))
         db.commit()
         log("restored weights: %s" % bw)
         return
@@ -135,7 +144,8 @@ def main():
     if changed:
         for cid, w in new_w.items():
             db.execute("UPDATE channels SET weight=? WHERE id=?", (w, cid))
-            db.execute("UPDATE abilities SET weight=? WHERE channel_id=?", (w, cid))
+            db.execute("UPDATE abilities SET weight=? WHERE channel_id=? AND model LIKE ?",
+                       (w, cid, MODEL_FAMILY))
         db.commit()
         log("APPLY weights: %s (takes effect within 60s via fork db-sync)" % new_w)
     else:
