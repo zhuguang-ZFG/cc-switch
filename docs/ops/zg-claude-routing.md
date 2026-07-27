@@ -138,3 +138,9 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - Do not invent fake `claude-*` aliases on LongCat (tool JSON 400s).
 - Do not leave `glm-5.2[1M]` without NewAPI ability (proxy strip is not always present).
 - Do not re-enable zhipu thinking unless Claude Code `max_tokens` budget is proven large enough.
+
+### muyuan.do（君自营站，2026-07-28 起第一位）
+
+- **运营者是君（群里熟人）**，非匿名公益池：key 作废/分组缺模型/限长问题直接找君沟通，不要当黑盒池子处理。
+- 0.01 倍率；CF 1010 要浏览器 UA；completions 只认 `codex-cli` UA（header_override 已配）。
+- 当前 key 分组只有 gpt-5.4/5.5/MiniMax-M3/gpt-5.6-sol；**terra/luna 无货、大上下文（200k）会被拒**——可请君开分组权限或放宽限长。
