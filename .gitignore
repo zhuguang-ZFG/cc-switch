@@ -3,6 +3,10 @@ dist/
 release/
 .DS_Store
 *.log
+__pycache__/
+*.pyc
+.tmp-*
+cargo-*.txt
 .env
 .env.local
 *.tsbuildinfo

@@ -116,6 +116,8 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - **主池映射阀（泄压阀，cap 25）**：`#137` gpt-terra（8317 auth 耗尽躺平 w1）、`#138` kimi-k3（ttft ~1.1s，事实主力，真实承接 60%+）、`#139` grok-4.5（bazaarlink-2 上游，ttft 2.7s，2026-07-27 23:40 上岗）。
 - **Sonnet 链序**（自适应，当前）：`[63 kimi, 134 glm, 133 freemodel, 136 minimax, 129 terra]`；#132 work.freemodel 拒绝 Claude Code 已摘渠。
 - **kiro_guard tee+续写全功能在线**（8 实例）：截断检测→自动续写（SOFT_RETRY=1，退避 700ms）→merge 合并；tee_eof/hard 事件记 `last_block` 落 `kiro-guard-soft.jsonl`。2026-07-27 23:49 首个实战 `short_completion → recovered_merged`。
+- **⚠️ Claude Code「停止」真因 = max_tokens cap（2026-07-28 修复）**：tee 续写治不了「停止」——深度诊断证明 eof 不是断流，是 guard `_effective_cap`（kiro_guard.py:1207）把 `max_tokens=64000` 砍到 8192，模型到 8192 触发 `stop_reason=max_tokens` 合法停。6h 数据：240 次 eof 100% 在经 guard 的真 claude 渠道（#10/#20/#60），guard journal 判 78-82% 为 ok（非断流），journalctl 每请求都打 `max_tokens capped 64000 → 8192`。**修复**：8 个 guard 服务 systemd override `KIRO_GUARD_MAX_TOKENS_CAP=16000`（原 4096）/ `KIRO_GUARD_MAX_TOKENS_WRITE_CAP=32000`（原 8192）。验证：restart 后 `capped` 日志归零。详见 `docs/plans/newapi-adaptive-routing-2026-07-27.md` 末尾。
+- **主池再平衡（2026-07-28 02:30，数据驱动）**：kimi-k3#138 w25(186次0失败最稳) > baibei-8f3c#9 w20(真claude,abilities双写修复) > welfare#142 w15(最快16.7s) = baibei-25ca#20 w15 > baibei-2663#10 w12 > muyuan#140 w8(6h 86次sensitive拦截,failover成本>0.01倍率)。grok#139 w0 阀门关。
 - 设计文档：`docs/plans/newapi-adaptive-routing-2026-07-27.md`；v4 立项（VPS 前置 guard，P2 大概率不做）：`docs/plans/newapi-midstream-continuation-v4-2026-07-27.md`。
 - **Client surfaces (2026-07-26):** Claude Code → ZG NewAPI；Cursor IDE BYOK → `zg-*` → NewAPI；**Cursor Agent CLI → Cursor 云端官方模型 only**（默认 `claude-opus-5-high`；勿用 Opus 4.8 踩 Cyber Safeguards）。细节见 runbook「客户端怎么走 NewAPI」。
 - **AUP / Cyber Safeguards:** 官方 Opus 4.8 易拦；新会话 + 换 Opus5/Sonnet/glm；无客户端关过滤。见 runbook「Cyber Safeguards / AUP」与 `docs/patches/cyber-safeguards-opus48-2026-07-26.md`。
@@ -144,3 +146,4 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - **运营者是君（群里熟人）**，非匿名公益池：key 作废/分组缺模型/限长问题直接找君沟通，不要当黑盒池子处理。
 - 0.01 倍率；CF 1010 要浏览器 UA；completions 只认 `codex-cli` UA（header_override 已配）。
 - 当前 key 分组只有 gpt-5.4/5.5/MiniMax-M3/gpt-5.6-sol；**terra/luna 无货、大上下文（200k）会被拒**——可请君开分组权限或放宽限长。
+- **WAF 敏感词拦截（2026-07-28 实测）**：6h 内 86 次 `sensitive_words_detected`（朴素单词黑名单，日常动词+安全审计词触发），每次 failover 3-5s 延迟。v5.2 optimizer 归 content 类不压权，但降权 w60→w8（failover 成本 > 0.01 倍率收益）。若君能放宽或换不拦上游，可回升主力。
