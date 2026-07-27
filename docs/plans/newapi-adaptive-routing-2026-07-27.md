@@ -281,3 +281,23 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   否则 responses-only 渠道必被 chat/completions 探针判死。已部署 VPS 并跑通一轮
   （#142 ttft 1.4s q=1.00）。
 - **#21 澄清**：8317 死 key 但 abilities 仅 GPT 模型，不进 claude 故障路由，无影响。
+
+## 追加（02:00）：kimi-code zg-newapi 模型能力声明补全 + JD Code 接入
+
+- **问题**：config.toml 里 zg-newapi 16 个模型块只有 display_name/model/provider/
+  max_context_size 四行，缺 capabilities 声明——CLI 认为这些模型不会思考、不能
+  调工具，导致 [thinking] 段即便切到 thinking 模型也不发 reasoning。ctx 一刀切
+  262144 也不准（deepseek-flash/sensenova/mimo 实际 128k，claude-opus 实际 200k）。
+- **修复**：16 个模型按真实能力补 capabilities（thinking 系：glm-5.2/5.1、
+  deepseek-v4-pro、kimi-k3/k2.7/k2.6、qwen3.7-max、minimax-m3、grok-4.5、
+  claude-opus-4-8；纯工具系：gpt-5.6-sol/5.5、LongCat、deepseek-flash、
+  sensenova、mimo）；ctx 按上游真实值修正。
+- **JD Code 接入**：#96 joycode-backup（JoyCode2Api 反代 /opt/joycode，
+  监听 34891，key sk-joy-…）从 priority 25 w0 提到 **45 层 w10**（与 #60/#138/
+  #139 同兜底带）。反代提供 8 模型（JoyAI-Code-1.5、MiniMax-M3/M2.7、
+  Kimi-K2.6、GLM-5.1/5、DeepSeek-V4-Pro、Doubao-Seed-2.0-pro），ctx 200k，
+  返回带 reasoning_content 字段。
+- **kimi-code alias**：新增 zg-newapi/jd-code → JoyAI-Code-1.5，capabilities
+  [thinking, tool_use]，ctx 200000。-m zg-newapi/jd-code 可直接切。
+- **E2E**：use_channel ["96"]，streaming 200，reasoning_content 正常输出，
+  consume log channel_id=96 确认路由命中。JD 思维链可用。
