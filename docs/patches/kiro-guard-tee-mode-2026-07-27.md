@@ -43,3 +43,13 @@ CYRILLIC_BYPASS 实例（AR）自动回落缓冲路径（原样转发无法对�
 - 新 journal phase：`tee_first`/`tee_round_N`/`tee_retry_ok_merged`/`tee_exhausted`/`tee_cont`。
 - selftest 新增 ~20 断言（parser+assembler roundtrip、截断判定、index remap、
   俄语保留、累积 merge 链、active 信号量）。
+
+## 追加：上游中途断流续写（2026-07-27 晚）
+
+诱因：当日 15:08-15:24 百倍池风暴（CF 524 origin timeout / 503 / 429 并发限流），
+Claude Code 报「Connection closed mid-response」。tee 下 524 表现为 200 后 SSE
+流中途 EOF（无 message_stop），原先判 hard → sse error。
+
+现 `_stream_tee` 对 `missing_stop_reason` 且已有部分文本的情况按截断处理——
+部分文本 merge 进 acc 后走 continuation 续写（同样受 SOFT_RETRY 限制），
+客户端无感。journal phase：`tee_eof:missing_stop_reason`。

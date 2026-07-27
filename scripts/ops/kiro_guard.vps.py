@@ -1879,6 +1879,27 @@ class Handler(BaseHTTPRequestHandler):
                     _log(f"tee soft_exhausted reason={rsn}")
                     _send_sse_error()
                     return
+                if (
+                    kind == "hard"
+                    and rsn == "missing_stop_reason"
+                    and TRUNC_CONTEXT
+                    and round_no < SOFT_RETRY
+                    and _content_nonempty(round_msg.get("content", []))
+                ):
+                    # Upstream closed mid-stream after partial SSE (CF 524 etc.):
+                    # treat the partial text as truncation and continue it.
+                    reason = rsn
+                    journal_event(
+                        "soft", f"tee_eof:{rsn}", {"phase": f"tee_round_{round_no}"},
+                        req_id=req_id,
+                    )
+                    acc_msg = (
+                        round_msg if acc_msg is None else merge_responses(acc_msg, round_msg)
+                    )
+                    round_no += 1
+                    if SOFT_RETRY_BACKOFF_MS > 0:
+                        time.sleep(SOFT_RETRY_BACKOFF_MS / 1000.0)
+                    continue
                 journal_event("hard", rsn, {"phase": "tee"}, req_id=req_id)
                 _check_hard_alert(rsn)
                 _log(f"tee hard_fail reason={rsn}")
