@@ -22,16 +22,16 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 
 | Ladder | Order (pri/w) |
 |--------|----------------|
-| **GPT** | `#21` 60/40 → `#124` 55/25 → `#123` 50/20 → `#131` freemodel-work 45/15（跨 pri 才是严格先后） |
+| **GPT** | 实况（2026-07-27 审计）：terra `#21` 60/40 → `#131` freemodel-work 45/15（**#124 status=3 已封**、#123 无 terra 能力）；**gpt-5.5 仅 `#21` 独苗**；sol 仅 `#131` |
 | **GLM / default Sonnet** | `#41/#42` zhipu 80/50·8 → `#123` hongshi 50/20 |
-| **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#125` Vyce 35/20 → `#90` LongCat 30/10 |
+| **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#63` kimi -20（vyce `#125` status=2 整车停车；`#90` LongCat 无 claude-haiku 能力，仅服务 `LongCat-2.0` id） |
 | **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
 | **Anthropic Sonnet** | `#132` freemodel-work GPT -19 → `#63` kimi -20 → `#133` freemodel-cc -21（vyce `#125` sonnet 已剥离：502 硬挂挡链，详见 runbook；`#132` 深夜提权为第一梯队） |
-| **Opus** | pri45 `#9/#10/#20/#60`（w **50/40/28/3**）→ AR `#118` w6 → `#132` freemodel-work GPT -19（Claude 故障第一梯队，Opus→`gpt-5.6-sol`）→ `#133` freemodel-cc -21/5 → GPT -30 系；4.x/`4-8` map→**Opus5**；`[1M]` 在百倍池 **upstream→裸 `claude-opus-5`**（价表拒 `[1M]`）；`#118` 仍保留 `[1M]` identity。见 `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md` |
-| **Fable** (`claude-fable-5` / `[1M]`) | `#127` jianzhile pri50/w20（仅 fable；头 `New-Api-Group: Claude-CC-MAX`）→ 其下仍可能落到主池若仍挂 fable 能力。本机 Fable 角色 → `claude-fable-5`。见 `docs/patches/jianzhile-fable-newapi-2026-07-26.md` |
+| **Opus** | pri45 `#10/#20/#60`（w **20/40/30**，2026-07-27 晚降 #10 稳链；`#9` status=2、`#11` 活 w1）→ `#132` freemodel-work GPT -19（Claude 故障第一梯队，Opus→`gpt-5.6-sol`）→ `#133` freemodel-cc -21/5 → GPT -30 系；AR `#118` status=3 封禁中；4.x/`4-8` map→**Opus5**；`[1M]` 在百倍池 **upstream→裸 `claude-opus-5`**（价表拒 `[1M]`）。见 `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md` |
+| **Fable** (`claude-fable-5` / `[1M]`) | `#127` jianzhile pri50/w20（仅 fable；头 `New-Api-Group: Claude-CC-MAX`）→ `#63` kimi -20（2026-07-27 深夜打开的兜底）。本机 Fable 角色 → `claude-fable-5`。见 `docs/patches/jianzhile-fable-newapi-2026-07-26.md` |
 | **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
 
-`#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#11`/`#81` **status=2**；AR `#118–120` health EXCLUDE。Vyce **无** Opus。health_check v5：`docs/patches/newapi-dx-health-check-v5-2026-07-26.md`。防卡顿：`docs/patches/newapi-dx-anti-stall-2026-07-26.md`。
+`#83/#84/#86` AR-GPT 与其它噪声渠：`abilities.enabled=0`。`#81`/`#125` **status=2**；`#118` status=3（auto-ban）、`#124` status=3；**`#11` 实际仍活**（opus w1 涓流，2026-07-27 审计确认）；AR `#118–120` health EXCLUDE。Vyce **无** Opus 且已整车停车。health_check v5：`docs/patches/newapi-dx-health-check-v5-2026-07-26.md`。防卡顿：`docs/patches/newapi-dx-anti-stall-2026-07-26.md`。
 
 ## Local entry (required)
 
