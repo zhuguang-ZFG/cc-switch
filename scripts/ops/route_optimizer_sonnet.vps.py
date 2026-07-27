@@ -25,7 +25,7 @@ sys.path.insert(0, "/opt/new-api/scripts")
 
 import route_optimizer as ro
 
-SONNET_GROUP = [63, 133, 129, 134]  # #132 work.freemodel 拒绝 Claude Code，已摘渠移出
+SONNET_GROUP = [63, 133, 129, 134, 136]  # #132 work.freemodel 拒绝 Claude Code，已摘渠移出
 SONNET_REQ_MODEL = "claude-sonnet-4-6"
 SONNET_FAMILY = "claude-sonnet%"
 SONNET_MARGIN = 1.5
