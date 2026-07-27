@@ -301,3 +301,27 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   [thinking, tool_use]，ctx 200000。-m zg-newapi/jd-code 可直接切。
 - **E2E**：use_channel ["96"]，streaming 200，reasoning_content 正常输出，
   consume log channel_id=96 确认路由命中。JD 思维链可用。
+
+## 追加（02:10）：kimi 套餐 prompt cache 机制实测 + channel affinity 配置
+
+- **kimi 上游缓存实测**：api.kimi.com/coding 原生支持 prompt cache，自动生效，
+  无需 cache_control 声明。同一 1300 token system prompt 连发两次：第一次
+  prompt_tokens=1300 无 cache，第二次 cached_tokens=1280（98% 命中）。
+- **NewAPI 透传正确**：consume log 完整记录 cache_tokens 字段。走 #138 kimi-k3-opus
+  的 claude-opus-4-8 流量实测 prompt_tokens=272344, cache_tokens=262400（96% 命中）。
+  但 NewAPI 对 kimi 按 cache_ratio=0.1 记账（Anthropic 标准），而 kimi 上游缓存
+  免费——账面略保守但不影响功能。
+- **缓存隔离问题**：同一 claude-opus 会话在 #138(kimi)/#140(muyuan)/#142(welfare)
+  间轮换时，每个渠道各自建缓存，轮换会打散缓存、重算全量。
+- **channel affinity 已配（治本）**：
+  - 总开关 channel_affinity_setting.enabled=true，switch_on_success=false（粘住不切），
+    default_ttl_seconds=600，keep_on_channel_disabled=false。
+  - 新增 "claude cli trace" 规则：model_regex [^claude-.*$, ^fable.*$]，
+    path /v1/messages，key_sources 取 metadata.user_id + X-App + User-Agent 三重，
+    ttl 600s，skip_retry_on_failure=true（粘的渠道挂了才换），include_model_name=true。
+  - 复用既有 "glm trace" 规则（一直生效）：同会话按 metadata.user_id 粘渠道。
+- **E2E 实证（真实 Claude Code 流量，token_name=cc-switch）**：连续 glm-5.2 请求
+  全部粘在 #42，cache 命中率 99.7%（87504/87712 tokens），frt<2s。affinity 字段
+  明确记录 reason="glm trace", channel_id=42。
+- **生效条件**：claude cli trace 规则在流量打到 claude-*/fable-* 模型名时触发；
+  当前 Claude Code 默认走 glm-5.2（cc-switch alias 路由），由 glm trace 规则保护。
