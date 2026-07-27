@@ -149,3 +149,14 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - 0.01 倍率；CF 1010 要浏览器 UA；completions 只认 `codex-cli` UA（header_override 已配）。
 - 当前 key 分组只有 gpt-5.4/5.5/MiniMax-M3/gpt-5.6-sol；**terra/luna 无货、大上下文（200k）会被拒**——可请君开分组权限或放宽限长。
 - **WAF 敏感词拦截（2026-07-28 实测）**：6h 内 86 次 `sensitive_words_detected`（朴素单词黑名单，日常动词+安全审计词触发），每次 failover 3-5s 延迟。v5.2 optimizer 归 content 类不压权，但降权 w60→w8（failover 成本 > 0.01 倍率收益）。若君能放宽或换不拦上游，可回升主力。
+
+## kimi-code CLI 收编到 NewAPI（2026-07-28 03:10）
+
+- **收编**：kimi-code config.toml 删除 6 个直连 provider（wuming/baibei/tokenrouter/林夕/cunai×2），除 `managed:kimi-code`（官方订阅）和 `cc-switch-proxy`（/login）外全走 `zg-newapi`。
+- **新增模型别名**（全部经 NewAPI 统一入口）：
+  - `zg-newapi/glm-5.2`（日常主力）、`zg-newapi/claude-opus-5`（真 claude）、`zg-newapi/claude-opus-4-8`
+  - `zg-newapi/gpt-5.5`、`zg-newapi/gpt-5.6-sol`、`zg-newapi/gpt-5.6-terra`
+  - `zg-newapi/grok-4.5`（bazaarlink #139，独立模型，2026-07-28 新增，priority 45 w10）
+- **grok-4.5 配置**：#139 bazaarlink 渠道加 `grok-4.5` 独立模型（model_mapping grok-4.5→grok-4.5），ability priority 45 weight 10。测试 model=x-ai/grok-4.5 通过。
+- **不暴露 kimi-k3 独立别名**：#138 的 kimi-k3 只作 claude 渠道上游（claude-opus-4-8→k3），不对外暴露 kimi-k3 模型（503 是预期）。kimi-code 要用 kimi 走官方 `managed:kimi-code`。
+- **验证**：glm-5.2/claude-opus-5/gpt-5.5/grok-4.5 四模型经 zg-newapi 全部 200。
