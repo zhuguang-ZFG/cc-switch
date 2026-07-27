@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Sonnet 主备探活 + priority 自动对调
 
-**已废弃（2026-07-27）**：路由主排序键为 channels.priority，本脚本调整 abilities.priority 无效，保留仅供 --force 手动使用
+**probe-only 默认（2026-07-27）**：路由主排序键为 channels.priority，本脚本调整
+abilities.priority 无效。默认模式只探活 #125/#63 + 打印路由表 + 双挂 TG 告警，不写 DB；
+--force 才执行旧的 abilities.priority 对调逻辑。
 
 背景 (2026-07-27):
 - Claude Code 在 CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576 时自动给模型名追加
@@ -24,6 +26,16 @@ import json
 import sqlite3
 import subprocess
 import sys
+
+import sys as _sys
+
+_sys.path.insert(0, "/opt/new-api")
+try:
+    from tg_notify import send_tg
+except Exception:
+
+    def send_tg(t, buttons=None, markdown=True, chat_id=None):
+        return False
 
 DB = "/opt/new-api/data/one-api.db"
 
@@ -105,15 +117,7 @@ def show_routing(conn: sqlite3.Connection) -> None:
 
 
 def main() -> int:
-    if "--force" not in sys.argv:
-        print(
-            "已废弃（2026-07-27）：本脚本默认不再执行。\n"
-            "- 实证该 NewAPI fork 的路由主排序键是 channels.priority，而非 abilities.priority，\n"
-            "  本脚本调整 abilities.priority 本来就无效。\n"
-            "- channels.priority 主备已固定（#125=35 > #63=-20），vyceai 恢复后会自动回主渠，无需对调。\n"
-            "- 如确需手动执行旧逻辑，请加 --force。"
-        )
-        return 0
+    force = "--force" in sys.argv
     conn = sqlite3.connect(DB)
 
     print("=== Probe ===")
@@ -122,6 +126,16 @@ def main() -> int:
         code, note = probe(conn, cid)
         results[cid] = code == "200"
         print(f"  ch#{cid} {PROBE_MODEL[cid]}: {code} {note}")
+
+    if not force:
+        # probe-only：不写 DB；双渠道全挂时 TG 告警（health_check 同款 send_tg）
+        if not any(results.values()):
+            print("\nBoth Sonnet channels down — TG alert.")
+            send_tg("🚨 Sonnet 双渠道全挂：#125 vyceai / #63 kimi-coding 探活均失败")
+        show_routing(conn)
+        conn.close()
+        print("\n(probe-only：未写 DB；--force 才调整 abilities.priority)")
+        return 0 if any(results.values()) else 1
 
     if results[PRIMARY]:
         hi, lo, why = PRIMARY, BACKUP, "primary healthy"

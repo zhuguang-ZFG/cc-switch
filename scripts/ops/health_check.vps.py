@@ -18,6 +18,7 @@ cron: */30 flock health_check.py
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import time
@@ -43,7 +44,8 @@ API = "http://127.0.0.1:3000"
 
 def _secret(k, default=""):
     try:
-        return json.load(open("/opt/new-api/secrets.json")).get(k, default)
+        with open("/opt/new-api/secrets.json") as f:
+            return json.load(f).get(k, default)
     except Exception:
         return default
 
@@ -87,7 +89,10 @@ def load_state():
 
 
 def save_state(s):
-    json.dump(s, open(STATE, "w"), indent=1)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(s, f, indent=1)
+    os.replace(tmp, STATE)
 
 
 def _http_request(
@@ -184,6 +189,8 @@ def parse_headers(hdr_override):
 
 def probe_once(base, key, model, ctype, hdr_override, proxy=None, timeout=TIMEOUT):
     headers = parse_headers(hdr_override)
+    # multi-key channels store keys one per line; probe with the first
+    key = (key or "").splitlines()[0].strip()
     headers["Authorization"] = f"Bearer {key}"
     base = base.rstrip("/")
     t0 = time.time()
@@ -215,7 +222,7 @@ def probe_once(base, key, model, ctype, hdr_override, proxy=None, timeout=TIMEOU
         if ctype == 14:
             ok = '"stop_reason"' in out or ('"type":"message"' in out and '"content"' in out)
         else:
-            ok = '"choices"' in out
+            ok = '"choices"' in out and code == 200
         return ok, elapsed_ms, code, out[:2048]
     except Exception as e:
         return False, (time.time() - t0) * 1000, 0, str(e)[:200]
@@ -317,6 +324,9 @@ def main():
 
         if ok:
             fails[str(cid)] = 0
+            if status == 1:
+                # alive again: drop any stale script-disable marker
+                disabled_by_script.discard(cid)
             alerted.pop(str(cid), None)
             if lat_ms > SLOW_MS:
                 slow_hits[str(cid)] = slow_hits.get(str(cid), 0) + 1

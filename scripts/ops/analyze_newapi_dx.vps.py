@@ -27,6 +27,7 @@ REPORT_DIR = Path("/opt/new-api/reports")
 BACKUP_DIR = Path("/opt/new-api/backups")
 ENV_FILE = Path("/opt/new-api/kiro-guard.env")
 STATE_FILE = Path("/opt/new-api/dx_ops_state.json")
+LOCK_FILE = Path("/opt/new-api/dx_ops.lock")
 STATUS_MD = Path("/opt/new-api/STATUS.md")
 GUARD_UNITS = [
     "kiro-guard",
@@ -53,7 +54,6 @@ AR_P50_HARD_MS = 45_000  # AR backup: cap weight <= 3
 AR_P50_PARK_MS = 80_000  # AR: weight=1 (keep channel, starve traffic)
 SOFT_MIN_EVENTS = 20
 SHORT_OUT_BOUNDS = (16, 64)
-SHORT_IN_BOUNDS = (1500, 4000)
 GATEWAY = "http://127.0.0.1:3000"
 MANAGED_ENV_KEYS = (
     "KIRO_GUARD_SHORT_OUT",
@@ -63,8 +63,18 @@ MANAGED_ENV_KEYS = (
 )
 
 
-def sh(cmd: List[str], timeout: int = 60) -> str:
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+class ShError(RuntimeError):
+    """External command failed (timeout or non-zero rc). Carries cmd context."""
+
+
+def sh(cmd: List[str], timeout: int = 60, check: bool = True) -> str:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise ShError(f"timeout({timeout}s): {' '.join(str(c) for c in cmd)}") from e
+    if check and r.returncode != 0:
+        tail = ((r.stdout or "") + (r.stderr or "")).strip()[-300:]
+        raise ShError(f"rc={r.returncode}: {' '.join(str(c) for c in cmd)} :: {tail}")
     return (r.stdout or "") + (r.stderr or "")
 
 
@@ -72,7 +82,7 @@ def pct(xs: List[float], p: float) -> Optional[float]:
     if not xs:
         return None
     s = sorted(xs)
-    return s[min(len(s) - 1, int(len(s) * p))]
+    return s[min(len(s) - 1, math.ceil(len(s) * p) - 1)]
 
 
 def load_state() -> dict:
@@ -90,10 +100,21 @@ def collect_soft_journal(hours: int) -> Dict[str, Any]:
     units = []
     for u in GUARD_UNITS:
         units += ["-u", f"{u}.service"]
-    out = sh(
-        ["journalctl", *units, "--since", f"{hours} hours ago", "--no-pager", "-o", "cat"],
-        timeout=90,
-    )
+    try:
+        out = sh(
+            ["journalctl", *units, "--since", f"{hours} hours ago", "--no-pager", "-o", "cat"],
+            timeout=90,
+        )
+    except ShError as e:
+        # 证据采集失败：不得静默降级为"无证据"，由 main 写入 escalate
+        return {
+            "soft_retry": 0,
+            "soft_exhausted": 0,
+            "hard_fail": 0,
+            "reasons": {},
+            "lines_scanned": 0,
+            "error": f"证据采集失败 (journalctl): {e}",
+        }
     soft_retry = 0
     soft_exhausted = 0
     hard = 0
@@ -273,6 +294,11 @@ def suggest_weights(latency: Dict[int, dict], cur: Dict[int, dict]) -> Tuple[Dic
             target = band_for_rank[min(ri, len(band_for_rank) - 1)]
             ri += 1
         old = cur[cid]["weight"]
+        if old == 0:
+            # manually zeroed (operator parked the channel): never auto-revive
+            suggested[cid] = 0
+            escalate.append(f"#{cid} manually zeroed, kept")
+            continue
         # slower than 1.6× best: never raise
         if best_p50 > 0 and p50f > best_p50 * 1.6 and target > old:
             target = old
@@ -303,6 +329,10 @@ def suggest_weights(latency: Dict[int, dict], cur: Dict[int, dict]) -> Tuple[Dic
         lat = latency.get(cid) or {}
         n = int(lat.get("n") or 0)
         old = int(cur[cid]["weight"])
+        if old == 0:
+            suggested[cid] = 0
+            escalate.append(f"#{cid} manually zeroed, kept")
+            continue
         p50 = float(lat.get("p50") or 0)
         p90 = float(lat.get("p90") or 0)
         ceiling = 8 if cid == 118 else 3
@@ -350,17 +380,29 @@ def apply_weights(suggested: Dict[int, int], dry_run: bool) -> Dict[str, Any]:
         changed.append({"id": cid, "from": old, "to": w})
     con.commit()
     con.close()
+    # keep only the newest 10 weight backups
+    backups = sorted(BACKUP_DIR.glob("one-api.before-dx-weights-*.db"))
+    for old_bak in backups[:-10]:
+        try:
+            old_bak.unlink()
+        except OSError:
+            pass
     restarted = False
+    restart_error = None
     if changed:
-        sh(["podman", "restart", "new-api"], timeout=120)
-        time.sleep(6)
-        restarted = True
+        try:
+            sh(["podman", "restart", "new-api"], timeout=120)
+            time.sleep(6)
+            restarted = True
+        except ShError as e:
+            restart_error = str(e)
     return {
         "applied": True,
         "backup": str(bak),
         "changed": changed,
         "suggested": suggested,
         "restarted": restarted,
+        "restart_error": restart_error,
     }
 
 
@@ -415,7 +457,17 @@ def write_env_file(env: Dict[str, str], dry_run: bool) -> Dict[str, Any]:
     # ensure units load EnvironmentFile
     ensure_environment_file()
     sh(["systemctl", "daemon-reload"], timeout=30)
-    sh(["systemctl", "restart", *GUARD_UNITS], timeout=60)
+    # serial rolling restart: one unit at a time, verify active, stop on first failure
+    unit_restart_failed: List[Dict[str, str]] = []
+    for unit in GUARD_UNITS:
+        try:
+            sh(["systemctl", "restart", unit], timeout=60)
+            active = sh(["systemctl", "is-active", unit], timeout=20).strip()
+            if active != "active":
+                raise ShError(f"{unit} is-active={active!r} after restart")
+        except ShError as e:
+            unit_restart_failed.append({"unit": unit, "error": str(e)})
+            break
     # selftest
     st = sh(
         ["bash", "-lc", "KIRO_GUARD_SELFTEST=1 /usr/bin/python3 /opt/new-api/kiro_guard.py"],
@@ -426,7 +478,8 @@ def write_env_file(env: Dict[str, str], dry_run: bool) -> Dict[str, Any]:
         "bak": str(bak) if bak else None,
         "env": {k: env.get(k) for k in MANAGED_ENV_KEYS},
         "selftest": st.strip(),
-        "units": sh(["systemctl", "is-active", *GUARD_UNITS], timeout=20).strip().splitlines(),
+        "units": sh(["systemctl", "is-active", *GUARD_UNITS], timeout=20, check=False).strip().splitlines(),
+        "unit_restart_failed": unit_restart_failed,
     }
 
 
@@ -511,12 +564,21 @@ def smoke() -> List[dict]:
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     # tokens table key
     tok = None
+    tok_id = None
     try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(tokens)").fetchall()}
+        # prefer an enabled token with ample quota (unlimited first, then largest remain_quota)
+        if "unlimited_quota" in cols and "remain_quota" in cols:
+            order = "unlimited_quota DESC, remain_quota DESC"
+        elif "remain_quota" in cols:
+            order = "remain_quota DESC"
+        else:
+            order = "id"
         row = con.execute(
-            "SELECT key FROM tokens WHERE status=1 ORDER BY id LIMIT 1"
+            f"SELECT id, key FROM tokens WHERE status=1 ORDER BY {order} LIMIT 1"
         ).fetchone()
         if row:
-            tok = row[0]
+            tok_id, tok = row[0], row[1]
     except Exception:
         pass
     con.close()
@@ -571,6 +633,8 @@ def smoke() -> List[dict]:
                     "ms": int((time.time() - t0) * 1000),
                 }
             )
+    for r in results:
+        r["token_id"] = tok_id
     return results
 
 
@@ -627,11 +691,23 @@ def main() -> None:
     ap.add_argument("--skip-smoke", action="store_true")
     args = ap.parse_args()
 
+    # single-instance lock (VPS/Linux only; --help exits during parse_args above)
+    import fcntl
+
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(f"another analyze_newapi_dx instance holds {LOCK_FILE} — abort")
+
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     st = load_state()
     escalate: List[str] = []
 
     soft = collect_soft_journal(args.lookback_hours)
+    if soft.get("error"):
+        escalate.append(str(soft["error"]))
     latency = collect_opus_latency(args.lookback_hours)
     weights_before = current_weights()
     env = read_env_file()
@@ -682,6 +758,11 @@ def main() -> None:
                 st["last_weight_apply_ts"] = time.time()
                 st["last_suggested"] = suggested
 
+    if soft_apply.get("unit_restart_failed"):
+        escalate.append(f"guard 单元串行重启中止: {soft_apply['unit_restart_failed']}")
+    if weights_apply.get("restart_error"):
+        escalate.append(f"podman restart new-api 失败（restarted=False）: {weights_apply['restart_error']}")
+
     smoke_res = [] if (args.skip_smoke or args.dry_run) else smoke()
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -718,5 +799,22 @@ def main() -> None:
     print(json.dumps({"report": str(report_md), "summary": summary_bits, "escalate": escalate, "smoke": smoke_res, "weights_apply": weights_apply, "soft_apply": soft_apply}, ensure_ascii=False, indent=2))
 
 
+def _write_failure_report(err: BaseException) -> None:
+    """Best-effort failure report when main() blows up (e.g. sh() timeout/rc)."""
+    try:
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        (REPORT_DIR / f"dx-{ts}-FAILED.md").write_text(
+            f"# DX ops FAILED — {ts}\n\n```\n{type(err).__name__}: {err}\n```\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        _write_failure_report(e)
+        raise RuntimeError(f"analyze_newapi_dx failed: {e}") from e

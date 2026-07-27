@@ -22,6 +22,7 @@ Community ports (P0 2026-07-26):
 """
 from __future__ import annotations
 
+import collections
 import copy
 import gzip as _gzip
 import io
@@ -121,7 +122,8 @@ METRICS_SNAPSHOT_PATH = os.environ.get(
     "KIRO_GUARD_METRICS_SNAPSHOT",
     os.path.join(os.path.dirname(JOURNAL_PATH), f"kiro-guard-metrics-{LISTEN_PORT}.json"),
 )
-METRICS_SNAPSHOT_INTERVAL = int(os.environ.get("KIRO_GUARD_METRICS_SNAPSHOT_INTERVAL", "300"))
+# Clamp >=10s: 0 would busy-loop the snapshot thread.
+METRICS_SNAPSHOT_INTERVAL = max(10, int(os.environ.get("KIRO_GUARD_METRICS_SNAPSHOT_INTERVAL", "300")))
 # Concurrency limiter: max simultaneous upstream requests. 0 = unlimited.
 UPSTREAM_CONCURRENCY = int(os.environ.get("KIRO_GUARD_UPSTREAM_CONCURRENCY", "3"))
 # Streaming passthrough: when enabled, forward stream:true directly to upstream
@@ -181,8 +183,8 @@ _journal_lock = threading.Lock()
 _soft_counts: Dict[str, int] = {}
 _hard_counts: Dict[str, int] = {}
 _ok_count = 0
-_latencies: list = []
 _LATENCY_WINDOW = 200
+_latencies = collections.deque(maxlen=_LATENCY_WINDOW)
 _upstream_sem = threading.Semaphore(UPSTREAM_CONCURRENCY) if UPSTREAM_CONCURRENCY > 0 else None
 _consecutive_hard = 0
 _last_tg_alert_ts = 0.0
@@ -190,6 +192,11 @@ _last_tg_alert_ts = 0.0
 
 def _log(msg: str) -> None:
     sys.stderr.write("[kiro-guard] " + msg + "\n")
+
+
+def _redact_proxy(p: str) -> str:
+    """Strip user:pass@ from proxy URL before echoing in /metrics."""
+    return re.sub(r"(://)[^/@]+@", r"\1", p)
 
 
 def _bump(counter: Dict[str, int], key: str) -> None:
@@ -245,12 +252,18 @@ def _metrics_snapshot_loop() -> None:
 
 
 def _tg_alert(message: str) -> None:
-    """Send a TG bot alert via tg_notify (reuses VPS proxy + token). Never raises."""
+    """Cooldown-gated TG alert. Cooldown decided on caller thread; the network
+    send itself is fire-and-forget on a daemon thread so request paths never block."""
     global _last_tg_alert_ts
     now = time.time()
     if now - _last_tg_alert_ts < 60:
         return
     _last_tg_alert_ts = now
+    threading.Thread(target=_tg_send, args=(message,), daemon=True).start()
+
+
+def _tg_send(message: str) -> None:
+    """Send a TG bot alert via tg_notify (reuses VPS proxy + token). Never raises."""
     try:
         from tg_notify import send_tg
         send_tg(message, markdown=False)
@@ -367,9 +380,7 @@ def _read_limited(fp, limit: int = MAX_RESPONSE_BYTES) -> bytes:
 
 
 def _record_latency(elapsed_ms: float) -> None:
-    _latencies.append(elapsed_ms)
-    if len(_latencies) > _LATENCY_WINDOW:
-        del _latencies[: len(_latencies) - _LATENCY_WINDOW]
+    _latencies.append(elapsed_ms)  # deque(maxlen) drops oldest automatically
 
 
 def _fetch_upstream(req: urllib.request.Request, timeout: float = TIMEOUT) -> Tuple[int, bytes]:
@@ -714,14 +725,6 @@ def classify_response(
     return "ok", "ok", msg
 
 
-def mark_incomplete(msg: dict) -> dict:
-    """Honest stop_reason when soft-incomplete must be shown to client."""
-    out = dict(msg)
-    if out.get("stop_reason") == "end_turn":
-        out["stop_reason"] = "max_tokens"
-    return out
-
-
 def build_continuation_payload(
     original_payload: dict, truncated_msg: dict
 ) -> dict:
@@ -1032,6 +1035,7 @@ def build_messages_request(payload: dict, header_map: Dict[str, str]) -> urllib.
     )
     for h, v in header_map.items():
         req.add_header(h, v)
+    req.add_header("Content-Type", "application/json")
     return req
 
 
@@ -1105,7 +1109,6 @@ def fetch_classified(
     journal_event("soft", reason, {"phase": "first"}, req_id=req_id)
     # soft: retry with backoff (Kiro-Go #143). For text truncations, inject
     # truncated content as context so the model continues (kirocc spirit).
-    first_trunc_msg = msg
     for attempt in range(SOFT_RETRY):
         if SOFT_RETRY_BACKOFF_MS > 0:
             time.sleep(SOFT_RETRY_BACKOFF_MS / 1000.0)
@@ -1152,8 +1155,10 @@ def fetch_classified(
         kind2, reason2, msg2 = classify_response(body2, payload)
         if kind2 == "ok":
             _reset_hard_counter()
-            if use_continuation and first_trunc_msg is not None:
-                merged = merge_responses(first_trunc_msg, msg2)
+            # Merge onto the msg this round's continuation was built from
+            # (with SOFT_RETRY>=2 that is the latest truncated msg, not the first).
+            if use_continuation and msg is not None:
+                merged = merge_responses(msg, msg2)
                 _extra_m = {"phase": "retry_ok_merged"}
                 _extra_m.update(_usage_extra(merged) or {})
                 journal_event(
@@ -1243,7 +1248,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.send_error(400, "bad content-length")
+            return
         raw = self.rfile.read(length)
         try:
             payload = json.loads(raw)
@@ -1391,7 +1400,7 @@ class Handler(BaseHTTPRequestHandler):
     def _stream_passthrough(self, payload, header_map):
         """Forward stream:true directly to upstream and relay SSE chunks as-is."""
         cap = _effective_cap(payload)
-        if cap > 0 and payload.get("max_tokens", 0) > cap:
+        if cap > 0 and (payload.get("max_tokens") or 0) > cap:
             payload["max_tokens"] = cap
         data = json.dumps(payload, ensure_ascii=False).encode()
         req = urllib.request.Request(
@@ -1516,7 +1525,7 @@ class Handler(BaseHTTPRequestHandler):
                     "journal": JOURNAL_PATH,
                     "soft_retry": SOFT_RETRY,
                     "soft_retry_backoff_ms": SOFT_RETRY_BACKOFF_MS,
-                    "proxy": PROXY or None,
+                    "proxy": _redact_proxy(PROXY) if PROXY else None,
                     "soft_limit": SOFT_LIMIT,
                     "trunc_context": TRUNC_CONTEXT,
                     "max_tokens_cap": MAX_TOKENS_CAP,

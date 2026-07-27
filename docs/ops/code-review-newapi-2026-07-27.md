@@ -1,6 +1,11 @@
 # NewAPI 定制代码深度评审（2026-07-27）
 
-> **修复状态（2026-07-27 当日）**：P1-1~10 已全部修复并部署（commit `d60cf80`，guard 滚动重启 + 冒烟通过）。P2/P3 未动，P1-4 相关的 P2-11/13 计划随 tee 模式改造一起做。sonnet_failover 已加废弃守卫。
+> **修复状态（2026-07-27 当日）**：P1-1~10 已全部修复并部署（commit `d60cf80`，guard 滚动重启 + 冒烟通过）。
+> P2/P3 已修并部署（同日第二批）：P2-12/15/16/17/18/19/20、P3 全部（kiro_guard 死代码/快照 clamp/PROXY 脱敏/Content-Type/Content-Length+max_tokens 兜底/TG 告警异步化/deque 滑窗；dx pct off-by-one/smoke token 优选/SHORT_IN_BOUNDS/备份留 10 份；health_check 探活加 code==200、_secret 改 with、state 原子写+复活清残留；sonnet_failover 默认 probe-only + 双挂 TG 告警，`--force` 才写 DB）。
+> **未动**：P2-11（线程上限）、P2-13（慢路径错误呈现）、P2-14（cyrillic）——P2-11/13 与 tee 模式改造同区域，届时一起做。
+> **P2-12 残余**：SOFT_RETRY≥2 时 continuation payload 仍只注入最新截断段（完整修复需累积式 continuation）；默认 SOFT_RETRY=1 不受影响。
+> 部署后冒烟新发现并已处理：#129 上游（Dc公益 8317）auth 池耗尽导致 Opus 兜底 503 → 新增 **#130 gpt-123458-claude-fallback**（克隆 #124，ch_pri=-31）作为第二独立兜底，Opus 恢复 200；health_check 多 key 渠道（\n 分隔）拼出非法 Bearer 头 → probe 取首个 key（已随本批部署）。
+> dx cooldown（P1-5）与 health_check alerted（P1-8）待下一个 cron 周期自然验证。
 
 **范围**：`scripts/ops/` 下 VPS 镜像脚本（kiro_guard / analyze_newapi_dx / health_check / sonnet_failover）。cc-switch 不在范围。
 **方法**：3 个评审代理全文通读 + 关键 finding 人工复核。
