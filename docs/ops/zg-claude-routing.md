@@ -22,7 +22,7 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 
 | Ladder | Order (pri/w) |
 |--------|----------------|
-| **GPT** | `#21` 60/40 → `#124` 55/25 → `#123` 50/20（跨 pri 才是严格先后） |
+| **GPT** | `#21` 60/40 → `#124` 55/25 → `#123` 50/20 → `#131` freemodel-work 45/15（跨 pri 才是严格先后） |
 | **GLM / default Sonnet** | `#41/#42` zhipu 80/50·8 → `#123` hongshi 50/20 |
 | **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#125` Vyce 35/20 → `#90` LongCat 30/10 |
 | **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
