@@ -171,3 +171,24 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - 验证：`grep -c '_r_code = 503 if e.code in (401, 403)' kiro_guard.py` = **2**（两处改点都落地）；8 个 guard 重启后全 active；近 10min `handler_stop=0`。
 - 设计权衡：不动 NewAPI fork（镜像 = 上游 calciumion/new-api 无 failover 配置项），guard 层转换最省事；503 是 Anthropic 标准「过载」语义，Claude Code 会自然重试或由 NewAPI 层切渠。
 - 预期收益：baibei 间歇 403 从「Claude Code 停止」降级为「透明 failover 一次切渠」，体感中断大幅减少。
+
+## NewAPI 额度 + 渠道策略设置修复（2026-07-28 03:24）
+
+**问题（DB 审计发现）**：
+1. token 1/2/3 的 `remain_quota` 是巨大负数（-256万 / -8981万 / -4亿）——历史消耗累积，虽然 `unlimited_quota=1` 理论上跳过校验，但负数不正常。
+2. `AutomaticEnableChannelEnabled=false` —— 渠道被 auto-ban 后**永不自动恢复**。这是 #9/#52/#118 曾经永久 status=2/3 的根源：一旦 auto-disable 就只能手动解封。
+3. `ChannelDisableThreshold=10` —— 公益池抖动 10 次连续错误就 auto-disable，太敏感（baibei 间歇 403 / muyuan sensitive 都能轻松凑齐）。
+4. `ModelRequestRateLimitEnabled=true` + 1 分钟 120 次 —— Claude Code 高频会触发限流。
+
+**修复**（DB 写 + `podman restart new-api` 重载）：
+| 设置 | 旧值 | 新值 | 理由 |
+|------|------|------|------|
+| `users.id=1 quota` | 636万 | 999999999999（~1万亿） | 管理员额度实际无限 |
+| `tokens.remain_quota`（全 4 个） | 负数/小数 | 999999999999 | 重置历史负数垃圾，配合 unlimited_quota=1 |
+| `AutomaticEnableChannelEnabled` | **false** | **true** | auto-ban 的渠道能自动探活恢复，不再永久死 |
+| `ChannelDisableThreshold` | 10 | **50** | 公益池抖动容忍度提高 5 倍，减少误禁 |
+| `ModelRequestRateLimitEnabled` | true | **false** | Claude Code 高频请求不再被限流 |
+
+- backup：`/opt/new-api/data/backups/one-api.db.bak.quota_20260728_0324`
+- 验证：API status 200；4 token remain_quota 全部大正数且 unlimited_quota=1；重启后真实流量正常消耗（token #3 已从 999999999999 降到 999998839888，说明在用且不拦）。
+- **副作用提示**：`AutomaticEnableChannelEnabled=true` 后，被 auto-ban 的渠道会在下次请求探活时自动恢复 status=1。如果某渠道上游真死了，可能会反复 flap（disable→enable→disable）。route_optimizer 的 EWMA 仍会降权，所以 flap 的成本是「偶尔浪费一次往返」，可接受。
