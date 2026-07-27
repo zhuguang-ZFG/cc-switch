@@ -26,8 +26,8 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | **GLM / default Sonnet** | `#41/#42` zhipu 80/50·8 → `#123` hongshi 50/20 |
 | **Haiku** (`claude-haiku-*` / dated) | `#122` Agnes 40/20 → `#63` kimi -20（vyce `#125` status=2 整车停车；`#90` LongCat 无 claude-haiku 能力，仅服务 `LongCat-2.0` id） |
 | **Haiku alias** `LongCat-2.0` | Agnes `#122` maps → `agnes-2.0-flash`（与上不同 model id） |
-| **Anthropic Sonnet** | `#132` freemodel-work GPT -19 → `#63` kimi -20 → `#133` freemodel-cc -21（vyce `#125` sonnet 已剥离：502 硬挂挡链，详见 runbook；`#132` 深夜提权为第一梯队） |
-| **Opus** | pri45 `#10/#20/#60`（w **20/40/30**，2026-07-27 晚降 #10 稳链；`#9` status=2、`#11` 活 w1）→ `#132` freemodel-work GPT -19（Claude 故障第一梯队，Opus→`gpt-5.6-sol`）→ `#133` freemodel-cc -21/5 → GPT -30 系；AR `#118` status=3 封禁中；4.x/`4-8` map→**Opus5**；`[1M]` 在百倍池 **upstream→裸 `claude-opus-5`**（价表拒 `[1M]`）。见 `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md` |
+| **Anthropic Sonnet** | `#132` freemodel-work GPT -19 → `#63` kimi -20 → `#133` freemodel-cc -21 → GPT -30 系 → `#134` glm -33（vyce `#125` sonnet 已剥离+整车停车；`#132` 深夜提权为第一梯队） |
+| **Opus** | pri45 `#10/#20/#60`（w **20/40/30**，2026-07-27 晚降 #10 稳链；`#9` status=2、`#11` 活 w1）→ `#132` freemodel-work GPT -19 → **`#63` kimi -20**（2026-07-27 加入 Opus 链，e2e 已验证）→ `#133` freemodel-cc -21 → GPT -30 系 → **`#134` glm -33**（总兜底，key2 cap 复位后可用）；AR `#118` status=3 封禁中；4.x/`4-8` map→**Opus5**；`[1M]` 在百倍池 **upstream→裸 `claude-opus-5`**（价表拒 `[1M]`）。见 `docs/patches/opus1m-map-and-fable-provider-2026-07-26.md` |
 | **Fable** (`claude-fable-5` / `[1M]`) | `#127` jianzhile pri50/w20（仅 fable；头 `New-Api-Group: Claude-CC-MAX`）→ `#63` kimi -20（2026-07-27 深夜打开的兜底）。本机 Fable 角色 → `claude-fable-5`。见 `docs/patches/jianzhile-fable-newapi-2026-07-26.md` |
 | **Vyce OpenAI** | `#126` 48/15（deepseek/minimax/mimo；在 hongshi 之后） |
 
