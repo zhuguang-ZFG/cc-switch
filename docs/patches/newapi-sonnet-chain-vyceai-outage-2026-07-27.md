@@ -41,3 +41,12 @@ UPDATE abilities SET enabled=1 WHERE channel_id=125 AND model LIKE 'claude-sonne
 ```
 
 DB 备份：`/opt/new-api/data/backups/one-api.before-vyce-sonnet-off-*.db`。
+
+## 追加（20:11）：Opus 主池 #10 不稳 → 降权
+
+- 现象：客户端「总是停止」——`claude-opus-4-8` 请求经 #10 时流中途 EOF
+  （`soft_errors=1, received=3`）+ 间歇 `500 Upstream access forbidden`；
+  NewAPI 重试由 #20/#60 补完，但 thinking 已流出的请求无法续，客户端只能「继续」。
+- 处置：权重 `#10` 50→**20**、`#60` k40 18→**30**（#20 保持 40）。
+  新分布 #10 22% / #20 44% / #60 33%。dx 自动权重次日会再调。
+- 注意：#9 status=2 未动；#10 若持续 forbidden 可再降或 status=2。
