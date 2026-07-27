@@ -192,3 +192,22 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - backup：`/opt/new-api/data/backups/one-api.db.bak.quota_20260728_0324`
 - 验证：API status 200；4 token remain_quota 全部大正数且 unlimited_quota=1；重启后真实流量正常消耗（token #3 已从 999999999999 降到 999998839888，说明在用且不拦）。
 - **副作用提示**：`AutomaticEnableChannelEnabled=true` 后，被 auto-ban 的渠道会在下次请求探活时自动恢复 status=1。如果某渠道上游真死了，可能会反复 flap（disable→enable→disable）。route_optimizer 的 EWMA 仍会降权，所以 flap 的成本是「偶尔浪费一次往返」，可接受。
+
+## #9 key 换行符 + #20 并发风暴修复（2026-07-28 03:27）
+
+**根因（500 upstream error: do request failed）**：审计 #9 hexdump 发现其 `key` 字段含**嵌入换行符 `0x0a`**——实际存了两个 key 用 `\n` 拼接：
+```
+sk-9ef0239d8aa3f1b9ef058a6fa2d6fab64177c9eaa3ba175517f4dd7b1b648f3c\n
+sk-8410ee646169e9d988705f2d1e2d8c575d5ab875987fa5cee53f7fccf4b0f2b
+```
+Go HTTP client 把整串当 `X-Api-Key` header 值，遇 `\n` 直接报 `net/http: invalid header field value for "X-Api-Key"` → NewAPI 记 `do request failed` → 对外 500。**每次打到 #9 都必 500**（key 本地坏，与上游无关）。
+
+测试两 key：第一个 200（有效），第二个 401（作废）。修复：`UPDATE channels SET key='sk-9ef0239...' WHERE id=9`（截成单一有效 key）+ `podman restart new-api` 刷 fork 内存缓存。
+
+**连带问题（#20 Concurrency limit exceeded 429）**：#9 每次必 500 → RetryTimes failover 全压到 #20 → baibei 上游账号并发硬上限被打爆（17 次 429）。根因不是 #20 本身，是 #9 坏了导致的流量倾斜。
+
+**权重再均衡**（50 层真 claude）：原 `#9/#20/#10 = 60/13/1`（#9 key 坏时 w60 全浪费）→ 现 `25/25/10`。channels + abilities 双写。重启后 channel 分布健康：#9/#10/#20/#60 各有命中，无单点。
+
+- backup：`one-api.db.bak.key9_20260728_0327` / `one-api.db.bak.rebalance_20260728_0330`
+- 验证：`invalid header` 计数归零；claude-opus-5 经 gateway 200 + 缓存命中；4 渠道分流正常。
+- **教训**：DB 里 key 字段绝对不能有多行/控制字符。NewAPI 后台编辑 key 时粘贴可能带入换行。审计渠道 key 时用 `xxd` 而非肉眼。
