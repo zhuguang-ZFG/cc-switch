@@ -272,12 +272,13 @@ def main():
     else:
         log("no change (hysteresis), weights: %s" % new_w)
 
-    # TG alerts on dead-set transitions
+    # TG alerts on dead-set transitions（映射渠 flap 不发判死/恢复告警，门控已覆盖）
     names = {r["id"]: r["name"] for r in tier}
     dead = sorted(c for c, s in scores.items() if s <= 0)
     prev_dead = st.get("dead", [])
-    newly = [c for c in dead if c not in prev_dead]
-    healed = [c for c in prev_dead if c not in dead]
+    newly = [c for c in dead if c not in prev_dead and c not in MAIN_TIER_MAPPED]
+    healed = [c for c in prev_dead
+              if c not in dead and c not in MAIN_TIER_MAPPED]
     if dead and len(dead) == len(tier):
         send_tg("🚨 *Opus 主池全灭*：所有受管渠道探针失败\nweights: %s" % new_w)
     else:

@@ -68,6 +68,8 @@ def _stream_ttft(req):
             return None
         except (socket.timeout, TimeoutError):
             return float(SONNET_PROBE_TIMEOUT)
+        except Exception:
+            return None      # 首块前被重置 ≈ 不稳定/死
 
 
 def _probe_openai(base_url, key, model, ua):
@@ -155,13 +157,13 @@ def sonnet_main():
             ro.log("sonnet probe FAIL ch#%d %s (errs=%d succ=%d)"
                    % (cid, row["name"][:26], errs[cid], succ[cid]))
             continue
-        prev_t = st.setdefault("ewma_ttft", {}).get(str(cid), ttft)
+        prev_t = st.setdefault("ewma_ttft", {}).get("s%d" % cid, ttft)
         ew_t = ro.EWMA_ALPHA * ttft + (1 - ro.EWMA_ALPHA) * prev_t
-        st["ewma_ttft"][str(cid)] = ew_t
+        st["ewma_ttft"]["s%d" % cid] = ew_t
         rate = errs[cid] / (errs[cid] + succ[cid] + 1.0)
-        prev_r = st.setdefault("ewma_err", {}).get(str(cid), rate)
+        prev_r = st.setdefault("ewma_err", {}).get("s%d" % cid, rate)
         ew_r = ro.EWMA_ALPHA * rate + (1 - ro.EWMA_ALPHA) * prev_r
-        st["ewma_err"][str(cid)] = ew_r
+        st["ewma_err"]["s%d" % cid] = ew_r
         lat = 0.5 * ew_t + 0.5 * ttft
         quality = 1.0 / (1.0 + ro.ERR_PENALTY * ew_r)
         scores[cid] = quality / max(lat, 0.3)
