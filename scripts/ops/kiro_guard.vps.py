@@ -1889,8 +1889,13 @@ class Handler(BaseHTTPRequestHandler):
                     # Upstream closed mid-stream after partial SSE (CF 524 etc.):
                     # treat the partial text as truncation and continue it.
                     reason = rsn
+                    _lb = "none"
+                    _rc = round_msg.get("content") or []
+                    if _rc and isinstance(_rc[-1], dict):
+                        _lb = _rc[-1].get("type") or "unknown"
                     journal_event(
-                        "soft", f"tee_eof:{rsn}", {"phase": f"tee_round_{round_no}"},
+                        "soft", f"tee_eof:{rsn}",
+                        {"phase": f"tee_round_{round_no}", "last_block": _lb},
                         req_id=req_id,
                     )
                     acc_msg = (
@@ -1900,7 +1905,13 @@ class Handler(BaseHTTPRequestHandler):
                     if SOFT_RETRY_BACKOFF_MS > 0:
                         time.sleep(SOFT_RETRY_BACKOFF_MS / 1000.0)
                     continue
-                journal_event("hard", rsn, {"phase": "tee"}, req_id=req_id)
+                _lb = "none"
+                _rc = (round_msg.get("content") or []) if round_msg else []
+                if _rc and isinstance(_rc[-1], dict):
+                    _lb = _rc[-1].get("type") or "unknown"
+                journal_event(
+                    "hard", rsn, {"phase": "tee", "last_block": _lb}, req_id=req_id
+                )
                 _check_hard_alert(rsn)
                 _log(f"tee hard_fail reason={rsn}")
                 _send_sse_error()
