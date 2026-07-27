@@ -61,7 +61,8 @@ ERR_RE = re.compile(r"channel error \(channel #(\d+)(?:, status code: (\d+))?\):
 
 # 错误分级权重（v5, 2026-07-27）：429/并发限制是瞬时现象轻罚（0.5），
 # 5xx/连接故障中罚（2.0），401/403 auth 类重罚（3.0）。参考 CRS 分级冷却模型。
-ERR_W_AUTH, ERR_W_CONC, ERR_W_OTHER = 3.0, 0.5, 2.0
+# v5.2：sensitive_words 等内容拒绝不是渠道故障，单列一类权重 0（只统计不惩罚）。
+ERR_W_AUTH, ERR_W_CONC, ERR_W_OTHER, ERR_W_CONTENT = 3.0, 0.5, 2.0, 0.0
 
 
 def log(msg):
@@ -179,8 +180,8 @@ def channel_errors(ids):
 
 
 def channel_error_classes(ids):
-    """Per-channel classified error counts: auth / conc(urrency) / other."""
-    cls = {cid: {"auth": 0, "conc": 0, "other": 0} for cid in ids}
+    """Per-channel classified error counts: auth / conc / other / content."""
+    cls = {cid: {"auth": 0, "conc": 0, "other": 0, "content": 0} for cid in ids}
     try:
         out = subprocess.run(
             ["podman", "logs", "--since", LOG_WINDOW, "new-api"],
@@ -191,7 +192,9 @@ def channel_error_classes(ids):
                 continue
             status = int(m.group(2) or 0)
             msg = (m.group(3) or "").lower()
-            if status in (401, 403):
+            if "sensitive_words" in msg:
+                cls[cid]["content"] += 1
+            elif status in (401, 403):
                 cls[cid]["auth"] += 1
             elif status == 429 or "concurrency limit" in msg:
                 cls[cid]["conc"] += 1
@@ -204,7 +207,7 @@ def channel_error_classes(ids):
 
 def weighted_err_count(c):
     return (ERR_W_AUTH * c["auth"] + ERR_W_CONC * c["conc"]
-            + ERR_W_OTHER * c["other"])
+            + ERR_W_OTHER * c["other"] + ERR_W_CONTENT * c["content"])
 
 
 def main():
@@ -272,7 +275,7 @@ def main():
         quality = 1.0 / (1.0 + ERR_PENALTY * ew_r)
         scores[cid] = quality / max(lat, 0.3)
         c = err_cls[cid]
-        cls_note = (" a%d/c%d/o%d" % (c["auth"], c["conc"], c["other"])) if errs[cid] else ""
+        cls_note = (" a%d/c%d/o%d/t%d" % (c["auth"], c["conc"], c["other"], c["content"])) if errs[cid] else ""
         log("ch#%-3d %-26s ttft=%5.1fs lat=%5.1fs err=%.2f q=%.2f (errs=%d%s succ=%d)" % (
             cid, name, ttft, lat, ew_r, quality, errs[cid], cls_note, succ[cid]))
 

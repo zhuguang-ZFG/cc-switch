@@ -235,3 +235,22 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
   （「插进」这种误伤面太大）或按模型关掉过滤。
 - 一个观察到的真实故障：00:45:41 `140->138->138` 连续失败后 500 给客户端
   （#138 k3 偶发 do request failed），非 #140 引入，属 k3 上游抖动。
+
+## 追加（01:20）：optimizer v5.1/v5.2 + #141 阿里云 coding plan 福利渠
+
+- **v5.1**：全灭告警加跳变门控（state.all_dead），只在新进入全灭时发一次；
+  文案带 priority 层号和渠道名。起因：#140 独占 60 层后探针单次抖动就触发
+  「主池全灭」（01:00 实例，30s 后复测正常）。
+- **v5.2**：错误分级新增 content 类——sensitive_words 等内容拒绝不是渠道
+  故障，权重 0（只统计展示 t%d，不进错误率分子）。
+- **#141 aliyun-codingplan-fuli**（type 1）：阿里云 coding plan 共享 key
+  （sk-sp-…，2026-08-02 到期不续），opus 全家族→qwen3-coder-plus，
+  priority -19（与 #63 同兜底带）weight 10。实测 TTFT 0.55-0.83s，
+  计划内模型：qwen3-coder-plus/qwen3-coder-next/qwen3-max-2026-01-23/
+  qwen3.5/3.6/3.7-plus/glm-4.7/glm-5/kimi-k2.5/MiniMax-M2.5。
+- **坑**：one-api 系 base_url 不带 /v1——写 `…/v1` 会变 /v1/v1/chat/completions
+  404（E2E 首轮即踩，改回裸域名后 `use_channel=["141"]` 200/4s 通过）。
+- E2E 期间 optimizer 把临时置顶 70 的 #141 探针判死改 w1（当时 404），
+  已随修复恢复 w10——临时置顶测试后记得核对 weight。
+- code review 遗留（未拍板）：P2 optimizer 管理面塌缩为 60 层单渠道监控，
+  45 层（#10/#20/#60/#138/#139）weight 冻结无人管理。
