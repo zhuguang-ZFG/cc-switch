@@ -35,7 +35,7 @@ python scripts/ops/newapi-dx-analyze.py --dry-run # 只报告
 | 检查 | 期望 |
 |------|------|
 | 安装包 | **官方** farion1231（DB `user_version=16`）；勿装本分支 fork 二进制 |
-| `~\.claude\settings.json` | 官方别名：Sonnet=`claude-sonnet-4-6[1M]`，Opus=`claude-opus-5[1M]`，Haiku=`claude-haiku-4-5`；**无** `ANTHROPIC_MODEL` |
+| `~\.claude\settings.json` | Opus=`claude-opus-5[1M]`（含 `REASONING_MODEL` / `SUBAGENT_MODEL`）；**Sonnet=`claude-sonnet-4-6` 不带 `[1M]`**（CC 会自动追加 `[1m]`，写死 `[1M]` 反而两层后缀路由不到）；Haiku=`claude-haiku-4-5`；**无** `ANTHROPIC_MODEL` |
 | cc-switch provider ZG | Sonnet 上游 `glm-5.2[1M]`；**无** `ANTHROPIC_MODEL` |
 | cc-switch FQ#2 AR2 | `claude-opus-5` 无 `[1M]` |
 | `rtk init --show` | Hook `[ok]`；版本 rtk-ai（非 crates.io 0.1.0） |
@@ -126,10 +126,11 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | 项 | 值 |
 |----|-----|
 | weight | 1–50；单次 \|Δ\|≤15 |
-| Opus 主池权重 | **`#9/#10/#20`**（百倍，多 key）= **50/40/28**；**`#60`**（林夕/k40，多 key）= **已死**（额度耗尽，status=2）；AR **`#118` w10**（Codex 伪装，`claude-opus-4-6/4-8`，guard-8410）；`#119/#120` **暂不开** |
-| `#81` / `#11` / AR `#119–120` | status=2 + abilities off；`#118` live；health EXCLUDE∋11,75,77–81,118–120（118 不探但仍可路由） |
+| Opus 主池权重 | **`#9/#10/#20`**（百倍，多 key）= **50/40/28**；**林夕 `#11/#60`** 已复活（2026-07-27，仅 `claude-opus-5`/`[1M]` ability，**w5/w3**）；AR **`#118` w10**（Codex 伪装，`claude-opus-4-6/4-8`，guard-8410）；`#119/#120` **暂不开** |
+| `#81` / AR `#119–120` | status=2 + abilities off；`#118` live；health EXCLUDE∋11,75,77–81,118–120（118 不探但仍可路由；**#11 已复活**但 health 仍不探） |
 | 卡顿分诊 | 首字慢→`logs.use_time`/渠道；中途停→soft journal；关键词→502 failover。见 `docs/patches/newapi-dx-gov-b-2026-07-26.md` |
-| 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`；Haiku `#122→#125→#90`；本机 FQ ZG→AR2 |
+| 严格故障序 | 见 `docs/ops/zg-claude-routing.md`「Strict failover order」：GPT `#21→#124→#123`（`#21`=DC公益 8317，`gpt-5.6-terra`/`luna`/`5.5` e2e 已验证 2026-07-27）；Haiku `#122→#125→#90`；**Sonnet `#63`(pri35)→`#125`(pri25)**（vyceai 525 硬挂期间主备已对调，恢复后跑 `sonnet_failover.py` 换回）；**Claude→GPT 兜底（2026-07-27）**：`#21/#124` 挂 `claude-opus-5`/`[1M]`/`claude-sonnet-4-6`/`[1m]`/`[1M]` ability（**pri0 w0 最后兜底**，Opus→`gpt-5.6-terra`，Sonnet→`gpt-5.5`，走 model_mapping）；本机 FQ ZG→AR2 |
+| `[1m]` 别名 | Claude Code 在 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576` 时**自动追加 `[1m]`**（小写）。渠道须同时有 `[1m]` / `[1M]` 的 ability + `model_mapping` 映射回基础模型，**且 priority 与基础模型一致**——否则备份渠会抢主渠流量 |
 | DX 自动改权重 | **仅** Opus 主池 `#9/#10/#20/#60` 与软截断阈值；勿改 GPT/Haiku/Vyce 梯队 pri，勿把 `w=0` 噪声渠重新 enabled |
 | `#81` | Opus/Fable 已摘（models 空 + abilities off）；渠 pri15；改完 **必须** `podman restart new-api`；**勿** `/status` 弹回 |
 | SHORT_OUT | 16–64（当前 **40**） |
@@ -156,7 +157,7 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 | AR Cyrillic | `KIRO_GUARD_CYRILLIC_BYPASS=1`（仅 `kiro-guard-ar-841*`）：`c`→`с` 打散词表；响应还原；勿开到百倍/k40 |
 | SOFT_LIMIT | `KIRO_GUARD_SOFT_LIMIT=1`：空/半截 tool → Bash 提示继续拆分（非 502） |
 | RetryTimes | NewAPI options **3**（勿回 5；与 guard soft-retry 叠乘） |
-| `#11` / `#60` / `#81` | `#11/#81` status=2 + abilities off；`#60`（林夕/k40，多 key）**已死**（额度耗尽）应 status=2；health **不探 EXCLUDE** |
+| `#11` / `#60` / `#81` | `#81` status=2 + abilities off；**`#11/#60`（林夕/k40）2026-07-27 复活**：仅开 `claude-opus-5`/`[1M]` ability（`[1M]` 走 model_mapping 回基础模型，上游无 `[1M]` 实体），w5/w3，e2e 已见 #60 真实出量 200；health **不探 EXCLUDE** |
 | health_check v5.1 | **仅** Opus `#9/#10/#20/#60`；探针优先 `claude-opus-5[1M]`；公益站 transient **不禁**；硬失败≥12 可禁；**无**自动复活 / DISABLE-QUOTA / 改 pri / 整渠 abilities；慢探针只 TG。见 `docs/patches/newapi-dx-health-check-v5.1-2026-07-26.md` |
 | 本机 FQ | ZG → `agentrouter-2`；`max_retries=2`；`ANTHROPIC_MODEL=claude-opus-5[1M]` |
 | Zhipu `#41/#42` | `param_override`：`enable_thinking=false` + **delete `stop`**（防 `</block>` 字符串 400）；改 override 后必须 `podman restart new-api`。见 `docs/patches/newapi-dx-zhipu-stop-2026-07-26.md` |
@@ -234,6 +235,58 @@ Claude Code（ZG）日常模型应是 `claude-opus-5[1M]`；Cursor CLI 默认 `c
 |-----|------|
 | `@InformationButlerBot` | 林夕公益站：`/bind` `/checkin` `/account` 余额查询 |
 | `@Lbas100xxxxxxBot` | 百倍公益站：状态查询、`/ai` 编程提问（暂无签到） |
+
+## Sonnet 单点故障 + `[1m]` 别名坑（2026-07-27）
+
+**症状**：auto-mode 安全分类器报 `claude-sonnet-4-6[1m] is temporarily unavailable`，Bash/Edit 全被阻断。
+
+**根因链**：
+
+1. Claude Code 在 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576` 时**自动给模型名追加 `[1m]`**（小写）
+2. ZG NewAPI 上只有 `claude-sonnet-4-6`，没有 `[1m]` 的 ability → 404
+3. 唯一启用的 Sonnet 渠道 `#125`（vyceai）当时返回 **HTTP 525**（CF↔源站 SSL 握手失败），且**无任何 failover**
+
+**修复**：
+
+| 步骤 | 内容 |
+|------|------|
+| 1 | `#125` 加 `claude-sonnet-4-6[1m]` / `[1M]` ability + `model_mapping` → `claude-sonnet-4-6` |
+| 2 | 启用 `#63`（fallback-claude-to-kimi）作备份，加同样的 `[1m]` / `[1M]` 别名 → `claude-sonnet-5` |
+| 3 | 修正 `#125` 的 `[1m]` / `[1M]` ability priority **0 → 35**（插入时默认 0，导致备份渠 25 反超主渠，failover 方向倒置） |
+| 4 | `#125` 持续 525/超时且 **NewAPI 未自动切换**（525 疑不在重试集）→ 主备对调：`#63` pri **35**，`#125` pri **25** |
+| 5 | 补定价：`ModelRatio` + `claude-sonnet-4-6[1m]`/`[1M]` = 0.5、`CompletionRatio` = 2（对齐 haiku/opus 既有别名）→ `podman restart new-api` → e2e `[1m]`/`[1M]`/基础模型全 200 |
+
+**教训**：
+
+- 新增 ability **必须显式设 priority 与基础模型一致**，否则默认 0 会让低优先级备份渠抢走流量
+- 新增别名 ability **必须同步补定价**（`ModelRatio` + `CompletionRatio`），否则请求被 400「价格未配置」挡下——ability 有了照样不可用
+- **别指望 NewAPI 对所有错误码 failover**——525 就没触发。主渠硬挂时要手动调 priority
+
+**Sonnet 渠道现状**（探活 2026-07-27 07:0x）：
+
+| 渠道 | 结果 | pri |
+|------|------|-----|
+| `#63` kimi-coding | **200 OK** — 当前主渠（后端实为 Kimi，降级路径） | **35** |
+| `#125` vyceai | 525 → 连接超时 | 25 |
+| `#61` 0ait | 403 `User has been banned` | — |
+| `#52` anyrouter | 000（VPS 直连被 CF 拦，需代理） | — |
+| `#128` claude-max-oauth | 000（本地 18128 未运行） | — |
+
+**脚本**：`/opt/new-api/sonnet_failover.py`（镜像 `scripts/ops/sonnet_failover.vps.py`）
+
+```bash
+python3 /opt/new-api/sonnet_failover.py && podman restart new-api
+```
+
+按探活结果决定方向：两边都活 → `#125` 主；只有一边活 → 活的升主；两边都挂 → **不动 priority**。vyceai 恢复后重跑即可换回。
+
+## 已知遗留问题
+
+| 问题 | 影响 | 为何暂不修 |
+|------|------|-----------|
+| `anyrouter_squeeze.py` 不走 socks 代理 | VPS 直连 anyrouter.top **SSL 握手失败**，squeeze 每 10min 必失败 | AnyRouter **上游额度已耗尽**（`/v1/models` 列 17 个模型但全部调用返回 404「当前 API 不支持所选模型」），修了代理也拿不到额度。等平台补货后再改 |
+| ~~guard `:8400` 指向已死的林夕 k40~~ | ✅ 已解决（2026-07-27）：林夕 opus-5 复活，`#11/#60` 重新入池 | — |
+| `channel_cache.go` 每分钟刷 `channel_info: unexpected end of JSON input` | 日志噪音（~400 条/6h，2026-07-26 起就有） | 功能正常（缓存照常刷新、渠道正常路由）；DB 全量扫 85 渠道 `channel_info` 均为合法 JSON，疑容器内查询路径/版本差异，未深查 |
 
 ## VPS 维护（2026-07-27）
 
