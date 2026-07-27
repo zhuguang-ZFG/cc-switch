@@ -292,7 +292,7 @@ def main():
 
     conn = sqlite3.connect(DB)
     rows = conn.execute(
-        "SELECT id, name, base_url, key, models, status, header_override, type, setting, priority "
+        "SELECT id, name, base_url, key, models, status, header_override, type, setting, priority, model_mapping "
         "FROM channels WHERE id IN (%s)"
         % ",".join(str(i) for i in sorted(OPUS_POOL))
     ).fetchall()
@@ -301,7 +301,7 @@ def main():
     cookie = login_cookie()
     changed = False
 
-    for cid, name, base, key, models, status, hdr, ctype, setting, priority in rows:
+    for cid, name, base, key, models, status, hdr, ctype, setting, priority, model_mapping in rows:
         if cid in PINNED_EXCLUDE:
             fails[str(cid)] = 0
             continue
@@ -310,6 +310,18 @@ def main():
         if not model:
             print(f"SKIP #{cid} {name}: no models")
             continue
+
+        # Probe what the channel actually sends upstream: NewAPI rewrites the
+        # model via model_mapping (e.g. claude-opus-5[1M] -> claude-opus-5);
+        # probing with the unmapped name gives false negatives (100x pricing
+        # rejects the [1M] id and the probe can never succeed).
+        try:
+            mm = json.loads(model_mapping) if model_mapping else {}
+            mapped = mm.get(model) or {k.lower(): v for k, v in mm.items()}.get(model.lower())
+            if mapped:
+                model = mapped
+        except Exception:
+            pass
 
         setting_proxy = None
         try:

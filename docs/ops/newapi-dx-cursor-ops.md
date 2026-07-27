@@ -288,6 +288,7 @@ python3 /opt/new-api/sonnet_failover.py && podman restart new-api
 | `anyrouter_squeeze.py` 不走 socks 代理 | VPS 直连 anyrouter.top **SSL 握手失败**，squeeze 每 10min 必失败 | AnyRouter **上游额度已耗尽**（`/v1/models` 列 17 个模型但全部调用返回 404「当前 API 不支持所选模型」），修了代理也拿不到额度。等平台补货后再改 |
 | ~~guard `:8400` 指向已死的林夕 k40~~ | ✅ 已解决（2026-07-27）：林夕 opus-5 复活，`#11/#60` 重新入池 | — |
 | ~~`channel_cache.go` 每分钟刷 `channel_info: unexpected end of JSON input`~~ | ✅ 已解决（2026-07-27）：**根因 = SQLite 存储类**。`ChannelInfo.Scan()` 只做 `value.([]byte)` 断言——BLOB 行正常，**TEXT 行断言失败拿 nil → Unmarshal 报 "unexpected end"**。Web UI 建的渠道（#122/#123/#127/#128）channel_info 存为 TEXT，GORM 每轮同步跳过这些行。修复：`UPDATE channels SET channel_info=CAST(channel_info AS BLOB) WHERE typeof(channel_info)='text'`，错误清零，#127 fable 恢复进缓存。上游 bug，TEXT 行随时可能再现（UI 新建/编辑渠道后），复发就重跑该 SQL | — |
+| ~~health_check 探活对 guard 渠道必然 503（假瞎）~~ | ✅ 已解决（2026-07-27）：探针用 DB 裸模型名（如 `claude-opus-5[1M]`）直打 guard，百倍价表拒 `[1M]` → 每 30 分钟四 guard 整齐 503，#9/#10/#20/#60 监控形同虚设；真实流量没事（NewAPI 先 map 再发）。修复：探针选取后应用渠道 `model_mapping`（带大小写回退），实测 #9/#10/#20/#60 四探全过。注意 #9 status=2 但探活已通（`STILL-DISABLED probe ok`），可考虑手动放归 | — |
 
 ## 速度瓶颈分析（2026-07-27 实测）
 
