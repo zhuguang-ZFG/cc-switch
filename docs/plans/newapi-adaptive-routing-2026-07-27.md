@@ -420,3 +420,72 @@ grok45(139)      w0   ← 阀门关
 
 - **② tee 模式**：立项文档 `newapi-midstream-continuation-v4-2026-07-27.md` 已就绪，等用户明确说「开始做 tee」。
 - **muyuan WAF 根治**：若君能放宽敏感词清单或换不拦的上游，muyuan weight 可回升到主力。
+
+## 追加（02:45）：tee 诊断 → 找到「停止」真正根因 = max_tokens cap
+
+### 诊断过程（颠覆原假设）
+
+原 v4 立项假设：「Claude Code 停止 = SSE 流中途 EOF，tee 续写可治」。
+**今晚深度诊断推翻了这个假设。**
+
+**证据链**（近 6h 数据）：
+
+1. NewAPI 侧 240 次 `reason=eof`（用户体感的「停止」），**100% 集中在经 guard 的真 claude 渠道**：
+   - #10 baibei-2663(8404): 86 次 eof
+   - #20 baibei-25ca(8405): 75 次
+   - #60 k40(8400): 49 次
+   - #142 welfare: 26 次 / #11 k40: 4 次
+   - **#138 kimi-k3 / #42 zhipu-glm：0 次 eof**（它们不经 guard）
+
+2. guard journal 侧（baibei 8404/8405）：**78-82% 判为 ok（正常完成）**，missing_stop_reason 各仅 6 次。
+   → guard 认为绝大多数 eof 流是「正常完成」的，不是断流。
+
+3. 每个 eof 都有 HTTP 200 + completion_tokens 有值（67~9546 tokens）+ record consume log + [DONE]。
+   → 流不是断的，是产生了内容后合法结束。
+
+4. **决定性证据（journalctl）**：8404 每个请求都打印 `max_tokens capped 64000 → 8192`。
+
+### 根因
+
+guard 的 `_effective_cap`（kiro_guard.py:1207）把 Claude Code 的 `max_tokens=64000`
+强制 cap 到 8192（写代码请求，MAX_TOKENS_WRITE_CAP 默认值）。模型输出到 8192 token
+触发 `stop_reason=max_tokens` 停止，Claude Code 显示「停止」按钮等用户继续。
+
+**tee 续写对此无能为力**——流不是断的，是 guard 主动限长后模型合法停止。续写器
+只在「断流」（missing_stop_reason）时触发，而这里 stop_reason 是合法的 max_tokens。
+
+### 修复
+
+`INTENT`: guard cap max_tokens 到 8192 导致模型提前停；Claude Code 期望 max_tokens=64000
+不被截断以获得连续长输出；修复=提升 cap 覆盖典型请求。
+
+给所有 8 个 guard 服务（8400/8401/8403/8404/8405/8410/8411/8412）加 systemd override：
+
+```
+[Service]
+Environment="KIRO_GUARD_MAX_TOKENS_CAP=16000"       # 原 4096
+Environment="KIRO_GUARD_MAX_TOKENS_WRITE_CAP=32000"  # 原 8192
+```
+
+- 普通请求上限 4096→16000，写代码请求上限 8192→32000
+- 不动代码，纯 env override，逐服务独立可回滚（删 override.conf + restart）
+- 全端口验证生效：8 个进程 environ 均 cap=16000 write_cap=32000
+
+### 为什么 cap 之前是 8192
+
+推测原始意图是省成本/防滥用。但：
+- baibei 是真 claude（上游按 token 计费），cap 在 guard 这层省不了钱（请求已经到了 guard，
+  上游该付的 token 费不变——cap 只减少了 output token，但 Claude Code 会立刻发「继续」
+  请求补完，总 output token 反而可能更多，因为每次继续重发系统提示）
+- 对体验是灾难：每 8192 token 停一次，长任务要手动继续 N 次
+
+### 验收（待 1-2h 真实流量积累）
+
+明早 cron（6b40a013）会对比 eof 率。预期：
+- 经 guard 的真 claude 渠道 eof 率从 ~100% 降到 <30%（剩余的是真断流 + max_tokens=32000 边界）
+- #138 kimi-k3 不受影响（不经 guard，本就 0 eof）
+
+### PENDING
+
+- 1-2h 后验证 eof 率下降（需真实 Claude Code 流量）
+- 若 32000 仍不够（极长任务），可再提到 64000（完全不做 cap）
