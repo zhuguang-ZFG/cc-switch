@@ -63,3 +63,14 @@ DB 备份：`/opt/new-api/data/backups/one-api.before-vyce-sonnet-off-*.db`。
   `#41=50/#42=8` 一行 SQL。
 - 教训：**同层权重悬殊 + 主渠配额死 = 分类器故障**；optimizer 扩展 GLM 层
   （需 OpenAI 格式探针）列为 v2.1。
+
+## 追加（21:15）：国模进 Claude 路由 — kimi 进 Opus 链 + #134 GLM 总兜底
+
+- **#63 kimi 加 `claude-opus-5`/`[1M]` 能力**（mapping→kimi-for-coding）：
+  强制路由实测 200/4.2s/`use_channel=["63"]`。Opus 链：
+  主池→`#132`GPT(-19)→**`#63`kimi(-20)**→`#133`→GPT -30 系。
+- **新增 `#134 glm-claude-backstop`**（克隆 #41 智谱 key2，**pri=-33 最末位**，
+  Opus/Sonnet→`glm-5.2`）：机械链路正确，强制测试时 429 是 key2 的 5h cap
+  （22:46:47 复位），非配置问题；失败后链路自动 134→60 / 134→132→63 走完，
+  恰好实战验证了多层兜底。选 key2 是为与 GLM 主载 key1(#42) 配额隔离。
+- GPT 池此前已在 Claude 路由内（#132/#129/#130），本次补齐的是国模层。
