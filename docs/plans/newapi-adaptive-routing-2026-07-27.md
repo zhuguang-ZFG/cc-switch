@@ -194,3 +194,13 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
 - optimizer 已正确接管 60 层（探针走 header_override 的 codex UA）。
 - 8317 Dc 站 key 全作废（401 invalid，非配额），三渠道 #21/#129/#137
   保持隔离等群里补 key。
+
+## 追加（00:35）：#140 opus 降 44 —— 敏感词拦截，第一位适得其反
+
+- 实测真实工作流量：**muyuan 上游有敏感词过滤**（500 sensitive_words_detected，
+  与 agentrouter WAF 同族），Claude Code 真实 prompt 全部触发拦截回落。
+  第一位期间 FRT 从 9-11s 恶化到 17-49s（每请求白付 1-2 次失败重试）。
+- 处置：opus 行 60 → **44**（主池之下第一兜底），channels+abilities 双写；
+  fable(55)/sonnet(-18)/haiku(45) 暂留观察（真实流量少，同风险）。
+- 可请君放宽上游敏感词过滤（或确认是哪个上游渠道拦的），解除后可回 60。
+- 教训：公益站「第一位」上线前必须用真实大 prompt 验证，小探针测不出 WAF。
