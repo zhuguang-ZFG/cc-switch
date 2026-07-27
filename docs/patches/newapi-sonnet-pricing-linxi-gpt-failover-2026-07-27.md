@@ -14,12 +14,13 @@
 - 变更：渠道 status=1；仅开 `claude-opus-5`/`[1M]` ability，pri45 **w5/w3**（`#10 w50`/`#20 w40` 仍主导；`#60` 权重由 DX 管理，`#11` 手动）
 - 验证：e2e 6/6 200，日志见 `use_channel:["60"]` 真实出量
 
-## 3. GPT 加入 Claude 故障路由（pri0 兜底）
+## 3. GPT 加入 Claude 故障路由（两次迭代，含重要机制发现）
 
-- `#21`/`#124` 新增 ability：`claude-opus-5`/`[1M]`/`claude-sonnet-4-6`/`[1m]`/`[1M]`，**pri0 w0** 最后兜底
-- `model_mapping`：Opus 家族 → `gpt-5.6-terra`（372k ctx）；Sonnet 家族 → `gpt-5.5`
-- 故障层次：Opus `pri45 主池 → #118 AR + GPT`；Sonnet `#63(35) → #125(25) → GPT(0)`
-- 兜底路径未实弹演练（需打死主池）；Anthropic→OpenAI 转换同 `#63` Kimi 路径，有大量成功先例
+- **机制发现（实测）**：本 fork 按 **`channels.priority` DESC** 选渠，`abilities.priority` 不是主排序键
+- ❌ v1（已撤回）：给 `#21/#124`（ch_pri 60/55）直接挂 claude ability（abilities pri0）→ **`#21` 立即抢走全部 Claude 流量**（`use_channel:["21"]` 直选，CC 会话 16 连击落在 GPT 上），opus/sonnet 全中招
+- ✅ v2（现网）：克隆 `#21` → **`#129 gpt-terra-claude-fallback`，ch_pri=-30 全局最低**（低于 `#118`=0、`#63`=-20），挂 `claude-opus-5`/`[1M]`/`claude-sonnet-4-6`/`[1m]`/`[1M]` ability；`model_mapping`：Opus→`gpt-5.6-terra`，Sonnet→`gpt-5.5`
+- 验证：opus→`["10"]/["20"]`，sonnet→`["125","63"]`，terra→`["21"]`；`#129` 只有 Claude 渠全灭才会被选中
+- 推论：Sonnet 的「主备对调」其实由 ch_pri 决定（`#125`=35 > `#63`=-20），vyceai 恢复后**自动**回主渠，无需手动改 abilities priority
 
 ## 4. 备注
 
