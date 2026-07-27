@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""route_optimizer.py v2 — TTFT + error/EOF-rate adaptive weights for NewAPI.
+"""route_optimizer.py v3 — TTFT + error/EOF-rate adaptive weights for NewAPI.
 
 v2 over v1:
 - streaming TTFT probe (first-byte latency, aborts early = cheaper)
 - quality signal: per-channel error rate parsed from container logs
   (channel error lines incl. mid-stream EOF handler_stop), EWMA-smoothed
 - TG alerts on dead/recovery/all-dead transitions (via /opt/new-api/tg_notify.py)
+
+v3 (2026-07-27):
+- __main__ 追加调用 route_optimizer_sonnet.sonnet_main()（Sonnet 兜底链层间
+  自动换序，同 cron 串行）；--restore 不再连带触发 sonnet 周期
+- 入口 flock（route_optimizer.lock）防 cron 重叠
 
 Only adjusts `weight` within the top-priority tier; never touches
 priority/status/models. Design: docs/plans/newapi-adaptive-routing-2026-07-27.md
@@ -68,17 +73,15 @@ def save_state(st):
     os.replace(tmp, STATE)
 
 
-def probe_ttft(base_url, key, model=None, extra_headers=None):
+def probe_ttft(base_url, key, model=None):
     """Streaming TTFT seconds, or None on failure. Aborts after first SSE chunk."""
     body = json.dumps({"model": model or PROBE_MODEL, "max_tokens": 8, "stream": True,
                        "messages": [{"role": "user", "content": "hi"}]}).encode()
-    hdrs = {"content-type": "application/json", "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "user-agent": "claude-cli/2.1.2 (external, cli)"}
-    if extra_headers:
-        hdrs.update(extra_headers)
     req = urllib.request.Request(
-        base_url.rstrip("/") + "/v1/messages", data=body, headers=hdrs)
+        base_url.rstrip("/") + "/v1/messages", data=body,
+        headers={"content-type": "application/json", "x-api-key": key,
+                 "anthropic-version": "2023-06-01",
+                 "user-agent": "claude-cli/2.1.2 (external, cli)"})
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
@@ -211,14 +214,31 @@ def main():
     db.close()
 
 
+LOCK = "/opt/new-api/data/route_optimizer.lock"
+
+
+def _acquire_lock():
+    """cron 重叠保护：拿不到锁直接退出（上一轮还在跑）。"""
+    import fcntl
+    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log("another optimizer run holds the lock, exiting")
+        sys.exit(0)
+    return fd  # 保持 fd 打开至进程结束，锁随进程释放
+
+
 if __name__ == "__main__":
+    _lock_fd = _acquire_lock()
     if "--restore-sonnet" in sys.argv or "--sonnet-dry" in sys.argv:
         import route_optimizer_sonnet
         route_optimizer_sonnet.sonnet_main()
     else:
         main()
-        try:
-            import route_optimizer_sonnet
-            route_optimizer_sonnet.sonnet_main()
-        except Exception as e:
-            log("sonnet reorder error: %s" % e)
+        if "--restore" not in sys.argv:
+            try:
+                import route_optimizer_sonnet
+                route_optimizer_sonnet.sonnet_main()
+            except Exception as e:
+                log("sonnet reorder error: %s" % e)

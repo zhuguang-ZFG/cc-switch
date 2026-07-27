@@ -25,7 +25,7 @@ sys.path.insert(0, "/opt/new-api/scripts")
 
 import route_optimizer as ro
 
-SONNET_GROUP = [63, 133, 129, 134]
+SONNET_GROUP = [63, 133, 129, 134]  # #132 work.freemodel 拒绝 Claude Code，已摘渠移出
 SONNET_REQ_MODEL = "claude-sonnet-4-6"
 SONNET_FAMILY = "claude-sonnet%"
 SONNET_MARGIN = 1.5
@@ -50,24 +50,24 @@ def _hdr_override(row):
 
 
 def _stream_ttft(req):
-    """流式 TTFT 秒数。None=死/被拒；SONNET_PROBE_TIMEOUT=活着但首块超时（慢）。"""
+    """流式 TTFT 秒数。None=死/被拒（含响应头都不来）；
+    SONNET_PROBE_TIMEOUT=200 已收到但首块超时（慢但活着）。"""
     import socket
     t0 = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=SONNET_PROBE_TIMEOUT) as r:
-            if not (200 <= r.status < 300):
-                return None
-            try:
-                for chunk in r:
-                    if chunk.strip():
-                        return time.time() - t0
-                return None
-            except (socket.timeout, TimeoutError):
-                return float(SONNET_PROBE_TIMEOUT)
-    except (socket.timeout, TimeoutError):
-        return float(SONNET_PROBE_TIMEOUT)
+        r = urllib.request.urlopen(req, timeout=SONNET_PROBE_TIMEOUT)
     except Exception:
         return None
+    with r:
+        if not (200 <= r.status < 300):
+            return None
+        try:
+            for chunk in r:
+                if chunk.strip():
+                    return time.time() - t0
+            return None
+        except (socket.timeout, TimeoutError):
+            return float(SONNET_PROBE_TIMEOUT)
 
 
 def _probe_openai(base_url, key, model, ua):
@@ -97,10 +97,12 @@ def _probe_one(row):
     cid = row["id"]
     model = _mapped(row, SONNET_REQ_MODEL)
     hdrs = _hdr_override(row)
+    # 多 key 渠（换行分隔）只取首 key，防止非法头导致探针永久失败
+    key = (row["key"] or "").split("\n")[0].strip()
     if row["type"] == TYPE_ANTHROPIC:
-        return cid, _probe_anthropic(row["base_url"], row["key"], model, hdrs)
+        return cid, _probe_anthropic(row["base_url"], key, model, hdrs)
     ua = hdrs.get("User-Agent", "new-api-route-optimizer/3.0")
-    return cid, _probe_openai(row["base_url"], row["key"], model, ua)
+    return cid, _probe_openai(row["base_url"], key, model, ua)
 
 
 def sonnet_main():
