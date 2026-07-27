@@ -1,25 +1,41 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""route_optimizer.py — latency+quality adaptive weights for NewAPI same-tier channels.
+"""route_optimizer.py v2 — TTFT + error/EOF-rate adaptive weights for NewAPI.
 
-Runs on the VPS as a cron job (every 5 min). Only adjusts `weight` within the
-top-priority tier of a model family; never touches priority/status/models.
-Design: docs/plans/newapi-adaptive-routing-2026-07-27.md
+v2 over v1:
+- streaming TTFT probe (first-byte latency, aborts early = cheaper)
+- quality signal: per-channel error rate parsed from container logs
+  (channel error lines incl. mid-stream EOF handler_stop), EWMA-smoothed
+- TG alerts on dead/recovery/all-dead transitions (via /opt/new-api/tg_notify.py)
+
+Only adjusts `weight` within the top-priority tier; never touches
+priority/status/models. Design: docs/plans/newapi-adaptive-routing-2026-07-27.md
 """
-import json, os, sqlite3, sys, time, urllib.request
+import json, os, re, sqlite3, subprocess, sys, time, urllib.request
+
+sys.path.insert(0, "/opt/new-api")
+try:
+    from tg_notify import send_tg
+except Exception:
+    def send_tg(text, **kw):
+        return False
 
 DB = "/opt/new-api/data/one-api.db"
 STATE = "/opt/new-api/data/route_optimizer_state.json"
 LOG = "/opt/new-api/data/route_optimizer.log"
 
-MODEL_FAMILY = "claude-opus%"          # v1: Opus pool only
+MODEL_FAMILY = "claude-opus%"
 PROBE_MODEL = "claude-opus-5"
-EXCLUDE_CHANNELS = {11}                # manual conservative trickle; optimizer must not touch
+EXCLUDE_CHANNELS = {11}
 PROBE_TIMEOUT = 30
-TRAFFIC_WINDOW_S = 1800                 # 30 min real-traffic window
+LOG_WINDOW = "6m"                       # container-log slice per run
+TRAFFIC_WINDOW_S = 360                  # success count window (matches cron)
 EWMA_ALPHA = 0.4
+ERR_PENALTY = 3.0                       # quality = 1/(1 + ERR_PENALTY*err_rate)
 W_MIN_OK, W_MAX, W_DEAD = 3, 60, 1
 HYSTERESIS = 5
+
+ERR_RE = re.compile(r"channel error \(channel #(\d+)")
 
 
 def log(msg):
@@ -42,7 +58,7 @@ def load_state():
         with open(STATE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {"ewma": {}, "backup_weights": None}
+        return {"ewma_ttft": {}, "ewma_err": {}, "dead": [], "backup_weights": None}
 
 
 def save_state(st):
@@ -52,9 +68,9 @@ def save_state(st):
     os.replace(tmp, STATE)
 
 
-def probe(base_url, key):
-    """Return latency seconds or None on failure."""
-    body = json.dumps({"model": PROBE_MODEL, "max_tokens": 8,
+def probe_ttft(base_url, key):
+    """Streaming TTFT seconds, or None on failure. Aborts after first SSE chunk."""
+    body = json.dumps({"model": PROBE_MODEL, "max_tokens": 8, "stream": True,
                        "messages": [{"role": "user", "content": "hi"}]}).encode()
     req = urllib.request.Request(
         base_url.rstrip("/") + "/v1/messages", data=body,
@@ -64,10 +80,30 @@ def probe(base_url, key):
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
-            r.read()
-            return time.time() - t0 if 200 <= r.status < 300 else None
+            if not (200 <= r.status < 300):
+                return None
+            for chunk in r:
+                if chunk.strip():
+                    return time.time() - t0
+            return None
     except Exception:
         return None
+
+
+def channel_errors(ids):
+    """Per-channel error count from the last LOG_WINDOW of container logs."""
+    errs = {cid: 0 for cid in ids}
+    try:
+        out = subprocess.run(
+            ["podman", "logs", "--since", LOG_WINDOW, "new-api"],
+            capture_output=True, text=True, timeout=60).stdout
+        for m in ERR_RE.finditer(out):
+            cid = int(m.group(1))
+            if cid in errs:
+                errs[cid] += 1
+    except Exception as e:
+        log("WARN container-log parse failed: %s" % e)
+    return errs
 
 
 def main():
@@ -76,7 +112,6 @@ def main():
     db = sqlite3.connect(DB)
     db.row_factory = sqlite3.Row
 
-    # top tier = highest priority among live channels serving the family
     rows = db.execute(
         "SELECT DISTINCT c.id, c.name, c.base_url, c.key, c.weight, c.priority"
         " FROM channels c JOIN abilities a ON a.channel_id = c.id"
@@ -103,53 +138,73 @@ def main():
         st["backup_weights"] = {str(r["id"]): r["weight"] for r in tier}
         save_state(st)
 
-    # real-traffic latency (30 min window)
-    traffic = {}
-    q = ("SELECT channel_id, AVG(use_time) av, COUNT(*) n FROM logs"
-         " WHERE model_name LIKE ? AND created_at > ? AND channel_id IN (%s)"
-         " GROUP BY channel_id" % ",".join("?" * len(ids)))
+    # successes from real traffic (short window; logs only record successes)
+    succ = {cid: 0 for cid in ids}
+    q = ("SELECT channel_id, COUNT(*) n FROM logs WHERE model_name LIKE ?"
+         " AND created_at > ? AND channel_id IN (%s) GROUP BY channel_id"
+         % ",".join("?" * len(ids)))
     for r in db.execute(q, [MODEL_FAMILY, int(time.time()) - TRAFFIC_WINDOW_S] + ids):
-        traffic[r["channel_id"]] = (r["av"], r["n"])
+        succ[r["channel_id"]] = r["n"]
 
-    # score each channel
+    errs = channel_errors(ids)
+
     scores = {}
     for r in tier:
         cid = r["id"]
-        p = probe(r["base_url"], r["key"])
-        if p is None:
+        name = r["name"][:26]
+        ttft = probe_ttft(r["base_url"], r["key"])
+        if ttft is None:
             scores[cid] = 0.0
-            log("probe FAIL ch#%d %s" % (cid, r["name"]))
+            log("probe FAIL ch#%d %s (errs=%d succ=%d)" % (cid, name, errs[cid], succ[cid]))
             continue
-        av, n = traffic.get(cid, (None, 0))
-        base = av if (av and n >= 3) else p
-        prev = st["ewma"].get(str(cid), base)
-        ew = EWMA_ALPHA * base + (1 - EWMA_ALPHA) * prev
-        st["ewma"][str(cid)] = ew
-        lat = 0.6 * ew + 0.4 * p
-        scores[cid] = 1.0 / max(lat, 0.5)
-        log("ch#%-3d %-26s probe=%5.1fs traffic_n=%-3d lat=%5.1fs" % (
-            cid, r["name"][:26], p, n, lat))
+        prev_t = st.setdefault("ewma_ttft", {}).get(str(cid), ttft)
+        ew_t = EWMA_ALPHA * ttft + (1 - EWMA_ALPHA) * prev_t
+        st["ewma_ttft"][str(cid)] = ew_t
+        rate = errs[cid] / (errs[cid] + succ[cid] + 1.0)
+        prev_r = st.setdefault("ewma_err", {}).get(str(cid), rate)
+        ew_r = EWMA_ALPHA * rate + (1 - EWMA_ALPHA) * prev_r
+        st["ewma_err"][str(cid)] = ew_r
+        lat = 0.5 * ew_t + 0.5 * ttft
+        quality = 1.0 / (1.0 + ERR_PENALTY * ew_r)
+        scores[cid] = quality / max(lat, 0.3)
+        log("ch#%-3d %-26s ttft=%5.1fs lat=%5.1fs err=%.2f q=%.2f (errs=%d succ=%d)" % (
+            cid, name, ttft, lat, ew_r, quality, errs[cid], succ[cid]))
 
     total = sum(scores.values())
     new_w = {}
     for r in tier:
         cid = r["id"]
-        if scores[cid] <= 0 or total <= 0:
-            new_w[cid] = W_DEAD
-        else:
-            new_w[cid] = max(W_MIN_OK, min(W_MAX, round(100 * scores[cid] / total)))
+        new_w[cid] = W_DEAD if (scores[cid] <= 0 or total <= 0) else \
+            max(W_MIN_OK, min(W_MAX, round(100 * scores[cid] / total)))
 
-    changed = {cid: w for cid, w in new_w.items()
-               if abs(w - dict((r["id"], r["weight"]) for r in tier)[cid]) >= HYSTERESIS}
-    if changed:
+    cur_w = {r["id"]: r["weight"] for r in tier}
+    if any(abs(new_w[c] - cur_w[c]) >= HYSTERESIS for c in new_w):
         for cid, w in new_w.items():
             db.execute("UPDATE channels SET weight=? WHERE id=?", (w, cid))
             db.execute("UPDATE abilities SET weight=? WHERE channel_id=? AND model LIKE ?",
                        (w, cid, MODEL_FAMILY))
         db.commit()
-        log("APPLY weights: %s (takes effect within 60s via fork db-sync)" % new_w)
+        log("APPLY weights: %s" % new_w)
     else:
         log("no change (hysteresis), weights: %s" % new_w)
+
+    # TG alerts on dead-set transitions
+    names = {r["id"]: r["name"] for r in tier}
+    dead = sorted(c for c, s in scores.items() if s <= 0)
+    prev_dead = st.get("dead", [])
+    newly = [c for c in dead if c not in prev_dead]
+    healed = [c for c in prev_dead if c not in dead]
+    if dead and len(dead) == len(tier):
+        send_tg("🚨 *Opus 主池全灭*：所有受管渠道探针失败\nweights: %s" % new_w)
+    else:
+        for c in newly:
+            send_tg("⚠️ Opus 渠道判死：#%d %s → w1" % (c, names.get(c, "")))
+        for c in healed:
+            send_tg("✅ Opus 渠道恢复：#%d %s → w%d" % (c, names.get(c, ""), new_w[c]))
+    if newly or healed:
+        log("dead-set: %s (newly=%s healed=%s)" % (dead, newly, healed))
+    st["dead"] = dead
+
     save_state(st)
     db.close()
 

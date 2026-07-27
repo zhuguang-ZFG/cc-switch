@@ -89,3 +89,22 @@ weight_i = round(100 × score_i / Σscore)，clamp [1, 60]
 - 踩坑：urllib 默认 UA 被 100x WAF 秒拒（curl 可过），探针必须带 `claude-cli` UA
 - 已知局限：`use_time` 是整段生成时长，混入模型思考时间，区分度被稀释；
   v3 改 TTFT 信号 + 断流率（`soft_errors`）计入质量分
+
+## v2（2026-07-27 21:03）
+
+- **TTFT 流式探针**：`stream:true` 读到首个 SSE 块即断开——信号=首字节耗时
+  （直接对应用户体感），且比整段探针省 token
+- **质量分**：解析容器日志 `channel error (channel #N…)` 计数（含 mid-stream
+  EOF 的 handler_stop），`quality = 1/(1+3×err_rate)`，err_rate EWMA 平滑；
+  分母用 logs 表 6 分钟成功数。断流渠即使 TTFT 快也会被压权
+- **TG 告警**（复用 `/opt/new-api/tg_notify.py`）：渠道判死/恢复/主池全灭
+  时推送；weight APPLY 不推（太吵）
+- state 键迁移用 `setdefault` 兼容 v1 旧 state
+- 首轮实测：TTFT #10 4.6s / #20 8.2s / #60 7.8s → `{10:46, 20:26, 60:27}`
+
+## 待拍板（语义变更，未动）
+
+- **自动摘渠/放回**：连续 N 轮判死 → status=2，恢复 M 轮 → status=1
+  （对标 LiteLLM cooldown；误摘风险需灰度）
+- **Sonnet 层间自动换序**：#132 连挂时与 #63 自动对调（改变人工故障序策略）
+- **每日体验日报**：p50/p90 TTFT、断流次数、use_channel 重试长度统计
