@@ -211,3 +211,23 @@ Go HTTP client 把整串当 `X-Api-Key` header 值，遇 `\n` 直接报 `net/htt
 - backup：`one-api.db.bak.key9_20260728_0327` / `one-api.db.bak.rebalance_20260728_0330`
 - 验证：`invalid header` 计数归零；claude-opus-5 经 gateway 200 + 缓存命中；4 渠道分流正常。
 - **教训**：DB 里 key 字段绝对不能有多行/控制字符。NewAPI 后台编辑 key 时粘贴可能带入换行。审计渠道 key 时用 `xxd` 而非肉眼。
+
+## Sonnet 分类器不可用 + hongshi EOF 停止（2026-07-28 03:40-04:03）
+
+**问题 1：`claude-sonnet-4-6[1M] is temporarily unavailable`**
+Claude Code auto 权限模式用 `claude-sonnet-4-6[1M]` 做 Bash 安全分类器。该模型在 NewAPI 里所有可用渠道都在极低优先级（-18 到 -33），最高的是 #140 muyuan（priority -18, 但有 WAF 拦截）。分类器请求慢或失败 → Claude Code 无法判断 Bash 安全性 → 卡住。
+
+**问题 2：hongshi #123 `unexpected EOF` 导致停止**
+glm-5.2（Sonnet 映射目标）的唯一可用渠道是 #123 hongshi（`api.hongshi.cc.cd`），15 分钟内 4 次 EOF 断连。#42/#41 zhipu 是 glm-5.2 备份但 abilities `enabled=0`（fork 重启时自动禁用），全压到 hongshi → 断连 → Claude Code 显示「停止」。
+
+**修复**：
+1. **#42/#41 zhipu abilities 启用**：`UPDATE abilities SET enabled=1 WHERE channel_id IN (41,42) AND model IN ('glm-5.2','claude-sonnet-4-6[1M]','claude-sonnet-4-6[1m]')`。#42 priority 80 weight 50（主力），#41 priority 80 weight 5（副），#123 hongshi priority 50 weight 5（次选）。channels + abilities 双写。fork 重启后 abilities 存活。
+2. **model_mapping 修复**：#42/#41 的 `model_mapping` JSON 之前被 shell 引号吃坏（缺引号），用 Python sqlite3 重写为合法 JSON，加了 `claude-sonnet-4-6[1M]` → `glm-5.2` 映射。
+3. **models 字段补充**：#42/#41 的 `models` 字段加了 `claude-sonnet-4-6[1M]` / `[1m]` / `claude-sonnet-4-6`，让 fork 知道这两个渠道支持这些模型。
+4. **#123 hongshi 降权**：weight 20→5，从 glm-5.2 主力降为次选。zhipu 国内直连稳定，hongshi 的 EOF 不再影响主路径。
+
+- backup：`one-api.db.bak.sonnet_fix_*` / `one-api.db.bak.retry4_*`
+- 验证：`use_channel:["42","123"]` — 先试 #42 zhipu（priority 80）成功，不再只靠 hongshi。glm-5.2 测试 200,~5s。
+- **RetryTimes 提到 4**（原 2）：baibei 全池 502 时，2 次重试不够跨层打到 kimi-k3 兜底。4 次给更多机会。
+
+**关于「间接提升国模能力」**：是的。Claude Code 的 Sonnet 分类器和日常 Sonnet 都映射到 `glm-5.2`（智谱），NewAPI 全渠道让 glm-5.2 有了 zhipu 直连 + hongshi 备份的可靠路由。Claude Code 用户实际上在用国产模型做安全分类和日常对话，但主推理（Opus）仍走真 Claude。这种架构让国产模型承担「快、稳、便宜」的角色，真 Claude 承担「难、深、贵」的角色，互补。
