@@ -92,6 +92,11 @@ Higher `priority` first. **Same priority is weight-biased pick, not a fixed sequ
 | AgentRouter long-prompt WAF | `500 sensitive_words_detected` (community) | AR-only Cyrillic-Bypass (`KIRO_GUARD_CYRILLIC_BYPASS=1` on 8410–8412); source: marko1olo/agentrouter-setup-guide |
 | Broken 03:00 backup | Copies missing `/opt/new-api/one-api.db` | Removed; keep `backup_db.sh` at 03:17 |
 | Local current=Sub2API | Bypasses ZG pool + guard; Sonnet forced to Opus | Restore ZG current; lean FQ; FB=25s / retries=2 |
+| anyrouter 400「请启用 1m 上下文」 | 2026-07 起全模型强制 `anthropic-beta: context-1m-2025-08-07` | 渠道只挂 `[1M]` abilities（fork 自动注头）；#52 已按此修复启用 |
+| agentrouter GPT 网络不可达 | VPS DNS 污染解析到 Facebook IPv6（`face:b00c`）+ IPv4 超时 | 放弃 GPT 线（#83/84/86 零流量）；勿为其配出站代理 |
+| agentrouter Claude 池断货 | 503「default 分组无可用渠道」→ fork auto-ban（status=3） | 池补货后解封 #118 + 补 abilities 复活；晨报固定复探 |
+| 100xlabs 账号并发上限 | `Concurrency limit exceeded for account`（500/429）→ handler_stop | 公益账号硬上限，路由吸收即可；optimizer 实时降权，勿当配置 bug |
+| 手动 bump priority 验证撞 optimizer cron | 验证窗口内 bump 渠成最高层 → optimizer 给它 w60 | 验证后必须恢复 priority+weight 双写（以快照值为准，换序器可能已调整） |
 
 Smoke (gateway + local `:15721`): `glm-5.2` / Haiku / `claude-opus-5[1M]` / sonnet-alias→`glm-5.2` → 200.
 
@@ -102,7 +107,16 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - Runbook: `docs/ops/newapi-dx-cursor-ops.md`
 - Local: `python scripts/ops/newapi-dx-analyze.py`
 - Auto in-band: soft-trunc env (`KIRO_GUARD_SHORT_*`) + Opus weights; escalate when out of band.
-- Opus 主池现网快照：**`#9/#10/#20/#60` = 50/40/28/3**（见 `opus1m-map-and-fable-provider-2026-07-26.md` / 历史 `newapi-dx-opus5-prefer-2026-07-26.md`）。
+- Opus 主池现网快照：**自适应权重**（v4，2026-07-27 深夜起，见下节）；历史手调 `#9/#10/#20/#60` = 50/40/28/3 作废（`opus1m-map-and-fable-provider-2026-07-26.md`）。
+
+## 自适应路由 v4（2026-07-27 深夜上线）
+
+- **route_optimizer.py v4**（VPS cron `*/5`，镜像 `scripts/ops/route_optimizer.py`）：主池 45 层调权 = TTFT 流式探针 + 容器日志错误率 EWMA；探针按渠道 type 分流（14=Anthropic / 1=OpenAI，模型取 model_mapping，UA 吃 header_override）；映射渠门控 `MAIN_TIER_MAPPED={137,138,139}` cap=25 margin=1.3（Claude 全灭时门控失效全开）；flock 防 cron 重叠；EXCLUDE={11}；映射渠 flap 不发判死 TG。
+- **route_optimizer_sonnet.py**（同 cron 串行，镜像 `scripts/ops/route_optimizer_sonnet.vps.py`）：Sonnet 链 `[63,133,129,134,136]` 层间换序，每轮最多换一对相邻层（margin 1.5），ladder=组内 priority 重排双写；**会吃掉手工 priority 调整**（以脚本为准）；EWMA 键带 `s` 前缀。`--restore` / `--restore-sonnet` / `--sonnet-dry`。
+- **主池映射阀（泄压阀，cap 25）**：`#137` gpt-terra（8317 auth 耗尽躺平 w1）、`#138` kimi-k3（ttft ~1.1s，事实主力，真实承接 60%+）、`#139` grok-4.5（bazaarlink-2 上游，ttft 2.7s，2026-07-27 23:40 上岗）。
+- **Sonnet 链序**（自适应，当前）：`[63 kimi, 134 glm, 133 freemodel, 136 minimax, 129 terra]`；#132 work.freemodel 拒绝 Claude Code 已摘渠。
+- **kiro_guard tee+续写全功能在线**（8 实例）：截断检测→自动续写（SOFT_RETRY=1，退避 700ms）→merge 合并；tee_eof/hard 事件记 `last_block` 落 `kiro-guard-soft.jsonl`。2026-07-27 23:49 首个实战 `short_completion → recovered_merged`。
+- 设计文档：`docs/plans/newapi-adaptive-routing-2026-07-27.md`；v4 立项（VPS 前置 guard，P2 大概率不做）：`docs/plans/newapi-midstream-continuation-v4-2026-07-27.md`。
 - **Client surfaces (2026-07-26):** Claude Code → ZG NewAPI；Cursor IDE BYOK → `zg-*` → NewAPI；**Cursor Agent CLI → Cursor 云端官方模型 only**（默认 `claude-opus-5-high`；勿用 Opus 4.8 踩 Cyber Safeguards）。细节见 runbook「客户端怎么走 NewAPI」。
 - **AUP / Cyber Safeguards:** 官方 Opus 4.8 易拦；新会话 + 换 Opus5/Sonnet/glm；无客户端关过滤。见 runbook「Cyber Safeguards / AUP」与 `docs/patches/cyber-safeguards-opus48-2026-07-26.md`。
 - **公益站抖动：** 预期噪声；勿当 P0。health v5.1 对 `no available accounts` 不累计禁用。
