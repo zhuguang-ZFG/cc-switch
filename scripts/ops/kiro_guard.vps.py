@@ -6,6 +6,10 @@
 本服务接收 new-api 的流式请求 → 改 stream:false 打上游 → 校验完整性 →
 客户端要流式就把完整消息合成为 SSE 发回。
 
+默认 KIRO_GUARD_TEE=1：改为 tee 模式——上游 stream:true 实时转发 SSE，
+边转边重组 message 做 classify，终止事件扣到判定后才发；文本截断时
+用 continuation 请求把流续上（低 TTFT，同时保留守卫判定）。
+
 硬失败 / 软截断耗尽重试 → 502（或已开 SSE 时 error 事件），让 new-api 切渠。
 软可疑：同上游再打（默认 1 次，带退避；对齐 Kiro-Go #143）。
 
@@ -131,6 +135,12 @@ UPSTREAM_CONCURRENCY = int(os.environ.get("KIRO_GUARD_UPSTREAM_CONCURRENCY", "3"
 STREAM_PASSTHROUGH = os.environ.get("KIRO_GUARD_STREAM_PASSTHROUGH", "0") not in (
     "0", "false", "False",
 )
+# Tee streaming: forward upstream SSE to the client as it arrives while
+# reassembling the message for classify; holds back terminal events until the
+# verdict, and continues the stream on text truncation (low TTFT + guard).
+TEE = os.environ.get("KIRO_GUARD_TEE", "1") not in ("0", "false", "False")
+# Active request cap: reject new /v1/messages with 503 when full. 0 = unlimited.
+MAX_ACTIVE_REQUESTS = int(os.environ.get("KIRO_GUARD_MAX_ACTIVE_REQUESTS", "16"))
 # TG alert: notify on consecutive hard failures.
 TG_BOT_TOKEN = os.environ.get("KIRO_GUARD_TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.environ.get("KIRO_GUARD_TG_CHAT_ID", "")
@@ -186,8 +196,34 @@ _ok_count = 0
 _LATENCY_WINDOW = 200
 _latencies = collections.deque(maxlen=_LATENCY_WINDOW)
 _upstream_sem = threading.Semaphore(UPSTREAM_CONCURRENCY) if UPSTREAM_CONCURRENCY > 0 else None
+_active_req_sem = (
+    threading.BoundedSemaphore(MAX_ACTIVE_REQUESTS) if MAX_ACTIVE_REQUESTS > 0 else None
+)
+_active_req_count = 0
+_active_req_lock = threading.Lock()
 _consecutive_hard = 0
 _last_tg_alert_ts = 0.0
+
+
+def _active_req_acquire() -> bool:
+    """Non-blocking active-request slot acquire (P2-11)."""
+    global _active_req_count
+    if _active_req_sem is None:
+        return True
+    if not _active_req_sem.acquire(blocking=False):
+        return False
+    with _active_req_lock:
+        _active_req_count += 1
+    return True
+
+
+def _active_req_release() -> None:
+    global _active_req_count
+    if _active_req_sem is None:
+        return
+    with _active_req_lock:
+        _active_req_count -= 1
+    _active_req_sem.release()
 
 
 def _log(msg: str) -> None:
@@ -407,6 +443,22 @@ def _fetch_upstream(req: urllib.request.Request, timeout: float = TIMEOUT) -> Tu
             _upstream_sem.release()
 
 
+def _open_upstream(req: urllib.request.Request, timeout: float = TIMEOUT):
+    """Open upstream without reading the body (tee streaming).
+
+    Caller owns the response: must close it and release _upstream_sem.
+    On open failure the semaphore is released before re-raising.
+    """
+    if _upstream_sem is not None:
+        _upstream_sem.acquire()
+    try:
+        return _UPSTREAM_OPENER.open(req, timeout=timeout)
+    except Exception:
+        if _upstream_sem is not None:
+            _upstream_sem.release()
+        raise
+
+
 def detect_content_blocked(status: int, body: bytes) -> Optional[str]:
     """Return a short reason if upstream rejected the prompt via edge filter.
 
@@ -568,6 +620,158 @@ def synth_stream_progressive(msg: dict, wfile) -> None:
         },
     ))
     _w(sse("message_stop", {"type": "message_stop"}))
+
+
+class _SSEParser:
+    """Incremental SSE parser: splits event:/data: lines across chunks.
+
+    feed() yields (event, data_str, raw_str) per complete event; raw_str is
+    the exact source text of the event (tee forwards it byte-identically).
+    """
+
+    def __init__(self):
+        self._buf = ""
+        self._event = "message"
+        self._data: list = []
+        self._raw = ""
+
+    def feed(self, chunk: bytes) -> list:
+        self._buf += chunk.decode("utf-8", errors="replace")
+        events = []
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            ev = self._line(line + "\n")
+            if ev is not None:
+                events.append(ev)
+        return events
+
+    def _line(self, raw_line: str):
+        self._raw += raw_line
+        line = raw_line.rstrip("\r\n")
+        if line == "":
+            if self._data:
+                ev = (self._event, "\n".join(self._data), self._raw)
+                self._event = "message"
+                self._data = []
+                self._raw = ""
+                return ev
+            self._raw = ""
+            return None
+        if line.startswith(":"):
+            self._raw = ""
+            return None
+        if line.startswith("event:"):
+            self._event = line[6:].strip()
+        elif line.startswith("data:"):
+            d = line[5:]
+            if d.startswith(" "):
+                d = d[1:]
+            self._data.append(d)
+        return None
+
+    def flush_end(self):
+        """Emit any pending event at upstream EOF (no trailing blank line)."""
+        ev = None
+        if self._buf:
+            ev = self._line(self._buf)
+            self._buf = ""
+        if ev is None and self._data:
+            ev = (self._event, "\n".join(self._data), self._raw)
+            self._event = "message"
+            self._data = []
+            self._raw = ""
+        if ev is not None and not ev[2].endswith("\n\n"):
+            ev = (ev[0], ev[1], ev[2].rstrip("\r\n") + "\n\n")
+        return ev
+
+
+class _MessageAssembler:
+    """Rebuild an anthropic message dict from a streamed SSE event flow."""
+
+    def __init__(self):
+        self.msg: Optional[dict] = None
+        self._blocks: Dict[int, dict] = {}
+        self.stop_reason = None
+        self.stop_sequence = None
+        self.usage: dict = {}
+
+    def handle(self, event: str, data: dict) -> None:
+        if not isinstance(data, dict):
+            return
+        etype = data.get("type") or event
+        if etype == "message_start":
+            m = data.get("message") or {}
+            self.msg = copy.deepcopy(m)
+            self.msg.setdefault("content", [])
+            u = m.get("usage")
+            if isinstance(u, dict):
+                self.usage.update(u)
+        elif etype == "content_block_start":
+            idx = data.get("index", 0)
+            self._blocks[idx] = copy.deepcopy(data.get("content_block") or {})
+        elif etype == "content_block_delta":
+            block = self._blocks.get(data.get("index", 0))
+            if block is None:
+                return
+            delta = data.get("delta") or {}
+            dt = delta.get("type")
+            if dt == "text_delta":
+                block["text"] = (block.get("text") or "") + (delta.get("text") or "")
+            elif dt == "thinking_delta":
+                block["thinking"] = (block.get("thinking") or "") + (delta.get("thinking") or "")
+            elif dt == "signature_delta":
+                block["signature"] = (block.get("signature") or "") + (delta.get("signature") or "")
+            elif dt == "input_json_delta":
+                block["_partial_json"] = (block.get("_partial_json") or "") + (
+                    delta.get("partial_json") or ""
+                )
+        elif etype == "content_block_stop":
+            block = self._blocks.get(data.get("index", 0))
+            if block is not None and "_partial_json" in block:
+                raw = block.pop("_partial_json")
+                try:
+                    block["input"] = json.loads(raw) if raw else {}
+                except Exception:
+                    block["input"] = {}
+        elif etype == "message_delta":
+            delta = data.get("delta") or {}
+            if delta.get("stop_reason") is not None:
+                self.stop_reason = delta.get("stop_reason")
+            if "stop_sequence" in delta:
+                self.stop_sequence = delta.get("stop_sequence")
+            u = data.get("usage")
+            if isinstance(u, dict):
+                self.usage.update(u)
+
+    def message(self) -> Optional[dict]:
+        if self.msg is None:
+            return None
+        out = copy.deepcopy(self.msg)
+        out["content"] = [self._blocks[i] for i in sorted(self._blocks)]
+        out["stop_reason"] = self.stop_reason
+        out["stop_sequence"] = self.stop_sequence
+        out["usage"] = dict(self.usage)
+        return out
+
+
+class _IndexRemap:
+    """Map upstream block indexes to dense client indexes (continuation round).
+
+    Skipped blocks (thinking, buffered first text) still get assigned client
+    indexes in emission order so the client sees a contiguous sequence.
+    """
+
+    def __init__(self, base: int):
+        self._base = base
+        self._map: Dict[int, int] = {}
+
+    def start(self, upstream_idx: int) -> int:
+        client_idx = self._base + len(self._map)
+        self._map[upstream_idx] = client_idx
+        return client_idx
+
+    def get(self, upstream_idx: int) -> int:
+        return self._map.get(upstream_idx, upstream_idx + self._base)
 
 
 def _content_nonempty(content: Any) -> bool:
@@ -951,8 +1155,12 @@ def _cyrillic_encode_text(text: str) -> str:
     return text.replace(_LATIN_C, _CYRILLIC_C)
 
 
+_CYRILLIC_DECODE_RE = re.compile("(?<=[A-Za-z0-9])\\u0441(?=[A-Za-z0-9])")
+
+
 def _cyrillic_decode_text(text: str) -> str:
-    return text.replace(_CYRILLIC_C, _LATIN_C)
+    """Restore latin c only inside latin words; real Russian text stays intact."""
+    return _CYRILLIC_DECODE_RE.sub(_LATIN_C, text)
 
 
 def cyrillic_encode_payload(payload: dict) -> dict:
@@ -1019,9 +1227,9 @@ def _effective_cap(payload: dict) -> int:
     return base
 
 
-def build_messages_request(payload: dict, header_map: Dict[str, str]) -> urllib.request.Request:
+def build_messages_request(payload: dict, header_map: Dict[str, str], stream: bool = False) -> urllib.request.Request:
     body = dict(payload)
-    body["stream"] = False
+    body["stream"] = stream
     cap = _effective_cap(body)
     if cap > 0:
         orig = body.get("max_tokens")
@@ -1109,6 +1317,7 @@ def fetch_classified(
     journal_event("soft", reason, {"phase": "first"}, req_id=req_id)
     # soft: retry with backoff (Kiro-Go #143). For text truncations, inject
     # truncated content as context so the model continues (kirocc spirit).
+    acc_msg: Optional[dict] = None  # accumulated merges across continuation rounds
     for attempt in range(SOFT_RETRY):
         if SOFT_RETRY_BACKOFF_MS > 0:
             time.sleep(SOFT_RETRY_BACKOFF_MS / 1000.0)
@@ -1125,7 +1334,7 @@ def fetch_classified(
             and _content_nonempty(msg.get("content", []))
         )
         if use_continuation:
-            retry_payload = build_continuation_payload(payload, msg)
+            retry_payload = build_continuation_payload(payload, acc_msg or msg)
             retry_upstream = (
                 cyrillic_encode_payload(retry_payload)
                 if CYRILLIC_BYPASS else retry_payload
@@ -1156,9 +1365,9 @@ def fetch_classified(
         if kind2 == "ok":
             _reset_hard_counter()
             # Merge onto the msg this round's continuation was built from
-            # (with SOFT_RETRY>=2 that is the latest truncated msg, not the first).
+            # (with SOFT_RETRY>=2 that is the accumulated msg, not the first).
             if use_continuation and msg is not None:
-                merged = merge_responses(msg, msg2)
+                merged = merge_responses(acc_msg or msg, msg2)
                 _extra_m = {"phase": "retry_ok_merged"}
                 _extra_m.update(_usage_extra(merged) or {})
                 journal_event(
@@ -1199,6 +1408,12 @@ def fetch_classified(
             _log(f"hard_fail_after_soft reason={reason2}")
             return status2, body2, kind2, reason2, msg2
         journal_event("soft", reason2, {"phase": f"retry_{attempt + 1}"}, req_id=req_id)
+        if (
+            use_continuation
+            and msg2 is not None
+            and reason2 in _TEXT_TRUNC_REASONS
+        ):
+            acc_msg = merge_responses(acc_msg or msg, msg2)
         reason, body, msg = reason2, body2, msg2
 
     _log(f"soft_exhausted reason={reason}")
@@ -1265,7 +1480,21 @@ class Handler(BaseHTTPRequestHandler):
 
         if STREAM_PASSTHROUGH and want_stream:
             return self._stream_passthrough(payload, header_map)
+        if not _active_req_acquire():
+            self._reply(
+                503,
+                _api_error(503, "The model is currently overloaded. Please retry."),
+                "application/json",
+            )
+            return
+        try:
+            if TEE and want_stream and not CYRILLIC_BYPASS:
+                return self._stream_tee(payload, header_map)
+            return self._messages_buffered(payload, header_map, want_stream)
+        finally:
+            _active_req_release()
 
+    def _messages_buffered(self, payload, header_map, want_stream):
         result_q: queue.Queue = queue.Queue(maxsize=1)
 
         def worker():
@@ -1330,6 +1559,13 @@ class Handler(BaseHTTPRequestHandler):
                             err_obj = json.loads(body)
                         except Exception:
                             err_obj = {"type": "error", "error": {"type": "api_error", "message": body[:500].decode("utf-8", "replace")}}
+                        if status == 401 or status == 403:
+                            _err = err_obj.get("error")
+                            if isinstance(_err, dict):
+                                _err["type"] = (
+                                    "authentication_error" if status == 401
+                                    else "permission_error"
+                                )
                         self.wfile.write(sse("error", err_obj))
                     else:
                         self.wfile.write(sse("error", {
@@ -1380,6 +1616,291 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._reply(200, json.dumps(msg, ensure_ascii=False).encode(), "application/json")
 
+    def _stream_tee(self, payload, header_map):
+        """Tee mode: relay upstream SSE live, classify the reassembled message.
+
+        Terminal events (message_delta with stop_reason / message_stop) are
+        held back until classify passes; on text truncation the stream is
+        continued from a continuation request with index remapping.
+        """
+        req_id = uuid.uuid4().hex[:12]
+        _log(f"req_start req_id={req_id} mode=tee")
+        t0 = time.monotonic()
+        deadline = (
+            t0 + TIMEOUT * (1 + SOFT_RETRY)
+            + (SOFT_RETRY_BACKOFF_MS / 1000.0) * SOFT_RETRY
+        )
+        headers_sent = False
+        acc_msg: Optional[dict] = None
+        reason = ""
+        round_no = 0
+        total_bytes = 0
+
+        def _w(data: bytes) -> None:
+            self.wfile.write(data)
+            self.wfile.flush()
+
+        def _send_sse_error() -> None:
+            _w(sse("error", {
+                "type": "error",
+                "error": {
+                    "type": "overloaded_error",
+                    "message": "The model is currently overloaded. Please retry.",
+                },
+            }))
+
+        try:
+            while True:
+                if round_no == 0:
+                    round_payload = payload
+                else:
+                    round_payload = build_continuation_payload(payload, acc_msg)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _log(f"tee deadline_exceeded req_id={req_id}")
+                    if headers_sent:
+                        _send_sse_error()
+                    else:
+                        self._reply(
+                            502,
+                            _api_error(502, "The model is currently overloaded. Please retry."),
+                            "application/json",
+                        )
+                    return
+                req = build_messages_request(round_payload, header_map, stream=True)
+                t_open = time.monotonic()
+                try:
+                    resp = _open_upstream(req, timeout=min(TIMEOUT, remaining))
+                except urllib.error.HTTPError as e:
+                    _record_latency((time.monotonic() - t_open) * 1000)
+                    try:
+                        ebody = _read_limited(e)
+                    except ValueError:
+                        ebody = b""
+                    if not headers_sent:
+                        blocked = maybe_failover_content_block(e.code, ebody, "tee_first")
+                        if blocked is not None:
+                            self._reply(blocked[0], blocked[1], "application/json")
+                            return
+                        journal_event("hard", f"upstream_http_{e.code}", req_id=req_id)
+                        _check_hard_alert(f"upstream_http_{e.code}")
+                        self._reply(e.code, ebody, "application/json")
+                    else:
+                        journal_event(
+                            "hard", f"upstream_http_{e.code}_tee_cont", req_id=req_id
+                        )
+                        _check_hard_alert(f"upstream_http_{e.code}_tee_cont")
+                        _send_sse_error()
+                    return
+                except Exception:
+                    _record_latency((time.monotonic() - t_open) * 1000)
+                    if headers_sent:
+                        _send_sse_error()
+                    else:
+                        self._reply(
+                            502,
+                            _api_error(502, "Upstream connection failed. Please retry."),
+                            "application/json",
+                        )
+                    return
+                _record_latency((time.monotonic() - t_open) * 1000)
+                if not headers_sent:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    headers_sent = True
+
+                parser = _SSEParser()
+                asm = _MessageAssembler()
+                remap = (
+                    _IndexRemap(len(acc_msg.get("content") or [])) if acc_msg else None
+                )
+                held: list = []
+                skip_idx: set = set()
+                first_text_idx: Optional[int] = None
+                first_text_buf = ""
+                first_text_started = False
+
+                def _flush_first_text() -> None:
+                    nonlocal first_text_started
+                    if first_text_started or first_text_idx is None:
+                        return
+                    first_text_started = True
+                    cidx = remap.get(first_text_idx)
+                    _w(sse("content_block_start", {
+                        "type": "content_block_start", "index": cidx,
+                        "content_block": {"type": "text", "text": ""},
+                    }))
+                    acc_tail = _assistant_text(acc_msg.get("content") or [])
+                    head = _dedup_overlap(acc_tail, first_text_buf)
+                    if head:
+                        _w(sse("content_block_delta", {
+                            "type": "content_block_delta", "index": cidx,
+                            "delta": {"type": "text_delta", "text": head},
+                        }))
+
+                def _handle_event(ev_name, data_s, raw_ev) -> None:
+                    nonlocal first_text_idx, first_text_buf
+                    try:
+                        data = json.loads(data_s)
+                    except Exception:
+                        data = {}
+                    asm.handle(ev_name, data)
+                    etype = data.get("type") if isinstance(data, dict) else None
+                    if etype == "message_stop":
+                        held.append(raw_ev)
+                        return
+                    if (
+                        etype == "message_delta"
+                        and (data.get("delta") or {}).get("stop_reason") is not None
+                    ):
+                        held.append(raw_ev)
+                        return
+                    if round_no == 0:
+                        _w(raw_ev.encode("utf-8"))
+                        return
+                    # Continuation round: skip message_start / thinking blocks,
+                    # remap indexes, buffer+dedup the first text block.
+                    if etype == "message_start":
+                        return
+                    uidx = data.get("index", 0)
+                    if etype == "content_block_start":
+                        btype = (data.get("content_block") or {}).get("type")
+                        if btype == "thinking":
+                            skip_idx.add(uidx)
+                            return
+                        cidx = remap.start(uidx)
+                        if btype == "text" and first_text_idx is None:
+                            first_text_idx = uidx
+                            return
+                        out = dict(data)
+                        out["index"] = cidx
+                        _w(sse(ev_name, out))
+                        return
+                    if etype in ("content_block_delta", "content_block_stop"):
+                        if uidx in skip_idx:
+                            return
+                        if first_text_idx is not None and uidx == first_text_idx:
+                            if etype == "content_block_delta":
+                                d = data.get("delta") or {}
+                                if (
+                                    d.get("type") == "text_delta"
+                                    and not first_text_started
+                                ):
+                                    first_text_buf += d.get("text") or ""
+                                    if len(first_text_buf) < 600:
+                                        return
+                                    _flush_first_text()
+                                    return
+                            else:
+                                _flush_first_text()
+                        out = dict(data)
+                        out["index"] = remap.get(uidx)
+                        _w(sse(ev_name, out))
+                        return
+                    _w(sse(ev_name, data))
+
+                try:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        total_bytes += len(chunk)
+                        if total_bytes > MAX_RESPONSE_BYTES:
+                            raise ValueError("tee response exceeds MAX_RESPONSE_BYTES")
+                        for ev_name, data_s, raw_ev in parser.feed(chunk):
+                            _handle_event(ev_name, data_s, raw_ev)
+                    tail_ev = parser.flush_end()
+                    if tail_ev is not None:
+                        _handle_event(tail_ev[0], tail_ev[1], tail_ev[2])
+                finally:
+                    resp.close()
+                    if _upstream_sem is not None:
+                        _upstream_sem.release()
+
+                round_msg = asm.message()
+                if round_msg is None:
+                    round_msg = {"content": [], "stop_reason": None}
+                kind, rsn, cmsg = classify_response(
+                    json.dumps(round_msg, ensure_ascii=False).encode(), payload
+                )
+                if kind == "ok":
+                    final_msg = cmsg if round_no == 0 else merge_responses(acc_msg, cmsg)
+                    _reset_hard_counter()
+                    if round_no == 0:
+                        for raw_ev in held:
+                            _w(raw_ev.encode("utf-8"))
+                        journal_event("ok", "ok", _usage_extra(final_msg), req_id=req_id)
+                    else:
+                        u = final_msg.get("usage") or {}
+                        _w(sse("message_delta", {
+                            "type": "message_delta",
+                            "delta": {
+                                "stop_reason": final_msg.get("stop_reason"),
+                                "stop_sequence": final_msg.get("stop_sequence"),
+                            },
+                            "usage": {"output_tokens": u.get("output_tokens", 0)},
+                        }))
+                        _w(sse("message_stop", {"type": "message_stop"}))
+                        _extra = {"phase": "tee_retry_ok_merged"}
+                        _extra.update(_usage_extra(final_msg) or {})
+                        journal_event(
+                            "soft", f"recovered_merged:{reason}", _extra, req_id=req_id
+                        )
+                        _log(f"tee trunc_context merged reason={reason}")
+                    return
+                if kind == "soft":
+                    reason = rsn
+                    can_continue = (
+                        TRUNC_CONTEXT
+                        and rsn in _TEXT_TRUNC_REASONS
+                        and cmsg is not None
+                        and _content_nonempty(cmsg.get("content", []))
+                        and round_no < SOFT_RETRY
+                    )
+                    if can_continue:
+                        journal_event(
+                            "soft", rsn, {"phase": f"tee_round_{round_no}"},
+                            req_id=req_id,
+                        )
+                        acc_msg = (
+                            cmsg if acc_msg is None else merge_responses(acc_msg, cmsg)
+                        )
+                        round_no += 1
+                        if SOFT_RETRY_BACKOFF_MS > 0:
+                            time.sleep(SOFT_RETRY_BACKOFF_MS / 1000.0)
+                        continue
+                    journal_event(
+                        "soft", f"retry_exhausted:{rsn}",
+                        {"phase": "tee_exhausted"}, req_id=req_id,
+                    )
+                    _log(f"tee soft_exhausted reason={rsn}")
+                    _send_sse_error()
+                    return
+                journal_event("hard", rsn, {"phase": "tee"}, req_id=req_id)
+                _check_hard_alert(rsn)
+                _log(f"tee hard_fail reason={rsn}")
+                _send_sse_error()
+                return
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as e:
+            _log(f"stream_tee_error req_id={req_id}: {type(e).__name__}:{e}")
+            try:
+                if headers_sent:
+                    _send_sse_error()
+                else:
+                    self._reply(
+                        502,
+                        _api_error(502, "The model is currently overloaded. Please retry."),
+                        "application/json",
+                    )
+            except Exception:
+                pass
+            return
+
     def _count_tokens(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length)
@@ -1398,6 +1919,19 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(200, json.dumps({"input_tokens": est}).encode(), "application/json")
 
     def _stream_passthrough(self, payload, header_map):
+        if not _active_req_acquire():
+            self._reply(
+                503,
+                _api_error(503, "The model is currently overloaded. Please retry."),
+                "application/json",
+            )
+            return
+        try:
+            self._stream_passthrough_impl(payload, header_map)
+        finally:
+            _active_req_release()
+
+    def _stream_passthrough_impl(self, payload, header_map):
         """Forward stream:true directly to upstream and relay SSE chunks as-is."""
         cap = _effective_cap(payload)
         if cap > 0 and (payload.get("max_tokens") or 0) > cap:
@@ -1536,6 +2070,9 @@ class Handler(BaseHTTPRequestHandler):
                     "gzip_min_bytes": GZIP_MIN_BYTES,
                     "upstream_concurrency": UPSTREAM_CONCURRENCY,
                     "stream_passthrough": STREAM_PASSTHROUGH,
+                    "tee": TEE,
+                    "active_requests": _active_req_count,
+                    "max_active_requests": MAX_ACTIVE_REQUESTS,
                     "tg_alert_threshold": TG_ALERT_THRESHOLD,
                     "content_block_failover": CONTENT_BLOCK_FAILOVER,
                     "cyrillic_bypass": CYRILLIC_BYPASS,
@@ -1665,11 +2202,17 @@ if __name__ == "__main__":
         assert enc["tools"][0]["name"] == "Read"
         dec = cyrillic_decode_bytes(
             json.dumps(
-                {"content": [{"type": "text", "text": "сlass Foo"}]},
+                {"content": [{"type": "text", "text": "xсlass Foo"}]},
                 ensure_ascii=False,
             ).encode()
         )
-        assert b"class Foo" in dec, dec
+        assert b"xclass Foo" in dec, dec
+        # Decode is context-aware: cyrillic c keeps real Russian intact (P2-14)
+        rus = "всегда сила сокол"
+        assert _cyrillic_decode_text(rus) == rus, _cyrillic_decode_text(rus)
+        assert _cyrillic_decode_text("funсtion") == "function"
+        # word-boundary cyrillic c (no latin neighbour) is left alone
+        assert _cyrillic_decode_text("сall") == "сall"
         # Truncation-context: build_continuation_payload
         orig = {
             "model": "claude-opus-5",
@@ -1760,6 +2303,81 @@ if __name__ == "__main__":
         assert sse_out.count("Let me think") == 1, "thinking text should appear once only"
         # Verify tool_use block start has empty input
         assert '"input": {}' in sse_out, "tool_use start should have empty input"
+        # Tee: SSE parser + assembler roundtrip → classify ok
+        parser = _SSEParser()
+        asm = _MessageAssembler()
+        raw_sse = buf.getvalue()
+        for i in range(0, len(raw_sse), 37):  # odd chunk size → split lines
+            for ev_name, data_s, raw_ev in parser.feed(raw_sse[i:i + 37]):
+                assert raw_ev, "raw event text missing"
+                asm.handle(ev_name, json.loads(data_s))
+        tail_ev = parser.flush_end()
+        assert tail_ev is None, f"unexpected leftover event: {tail_ev}"
+        rebuilt = asm.message()
+        assert rebuilt is not None
+        assert _assistant_text(rebuilt["content"]) == "hello world " * 20
+        assert rebuilt["content"][0]["thinking"] == "Let me think about this carefully."
+        assert rebuilt["content"][2]["input"] == {"path": "/a"}, rebuilt["content"][2]
+        assert rebuilt["stop_reason"] == "end_turn"
+        kind, reason, _ = classify_response(
+            json.dumps(rebuilt, ensure_ascii=False).encode(), {"max_tokens": 64}
+        )
+        assert kind == "ok", (kind, reason)
+        # Tee: truncated stream (EOF before message_delta) → hard missing_stop_reason
+        trunc_sse = (
+            sse("message_start", {"type": "message_start", "message": {
+                "content": [], "usage": {"input_tokens": 5000, "output_tokens": 1}}})
+            + sse("content_block_start", {"type": "content_block_start", "index": 0,
+                  "content_block": {"type": "text", "text": ""}})
+            + sse("content_block_delta", {"type": "content_block_delta", "index": 0,
+                  "delta": {"type": "text_delta", "text": "partial output"}})
+            + sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+        )
+        p2, a2 = _SSEParser(), _MessageAssembler()
+        for ev_name, data_s, _raw in p2.feed(trunc_sse):
+            a2.handle(ev_name, json.loads(data_s))
+        assert p2.flush_end() is None
+        m2 = a2.message()
+        kind, reason, _ = classify_response(
+            json.dumps(m2).encode(), {"max_tokens": 4096}
+        )
+        assert kind == "hard" and reason == "missing_stop_reason", (kind, reason)
+        # stop_reason=max_tokens is a complete stream → classify ok (current semantics)
+        m2["stop_reason"] = "max_tokens"
+        kind, reason, _ = classify_response(
+            json.dumps(m2).encode(), {"max_tokens": 4096}
+        )
+        assert kind == "ok", (kind, reason)
+        # Tee continuation: index remap stays dense when thinking block is skipped
+        remap = _IndexRemap(2)  # 2 accumulated blocks from previous round
+        assert remap.start(0) == 2   # first forwarded block (was upstream idx 0)
+        assert remap.start(2) == 3   # upstream idx 1 was a skipped thinking block
+        assert remap.get(2) == 3
+        # Tee continuation: first text block buffer dedup against acc tail
+        acc_tail = "The quick brown fox jumps over the lazy dog and sleeps"
+        first_buf = "over the lazy dog and sleeps until morning comes"
+        assert _dedup_overlap(acc_tail, first_buf) == " until morning comes"
+        assert _dedup_overlap(acc_tail, "brand new text") == "brand new text"
+        # Accumulative merge chain: merge(merge(a,b),c) text + token sums
+        ma = {"content": [{"type": "text", "text": "aaa "}],
+              "stop_reason": "end_turn",
+              "usage": {"input_tokens": 10, "output_tokens": 3}}
+        mb = {"content": [{"type": "text", "text": "bbb "}],
+              "stop_reason": "end_turn",
+              "usage": {"input_tokens": 11, "output_tokens": 4}}
+        mc = {"content": [{"type": "text", "text": "ccc"}],
+              "stop_reason": "end_turn",
+              "usage": {"input_tokens": 12, "output_tokens": 5}}
+        mabc = merge_responses(merge_responses(ma, mb), mc)
+        assert mabc["content"][0]["text"] == "aaa bbb ccc", mabc["content"]
+        assert mabc["usage"]["output_tokens"] == 12, mabc["usage"]
+        assert mabc["usage"]["input_tokens"] == 12, mabc["usage"]
+        # Active request semaphore: non-blocking acquire / release
+        assert _active_req_acquire() is True
+        old_cnt = _active_req_count
+        assert old_cnt >= 1
+        _active_req_release()
+        assert _active_req_count == old_cnt - 1
         # Response size limit
         assert _read_limited(io.BytesIO(b"x" * 100), 100) == b"x" * 100
         try:
@@ -1884,6 +2502,10 @@ if __name__ == "__main__":
     _log(f"metrics_snapshot every {METRICS_SNAPSHOT_INTERVAL}s → {METRICS_SNAPSHOT_PATH}")
     if STREAM_PASSTHROUGH:
         _log("stream_passthrough=ON (direct upstream streaming, no guard classify)")
+    elif TEE:
+        _log("tee=ON (live SSE relay + classify on reassembled message)")
+    if MAX_ACTIVE_REQUESTS > 0:
+        _log(f"max_active_requests={MAX_ACTIVE_REQUESTS}")
     if UPSTREAM_CONCURRENCY > 0:
         _log(f"upstream_concurrency={UPSTREAM_CONCURRENCY}")
     _log(f"tg_alert threshold={TG_ALERT_THRESHOLD}")

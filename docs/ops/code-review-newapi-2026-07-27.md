@@ -2,8 +2,7 @@
 
 > **修复状态（2026-07-27 当日）**：P1-1~10 已全部修复并部署（commit `d60cf80`，guard 滚动重启 + 冒烟通过）。
 > P2/P3 已修并部署（同日第二批）：P2-12/15/16/17/18/19/20、P3 全部（kiro_guard 死代码/快照 clamp/PROXY 脱敏/Content-Type/Content-Length+max_tokens 兜底/TG 告警异步化/deque 滑窗；dx pct off-by-one/smoke token 优选/SHORT_IN_BOUNDS/备份留 10 份；health_check 探活加 code==200、_secret 改 with、state 原子写+复活清残留；sonnet_failover 默认 probe-only + 双挂 TG 告警，`--force` 才写 DB）。
-> **未动**：P2-11（线程上限）、P2-13（慢路径错误呈现）、P2-14（cyrillic）——P2-11/13 与 tee 模式改造同区域，届时一起做。
-> **P2-12 残余**：SOFT_RETRY≥2 时 continuation payload 仍只注入最新截断段（完整修复需累积式 continuation）；默认 SOFT_RETRY=1 不受影响。
+> **未动项已清零（同日第三批 tee 改造）**：P2-11（`KIRO_GUARD_MAX_ACTIVE_REQUESTS`=16 快速 503）、P2-13（tee 路径透传真实状态码；缓冲慢路径细分 authentication/permission error）、P2-14（cyrillic decode 上下文正则）、P2-12 残余（缓冲路径 acc_msg 累积式 continuation）全部随 tee 模式落地并部署，详见 `docs/patches/kiro-guard-tee-mode-2026-07-27.md`。tee 默认开（`KIRO_GUARD_TEE=1`），实测 TTFB 3.4s（原 ~14s）。
 > 部署后冒烟新发现并已处理：#129 上游（Dc公益 8317）auth 池耗尽导致 Opus 兜底 503 → 新增 **#130 gpt-123458-claude-fallback**（克隆 #124，ch_pri=-31）作为第二独立兜底，Opus 恢复 200；health_check 多 key 渠道（\n 分隔）拼出非法 Bearer 头 → probe 取首个 key（已随本批部署）。
 > dx cooldown（P1-5）与 health_check alerted（P1-8）待下一个 cron 周期自然验证。
 
