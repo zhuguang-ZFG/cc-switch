@@ -321,13 +321,19 @@ def main():
     newly = [c for c in dead if c not in prev_dead and c not in MAIN_TIER_MAPPED]
     healed = [c for c in prev_dead
               if c not in dead and c not in MAIN_TIER_MAPPED]
-    if dead and len(dead) == len(tier):
-        send_tg("🚨 *Opus 主池全灭*：所有受管渠道探针失败\nweights: %s" % new_w)
+    # 全灭告警也按跳变发（v5.1）：持续全灭不重复轰炸，恢复走 healed 分支
+    all_dead = bool(dead) and len(dead) == len(tier)
+    if all_dead:
+        if not st.get("all_dead"):
+            send_tg("🚨 *Opus %d 层全灭*：%s 探针全部失败\nweights: %s"
+                    % (top_pri, ", ".join("#%d %s" % (c, names.get(c, ""))
+                                          for c in dead), new_w))
     else:
         for c in newly:
             send_tg("⚠️ Opus 渠道判死：#%d %s → w1" % (c, names.get(c, "")))
         for c in healed:
             send_tg("✅ Opus 渠道恢复：#%d %s → w%d" % (c, names.get(c, ""), new_w[c]))
+    st["all_dead"] = all_dead
     if newly or healed:
         log("dead-set: %s (newly=%s healed=%s)" % (dead, newly, healed))
     st["dead"] = dead
