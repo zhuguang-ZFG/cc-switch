@@ -1,0 +1,73 @@
+# unified_router configuration — NewAPI adaptive routing v6
+# Design: docs/plans/newapi-unified-router-v6-2026-07-28.md
+#
+# This file replaces hardcoded constants in route_optimizer.py / autoweight.py.
+# Edit here, no code changes needed.
+
+# ── Global ──
+probe_timeout: 30              # seconds, TTFT probe max wait
+log_window: "6m"              # container-log slice per run
+traffic_window_s: 360         # real-traffic lookback from logs table
+ewma_alpha: 0.4               # EWMA smoothing (higher = faster reaction)
+err_penalty: 3.0              # quality = 1/(1 + ERR_PENALTY * err_rate)
+hysteresis: 5                 # |Δweight| < this → skip DB write
+w_min_ok: 3                   # ε-greedy floor for alive channels
+w_max: 60                     # weight ceiling
+w_dead: 1                     # near-zero weight for dead/breaker-open channels
+
+# ── Error classification weights ──
+# 429/concurrency = transient (0.5), 5xx/connection = fault (2.0),
+# 401/403 auth = severe (3.0), content_policy = not a fault (0.0)
+err_w_auth: 3.0
+err_w_conc: 0.5
+err_w_other: 2.0
+err_w_content: 0.0
+
+# ── Circuit breaker ──
+breaker:
+  error_rate_threshold: 0.5   # >50% error rate → OPEN
+  min_requests: 5             # need ≥5 requests in window to evaluate
+  window_seconds: 120         # rolling window for error rate
+  cooldown_seconds: 30        # OPEN → wait 30s → HALF_OPEN
+  panic_threshold: 0.7        # >70% channels OPEN → all drop to HALF_OPEN
+
+# ── P2C + Peak-EWMA scoring ──
+scoring:
+  inflight_weight: 0.3        # how much in-flight requests affect score
+  inflight_estimate_window: 60 # seconds to estimate concurrency
+  peak_ewma_beta: 0.05        # peak decay rate (lower = longer memory)
+  real_traffic_ratio: 0.6     # 60% real traffic + 40% probe in blended latency
+
+# ── Tier definitions ──
+# Each tier = a priority band. unified_router manages weights WITHIN each tier.
+tiers:
+  # ── Opus main pool (priority 50) ──
+  opus_main:
+    priority: 50
+    model_family: "claude-opus%"
+    probe_model: "claude-opus-5"
+    channels: [9, 10, 11, 20, 60, 127]  # baibei×3 + linxi×2 + jianzhile
+    mapped_channels: []
+    mapped_margin: 1.3
+    mapped_cap: 25
+    # Per-channel probe model override (for fable-only etc.)
+    probe_model_override:
+      127: "claude-fable-5"    # jianzhile only serves fable
+
+  # ── Opus fallback (priority 45, GPT/k3/grok mapped) ──
+  opus_fallback:
+    priority: 45
+    model_family: "claude-opus%"
+    probe_model: "claude-opus-5"
+    channels: [140, 13, 131, 96, 139, 142]
+    mapped_channels: [140, 13, 131, 96, 139, 142]  # all mapped
+    mapped_margin: 1.3
+    mapped_cap: 25
+
+  # ── Sonnet fallback chain (priority < 0) ──
+  sonnet_chain:
+    priority: -1               # marker; sonnet uses swap logic not weight
+    model_family: "claude-sonnet%"
+    probe_model: "claude-sonnet-4-6"
+    channels: [63, 133, 129, 134, 136]
+    swap_margin: 1.5           #下层 score > 上层 × 1.5 → swap
