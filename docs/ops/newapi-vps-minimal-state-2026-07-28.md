@@ -8,7 +8,7 @@
 |------|------|------|
 | NewAPI 容器 | 运行中 | `podman new-api`，监听 `0.0.0.0:3000` |
 | nginx 反代 | 运行中 | 只保留 `newapi.aliyun.donglicao.com.conf` |
-| joycode-proxy | 已禁用 | `systemctl joycode-proxy.service` 仍在跑，但 NewAPI 渠道已禁用（JD 账号掉登录，无法认证） |
+| joycode-proxy | 已放弃 | `systemctl joycode-proxy.service` 仍在跑，但 NewAPI 渠道已被用户删除（JD 账号掉登录，无法认证） |
 | kiro-guard | 已移除 | 10 个 systemd 服务已停止并移出 `/etc/systemd/system` |
 | newapi-tg-bot | 已移除 | Telegram 报警服务已停止并移除 |
 | 路由/优化脚本 | 已移除 | route_optimizer、unified_router、health_check、newapi_monitor、autoweight 等 |
@@ -17,30 +17,33 @@
 ## DB 状态
 
 ```text
-channels: 11
-abilities: 32
+channels: 12
+abilities: 34
 ```
 
 ## 当前渠道
 
 | ID | 名称 | base_url | 模型 | 状态 | 优先级 | 权重 |
 |---|---|---|---|---|---|---|
-| 1 | joycode-proxy-jd | `http://127.0.0.1:34891` | `JoyAI-Code` | 禁用 | 50 | 10 |
 | 2 | ai.centos.hk-gpt | `https://ai.centos.hk` | `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` | 启用 | 50 | 10 |
 | 3-8 | baibei-100xlabs-1 ~ 6 | `https://sub.100xlabs.space` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用 | 50 | 10 |
 | 9-11 | linxi-k40-1 ~ 3 | `https://k40.shengqainbang.cn` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用 | 50 | 10 |
+| 12 | vyceai | `https://vyceai.com` | `claude-haiku-4-5`, `claude-sonnet-4-6` | 启用 | 50 | 10 |
+| 13 | ai.168661-grok | `https://ai.168661.xyz` | `grok-4.5` | 启用 | 50 | 10 |
 
 - 百倍（100xlabs）6 个 key 已拆成 6 条渠道，NewAPI 内部做负载均衡
 - 林夕（k40.shengqainbang.cn）3 个 key 已拆成 3 条渠道
-- joycode-proxy-jd 因 JD 账号掉登录 + 风控验证无法恢复，已禁用
+- joycode-proxy-jd 渠道已由用户从 NewAPI 删除（JD 账号掉登录 + 风控无法恢复，已放弃）
+- vyceai、ai.168661-grok 为用户后续自行提供/要求接入的渠道（2026-07-28）
+- ai.168661-grok 直连实测：`/v1/models` 返回 grok-4.3/4.5/chat-fast/imagine-image 四款，按需只挂了 `grok-4.5`；`chat/completions` 实测 HTTP 200（首响约 10s）
 
 ## 保留服务
 
-### joycode-proxy（JD 模型，已禁用）
+### joycode-proxy（JD 模型，已放弃）
 
 - 监听：`127.0.0.1:34891`
 - 路径：`/opt/joycode/JoyCode2Api`
-- 当前状态：代理服务仍在运行，但 NewAPI 渠道已禁用
+- 当前状态：代理服务仍在运行，但 NewAPI 渠道已被用户删除
 - 原因：JD 账号凭证过期，扫码/OAuth 均触发风控（riskCode=1100），无法完成认证
 - 恢复方式：需本机 JoyCode IDE `state.vscdb` 或有效的 ptKey
 
