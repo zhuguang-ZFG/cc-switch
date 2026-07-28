@@ -27,6 +27,16 @@
 
 明确不动的：`RELAY_TIMEOUT=0`（官方警告设短会导致计费不同步）、`STREAMING_TIMEOUT` 默认 300s、`RetryTimes=4`。
 
+## 渠道亲和（2026-07-28 开启）
+
+`channel_affinity_setting.enabled = true`。规则库此前已配好三条（claude/gpt/glm trace），本次仅开开关。
+
+- 效果：同一会话（按 `metadata.user_id`/`prompt_cache_key`/UA 提取指纹）在 TTL 600s 内固定到同一上游渠道；渠道级粘性 + 渠道内 key 仍轮询
+- 收益：claude 前缀缓存命中率提升（不再在林夕/百倍间随机跳）、长对话中途不换上游账户减少流中断
+- 已验证：同一 `metadata.user_id` 两连发均落 channel #9（affinity key_fp 一致，rule `claude cli trace` 命中，第二次显式记录 `"channel_id":9`）
+- 失败保护：`skip_retry_on_failure=false`，渠道故障仍走正常故障转移
+- 附带：claude 规则的 `pass_headers` 模板会把客户端原始头（User-Agent、Anthropic-Beta、X-Stainless-*）透传上游
+
 重建命令（数据在 `/opt/new-api/data` 挂载卷，重建不丢数据）：
 
 ```bash
