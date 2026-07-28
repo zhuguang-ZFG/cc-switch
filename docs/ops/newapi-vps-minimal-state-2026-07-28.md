@@ -14,6 +14,28 @@
 | 路由/优化脚本 | 已移除 | route_optimizer、unified_router、health_check、newapi_monitor、autoweight 等 |
 | cron 任务 | 已清理 | 只保留 DB 备份、SSL 续期、lima-monitor 健康检查、网站同步 |
 
+## 容器环境变量（2026-07-28 重建容器时加入）
+
+| 变量 | 值 | 理由 |
+|---|---|---|
+| `GLOBAL_API_RATE_LIMIT` | `600` | 默认 180 次/3 分钟/单 IP，Claude Code 突发（主对话+分类器+子代理）易触发 429 |
+| `ERROR_LOG_ENABLED` | `true` | 前端日志显示上游错误细节，排查"停止/报错"不用猜 |
+| `CHANNEL_TEST_FREQUENCY` | `30` | 每 30 分钟自动探测渠道，坏 key 提前踢出轮询（配合已开启的自动禁用/恢复） |
+| `MEMORY_CACHE_ENABLED` | `true` | SQLite 单实例减读压 |
+| `BATCH_UPDATE_ENABLED` | `true` | quota/日志聚合写盘，减 SQLite 写压 |
+| `TZ` | `Asia/Shanghai` | 日志时间戳可读 |
+
+明确不动的：`RELAY_TIMEOUT=0`（官方警告设短会导致计费不同步）、`STREAMING_TIMEOUT` 默认 300s、`RetryTimes=4`。
+
+重建命令（数据在 `/opt/new-api/data` 挂载卷，重建不丢数据）：
+
+```bash
+podman run -d --name new-api --restart always -p 3000:3000 -v /opt/new-api/data:/data \
+  -e TZ=Asia/Shanghai -e GLOBAL_API_RATE_LIMIT=600 -e ERROR_LOG_ENABLED=true \
+  -e CHANNEL_TEST_FREQUENCY=30 -e MEMORY_CACHE_ENABLED=true -e BATCH_UPDATE_ENABLED=true \
+  docker.m.daocloud.io/calciumion/new-api:latest
+```
+
 ## DB 状态
 
 ```text
