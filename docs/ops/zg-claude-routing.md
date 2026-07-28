@@ -125,6 +125,8 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 - **AUP / Cyber Safeguards:** 官方 Opus 4.8 易拦；新会话 + 换 Opus5/Sonnet/glm；无客户端关过滤。见 runbook「Cyber Safeguards / AUP」与 `docs/patches/cyber-safeguards-opus48-2026-07-26.md`。
 - **公益站抖动：** 预期噪声；勿当 P0。health v5.1 对 `no available accounts` 不累计禁用。
 
+- **#9 baibei 失败率 45%（2026-07-28 12:00 诊断）：** #9 在 15min 内 5 ok / 9 hard（missing_stop_reason 主因）。baibei 上游返回截断 SSE 流。guard tee 模式在流开始后无法改 HTTP 状态码（headers_sent），只能发 SSE error event，NewAPI 不会重试。**修复**：#9/#10/#20 权重统一为 20。**tee 固有限制**：流式中途失败无法触发 NewAPI RetryTimes，靠降权减少命中。
+
 ## Client note (cc-switch)
 
 - Prefer **official** [farion1231/cc-switch](https://github.com/farion1231/cc-switch/releases) installers for daily use (e.g. v3.18.0 → DB support **v16**).
