@@ -54,8 +54,8 @@ podman run -d --name new-api --restart always -p 3000:3000 -v /opt/new-api/data:
 ## DB 状态
 
 ```text
-channels: 7
-abilities: 28
+channels: 8
+abilities: 32
 ```
 
 ## 当前渠道
@@ -69,17 +69,19 @@ abilities: 28
 | 13 | ai.168661-grok | `https://ai.168661.xyz` | `grok-4.5` | 启用 | 50 | 10 |
 | 14 | wintoken-glm | `https://www.wintoken.dev` | `glm-5.2` | 启用（单渠道 2 key 轮询） | 50 | 10 |
 | 15 | sensenova-token | `https://token.sensenova.cn` | `sensenova-6.7-flash-lite`, `deepseek-v4-flash`, `glm-5.2` | 启用（单渠道 2 key 轮询） | 50 | 10 |
+| 16 | centos-api-backup-gpt | `https://api.centos.hk` | `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` | 启用（centos 备用线路入口，同 key） | 50 | 5 |
 
 - 百倍 6 个 key、林夕 3 个 key 已改用 NewAPI **单渠道多 key 模式**（key 字段换行分隔，内部轮询），渠道数从 12 收敛到 5（后新增 grok、wintoken 共 7 条）
 - **多 key 渠道的坑（2026-07-28 踩过）**：只在 `key` 字段换行不够，还必须把 `channel_info` 列写成 **BLOB** JSON 并带 `"is_multi_key": true` + `multi_key_size` + `multi_key_mode`，否则 Anthropic 渠道把整段多行 key 塞进 `X-Api-Key` 头，报 `invalid header field value` 秒 500。且必须用 `sqlite3.Binary` 写 BLOB——写 TEXT 时 Go 端 `value.([]byte)` 断言失败，scan 报 `unexpected end of JSON input`，`is_multi_key` 静默为 false。单 key 渠道也要写 `{"is_multi_key":false,...}` BLOB，NULL 同样触发 scan 错误
 - 权重调优（2026-07-28，按 VPS 实测速度配权，谁快谁多拿流量）：
   - opus 池：林夕 w20（3 次采样 2.7s/2.9s/4.7s，稳定快）：百倍 w10（12.7s/12.7s/2.8s，波动大）≈ 2:1，林夕主力、百倍兜底+扩容量
-  - `gpt-5.6-sol` 单源 centos ability w10（实测 5.0s）；vyceai 的 sol ability 已于 2026-07-28 晚摘除（见下）
+  - `gpt-5.6-sol` 双入口：centos 默认线 ability w10（实测 5.0s）主力，备用线 ability w5 冗余；vyceai 的 sol ability 已于 2026-07-28 晚摘除（见下）
   - vyceai 渠道级从 0/0 修回 50/10（0 权重会导致其独占模型 haiku/sonnet 等完全调度不到）
   - 单源渠道（centos 其余 gpt、grok、vyceai 独占模型）权重不影响调度，保持 10
   - 基准参考：centos gpt-5.5 5.0s / grok-4.5 2.3s（波动大，另一次 10.4s）/ vyceai sonnet-4-6 14.8s
 - vyceai 实际挂了 13 个模型（用户在 UI 扩充；`gpt-5.6-sol` 于 2026-07-28 晚摘除——站方直接禁用该模型（`model_disabled`），且 vyceai 不支持 `/v1/responses` 端点（返回 SPA 页面），Codex 请求落上去必 400，NewAPI 对 400 不做故障转移，故删 ability 让 sol 只走 centos）。其余与其他渠道重名的模型（`glm-5.2` 等）NewAPI 按权重在多渠道间随机调度
 - vyceai 稳定性提醒（2026-07-28 晚实测）：`glm-5.2`/`mimo-v2.5-pro` 60s 超时、`claude-haiku-4-5` 45.9s——公益站上游波动大，`CHANNEL_TEST_FREQUENCY=30` 会自动摘除持续失败的渠道，无需手动干预
+- centos 三线路（2026-07-28 用户提供）：默认 `ai.centos.hk`、备用 `api.centos.hk`、优化 `frapi.centos.hk`，同 key 通用。实测 sol：默认 2.68s/2.95s 最快最稳、备用 5.19s/3.22s、优化 3.00s/4.59s——默认线保持 base_url 不动，备用线建为渠道 #16（ability w5），默认线故障时 NewAPI 自动 failover；`frapi.centos.hk` 留作手工备用未挂
 - Kimi Code CLI 已直连本 NewAPI（`http://47.112.162.80:3000/v1`，公网 40ms；弃用 Tailscale 路径 3.2s），客户端模型清单已与实有模型同步
 - wintoken-glm（2026-07-28 新增）：capi.cun.ai 被阿里云 IP 段封锁（VPS ping 100% 丢包），同服务的 `www.wintoken.dev` 入口 VPS 直连正常（1.3s），2 key 轮询。glm-5.2 形成双源：wintoken ability w20 主力（实测 chat 4.8s），vyceai ability w10 冗余（当晚上游超时频发）
 - sensenova-token（2026-07-28 新增）：商汤 token plan，VPS 直连 0.13s 极快（CN 机房），全免费定价。`sensenova-u1-fast` 在 /models 有列出但调用 404 未挂。实测：flash-lite 0.5s / ds-v4-flash 1.1s / glm-5.2 2.2s，是目前最快的渠道。glm-5.2 变为三源（wintoken w20 : vyceai w10 : sensenova w10），deepseek-v4-flash 双源（vyceai w10 : sensenova w10）
