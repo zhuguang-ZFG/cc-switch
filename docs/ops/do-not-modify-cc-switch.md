@@ -22,7 +22,7 @@ Forbidden without an explicit new user request:
 
 ## Allowed directions (prefer in order)
 
-1. **NewAPI** (Aliyun): channels, abilities, `model_mapping`, weights, `param_override`, health_check, kiro-guard — then `podman restart new-api` when required.
+1. **NewAPI** (Aliyun): channels, abilities, `model_mapping`, weights, `param_override` — then `podman restart new-api` when required. VPS 优化层（kiro-guard、health_check、路由脚本等）已移除，见 `docs/ops/newapi-vps-minimal-state-2026-07-28.md`。
 2. **Provider config in DB** (`zg-gateway-claude.settings_config.env`): role upstreams; **keep `ANTHROPIC_MODEL` absent** so old mapper cannot rewrite `glm-*` → Opus.
 3. **Live Claude** `~\.claude\settings.json`: takeover-style **official aliases** only (`claude-sonnet-4-6[1M]`, `claude-opus-5[1M]`, `claude-haiku-4-5`); `PROXY_MANAGED` + `:15721`; `model=opus`. Do **not** put raw `glm-5.2[1M]` into live Sonnet (fights takeover sync).
 4. Docs / patches under `docs/ops/` and `docs/patches/`.

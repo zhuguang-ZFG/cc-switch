@@ -1,3 +1,5 @@
+> ⚠️ **历史文档**：2026-07-28 VPS 已全面清理，kiro-guard、路由优化脚本、TG 报警、zhipu-coding-shim 等优化层均已移除，NewAPI 渠道表已清空。当前极简状态见 [newapi-vps-minimal-state-2026-07-28.md](./newapi-vps-minimal-state-2026-07-28.md)。本文保留为历史参考。
+
 # ZG NewAPI — Claude role routing (ops snapshot)
 
 **Updated:** 2026-07-28 03:20 (ops-only; **do not modify cc-switch**; Opus5 prefer; 真 claude 50 层 / kimi-k3 40 层兜底; kiro-guard max_tokens cap=65536 + 403→503 failover; Fable→jianzhile; kimi-code 收编走 zg-newapi)  
