@@ -143,6 +143,18 @@ Two findings worth recording:
 
 Channel 15 (`sensenova-token`) no longer serves Grok. It now serves `glm-5.2`, `deepseek-v4-flash`, and `sensenova-6.7-flash-lite`; all three pass a channel test. Any note that describes channel 15 as a Grok source is stale.
 
+### Channel 12: remove gpt-5.6-sol (stop fixed 503 path)
+
+Logs showed most `gpt-5.6-sol` type-5 errors as `503` on channel 12 (`vyceai`), then failover to channels 2/16 (`use_channel` multi-hop). Channel 12 models included a single GPT entry `gpt-5.6-sol` that the upstream consistently marked unavailable.
+
+Action: PUT channel 12 `models` without any `gpt-5*` id. Remaining models unchanged (claude/glm/deepseek/minimax/mimo/gemini/nemotron/auto). Backup: `tmp/ch12-before-remove-gpt.json` (local only).
+
+Post-check:
+
+- Channel 12 models no longer list `gpt-5.6-sol`.
+- Channel 2 and 16 still list the full gpt-5.5 / 5.6 family.
+- Channel 12 tests: `claude-haiku-4-5` / `deepseek-v4-flash` / `minimax-m3` success; `claude-fable-5` still upstream 503 (pre-existing, not caused by this edit).
+
 ## Rollback
 
 Local pre-change artifacts:
