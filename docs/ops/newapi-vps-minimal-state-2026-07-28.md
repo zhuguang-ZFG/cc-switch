@@ -26,14 +26,15 @@ abilities: 13
 | ID | 名称 | base_url | 模型 | 状态 | 优先级 | 权重 |
 |---|---|---|---|---|---|---|
 | 2 | ai.centos.hk-gpt | `https://ai.centos.hk` | `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` | 启用 | 50 | 10 |
-| 3 | baibei-100xlabs | `https://sub.100xlabs.space` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用（单渠道 6 key 轮询） | 50 | 10 |
+| 3 | baibei-100xlabs | `https://sub.100xlabs.space` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用（单渠道 6 key 轮询） | 50 | 20 |
 | 9 | linxi-k40 | `https://k40.shengqainbang.cn` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用（单渠道 3 key 轮询） | 50 | 10 |
-| 12 | vyceai | `https://vyceai.com` | `claude-haiku-4-5`, `claude-sonnet-4-6` | 启用 | 0 | 0 |
+| 12 | vyceai | `https://vyceai.com` | `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-fable-5`, `glm-5.2`, `gpt-5.6-sol`, `deepseek-v4-flash`, `gemini-3.1-flash-lite`, `gemini-3.6-flash`, `mimo-v2.5-pro`, `minimax-m3`, `nemotron-ultra-550b`, `nemotron-vision`, `auto` | 启用 | 50 | 10 |
 | 13 | ai.168661-grok | `https://ai.168661.xyz` | `grok-4.5` | 启用 | 50 | 10 |
 
 - 百倍 6 个 key、林夕 3 个 key 已改用 NewAPI **单渠道多 key 模式**（key 字段换行分隔，内部自动轮询），渠道数从 12 收敛到 5
+- 权重调优（2026-07-28）：opus 池按 key 容量配权——百倍 w20（6 key）：林夕 w10（3 key）≈ 2:1 流量比；vyceai 从 0/0 修回 50/10（0 权重会导致其独占模型 haiku/sonnet 等完全调度不到）
+- vyceai 实际挂了 14 个模型（用户在 UI 扩充），其中 `glm-5.2`、`gpt-5.6-sol` 与其他渠道重名，NewAPI 按权重在多渠道间随机调度
 - joycode-proxy-jd 渠道已由用户从 NewAPI 删除（JD 账号掉登录 + 风控无法恢复，已放弃）
-- vyceai 的 priority/weight=0 是用户自行设置的（不参与自动调度，仅手动指定模型时可用）
 - ai.168661-grok 直连实测：`/v1/models` 返回 grok-4.3/4.5/chat-fast/imagine-image 四款，按需只挂了 `grok-4.5`；`chat/completions` 实测 HTTP 200（首响约 10s）
 
 ## 保留服务
