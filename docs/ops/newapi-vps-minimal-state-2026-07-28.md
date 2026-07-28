@@ -17,11 +17,16 @@
 ## DB 状态
 
 ```text
-channels: 0
-abilities: 0
+channels: 2
+abilities: 13
 ```
 
-所有渠道已清空，请登录 NewAPI 后台自行添加。
+## 当前渠道
+
+| ID | 名称 | base_url | 模型 | 优先级 | 权重 |
+|---|---|---|---|---|---|
+| 1 | joycode-proxy-jd | `http://127.0.0.1:34891` | `JoyAI-Code`, `Claude-Opus-4.7`, `MiniMax-M2.7`, `Kimi-K2.6`, `Kimi-K2.5`, `GLM-5.1`, `GLM-5`, `GLM-4.7`, `Doubao-Seed-2.0-pro` | 50 | 10 |
+| 2 | ai.centos.hk-gpt | `https://ai.centos.hk` | `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` | 50 | 10 |
 
 ## 保留服务
 
