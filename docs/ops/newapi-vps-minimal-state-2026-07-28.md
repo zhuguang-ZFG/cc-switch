@@ -7,7 +7,7 @@
 | 组件 | 状态 | 说明 |
 |------|------|------|
 | NewAPI 容器 | 运行中 | `podman new-api`，监听 `0.0.0.0:3000` |
-| nginx 反代 | 运行中 | 只保留 `newapi.aliyun.donglicao.com.conf` |
+| nginx 反代 | 运行中 | 实际服务域名 `aliyun.donglicao.com`（apex，证书有效）；`newapi.aliyun.donglicao.com` 子域名无证书无 server 块已废弃，NewAPI 的 ServerAddress/api_info 均指向 apex |
 | joycode-proxy | 已放弃 | `systemctl joycode-proxy.service` 仍在跑，但 NewAPI 渠道已被用户删除（JD 账号掉登录，无法认证） |
 | kiro-guard | 已移除 | 10 个 systemd 服务已停止并移出 `/etc/systemd/system` |
 | newapi-tg-bot | 已移除 | Telegram 报警服务已停止并移除 |
@@ -36,6 +36,11 @@
 - 已验证：同一 `metadata.user_id` 两连发均落 channel #9（affinity key_fp 一致，rule `claude cli trace` 命中，第二次显式记录 `"channel_id":9`）
 - 失败保护：`skip_retry_on_failure=false`，渠道故障仍走正常故障转移
 - 附带：claude 规则的 `pass_headers` 模板会把客户端原始头（User-Agent、Anthropic-Beta、X-Stainless-*）透传上游
+
+## 遗留惰性配置（不影响运行，勿清）
+
+- `global.chat_completions_to_responses_policy`：channel_ids=[142] 指向已删除的旧渠道，当前惰性。这是「chat/completions → responses 协议转换」策略，日后若再遇 Codex 锁客户端的渠道（如 zzzcoding），把新渠道 id 填进去即可让 NewAPI 自动转协议——**这是解协议级锁的正解**，留着当模板
+- `ModelRatio`/`CompletionRatio` 中过时模型条目：仅影响计费显示，无限额度自用无实际影响
 
 重建命令（数据在 `/opt/new-api/data` 挂载卷，重建不丢数据）：
 
