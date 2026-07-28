@@ -17,8 +17,8 @@
 ## DB 状态
 
 ```text
-channels: 12
-abilities: 34
+channels: 5
+abilities: 13
 ```
 
 ## 当前渠道
@@ -26,15 +26,14 @@ abilities: 34
 | ID | 名称 | base_url | 模型 | 状态 | 优先级 | 权重 |
 |---|---|---|---|---|---|---|
 | 2 | ai.centos.hk-gpt | `https://ai.centos.hk` | `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` | 启用 | 50 | 10 |
-| 3-8 | baibei-100xlabs-1 ~ 6 | `https://sub.100xlabs.space` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用 | 50 | 10 |
-| 9-11 | linxi-k40-1 ~ 3 | `https://k40.shengqainbang.cn` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用 | 50 | 10 |
-| 12 | vyceai | `https://vyceai.com` | `claude-haiku-4-5`, `claude-sonnet-4-6` | 启用 | 50 | 10 |
+| 3 | baibei-100xlabs | `https://sub.100xlabs.space` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用（单渠道 6 key 轮询） | 50 | 10 |
+| 9 | linxi-k40 | `https://k40.shengqainbang.cn` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用（单渠道 3 key 轮询） | 50 | 10 |
+| 12 | vyceai | `https://vyceai.com` | `claude-haiku-4-5`, `claude-sonnet-4-6` | 启用 | 0 | 0 |
 | 13 | ai.168661-grok | `https://ai.168661.xyz` | `grok-4.5` | 启用 | 50 | 10 |
 
-- 百倍（100xlabs）6 个 key 已拆成 6 条渠道，NewAPI 内部做负载均衡
-- 林夕（k40.shengqainbang.cn）3 个 key 已拆成 3 条渠道
+- 百倍 6 个 key、林夕 3 个 key 已改用 NewAPI **单渠道多 key 模式**（key 字段换行分隔，内部自动轮询），渠道数从 12 收敛到 5
 - joycode-proxy-jd 渠道已由用户从 NewAPI 删除（JD 账号掉登录 + 风控无法恢复，已放弃）
-- vyceai、ai.168661-grok 为用户后续自行提供/要求接入的渠道（2026-07-28）
+- vyceai 的 priority/weight=0 是用户自行设置的（不参与自动调度，仅手动指定模型时可用）
 - ai.168661-grok 直连实测：`/v1/models` 返回 grok-4.3/4.5/chat-fast/imagine-image 四款，按需只挂了 `grok-4.5`；`chat/completions` 实测 HTTP 200（首响约 10s）
 
 ## 保留服务
