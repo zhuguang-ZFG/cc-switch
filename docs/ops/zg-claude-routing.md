@@ -127,6 +127,8 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 
 - **#9 baibei 失败率 45%（2026-07-28 12:00 诊断）：** #9 在 15min 内 5 ok / 9 hard（missing_stop_reason 主因）。baibei 上游返回截断 SSE 流。guard tee 模式在流开始后无法改 HTTP 状态码（headers_sent），只能发 SSE error event，NewAPI 不会重试。**修复**：#9/#10/#20 权重统一为 20。**tee 固有限制**：流式中途失败无法触发 NewAPI RetryTimes，靠降权减少命中。
 
+- **affinity 死粘修复 + 林夕 #13 启用（2026-07-28 12:19）：** affinity 规则 `claude cli trace` 的 `skip_retry_on_failure=true` 是「停止」根因——粘到失败渠道后不重试，直接返回截断响应。修复：skip_retry→false, ttl 60→15, switch_on_success→true。验证：3 请求路由到 #9/#20/#20（不再死粘）。林夕（free.lyclaude.site）#13 恢复启用：status=1, priority=45, w15, claude-opus-5 已加入 models + model_mapping。
+
 ## Client note (cc-switch)
 
 - Prefer **official** [farion1231/cc-switch](https://github.com/farion1231/cc-switch/releases) installers for daily use (e.g. v3.18.0 → DB support **v16**).
