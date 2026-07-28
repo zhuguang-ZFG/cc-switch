@@ -37,6 +37,7 @@ scoring:
   inflight_estimate_window: 60 # seconds to estimate concurrency
   peak_ewma_beta: 0.05        # peak decay rate (lower = longer memory)
   real_traffic_ratio: 0.6     # 60% real traffic + 40% probe in blended latency
+  # 原则：谁快用谁。不做缓存命中优化——claude/glm/gpt 统一纯速度评分
 
 # ── Tier definitions ──
 # Each tier = a priority band. unified_router manages weights WITHIN each tier.
