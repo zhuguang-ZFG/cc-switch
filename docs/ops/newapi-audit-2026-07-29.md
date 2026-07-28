@@ -100,7 +100,7 @@ Post-change checks confirmed:
 
 1. Grok routing depends on a single working upstream. Channel 20 (`fengwind-grok`) is the only Grok channel that passes a test. After a review finding that NewAPI uses **higher priority number first** (`ORDER BY priority desc`), channel 20 was raised from priority 40 to **70** (above 17/60 and 13/50) so requests hit fengwind first instead of burning two `429`s on 17/13. Channels 13 and 17 remain enabled as recovery spares; channel 19 stays disabled pending a valid key.
 2. Claude channels 9 and 18 show occasional upstream 500/502 failures. Current retry and failover behavior masks most failures, but upstream quality should be monitored.
-3. Performance metrics are enabled while `perf_metrics_setting.retention_days = 0`; this prevents useful multi-day P95 latency analysis. A seven-day retention window is a reasonable next measurement step.
+3. ~~Performance metrics retention was 0~~ **Done (2026-07-29):** `perf_metrics_setting.retention_days` set to `7` (metrics already `enabled=true`, `bucket_time=hour`). Multi-day P95 can accumulate from this point; older samples before the change remain unavailable.
 4. Prompt-cache ratio tables mainly contain older Claude model names. This is harmless for unlimited private use but makes cost and cache accounting incomplete for newer models.
 5. The deployment remains a single SQLite-backed instance. Official NewAPI guidance recommends PostgreSQL and Redis for clustered/high-availability deployments; no migration is justified for the current single-node workload without capacity evidence.
 
