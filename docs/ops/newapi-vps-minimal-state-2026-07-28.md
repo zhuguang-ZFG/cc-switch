@@ -39,8 +39,8 @@ podman run -d --name new-api --restart always -p 3000:3000 -v /opt/new-api/data:
 ## DB 状态
 
 ```text
-channels: 5
-abilities: 13
+channels: 6
+abilities: 26
 ```
 
 ## 当前渠道
@@ -52,8 +52,9 @@ abilities: 13
 | 9 | linxi-k40 | `https://k40.shengqainbang.cn` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用（单渠道 3 key 轮询） | 50 | 20 |
 | 12 | vyceai | `https://vyceai.com` | `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-fable-5`, `glm-5.2`, `gpt-5.6-sol`, `deepseek-v4-flash`, `gemini-3.1-flash-lite`, `gemini-3.6-flash`, `mimo-v2.5-pro`, `minimax-m3`, `nemotron-ultra-550b`, `nemotron-vision`, `auto` | 启用 | 50 | 10 |
 | 13 | ai.168661-grok | `https://ai.168661.xyz` | `grok-4.5` | 启用 | 50 | 10 |
+| 14 | wintoken-glm | `https://www.wintoken.dev` | `glm-5.2` | 启用（单渠道 2 key 轮询） | 50 | 10 |
 
-- 百倍 6 个 key、林夕 3 个 key 已改用 NewAPI **单渠道多 key 模式**（key 字段换行分隔，内部轮询），渠道数从 12 收敛到 5
+- 百倍 6 个 key、林夕 3 个 key 已改用 NewAPI **单渠道多 key 模式**（key 字段换行分隔，内部轮询），渠道数从 12 收敛到 5（后新增 grok、wintoken 共 7 条）
 - **多 key 渠道的坑（2026-07-28 踩过）**：只在 `key` 字段换行不够，还必须把 `channel_info` 列写成 **BLOB** JSON 并带 `"is_multi_key": true` + `multi_key_size` + `multi_key_mode`，否则 Anthropic 渠道把整段多行 key 塞进 `X-Api-Key` 头，报 `invalid header field value` 秒 500。且必须用 `sqlite3.Binary` 写 BLOB——写 TEXT 时 Go 端 `value.([]byte)` 断言失败，scan 报 `unexpected end of JSON input`，`is_multi_key` 静默为 false。单 key 渠道也要写 `{"is_multi_key":false,...}` BLOB，NULL 同样触发 scan 错误
 - 权重调优（2026-07-28，按 VPS 实测速度配权，谁快谁多拿流量）：
   - opus 池：林夕 w20（3 次采样 2.7s/2.9s/4.7s，稳定快）：百倍 w10（12.7s/12.7s/2.8s，波动大）≈ 2:1，林夕主力、百倍兜底+扩容量
@@ -64,6 +65,7 @@ abilities: 13
 - vyceai 实际挂了 14 个模型（用户在 UI 扩充），其中 `glm-5.2`、`gpt-5.6-sol` 与其他渠道重名，NewAPI 按权重在多渠道间随机调度
 - vyceai 稳定性提醒（2026-07-28 晚实测）：`glm-5.2`/`mimo-v2.5-pro` 60s 超时、`claude-haiku-4-5` 45.9s——公益站上游波动大，`CHANNEL_TEST_FREQUENCY=30` 会自动摘除持续失败的渠道，无需手动干预
 - Kimi Code CLI 已直连本 NewAPI（`http://47.112.162.80:3000/v1`，公网 40ms；弃用 Tailscale 路径 3.2s），客户端模型清单已与实有模型同步
+- wintoken-glm（2026-07-28 新增）：capi.cun.ai 被阿里云 IP 段封锁（VPS ping 100% 丢包），同服务的 `www.wintoken.dev` 入口 VPS 直连正常（1.3s），2 key 轮询。glm-5.2 形成双源：wintoken ability w20 主力（实测 chat 4.8s），vyceai ability w10 冗余（当晚上游超时频发）
 - joycode-proxy-jd 渠道已由用户从 NewAPI 删除（JD 账号掉登录 + 风控无法恢复，已放弃）
 - ai.168661-grok 直连实测：`/v1/models` 返回 grok-4.3/4.5/chat-fast/imagine-image 四款，按需只挂了 `grok-4.5`；`chat/completions` 实测 HTTP 200（首响约 10s）
 
