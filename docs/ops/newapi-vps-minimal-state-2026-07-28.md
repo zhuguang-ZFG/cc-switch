@@ -55,7 +55,7 @@ podman run -d --name new-api --restart always -p 3000:3000 -v /opt/new-api/data:
 
 ```text
 channels: 7
-abilities: 29
+abilities: 28
 ```
 
 ## 当前渠道
@@ -65,7 +65,7 @@ abilities: 29
 | 2 | ai.centos.hk-gpt | `https://ai.centos.hk` | `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` | 启用 | 50 | 10 |
 | 3 | baibei-100xlabs | `https://sub.100xlabs.space` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用（单渠道 6 key 轮询） | 50 | 10 |
 | 9 | linxi-k40 | `https://k40.shengqainbang.cn` | `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5` | 启用（单渠道 3 key 轮询） | 50 | 20 |
-| 12 | vyceai | `https://vyceai.com` | `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-fable-5`, `glm-5.2`, `gpt-5.6-sol`, `deepseek-v4-flash`, `gemini-3.1-flash-lite`, `gemini-3.6-flash`, `mimo-v2.5-pro`, `minimax-m3`, `nemotron-ultra-550b`, `nemotron-vision`, `auto` | 启用 | 50 | 10 |
+| 12 | vyceai | `https://vyceai.com` | `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `claude-fable-5`, `glm-5.2`, `deepseek-v4-flash`, `gemini-3.1-flash-lite`, `gemini-3.6-flash`, `mimo-v2.5-pro`, `minimax-m3`, `nemotron-ultra-550b`, `nemotron-vision`, `auto` | 启用 | 50 | 10 |
 | 13 | ai.168661-grok | `https://ai.168661.xyz` | `grok-4.5` | 启用 | 50 | 10 |
 | 14 | wintoken-glm | `https://www.wintoken.dev` | `glm-5.2` | 启用（单渠道 2 key 轮询） | 50 | 10 |
 | 15 | sensenova-token | `https://token.sensenova.cn` | `sensenova-6.7-flash-lite`, `deepseek-v4-flash`, `glm-5.2` | 启用（单渠道 2 key 轮询） | 50 | 10 |
@@ -74,17 +74,26 @@ abilities: 29
 - **多 key 渠道的坑（2026-07-28 踩过）**：只在 `key` 字段换行不够，还必须把 `channel_info` 列写成 **BLOB** JSON 并带 `"is_multi_key": true` + `multi_key_size` + `multi_key_mode`，否则 Anthropic 渠道把整段多行 key 塞进 `X-Api-Key` 头，报 `invalid header field value` 秒 500。且必须用 `sqlite3.Binary` 写 BLOB——写 TEXT 时 Go 端 `value.([]byte)` 断言失败，scan 报 `unexpected end of JSON input`，`is_multi_key` 静默为 false。单 key 渠道也要写 `{"is_multi_key":false,...}` BLOB，NULL 同样触发 scan 错误
 - 权重调优（2026-07-28，按 VPS 实测速度配权，谁快谁多拿流量）：
   - opus 池：林夕 w20（3 次采样 2.7s/2.9s/4.7s，稳定快）：百倍 w10（12.7s/12.7s/2.8s，波动大）≈ 2:1，林夕主力、百倍兜底+扩容量
-  - `gpt-5.6-sol` 双渠道重名：centos ability w10（实测 5.0s）主力，vyceai ability w2（实测 14.8s）仅冗余
+  - `gpt-5.6-sol` 单源 centos ability w10（实测 5.0s）；vyceai 的 sol ability 已于 2026-07-28 晚摘除（见下）
   - vyceai 渠道级从 0/0 修回 50/10（0 权重会导致其独占模型 haiku/sonnet 等完全调度不到）
   - 单源渠道（centos 其余 gpt、grok、vyceai 独占模型）权重不影响调度，保持 10
   - 基准参考：centos gpt-5.5 5.0s / grok-4.5 2.3s（波动大，另一次 10.4s）/ vyceai sonnet-4-6 14.8s
-- vyceai 实际挂了 14 个模型（用户在 UI 扩充），其中 `glm-5.2`、`gpt-5.6-sol` 与其他渠道重名，NewAPI 按权重在多渠道间随机调度
+- vyceai 实际挂了 13 个模型（用户在 UI 扩充；`gpt-5.6-sol` 于 2026-07-28 晚摘除——站方直接禁用该模型（`model_disabled`），且 vyceai 不支持 `/v1/responses` 端点（返回 SPA 页面），Codex 请求落上去必 400，NewAPI 对 400 不做故障转移，故删 ability 让 sol 只走 centos）。其余与其他渠道重名的模型（`glm-5.2` 等）NewAPI 按权重在多渠道间随机调度
 - vyceai 稳定性提醒（2026-07-28 晚实测）：`glm-5.2`/`mimo-v2.5-pro` 60s 超时、`claude-haiku-4-5` 45.9s——公益站上游波动大，`CHANNEL_TEST_FREQUENCY=30` 会自动摘除持续失败的渠道，无需手动干预
 - Kimi Code CLI 已直连本 NewAPI（`http://47.112.162.80:3000/v1`，公网 40ms；弃用 Tailscale 路径 3.2s），客户端模型清单已与实有模型同步
 - wintoken-glm（2026-07-28 新增）：capi.cun.ai 被阿里云 IP 段封锁（VPS ping 100% 丢包），同服务的 `www.wintoken.dev` 入口 VPS 直连正常（1.3s），2 key 轮询。glm-5.2 形成双源：wintoken ability w20 主力（实测 chat 4.8s），vyceai ability w10 冗余（当晚上游超时频发）
 - sensenova-token（2026-07-28 新增）：商汤 token plan，VPS 直连 0.13s 极快（CN 机房），全免费定价。`sensenova-u1-fast` 在 /models 有列出但调用 404 未挂。实测：flash-lite 0.5s / ds-v4-flash 1.1s / glm-5.2 2.2s，是目前最快的渠道。glm-5.2 变为三源（wintoken w20 : vyceai w10 : sensenova w10），deepseek-v4-flash 双源（vyceai w10 : sensenova w10）
 - joycode-proxy-jd 渠道已由用户从 NewAPI 删除（JD 账号掉登录 + 风控无法恢复，已放弃）
 - ai.168661-grok 直连实测：`/v1/models` 返回 grok-4.3/4.5/chat-fast/imagine-image 四款，按需只挂了 `grok-4.5`；`chat/completions` 实测 HTTP 200（首响约 10s）
+
+## Kimi Code 客户端配置（协议/思维链/上下文，2026-07-28 实测修正）
+
+`~/.kimi-code/config.toml` 中走本 NewAPI 的别名，以下规则均已实测验证（备份 `config.toml.bak.caps20260728`）：
+
+- **claude 别名必须 `protocol = "anthropic"`**：走 OpenAI 格式时思维链全丢；改走原生 `/v1/messages` 后 thinking 块完整返回（实测 blocks: `[thinking, text]`）。7 个 claude 别名均已加
+- **`max_output_size` 必填**：kosong CEILING 表无 `claude-opus-5`/`claude-sonnet-5` 版本号，fallback 32000 恰等于 effort=high 的 thinking budget 32000，`budget < max_tokens` 校验必失败 → 之前每次 400。已加 `claude-opus-5 = 128000`、`claude-sonnet-5 = 64000`，实测修复后 200
+- **ctx 以上游声明为准**：`glm-5.2` 262144→1048576、`deepseek-v4-flash` 131072→1048576（sensenova 上游声明 1M）
+- **thinking 标记按实测填**：`glm-5.2`、`grok-4.5` 实测 reasoning=YES 保留；gpt 全系/deepseek/mimo 实测 reasoning=no 不标；`sensenova-6.7-flash-lite` 不返回 `reasoning_content`（思考混在正文）已去掉 thinking cap
 
 ## 保留服务
 
