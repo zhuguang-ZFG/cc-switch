@@ -325,6 +325,7 @@ def process_tier(db, st, cfg, tier_name, tier_cfg, dry_run=False):
         return {}
 
     ids = [r[0] for r in rows]
+    ph = ",".join("?" * len(ids))  # FIX: rebuild ph from filtered ids (not config channel_ids)
     names = {r[0]: r[1][:24] for r in rows}
 
     # ── Gather signals ──

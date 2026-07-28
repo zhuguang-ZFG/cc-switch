@@ -63,3 +63,42 @@
 2. P1-3（内容审查误杀）——一行状态码判断
 3. dx 两件（P1-5/6）+ sonnet_failover 废弃/改写（P1-9 + 路由键事实）
 4. 其余 P2 随 tee 模式改造一起做（P1-4 超时预算、P2-11/13 与 tee 重写同区域）
+
+---
+
+## 后续修复（2026-07-28）
+
+### unified_router.py 参数绑定 bug（P0，阻断 opus_fallback tier）
+
+**症状**：unified_router cron 每 5 分钟在 `opus_fallback` tier crash（`sqlite3.ProgrammingError: Incorrect number of bindings supplied. The current statement uses 8, and the 7 supplied.`）。
+
+**根因**：`process_tier()` L319 用 config 全量 `channel_ids` 生成占位符 `ph`（6 个 `?`），但后续所有 SQL 用过滤后的 `ids`（`status=1` 过滤后可能只剩 5 个）。`ph` 与 `ids` 数量不匹配。
+
+**修复**：在 `ids = [r[0] for r in rows]` 之后重建 `ph = ",".join("?" * len(ids))`。
+
+**TWINS**：searched `% ph` pattern — found 4 sites: L201/L223 用各自函数参数 `ids` 生成（正确）；L322 用 config `channel_ids` 配合全量参数（正确）；L343 是唯一 bug 点，已修。本地 + VPS 同步修复。
+
+### 渠道配置修复
+
+| 修复 | 说明 |
+|------|------|
+| #138 kimi-k3 权重 25→5 | k3 国产模型冒充 opus-4-8，不应高权重。affinity 关闭后不再被钉死，但权重仍不合理 |
+| #140 muyuan 手动恢复 status 3→1 | 被 auto_ban 但此刻公益池可能已自愈 |
+| admin 额度设无限 | quota=999999999999，所有 admin tokens unlimited_quota=1 |
+
+### 渠道可用性快照（2026-07-28 ~14:00）
+
+| 渠道 | 状态 | 备注 |
+|------|------|------|
+| baibei 5 key (#9/#10/#20/#81/#143) | ✅ 全在线 | 真Claude主力，权重最高 |
+| 林夕 #11/#60 | ⚠️ 间歇超时 | k40.shengqainbang.cn 此刻超时 15s |
+| vyceai #125/#126 | ❌ 全挂 502 | 上游 vyceai.com 502/超时 |
+| welfare.0xpsyche #142 | ❌ POST 403 | key 有效（models 200）但 chat/completions 被 WAF 拦 |
+| muyuan 8317 #140/#129 | ⚠️ 间歇 | 公益池 auth 耗尽会自愈 |
+| FreeModel #131/#132/#133/#135 | ❌ 全禁用 | WorkBuddy 客户端验证，API 直连 403 |
+
+### unified_router dry-run 验证
+
+修复后 dry-run 完整跑通两个 tier，决策合理：
+- **opus_main**: #60 林夕最快（2.7s→w42），#9 baibei（3.8s→w23），#10（3.4s→w22）
+- **opus_fallback**: #96 joycode（0.4s→w25），#142 wuming（1.3s→w25），#139 grok（3.4s→w8）
