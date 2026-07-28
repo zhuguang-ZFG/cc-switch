@@ -1,11 +1,13 @@
 # NewAPI、OpenOneAPI、Kimi CLI 与 Claude Agent 当前状态（2026-07-28）
 
-> 这是 2026-07-28 晚间修复后的当前运维快照。历史路由、guard、自动调权和 Telegram 告警方案仅供追溯，不应作为现网操作依据。
+> 这是 2026-07-28 晚间修复后的运维快照。历史路由、guard、自动调权和 Telegram 告警方案仅供追溯，不应作为现网操作依据。
+>
+> **2026-07-29 更新**：Grok 路由、全局 option 与渠道数以 [newapi-audit-2026-07-29.md](./newapi-audit-2026-07-29.md) 的 Later changes 为准。本文下文中的「grok 三路 17→19→13」已过时——现网主源是 channel 20 `fengwind-grok`（priority 70）；13/17 仍挂 `grok-4.5` 但现测 429；19 仍 disabled。
 
 ## 结论
 
 - 保留 NewAPI 作为统一网关，不迁移到 Sub2API。
-- `grok-4.5` 三路：OpenOneAPI（channel 17，主/priority 60）→ gpt2api（channel 19，轮询/priority 55）→ ai.168661（channel 13，备/priority 50）。channel 19 于 2026-07-28 接入，type=OpenAI，base `https://gpt2api.dpdns.org/v1`，单 Key。
+- `grok-4.5`（**历史**三路，已 superseded）：OpenOneAPI（channel 17，主/priority 60）→ gpt2api（channel 19，轮询/priority 55）→ ai.168661（channel 13，备/priority 50）。channel 19 于 2026-07-28 接入；**2026-07-29 起主源改为 channel 20 `fengwind-grok` priority 70**，见审计文档。
 - 日常 `kimi`（Kimi Code 0.29.1）已按当前 schema 分离 OpenAI-compatible 与 Anthropic provider；旧 Python `kimi-cli` 1.48.0 单独保留。
 - Kimi MCP 已从 14 项清理为 12 项；保留项均完成真实握手。
 - Claude 完整 Agent 请求的 403 已通过单 Key 主备渠道和能力隔离修复。

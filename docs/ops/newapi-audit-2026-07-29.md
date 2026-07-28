@@ -98,7 +98,7 @@ Post-change checks confirmed:
 
 ## Remaining risks
 
-1. Grok routing is fragile and now depends on a single working upstream. Channel 20 (`fengwind-grok`, added later the same day) is the only Grok channel that passes a test; it also holds the most favourable priority. Channels 13 and 17 both return `429` group rate limits on re-test, and channel 19 remains disabled pending a valid key. Four channels advertise `grok-4.5`, so the model stays routable, but three of the four cannot currently serve traffic.
+1. Grok routing depends on a single working upstream. Channel 20 (`fengwind-grok`) is the only Grok channel that passes a test. After a review finding that NewAPI uses **higher priority number first** (`ORDER BY priority desc`), channel 20 was raised from priority 40 to **70** (above 17/60 and 13/50) so requests hit fengwind first instead of burning two `429`s on 17/13. Channels 13 and 17 remain enabled as recovery spares; channel 19 stays disabled pending a valid key.
 2. Claude channels 9 and 18 show occasional upstream 500/502 failures. Current retry and failover behavior masks most failures, but upstream quality should be monitored.
 3. Performance metrics are enabled while `perf_metrics_setting.retention_days = 0`; this prevents useful multi-day P95 latency analysis. A seven-day retention window is a reasonable next measurement step.
 4. Prompt-cache ratio tables mainly contain older Claude model names. This is harmless for unlimited private use but makes cost and cache accounting incomplete for newer models.
@@ -131,7 +131,7 @@ Correction: an earlier attempt wrote the flat key `ping_interval_enabled`, which
 
 ### Grok upstream added (channel 20)
 
-A new OpenAI-compatible channel `fengwind-grok` was added, serving 15 Grok models including `grok-4.5`, `grok-4.3`, the `grok-4.20-*` snapshots, `grok-composer-2.5-fast`, and the `grok-imagine` image/video models.
+A new OpenAI-compatible channel `fengwind-grok` was added, serving 15 Grok models including `grok-4.5`, `grok-4.3`, the `grok-4.20-*` snapshots, `grok-composer-2.5-fast`, and the `grok-imagine` image/video models. Initial `priority` was 40 (below 17 and 13). **Corrected to priority 70** after confirming NewAPI FAQ/source: higher number = higher priority. Channel test after the change still returns success (~2.6s).
 
 Two findings worth recording:
 
