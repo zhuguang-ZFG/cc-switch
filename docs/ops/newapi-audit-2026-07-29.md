@@ -15,6 +15,8 @@ NewAPI instance:
 
 Eleven channels existed at audit time. Ten remained enabled after remediation; channel 19 was disabled.
 
+Later the same day a twelfth channel was added (`fengwind-grok`, id 20). See "Later changes" below.
+
 Fresh channel tests showed:
 
 | Channel | Role | Result |
@@ -82,6 +84,8 @@ AutomaticRetryStatusCodes:
 
 Reason: retrying `401-407` authentication and permission failures cannot repair an invalid upstream key and multiplies latency and upstream load. Rate limits (`429`) and server failures remain retryable.
 
+This value was superseded later the same day; see "Later changes".
+
 ## Runtime verification
 
 Post-change checks confirmed:
@@ -94,11 +98,49 @@ Post-change checks confirmed:
 
 ## Remaining risks
 
-1. Grok routing is fragile. Channel 17 is slow and intermittent, channel 13 is rate-limited, and channel 19 is disabled pending a valid key.
+1. Grok routing is fragile and now depends on a single working upstream. Channel 20 (`fengwind-grok`, added later the same day) is the only Grok channel that passes a test; it also holds the most favourable priority. Channels 13 and 17 both return `429` group rate limits on re-test, and channel 19 remains disabled pending a valid key. Four channels advertise `grok-4.5`, so the model stays routable, but three of the four cannot currently serve traffic.
 2. Claude channels 9 and 18 show occasional upstream 500/502 failures. Current retry and failover behavior masks most failures, but upstream quality should be monitored.
 3. Performance metrics are enabled while `perf_metrics_setting.retention_days = 0`; this prevents useful multi-day P95 latency analysis. A seven-day retention window is a reasonable next measurement step.
 4. Prompt-cache ratio tables mainly contain older Claude model names. This is harmless for unlimited private use but makes cost and cache accounting incomplete for newer models.
 5. The deployment remains a single SQLite-backed instance. Official NewAPI guidance recommends PostgreSQL and Redis for clustered/high-availability deployments; no migration is justified for the current single-node workload without capacity evidence.
+
+## Later changes (same day, after this record was first committed)
+
+The following changes were made after the sections above were written. They supersede the earlier values where they overlap.
+
+### Retry status codes widened to cover gateway timeouts
+
+```text
+AutomaticRetryStatusCodes:
+  before: 100-199,300-399,409-499,500-503,505-523,525-599
+  after:  100-199,300-399,409-499,500-504,505-599
+```
+
+Reason: the earlier range skipped `504` (gateway timeout) and `524`. For models served by more than one channel, a timeout now triggers failover to another upstream instead of surfacing as a client-side timeout. `RetryTimes` remains `4`. `401-407` stays non-retryable.
+
+### SSE keepalive enabled
+
+```text
+general_setting.ping_interval_enabled: false -> true
+general_setting.ping_interval_seconds: 60 (unchanged)
+```
+
+Reason: high-effort reasoning requests can stay silent for tens of seconds, which intermediate proxies may treat as a dead connection.
+
+Correction: an earlier attempt wrote the flat key `ping_interval_enabled`, which NewAPI does not read. That write left `general_setting.ping_interval_enabled` at `false`, so keepalive was not actually active until the namespaced key was set. Verified by read-back.
+
+### Grok upstream added (channel 20)
+
+A new OpenAI-compatible channel `fengwind-grok` was added, serving 15 Grok models including `grok-4.5`, `grok-4.3`, the `grok-4.20-*` snapshots, `grok-composer-2.5-fast`, and the `grok-imagine` image/video models.
+
+Two findings worth recording:
+
+- Creating a channel through `POST /api/channel/` requires the payload shape `{"mode":"single","channel":{...}}`. A flat channel object leaves the `Channel` pointer nil and the handler panics with a nil-pointer dereference (`controller/channel.go`, `AddChannelRequest.Channel` is `*model.Channel`). This is a client-side payload error, not a server defect, but the error surface is a 500 panic rather than a validation message.
+- `grok-composer-2.5-fast` had no entry in `ModelRatio` / `CompletionRatio` and returned a price-not-configured `400`. Input ratio `0.5` and completion ratio `2` were added to match the other Grok models. All other Grok models already had ratios.
+
+### Channel 15 repurposed
+
+Channel 15 (`sensenova-token`) no longer serves Grok. It now serves `glm-5.2`, `deepseek-v4-flash`, and `sensenova-6.7-flash-lite`; all three pass a channel test. Any note that describes channel 15 as a Grok source is stale.
 
 ## Rollback
 
@@ -112,7 +154,12 @@ To roll back the global changes, restore these values through the option API:
 ```text
 monitor_setting.auto_test_channel_enabled = false
 AutomaticRetryStatusCodes = 100-199,300-399,401-407,409-499,500-503,505-523,525-599
+general_setting.ping_interval_enabled = false
 ```
+
+That `AutomaticRetryStatusCodes` value restores the state before *any* of the day's changes. To undo only the later widening and keep the authentication fix, use `100-199,300-399,409-499,500-503,505-523,525-599` instead.
+
+To remove the Grok upstream, disable channel 20 through the channel status endpoint. Its `ModelRatio` / `CompletionRatio` entry for `grok-composer-2.5-fast` can stay; an unused pricing entry is harmless.
 
 To re-enable channel 19, first install its correct upstream key, verify a successful channel test, and only then set its status to enabled.
 
