@@ -1,7 +1,7 @@
 # gorouter.app Claude 渠道接入 NewAPI（failover）
 
 日期：2026-07-29
-渠道：`id=26` `gorouter-claude`（NewAPI v1.0-rc.21，VPS 47.112.162.80）
+渠道：`id=26` `gorouter-claude` + `id=27` `gorouter-claude-2`（同网关双 key，NewAPI v1.0-rc.21，VPS 47.112.162.80）
 
 ## 背景
 
@@ -43,6 +43,12 @@ key `sk-cdX...akjh`（脱敏，完整值见 NewAPI 渠道配置）。
   `backups/one-api.before-autoban-20260729-184113.db`）：sonnet-5 只有渠道 26
   一个后端，若保留默认 `auto_ban=1`，gorouter 偶发 5xx/限流会被 NewAPI 自动禁用
   → sonnet-5 直接不可用且需手动重启。关掉自动禁用，靠 priority 兜底。
+- **第二 key 渠道 `id=27` `gorouter-claude-2`**（2026-07-29 追加）：克隆渠道 26
+  全部字段（`channel_info` BLOB 逐字节一致），仅换 key，同 `priority=45` /
+  `auto_ban=0`，同三模型。两渠道同优先级 → NewAPI 在池内按 key 轮询，对冲
+  单 key 额度耗尽/被封。abilities 同步三行。
+  - 连通性：`gorouter.app` Cloudflare 对**缺 User-Agent** 的请求返回 403
+    (error 1010)，实测请求须带浏览器 UA；带 UA 后新旧 key 均 200 出 sonnet-5。
 
 ## Kimi CLI 配置
 
@@ -63,6 +69,7 @@ key `sk-cdX...akjh`（脱敏，完整值见 NewAPI 渠道配置）。
 
 - `kiro_credits` 说明上游是 Kiro 账号池，可能有并发/额度限制，未实测到限流。
 - 若 gorouter 挂了，opus 请求自动回落主力池（priority 55/50）；
-  但 sonnet-5 目前只有 gorouter 一个来源，gorouter 挂则 sonnet-5 不可用。
-- 渠道 26 `auto_ban=0`，故 gorouter 报错不会被自动禁用；代价是要靠监控/手动
-  发现它持续失败。想彻底消除 sonnet-5 单点，需补第二个 sonnet-5 来源。
+  sonnet-5 现有渠道 26/27 两个同网关 key 兜底，单 key 被封/耗尽仍可轮询到另一个；
+  但两者共用 gorouter.app 上游，网关整体不可用时 sonnet-5 仍会全断。
+- 渠道 26/27 均 `auto_ban=0`，故 gorouter 报错不会被自动禁用；代价是要靠监控/手动
+  发现它持续失败。想彻底消除 sonnet-5 单上游，需补一个非 gorouter 的 sonnet-5 来源。
