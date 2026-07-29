@@ -48,5 +48,6 @@ Forbidden without an explicit new user request:
 ## Related
 
 - Routing snapshot: `docs/ops/zg-claude-routing.md`
-- Cursor ops loop: `docs/ops/newapi-dx-cursor-ops.md`
+- Current NewAPI/Kimi/MCP/Claude state: `docs/ops/newapi-kimi-mcp-claude-current-state-2026-07-28.md`
+- Historical Cursor ops loop (retired): `docs/ops/newapi-dx-cursor-ops.md`
 - Takeover alias design: `docs/patches/local-claude-takeover-aliases-2026-07-26.md`

@@ -40,3 +40,6 @@ mainWindow.js
 # Local Trellis / pi-agent workspace (journals may contain machine-specific paths and credentials)
 .trellis/
 .pi/
+
+# Local ops scratch dumps (NewAPI option/channel exports may contain credentials)
+tmp/

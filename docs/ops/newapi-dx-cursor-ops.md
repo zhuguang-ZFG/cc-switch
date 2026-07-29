@@ -1,4 +1,6 @@
-# Cursor 运维 NewAPI 开发体验
+> ⚠️ **历史 runbook，不可直接执行**：2026-07-28 VPS 极简化后，本文依赖的 analyzer、health_check、kiro-guard、路由脚本和 Telegram 服务均已移除。当前状态见 [newapi-kimi-mcp-claude-current-state-2026-07-28.md](./newapi-kimi-mcp-claude-current-state-2026-07-28.md) 与 [newapi-vps-minimal-state-2026-07-28.md](./newapi-vps-minimal-state-2026-07-28.md)。
+
+# Cursor 运维 NewAPI 开发体验（历史）
 
 **Owner:** Cursor agent（定时/按需）  
 **VPS script:** `/opt/new-api/analyze_newapi_dx.py`（仓库镜像 `scripts/ops/analyze_newapi_dx.vps.py`）  

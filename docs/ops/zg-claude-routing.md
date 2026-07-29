@@ -1,4 +1,4 @@
-> ⚠️ **历史文档**：2026-07-28 VPS 已全面清理，kiro-guard、路由优化脚本、TG 报警、zhipu-coding-shim 等优化层均已移除，NewAPI 渠道表已清空。当前极简状态见 [newapi-vps-minimal-state-2026-07-28.md](./newapi-vps-minimal-state-2026-07-28.md)。本文保留为历史参考。
+> ⚠️ **历史文档**：2026-07-28 VPS 已全面清理，kiro-guard、路由优化脚本、TG 报警、zhipu-coding-shim 等优化层均已移除，渠道随后按极简方案重建。当前可执行状态见 [newapi-kimi-mcp-claude-current-state-2026-07-28.md](./newapi-kimi-mcp-claude-current-state-2026-07-28.md) 与 [newapi-vps-minimal-state-2026-07-28.md](./newapi-vps-minimal-state-2026-07-28.md)。本文仅作历史追溯，禁止按其中渠道 ID、脚本或服务直接操作。
 
 # ZG NewAPI — Claude role routing (ops snapshot)
 
@@ -203,12 +203,12 @@ Detail: `docs/patches/newapi-dx-2026-07-26-night.md`, `docs/patches/newapi-dx-20
 
 **根因（500 upstream error: do request failed）**：审计 #9 hexdump 发现其 `key` 字段含**嵌入换行符 `0x0a`**——实际存了两个 key 用 `\n` 拼接：
 ```
-sk-9ef0239d8aa3f1b9ef058a6fa2d6fab64177c9eaa3ba175517f4dd7b1b648f3c\n
-sk-8410ee646169e9d988705f2d1e2d8c575d5ab875987fa5cee53f7fccf4b0f2b
+<redacted-valid-key>\n
+<redacted-revoked-key>
 ```
 Go HTTP client 把整串当 `X-Api-Key` header 值，遇 `\n` 直接报 `net/http: invalid header field value for "X-Api-Key"` → NewAPI 记 `do request failed` → 对外 500。**每次打到 #9 都必 500**（key 本地坏，与上游无关）。
 
-测试两 key：第一个 200（有效），第二个 401（作废）。修复：`UPDATE channels SET key='sk-9ef0239...' WHERE id=9`（截成单一有效 key）+ `podman restart new-api` 刷 fork 内存缓存。
+测试两 key：第一个 200（有效），第二个 401（作废）。修复：将 channel 9 截成单一有效 Key 后执行 `podman restart new-api` 刷新服务端缓存。
 
 **连带问题（#20 Concurrency limit exceeded 429）**：#9 每次必 500 → RetryTimes failover 全压到 #20 → baibei 上游账号并发硬上限被打爆（17 次 429）。根因不是 #20 本身，是 #9 坏了导致的流量倾斜。
 

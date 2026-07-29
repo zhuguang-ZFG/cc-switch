@@ -1,6 +1,6 @@
 # NewAPI VPS 极简状态（2026-07-28）
 
-> 本次清理后，VPS 上只剩 NewAPI 容器 + joycode-proxy，所有优化层、路由脚本、TG 报警、guard 代理均已移除。
+> 本次清理后，VPS 上只剩 NewAPI 容器 + joycode-proxy，所有优化层、路由脚本、TG 报警、guard 代理均已移除。晚间的 OpenOneAPI、Kimi MCP 和 Claude Agent 修复见 [newapi-kimi-mcp-claude-current-state-2026-07-28.md](./newapi-kimi-mcp-claude-current-state-2026-07-28.md)。
 
 ## 当前状态
 
@@ -39,7 +39,7 @@
 
 ## 遗留惰性配置（不影响运行，勿清）
 
-- `global.chat_completions_to_responses_policy`：channel_ids=[142] 指向已删除的旧渠道，当前惰性。这是「chat/completions → responses 协议转换」策略，日后若再遇 Codex 锁客户端的渠道（如 zzzcoding），把新渠道 id 填进去即可让 NewAPI 自动转协议——**这是解协议级锁的正解**，留着当模板
+- `global.chat_completions_to_responses_policy`：channel_ids=[142] 指向已删除的旧渠道，当前惰性。这是「chat/completions → responses 协议转换」策略，日后若再遇 Codex 锁客户端的渠道（如 zzzcoding），把新渠道 id 填进去即可让 NewAPI 自动转协议——**这是解协议级锁的正解**，留着当模板。zzzcoding 实测调查与完整接入路径（welfare 渠道模板 + Responses 直转/本策略兜底）见 `docs/patches/zzzcoding-codex-investigation-2026-07-29.md`
 - `ModelRatio`/`CompletionRatio` 中过时模型条目：仅影响计费显示，无限额度自用无实际影响
 
 重建命令（数据在 `/opt/new-api/data` 挂载卷，重建不丢数据）：
@@ -51,14 +51,26 @@ podman run -d --name new-api --restart always -p 3000:3000 -v /opt/new-api/data:
   docker.m.daocloud.io/calciumion/new-api:latest
 ```
 
-## DB 状态
+## 晚间最终路由增量（覆盖下方早间快照）
+
+- 新增 channel 17 `openoneapi-grok`：`grok-4.5` 主渠道，priority 60 / weight 30。
+- channel 13 保留为 `grok-4.5` 备份，priority 50 / weight 10。
+- channel 9 `linxi-k40` 改为 Claude Opus 5 单 Key 主渠道，priority 60 / weight 20。
+- 新增 channel 18 `linxi-k40-opus5-backup`：Claude Opus 5 单 Key备份，priority 55 / weight 10。
+- channel 3 只禁用 `claude-opus-5` ability，规避完整 Agent 请求触发的上游 WAF；其他模型不变。
+
+准确配置、根因和回归结果见 [newapi-kimi-mcp-claude-current-state-2026-07-28.md](./newapi-kimi-mcp-claude-current-state-2026-07-28.md)。
+
+## 早间 DB 快照（历史）
+
+> 下表记录晚间 OpenOneAPI 接入和 Claude 单 Key 拆分前的状态，不能作为当前渠道清单执行。
 
 ```text
 channels: 8
 abilities: 32
 ```
 
-## 当前渠道
+## 早间渠道快照（历史）
 
 | ID | 名称 | base_url | 模型 | 状态 | 优先级 | 权重 |
 |---|---|---|---|---|---|---|
@@ -88,9 +100,11 @@ abilities: 32
 - joycode-proxy-jd 渠道已由用户从 NewAPI 删除（JD 账号掉登录 + 风控无法恢复，已放弃）
 - ai.168661-grok 直连实测：`/v1/models` 返回 grok-4.3/4.5/chat-fast/imagine-image 四款，按需只挂了 `grok-4.5`；`chat/completions` 实测 HTTP 200（首响约 10s）
 
-## Kimi Code 客户端配置（协议/思维链/上下文，2026-07-28 实测修正）
+## Kimi Code 客户端配置（早间历史方案，已被现代 Kimi Code schema 修正覆盖）
 
-`~/.kimi-code/config.toml` 中走本 NewAPI 的别名，以下规则均已实测验证（备份 `config.toml.bak.caps20260728`）：
+> 本节混用了旧 Python `kimi-cli` 1.48.0 与现代 Kimi Code 的字段，不能继续照抄。日常 `kimi` 当前 provider、thinking、上下文配置及两代 CLI 的版本边界见 [newapi-kimi-mcp-claude-current-state-2026-07-28.md](./newapi-kimi-mcp-claude-current-state-2026-07-28.md)。
+
+`~/.kimi-code/config.toml` 中走本 NewAPI 的别名，以下为早间历史记录（备份 `config.toml.bak.caps20260728`）：
 
 - **claude 别名必须 `protocol = "anthropic"`**：走 OpenAI 格式时思维链全丢；改走原生 `/v1/messages` 后 thinking 块完整返回（实测 blocks: `[thinking, text]`）。7 个 claude 别名均已加
 - **`max_output_size` 必填**：kosong CEILING 表无 `claude-opus-5`/`claude-sonnet-5` 版本号，fallback 32000 恰等于 effort=high 的 thinking budget 32000，`budget < max_tokens` 校验必失败 → 之前每次 400。已加 `claude-opus-5 = 128000`、`claude-sonnet-5 = 64000`，实测修复后 200
@@ -140,4 +154,4 @@ curl -s -m 10 https://aliyun.donglicao.com/api/status
 
 ## 历史文档
 
-此前的路由快照、优化方案、补丁记录见 `docs/ops/zg-claude-routing.md`（已标注为历史）。
+当前晚间最终状态见 `docs/ops/newapi-kimi-mcp-claude-current-state-2026-07-28.md`。此前的路由快照、优化方案、补丁记录见 `docs/ops/zg-claude-routing.md`（已标注为历史）。
