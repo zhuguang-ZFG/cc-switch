@@ -98,7 +98,7 @@ Post-change checks confirmed:
 
 ## Remaining risks
 
-1. Grok routing depends on a single working upstream. Channel 20 (`fengwind-grok`) is the only Grok channel that passes a test. After a review finding that NewAPI uses **higher priority number first** (`ORDER BY priority desc`), channel 20 was raised from priority 40 to **70** (above 17/60 and 13/50) so requests hit fengwind first instead of burning two `429`s on 17/13. Channels 13 and 17 remain enabled as recovery spares; channel 19 stays disabled pending a valid key.
+1. Grok routing remains fragile. Channel 20 (`fengwind-grok`) was initially raised to priority 70 after it passed testing, but later produced repeated 120-second `524` timeouts and is now manually disabled. A fresh three-run `grok-4.5` test returned `502` each time; `grok-3-mini`, `grok-4.3`, and `grok-4.20-0309-non-reasoning` also returned `502`. Only `grok-composer-2.5-fast` still passed, slowly (~57 seconds), which is not sufficient reason to re-enable the whole channel. Current successful `grok-4.5` traffic uses channel 17; channel 13 remains another imperfect spare, and channel 19 stays disabled pending a valid key.
 2. Claude channels 9 and 18 show occasional upstream 500/502 failures. Current retry and failover behavior masks most failures, but upstream quality should be monitored.
 3. ~~Performance metrics retention was 0~~ **Done (2026-07-29):** `perf_metrics_setting.retention_days` set to `7` (metrics already `enabled=true`, `bucket_time=hour`). Multi-day P95 can accumulate from this point; older samples before the change remain unavailable.
 4. ~~Prompt-cache ratio tables mainly contain older Claude model names~~ **Done (2026-07-29):** two fill rounds. Round 1: `CacheRatio` +26 / `CreateCacheRatio` +14 for kimi-active models. Round 2: `CacheRatio` +5 / `CreateCacheRatio` +14 for remaining enabled-channel models (gemini/nemotron/grok-build and create-side secondaries). Final sizes **104 / 70**. Enabled channel models except router token `auto` now have **zero miss** on both tables. Ratios: cache read 0.1 (deepseek-class 0.25); create 1.25. Snapshots: `tmp/naopts-cache-disk-before.json`, `tmp/naopts-cacheratio-round2-before.json` (local only).
@@ -132,7 +132,9 @@ Correction: an earlier attempt wrote the flat key `ping_interval_enabled`, which
 
 ### Grok upstream added (channel 20)
 
-A new OpenAI-compatible channel `fengwind-grok` was added, serving 15 Grok models including `grok-4.5`, `grok-4.3`, the `grok-4.20-*` snapshots, `grok-composer-2.5-fast`, and the `grok-imagine` image/video models. Initial `priority` was 40 (below 17 and 13). **Corrected to priority 70** after confirming NewAPI FAQ/source: higher number = higher priority. Channel test after the change still returns success (~2.6s).
+A new OpenAI-compatible channel `fengwind-grok` was added, serving Grok models including `grok-4.5`, `grok-4.3`, the `grok-4.20-*` snapshots, and `grok-composer-2.5-fast`. Initial `priority` was 40 (below 17 and 13), then corrected to 70 after confirming that NewAPI routes higher priority numbers first. This paragraph records the initial successful state; it is superseded by the current outage note below.
+
+Current state: channel 20 is manually disabled after repeated `524` timeouts. Fresh tests returned `502` for `grok-4.5` three times and also failed for `grok-3-mini`, `grok-4.3`, and `grok-4.20-0309-non-reasoning`. `grok-composer-2.5-fast` still passed but took about 57 seconds. Do not re-enable the whole channel based on that single slow model; current successful `grok-4.5` traffic uses channel 17.
 
 Two findings worth recording:
 
@@ -150,6 +152,8 @@ Action: removed `glm-5.2` from channel 15 `models`, disabled only its channel-15
 Channel 21 (`191.96.25.96-gpt-backup-http`) was added as a low-weight OpenAI-compatible GPT backup (`priority=50`, `weight=3`). Direct chat, streaming, and tool-call tests passed. It remains enabled, but its public upstream transport is plain HTTP; use it only as a backup because API credentials and request content are not protected by TLS between NewAPI and the upstream.
 
 Channels 22 and 23 were created for AgentRouter Claude/OpenAI traffic but remain disabled. The alternate HTTPS domain works from the local workstation, while the Aliyun VPS receives an Aliyun WAF browser challenge page; the original domain is unreachable from that VPS. Their abilities are disabled so production routing cannot select them. Kimi Code can still use AgentRouter directly from the workstation through separate providers; no API keys are recorded here.
+
+Tailscale is installed, so a workstation relay is technically possible: NewAPI could target a service exposed on the workstation's Tailscale address, and that service could forward to AgentRouter using the required client headers. This has not been implemented or validated. There is currently no relay process, listening port, service supervision, health check, or sleep/offline policy; therefore Tailscale installation alone does not make channels 22/23 usable. A workstation relay would also make production availability depend on the Windows machine remaining online.
 
 Channel 24 (`welfare-0xpsyche-responses`) is an enabled Responses-only source. The upstream accepts only `/v1/responses` with a Codex-style user agent. To prevent ordinary Chat Completions traffic from selecting it, NewAPI exposes the isolated model alias `welfare-codex-gpt-5.6-sol`, mapped upstream to `gpt-5.6-sol`. It runs at `priority=40`, `weight=2`, with matching price ratios (`ModelRatio=0.5`, `CompletionRatio=2`, `CacheRatio=0.1`). Automatic and streaming channel tests passed, and a Kimi CLI request through the shared gateway logged a successful channel 24 hit with no type-5 errors.
 

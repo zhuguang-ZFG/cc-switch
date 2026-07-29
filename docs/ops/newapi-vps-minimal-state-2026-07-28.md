@@ -2,7 +2,7 @@
 
 > 本次清理后，VPS 上只剩 NewAPI 容器 + joycode-proxy，所有优化层、路由脚本、TG 报警、guard 代理均已移除。晚间的 OpenOneAPI、Kimi MCP 和 Claude Agent 修复见 [newapi-kimi-mcp-claude-current-state-2026-07-28.md](./newapi-kimi-mcp-claude-current-state-2026-07-28.md)。
 >
-> **2026-07-29 更新**：渠道表与 Grok 主源以 [newapi-audit-2026-07-29.md](./newapi-audit-2026-07-29.md) 为准。本文下文把 channel 13 写作 grok 备、channel 15 写作 grok 相关源已过时。Channel 15 现仅挂 `deepseek-v4-flash` / `sensenova-6.7-flash-lite`，其 `glm-5.2` 因长上下文持续触发 500 万 TPM 限流已摘除；Grok 主源为 channel 20（priority 70）。
+> **2026-07-29 更新**：渠道表与 Grok 现状以 [newapi-audit-2026-07-29.md](./newapi-audit-2026-07-29.md) 为准。本文下文把 channel 15 写作 Grok 相关源已过时。Channel 15 现仅挂 `deepseek-v4-flash` / `sensenova-6.7-flash-lite`，其 `glm-5.2` 因长上下文持续触发 500 万 TPM 限流已摘除。Channel 20 `fengwind-grok` 虽保留 priority 70，但现已手动停用（`grok-4.5` 连续测试 502）；当前成功的 Grok 4.5 流量走 channel 17。
 
 ## 当前状态
 
