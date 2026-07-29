@@ -49,6 +49,13 @@ key `sk-cdX...akjh`（脱敏，完整值见 NewAPI 渠道配置）。
   单 key 额度耗尽/被封。abilities 同步三行。
   - 连通性：`gorouter.app` Cloudflare 对**缺 User-Agent** 的请求返回 403
     (error 1010)，实测请求须带浏览器 UA；带 UA 后新旧 key 均 200 出 sonnet-5。
+- **渠道 3 降优先级 50→40**（2026-07-29 查日志后调整，备份
+  `backups/one-api.before-ch3-demote-20260729-195712.db`）：日志显示渠道 3
+  (baibei-100xlabs) opus-5 近乎 100% 返回 `500 Concurrency limit exceeded`，
+  而它原 priority 50 排在 gorouter(45) 之上 → 每个 opus-5 请求都先在死渠道 3
+  上重试超时再回落 gorouter，实测尾延迟 1-3 分钟（最慢 3m35s）。把渠道 3 降到 40
+  （gorouter 之下），channels 与 abilities 同步。调整后 opus-5 命中链变为
+  `18 → 26/27 → 3`，主力 18 挂时直接落 gorouter（实测 6-17s）。
 
 ## Kimi CLI 配置
 
@@ -68,7 +75,8 @@ key `sk-cdX...akjh`（脱敏，完整值见 NewAPI 渠道配置）。
 ## 注意
 
 - `kiro_credits` 说明上游是 Kiro 账号池，可能有并发/额度限制，未实测到限流。
-- 若 gorouter 挂了，opus 请求自动回落主力池（priority 55/50）；
+- opus-5 现优先级链 `18(55) → 26/27(45) → 3(40)`：gorouter 挂了会回落渠道 3
+  （虽 chronic 失败但保留兜底），或由主力 18 承接；
   sonnet-5 现有渠道 26/27 两个同网关 key 兜底，单 key 被封/耗尽仍可轮询到另一个；
   但两者共用 gorouter.app 上游，网关整体不可用时 sonnet-5 仍会全断。
 - 渠道 26/27 均 `auto_ban=0`，故 gorouter 报错不会被自动禁用；代价是要靠监控/手动
