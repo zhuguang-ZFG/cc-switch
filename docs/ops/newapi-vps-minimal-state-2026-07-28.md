@@ -2,7 +2,7 @@
 
 > 本次清理后，VPS 上只剩 NewAPI 容器 + joycode-proxy，所有优化层、路由脚本、TG 报警、guard 代理均已移除。晚间的 OpenOneAPI、Kimi MCP 和 Claude Agent 修复见 [newapi-kimi-mcp-claude-current-state-2026-07-28.md](./newapi-kimi-mcp-claude-current-state-2026-07-28.md)。
 >
-> **2026-07-29 更新**：渠道表与 Grok 主源以 [newapi-audit-2026-07-29.md](./newapi-audit-2026-07-29.md) 为准。本文下文把 channel 13 写作 grok 备、channel 15 写作 grok 相关源已过时——channel 15 现挂 `glm-5.2` / `deepseek-v4-flash` / `sensenova-6.7-flash-lite`；Grok 主源为 channel 20（priority 70）。
+> **2026-07-29 更新**：渠道表与 Grok 主源以 [newapi-audit-2026-07-29.md](./newapi-audit-2026-07-29.md) 为准。本文下文把 channel 13 写作 grok 备、channel 15 写作 grok 相关源已过时。Channel 15 现仅挂 `deepseek-v4-flash` / `sensenova-6.7-flash-lite`，其 `glm-5.2` 因长上下文持续触发 500 万 TPM 限流已摘除；Grok 主源为 channel 20（priority 70）。
 
 ## 当前状态
 
@@ -98,7 +98,7 @@ abilities: 32
 - centos 三线路（2026-07-28 用户提供）：默认 `ai.centos.hk`、备用 `api.centos.hk`、优化 `frapi.centos.hk`，同 key 通用。实测 sol：默认 2.68s/2.95s 最快最稳、备用 5.19s/3.22s、优化 3.00s/4.59s——默认线保持 base_url 不动，备用线建为渠道 #16（ability w5），默认线故障时 NewAPI 自动 failover；`frapi.centos.hk` 留作手工备用未挂
 - Kimi Code CLI 已直连本 NewAPI（`http://47.112.162.80:3000/v1`，公网 40ms；弃用 Tailscale 路径 3.2s），客户端模型清单已与实有模型同步
 - wintoken-glm（2026-07-28 新增）：capi.cun.ai 被阿里云 IP 段封锁（VPS ping 100% 丢包），同服务的 `www.wintoken.dev` 入口 VPS 直连正常（1.3s），2 key 轮询。glm-5.2 形成双源：wintoken ability w20 主力（实测 chat 4.8s），vyceai ability w10 冗余（当晚上游超时频发）
-- sensenova-token（2026-07-28 新增）：商汤 token plan，VPS 直连 0.13s 极快（CN 机房），全免费定价。`sensenova-u1-fast` 在 /models 有列出但调用 404 未挂。实测：flash-lite 0.5s / ds-v4-flash 1.1s / glm-5.2 2.2s，是目前最快的渠道。glm-5.2 变为三源（wintoken w20 : vyceai w10 : sensenova w10），deepseek-v4-flash 双源（vyceai w10 : sensenova w10）
+- sensenova-token（2026-07-28 新增，2026-07-29 更新）：商汤 token plan，VPS 小请求直连很快。`sensenova-u1-fast` 在 `/models` 有列出但调用 404，未挂。`glm-5.2` 的小请求测试曾通过，但 42 万级长上下文在生产中持续触发上游 500 万 TPM 的 `429`，并被 NewAPI 重试放大；现已从 channel 15 models 摘除并禁用对应 ability。Channel 15 继续承载 `sensenova-6.7-flash-lite` 与 `deepseek-v4-flash`，两者摘除 GLM 后复测成功。
 - joycode-proxy-jd 渠道已由用户从 NewAPI 删除（JD 账号掉登录 + 风控无法恢复，已放弃）
 - ai.168661-grok 直连实测：`/v1/models` 返回 grok-4.3/4.5/chat-fast/imagine-image 四款，按需只挂了 `grok-4.5`；`chat/completions` 实测 HTTP 200（首响约 10s）
 

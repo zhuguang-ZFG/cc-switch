@@ -139,9 +139,21 @@ Two findings worth recording:
 - Creating a channel through `POST /api/channel/` requires the payload shape `{"mode":"single","channel":{...}}`. A flat channel object leaves the `Channel` pointer nil and the handler panics with a nil-pointer dereference (`controller/channel.go`, `AddChannelRequest.Channel` is `*model.Channel`). This is a client-side payload error, not a server defect, but the error surface is a 500 panic rather than a validation message.
 - `grok-composer-2.5-fast` had no entry in `ModelRatio` / `CompletionRatio` and returned a price-not-configured `400`. Input ratio `0.5` and completion ratio `2` were added to match the other Grok models. All other Grok models already had ratios.
 
-### Channel 15 repurposed
+### Channel 15: remove GLM after sustained TPM throttling
 
-Channel 15 (`sensenova-token`) no longer serves Grok. It now serves `glm-5.2`, `deepseek-v4-flash`, and `sensenova-6.7-flash-lite`; all three pass a channel test. Any note that describes channel 15 as a Grok source is stale.
+Channel 15 (`sensenova-token`) no longer serves Grok. It was temporarily used for `glm-5.2`, `deepseek-v4-flash`, and `sensenova-6.7-flash-lite`, but production GLM traffic exposed a limit that small channel tests did not: 21 of 22 recent channel-15 GLM records failed with upstream `429` because requests exceeded the shared 5,000,000 TPM limit. The affected Kimi session was sending roughly 420k-430k prompt tokens per request, with no upstream cache tokens reported. NewAPI retries could hit channel 15 repeatedly before falling back to channel 14, multiplying token pressure and latency.
+
+Action: removed `glm-5.2` from channel 15 `models`, disabled only its channel-15 ability, and restarted NewAPI. Channel 15 remains enabled for `deepseek-v4-flash` and `sensenova-6.7-flash-lite`; both passed post-change channel tests. A real Kimi GLM request then succeeded directly through channel 14, with no channel 15 hop or new channel 15 error. Server backup: `one-api.before-ch15-remove-glm-20260729-130018.db`.
+
+### Additional GPT sources and protocol isolation
+
+Channel 21 (`191.96.25.96-gpt-backup-http`) was added as a low-weight OpenAI-compatible GPT backup (`priority=50`, `weight=3`). Direct chat, streaming, and tool-call tests passed. It remains enabled, but its public upstream transport is plain HTTP; use it only as a backup because API credentials and request content are not protected by TLS between NewAPI and the upstream.
+
+Channels 22 and 23 were created for AgentRouter Claude/OpenAI traffic but remain disabled. The alternate HTTPS domain works from the local workstation, while the Aliyun VPS receives an Aliyun WAF browser challenge page; the original domain is unreachable from that VPS. Their abilities are disabled so production routing cannot select them. Kimi Code can still use AgentRouter directly from the workstation through separate providers; no API keys are recorded here.
+
+Channel 24 (`welfare-0xpsyche-responses`) is an enabled Responses-only source. The upstream accepts only `/v1/responses` with a Codex-style user agent. To prevent ordinary Chat Completions traffic from selecting it, NewAPI exposes the isolated model alias `welfare-codex-gpt-5.6-sol`, mapped upstream to `gpt-5.6-sol`. It runs at `priority=40`, `weight=2`, with matching price ratios (`ModelRatio=0.5`, `CompletionRatio=2`, `CacheRatio=0.1`). Automatic and streaming channel tests passed, and a Kimi CLI request through the shared gateway logged a successful channel 24 hit with no type-5 errors.
+
+Kimi Code uses an `openai_responses` provider for `zg-newapi/welfare-codex-gpt-5.6-sol`. The ordinary `zg-newapi/gpt-5.6-sol` alias remains on Chat Completions and is intentionally not routed to channel 24.
 
 ### Channel 12: remove gpt-5.6-sol (stop fixed 503 path)
 
