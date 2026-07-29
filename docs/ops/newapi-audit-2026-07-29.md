@@ -159,6 +159,10 @@ Channel 24 (`welfare-0xpsyche-responses`) is an enabled Responses-only source. T
 
 Kimi Code uses an `openai_responses` provider for `zg-newapi/welfare-codex-gpt-5.6-sol`. The ordinary `zg-newapi/gpt-5.6-sol` alias remains on Chat Completions and is intentionally not routed to channel 24.
 
+Channel affinity initially did not apply to this isolated alias: the enabled `codex cli trace` rule matched only `^gpt-.*$`, so `welfare-codex-gpt-5.6-sol` failed the model-name test even though `/v1/responses` matched. After backing up the database to `/opt/new-api/backups/one-api.before-welfare-affinity-20260729-140620.db`, the rule was widened to `^(?:gpt-.*|welfare-codex-gpt-.*)$`. Its key source (`prompt_cache_key`), path filter, and 300-second TTL were left unchanged.
+
+Post-change verification showed that the Welfare alias and Responses path both match, the seven-rule set otherwise remained identical, both database integrity checks returned `ok`, `/api/status` returned HTTP 200, and the restarted container reported no critical startup errors. To roll back only this change, restore the Codex rule's model regex to `^gpt-.*$` and restart NewAPI.
+
 ### Channel 12: remove gpt-5.6-sol (stop fixed 503 path)
 
 Logs showed most `gpt-5.6-sol` type-5 errors as `503` on channel 12 (`vyceai`), then failover to channels 2/16 (`use_channel` multi-hop). Channel 12 models included a single GPT entry `gpt-5.6-sol` that the upstream consistently marked unavailable.
