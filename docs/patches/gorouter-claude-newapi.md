@@ -39,6 +39,10 @@ key `sk-cdX...akjh`（脱敏，完整值见 NewAPI 渠道配置）。
 - `abilities` 表同步三行：三个模型 × `channel_id=26`，
   `group=default`，`priority=45`，`weight=10`，`enabled=1`。
 - `podman restart new-api`，`/api/status` → 200，渠道 26 活跃。
+- **`auto_ban=0`**（2026-07-29 code review 后调整，备份
+  `backups/one-api.before-autoban-20260729-184113.db`）：sonnet-5 只有渠道 26
+  一个后端，若保留默认 `auto_ban=1`，gorouter 偶发 5xx/限流会被 NewAPI 自动禁用
+  → sonnet-5 直接不可用且需手动重启。关掉自动禁用，靠 priority 兜底。
 
 ## Kimi CLI 配置
 
@@ -60,3 +64,5 @@ key `sk-cdX...akjh`（脱敏，完整值见 NewAPI 渠道配置）。
 - `kiro_credits` 说明上游是 Kiro 账号池，可能有并发/额度限制，未实测到限流。
 - 若 gorouter 挂了，opus 请求自动回落主力池（priority 55/50）；
   但 sonnet-5 目前只有 gorouter 一个来源，gorouter 挂则 sonnet-5 不可用。
+- 渠道 26 `auto_ban=0`，故 gorouter 报错不会被自动禁用；代价是要靠监控/手动
+  发现它持续失败。想彻底消除 sonnet-5 单点，需补第二个 sonnet-5 来源。
