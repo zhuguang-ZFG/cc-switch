@@ -48,4 +48,20 @@ glm-5.2 回归（CodeBuddy 后端）    -> GLM-OK，原路径未破坏
 
 - 失败根因是第三方按 key 绑定后端分片、部分分片挂；冷却机制自动绕开死分片并在其恢复后重新启用，但不能保证某 key 永久可用——若全部分片都挂，仍会报错。
 - `custom_keys.json` 含明文 key，仅本机使用，勿提交到任何仓库。
-- 增删 key 只改 `custom_keys.json` 并重启转换器（杀 8787 监听进程，watchdog 30s 内自动拉起新代码）。冷却时长由 `CUSTOM_KEY_COOLDOWN_S`（默认 180s）控制。
+- 增删 key 只改 `custom_keys.json`，转换器按 mtime 热加载（无需重启）。冷却时长由 `CUSTOM_KEY_COOLDOWN_S`（默认 180s）控制。
+
+## 6. 安全加固（2026-07-31，代码审查后修复）
+
+审查转换器后发现若干可靠性与安全问题，已逐项修复（均在 `~/.kimi-code/proxies/codebuddy2openai/converter.py`，不在本仓库）：
+
+1. **流式错误分类统一**：原流式路径对任何 error chunk 都重试并冷却 key（包括 400/401/403/404）。改为提取 error chunk 的 status code，与非流式共用 `_is_retryable_code_text`——仅 502/503/504 或文案含 unavailable/temporarily/bad gateway 才重试；不可重试错误原样转发给客户端且不冷却 key。
+2. **日志与内存限制**：原会把完整 prompt、工具参数、模型输出、原始 SSE 写入日志，且 `raw_parts` 无界累积、`timeout=None`。改为只记元数据（模型/messages/tools/finish/tokens），删除完整 dump 与 `raw_parts`，流式读取改为有限超时（connect 15s / read idle 120s）。
+3. **冷却并发竞态**：原"晚到的成功"会清除"更晚请求"刚设置的冷却。`_mark_key_success` 改为带 `req_epoch`，只清除不晚于本次请求开始时间的失败状态（`_KEY_FAIL_AT`）。
+4. **URL 校验**：新增 `_validate_custom_url`，强制 https、拒绝 loopback/私网/link-local/`.local`、用 `urlsplit` 正确处理 query string。防止 `models.json` 被篡改后转换器被诱导向任意地址。
+5. **custom_keys.json 无效值回退**：原全无效值会覆盖 `models.json` 的有效单 key。改为过滤+去重后非空才覆盖。
+6. **空流不丢 chunk**：流正常结束但无 content 时，原会吞掉 role/finish/`[DONE]`。改为转发 `pending`。
+7. **配置热加载**：原注释称"动态加载"实则只启动读一次。改为 `get_custom_models()` 按 mtime 热加载，并清理失效模型的冷却状态。
+8. **/health 脱敏 + 鉴权**：原无鉴权且返回 auth 文件路径/nickname/企业名/token 过期时间。改为要求 API key、只返回 `logged_in`/`token_expired`/`custom_models`。
+9. **/v1/models 含自定义模型**：原只列硬编码 `DEFAULT_MODELS`。改为合并自定义模型（去重保序）。
+
+加固后验证：`gpt-5.6-sol` 非流式 5/5、流式 OK、`glm-5.2` 回归正常、`/health` 无 key→401 且无敏感字段、错误分类单元检查 400/401/403/404/429/500 均不重试。
