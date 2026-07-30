@@ -5,8 +5,13 @@
 ## 0. 关键事实
 
 - 旧文档 `cline-free-vps-newapi-channel-2026-07-30.md` §9 声称本机与 VPS 是「两个独立 cline 账户」。**实测为假**:本机与 VPS 原本是**同一个账户**(`barbarhonmamxi20@gmail.com`)。
-- cline free 限额是**每模型每日**:实测 `429 INFERENCE_CAP_ERROR: "Daily free limit reached on model zai/glm-5.2. Try again in 16h 59m"`。同一账号 glm-5.2 打满时,`deepseek-v4-flash` / `poolside/laguna-s-2.1:free` / `stepfun/step-3.7-flash` 仍返回 200。
+- cline free 限额实测为**两层**(账户每日总次数 + 每模型上游每日额度),详见下方「免费额度口径」条;本文旧的「每模型每日」说法已被该条取代。同号 glm-5.2 打满时,`deepseek-v4-flash` / `poolside/laguna-s-2.1:free` / `stepfun/step-3.7-flash` 仍返回 200。
 - **2026-07-30 已扩容到 4 个号**:用 `--data-dir` 隔离逐个登录 3 个新号(`17150303974@163.com` / `1171933076@qq.com` / `thaliahernandezyr7f0@alazinst.org`),`accounts.json` pool=4。实测某号 glm-5.2 当日打满时 proxy 自动 failover 到未打满的号,glm 恢复 200(见 §5)。继续加号见 §4。
+- **免费额度口径(2026-07-30 核实)**:cline free 限额有**两层**,会叠加:
+  - *网关层(账户级总次数)*:每个 cline 账户**免费模型每日 ≈1000 次请求/天**(`free-models-per-day`)。官方 429 文案原话:`Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day.`(多个 cline GitHub issue #3656/#5301 及社区实证)。往账户充 \$10 credits 即解锁该上限。这是**所有免费模型共享的每日总次数**。
+  - *上游层(每模型每日)*:实测某个免费模型(如 `glm-5.2`)会被上游单独打满,返回 `429 INFERENCE_CAP_ERROR: "Daily free limit reached on model zai/glm-5.2. Try again in 16h 59m"`;此时同号其他免费模型仍 200。proxy 的「账号×模型」冷却覆盖的就是这一层。
+  - **两层叠加**:即便各模型都没满,账户累计 1000 次/天后全免费模型 429(整号冷却,proxy 自动跳过该号)。
+  - **池容量**:N 个号 = N × 1000 次/天(网关层);某模型上限 = N 倍该模型上游每日额度。当前 4 号 ≈ 4000 次/天。
 
 ## 1. 架构
 
