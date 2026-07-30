@@ -68,4 +68,4 @@ kimi doctor config <config.toml>            -> OK
 - WorkBuddy Desktop 必须保持已登录，且 `codebuddy2openai` 转换器必须正在监听 `127.0.0.1:8787`。
 - `/v1/models` 返回 `401` 时，检查调用是否携带转换器的 Bearer key；这不代表 WorkBuddy 模型不可用。
 - 端口未监听时，检查 `C:/Users/zhugu/.kimi-code/proxies/codebuddy2openai/watchdog.ps1` 和 WorkBuddy Desktop 状态。
-- 该模型与 Cline Free 的 `cline-glm/glm-5.2`、`cline-free/glm-5.2` 是独立来源；按完整别名选择，避免将两者混淆。
+- 该模型与 VPS Cline 账号池的 `zg-newapi/cline-glm-5.2` 是独立来源；按完整别名选择，避免将两者混淆。本机 `cline-glm/*` 直连路径已移除。
