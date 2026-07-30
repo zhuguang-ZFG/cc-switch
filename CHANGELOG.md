@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - FAQ (zh/en/ja): Windows `ERR_CONNECTION_REFUSED` after cargo-only binary swap; “database version too new” after schema bump + UI rollback.
 - Patch note: `docs/patches/schema-v18-created-at-text.md` (incl. official v3.18.0 = DB v16; fork v17+ downgrade note).
+- **WorkBuddy GLM 5.2 local proxy for OMP + Kimi**: `docs/patches/workbuddy-glm-5.2-omp-kimi-2026-07-31.md` — exposes the logged-in WorkBuddy Desktop session through `codebuddy2openai` at `127.0.0.1:8787`; adds the `codebuddy/glm-5.2` alias with a 1M context window to both clients.
 - **Cline free 账号池化 + 扩容到 4 号(NewAPI ch35)**: `docs/patches/cline-free-pool-newapi-2026-07-30.md` — VPS `cline-proxy` 升级为多账号池(`accounts.json` round-robin + 按「账号×模型」冷却 + 429/额度 failover),ch35 透明不变。纠正旧文:本机与 VPS 实为**同一** cline 账户;cline free 限额是**每模型每日**。用 `--data-dir` 隔离登录新号(`add-account.sh <dir>`,人工浏览器 OAuth)。验证:扩到 4 号后某号 glm 当日打满自动 failover 到未打满的号,ch35 `glm-5.2` 从 `success=false` 变 `success=true`。
 - **Agnes AI as free OpenAI + NewAPI Haiku tier**: `docs/patches/agnes-haiku-newapi.md` — local Reasonix/Pi/Codex/Kimi providers; ZG `#122 agnes-haiku-free` maps `LongCat-2.0` / `claude-haiku-*` → `agnes-2.0-flash` (pri40; Haiku ladder Agnes→Vyce→LongCat). Not for Claude Opus type=14. Bare Agnes pricing fixed in DX pass.
 - **hongshi OpenAI/GLM backup**: `docs/patches/hongshi-openai-newapi.md` — NewAPI `#123` type=1 pri50 (no Claude).
