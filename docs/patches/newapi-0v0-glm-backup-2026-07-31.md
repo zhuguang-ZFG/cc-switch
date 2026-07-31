@@ -29,6 +29,7 @@ usage.completion_tokens: 92（其中 reasoning_tokens: 90）
 | weight | 5 |
 | group | default |
 | auto_ban | 1 |
+| key | 2 个 key 换行分隔 |
 
 abilities 表同步启用 `channel_id=40, model=glm-5.2, enabled=1`。
 
@@ -49,7 +50,8 @@ abilities 表同步启用 `channel_id=40, model=glm-5.2, enabled=1`。
 ## 4. 注意
 
 - 0v0.club 的 `glm-5.2` 流式内容为空，当前客户端默认走非流式不受影响；若后续开启流式需单独评估。
-- 该 key 为单一 key，未做多 key 轮换；上游若限流/封禁，ch40 会进入 auto_ban，不影响其他 glm-5.2 渠道。
+- channels.key 字段写入 2 个 0v0.club key（换行分隔），NewAPI 会自动轮询，单 key 限流/封禁时可 fallback。
+- 多 key 验证：追加第二个 key 后连打 5 次，全部 http200 且有 content。
 - 若 0v0.club 稳定性好，后续可考虑把权重提到 10 与主源平权。
 
 > 安全：本文档不含完整 API key、VPS 密码。
