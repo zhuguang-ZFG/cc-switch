@@ -1,8 +1,8 @@
 # AtomCode CodingPlan Lite deepseek-v4-flash 接入 NewAPI 聚合池（ch43）（2026-07-31）
 
-把 AtomCode（AtomGit 出品的终端 AI 编程助手）CodingPlan Lite 通道经 `atomcode-open-api` 代理接入 NewAPI（渠道 43），`deepseek-v4-flash` 聚合池增加第四源（ch15 sensenova / ch35 cline-free / ch37-38 tokenrhythm / ch43 atomcode 分流）。
+把 AtomCode（AtomGit 出品的终端 AI 编程助手）CodingPlan Lite 通道经 `atomcode-open-api` 代理接入 NewAPI（渠道 43），`deepseek-v4-flash` 聚合池增加一路免费额度。
 
-后续 2026-07-31 补充：ch35（cline-free 多账号池）也加入聚合池，`deepseek-v4-flash` 可路由到 cline 免费额度，模型映射由 ch35 的 `model_mapping` 处理。
+后续 2026-07-31 补充：ch35（cline-free）加入、ch42（DeepSeek 官方直连）加入、ch44（codebuddy）加入。**当前 deepseek-v4-flash 聚合池共七源**（ch15 sensenova / ch35 cline-free / ch37-38 tokenrhythm / ch42 官方 / ch43 atomcode / ch44 codebuddy），完整快照见 `docs/patches/newapi-aggregation-pools-2026-08-01.md`。
 
 ## 1. 背景：agentrouter 挂后补量
 
@@ -63,7 +63,7 @@ abilities：`('default','deepseek-v4-flash',43, enabled=1, priority=50, weight=1
 - 隔离验证（临时禁用 ch15/37/38 的 flash ability，只留 ch43）：
   - `curl http://10.88.0.1:3000/v1/chat/completions -H "Authorization: Bearer <token>" -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"reply ATOMCODE-OK only"}],"max_tokens":256}'` → `finish=stop`、`content='ATOMCODE-OK'`。
   - **坑：max_tokens 必须 ≥256**——deepseek-v4-flash 是推理模型，16 token 全被 reasoning_content 吃掉，content 为空（finish_reason=length 不是失败）。
-- 验证后已恢复 ch15/37/38/43 的 flash ability，聚合池五源全 enabled（ch15 sensenova / ch35 cline-free / ch37-38 tokenrhythm / ch43 atomcode）。
+- 验证后已恢复全部 flash ability，聚合池七源全 enabled（详见总览文档）。
 
 ## 5. 使用与注意
 
