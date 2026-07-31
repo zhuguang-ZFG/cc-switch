@@ -20,7 +20,7 @@ WorkBuddy Desktop 已登录会话 (copilot.tencent.com)
 
 ## 3. 客户端接入
 
-- OMP `~/.omp/agent/models.yml` 的 `codebuddy` provider 增加 `deepseek-v4-flash`（1M 上下文 / 32K 输出；按 AGENTS.md deepseek 惯例不设 `reasoning: true`）。
+- OMP `~/.omp/agent/models.yml` 的 `codebuddy` provider 增加 `deepseek-v4-flash`（1M 上下文 / 32K 输出；按 models.yml 既有 deepseek 惯例——不返回 `reasoning_content`——不设 `reasoning: true`）。
 - Kimi `~/.kimi-code/config.toml` 增加 `[models."codebuddy/deepseek-v4-flash"]`，经既有 `[providers.codebuddy]`（`127.0.0.1:8787`）。
 
 ## 4. 验证

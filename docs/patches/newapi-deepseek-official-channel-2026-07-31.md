@@ -10,6 +10,8 @@ deepseek-v4-flash 此前有多个中转源（ch15 sensenova、ch35 cline-free、
 
 实际落地用 **ch42**（max id=41，42 空闲）。停容器后 sqlite 直写（rc.21 `POST /api/channel` 会 panic；`channel_info` 必须为 BLOB 才不被 `ChannelInfo.Scan` 报错）。
 
+> 以下 SQL 为**落地后记录**（含 §4.2 修正后的定价注释）。重跑需按 `newapi-channel-info-blob-fix-2026-07-31.md` 流程（停机/备份/校验/回滚）并补齐渠道必填列（`used_quota`、`created_time` 等），且定价以 §4.2 为准。
+
 ```sql
 -- 备份：cp /opt/new-api/data/one-api.db /opt/new-api/data/backups/one-api.before-ch42-official-split-<ts>.db
 -- 停容器：podman stop new-api
@@ -85,7 +87,7 @@ ch42 自动进入该规则粘滞范围。固定 UA 连发 3 次官方别名全�
 
 ```text
 req 1: prompt=2493 cached=0     （首次写缓存）
-req 2: prompt=2493 cached=2432  （97.6% 前缀命中，CacheRatio 0.25 计费生效）
+req 2: prompt=2493 cached=2432  （97.6% 前缀命中；CacheRatio 当时为 0.25，§4.2 已修正为 0.02）
 ```
 
 近 24h 日志：官方别名请求 100% 落 `use_channel:["42"]`。单渠道 + 单 key + model_mapping 隔离 = 缓存命中无需额外亲和配置（亲和规则 #4 覆盖但无跨渠道可打散）；真正决定命中率的是客户端前缀复用（OMP/Kimi agent 会话天然复用，命中率 ~97%）与 DeepSeek 官方 1h 缓存 TTL。
