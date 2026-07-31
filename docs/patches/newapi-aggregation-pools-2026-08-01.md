@@ -76,6 +76,7 @@
 - **auto_ban 策略**：本机源（ch44/45）+ 免费紧 RPM 源（ch46/47 bazaarlink 10 RPM）auto_ban=0（桌面断连/突发 429 是常态，误杀得不偿失）；VPS/付费源全部 auto_ban=1（稳定源真挂该禁）。
 - **gorouter type 修复**：ch26/27/28 由 type=14（Anthropic）改 type=1（OpenAI）——type=14 时 NewAPI 定时测试用 OpenAI 格式返回空 → 内存标记降级 → 路由跳过全走 ch45。改 type=1 + 重建容器清缓存后恢复正常分流。
 - **k40/baibei 保守后备**：ch3/9/18 priority 降 30 + 每分钟赦免守护（见 §4 注）。auto_ban 负责 ban，守护负责及时恢复，priority 降后备防抖动。
+- **402 加入重试状态码**（2026-08-01）：`AutomaticRetryStatusCodes` 由 `100-199,300-399,409-499,500-504,505-599` 改为 `100-199,300-399,402,409-499,500-504,505-599`。根因：bazaarlink（ch46/47）免费额度打满时上游返回 402 `Insufficient credits`，但 402 不在重试范围 → NewAPI 不 failover 直接返给客户端 → OMP 报 `402 Insufficient credits`。修复后额度打满的源 402 触发重试/切其他源，不再报错。402 是网关层快速失败（额度检查毫秒级），重试代价可忽略；ch46/47 auto_ban=0 保持（免费源突发 429 常态，见上）。
 
 ## 7. 验证记录
 
