@@ -65,6 +65,8 @@ abilities：`('default','deepseek-v4-flash',43, enabled=1, priority=50, weight=1
   - **坑：max_tokens 必须 ≥256**——deepseek-v4-flash 是推理模型，16 token 全被 reasoning_content 吃掉，content 为空（finish_reason=length 不是失败）。
 - 验证后已恢复全部 flash ability，聚合池七源全 enabled（详见总览文档）。
 
+> 2026-08-01 补记：隔离验证时禁用 ch15/35/37/38/44 的 deepseek ability 后恢复命令漏了 4 个渠道，导致 25 分钟无流量；已全部恢复。教训：隔离验证后必须全量核对 abilities，不能只信恢复命令。
+
 ## 5. 使用与注意
 
 - 任何走 NewAPI 的客户端 `model` 填 `deepseek-v4-flash` 即可，权重自动分流；无新客户端配置。
