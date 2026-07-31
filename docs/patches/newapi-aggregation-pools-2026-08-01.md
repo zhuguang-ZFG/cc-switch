@@ -26,17 +26,18 @@
 | ch38 | tokenrhythm-2 | 付费中转 | 10 | 1 | |
 | ch44 | codebuddy（本机） | 桌面依赖 | 5 | 0 | |
 
-## 3. gpt-5.6-sol 聚合池（五源）
+## 3. gpt 聚合池（centos 摘除后）
 
-| 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
-|------|------|------|------|----------|------|
-| ch16 | centos-api-backup | 付费中转 | 5 | 1 | |
-| ch25 | centos-api-newkey | 付费中转 | 5 | 1 | |
-| ch30 | fastaitoken | 付费中转 | 5 | 1 | |
-| ch44 | codebuddy（本机） | 桌面依赖 | 5 | 0 | |
-| ch45 | agentrouter（本机） | 代理池 | 5 | 0 | Tailscale 100.83.32.95:8788 |
+| 模型 | 渠道 | 权重 | auto_ban | 备注 |
+|------|------|------|----------|------|
+| gpt-5.6-sol | ch30 fastaitoken | 5 | 1 | |
+| gpt-5.6-sol | ch44 codebuddy（本机） | 5 | 0 | |
+| gpt-5.6-sol | ch45 agentrouter（本机） | 5 | 0 | |
+| gpt-5.5 | ch30 fastaitoken | 20 | 1 | 单源 |
+| gpt-image-2 | ch30 fastaitoken | 20 | 1 | 单源 |
 
-> ch34（4router-gpt）已于 2026-08-01 删除（用户账户余额不足触发 403 排查时移除）。
+> ch16/ch25（centos.hk 同上游两 key）已于 2026-08-01 禁用：centos 上游账户欠费返 403「预扣费额度失败 用户剩余额度 ¥0.09」（该"用户"指 centos 账户，**非**本地无限钱包），且 NewAPI 对上游 403 默认不 failover，故双保险摘除（status=0 + abilities enabled=0）。
+> **副作用**：gpt-5.6-luna / gpt-5.6-terra 仅挂 centos，摘除后零源，已从 OMP/Kimi 配置移除（避免选到报"无可用渠道"）；centos 充值/换 key 后可恢复 ch16/25。
 
 ## 4. claude-opus-5 / claude-opus-4-8 / claude-opus-4-7 聚合池（七源）
 
