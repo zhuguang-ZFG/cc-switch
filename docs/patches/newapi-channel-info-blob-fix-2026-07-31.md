@@ -24,26 +24,106 @@ ch41 zzz-gpt        | text  ← 同上
 其余所有渠道        | blob  ← NewAPI 原生创建，存为 BLOB
 ```
 
-GORM 的 `channel_info` 字段是 `json.RawMessage`（`[]byte`）。SQLite driver 扫描时对 BLOB 正常返回 `[]byte`，对 **TEXT 类型**的 JSON 字符串扫描失败（尽管内容合法、`json_valid()=1`），触发 "unexpected end of JSON input"。
+NewAPI 的 `ChannelInfo.Scan` 实现只接受 `[]byte`：
 
-这是用 `python3 sqlite3` 模块直写 `channel_info`（传 str 而非 bytes）导致的——str 存为 TEXT，bytes 才存为 BLOB。
+```go
+bytesValue, _ := value.([]byte)
+return common.Unmarshal(bytesValue, c)
+```
+
+SQLite driver 对 BLOB 返回 `[]byte`，但对 TEXT 返回字符串；类型断言失败后 `bytesValue` 为 `nil`，最终触发 `unexpected end of JSON input`。因此即使 TEXT 内容合法且 `json_valid()=1`，仍会 Scan 失败。
+
+本次是用 Python `sqlite3` 直写 `channel_info` 时绑定了 `str`：`str` 存为 TEXT，`bytes` 或 `sqlite3.Binary(...)` 才存为 BLOB。SQLite CLI 的普通字符串字面量同样存为 TEXT，工具本身不是区别，显式写入 BLOB 才是关键。
 
 ## 3. 修复
 
-把 TEXT 类型的 channel_info 转成 BLOB：
+### 3.1 停机与备份
 
-```sql
-UPDATE channels SET channel_info = CAST(channel_info AS BLOB) WHERE typeof(channel_info)='text';
+直接修改 NewAPI SQLite 前先停止容器并备份；不要在运行中的进程仍可能写库时操作。
+
+```sh
+DB=/opt/new-api/data/one-api.db
+BACKUP="/opt/new-api/data/backups/one-api.before-channel-info-blob-$(date +%Y%m%d-%H%M%S).db"
+
+podman stop new-api
+cp -- "$DB" "$BACKUP"
+printf 'backup: %s\n' "$BACKUP"
 ```
 
-同时 ch40 的 channel_info 此前是 NULL（也触发 Scan error），已补写合法单 key JSON 再转 BLOB。
+### 3.2 检查并修复
 
-改完 `podman restart new-api`，重启后日志无 Scan error，`channels synced from database` 正常，前端渠道列表恢复。
+先检查异常行。除本次已知的 ch15/40/41 外若还有结果，尤其是多 key 渠道或非法 JSON，不要套用单 key 默认值，应先逐行确认其真实配置。
+
+```sh
+sqlite3 "$DB" <<'SQL'
+.headers on
+.mode column
+SELECT id, name, typeof(channel_info) AS storage_type,
+       json_valid(channel_info) AS valid_json
+FROM channels
+WHERE channel_info IS NULL
+   OR typeof(channel_info) <> 'blob'
+   OR json_valid(channel_info) <> 1;
+SQL
+```
+
+本次等价修复如下：仅在 ch40 仍为 NULL 时回填规范单 key JSON，再把 ch15/40/41 中合法的 TEXT 原样转为 BLOB。条件不匹配时不会覆盖现有值。
+
+```sh
+sqlite3 "$DB" <<'SQL'
+.bail on
+PRAGMA busy_timeout=8000;
+BEGIN IMMEDIATE;
+
+UPDATE channels
+SET channel_info = CAST('{"is_multi_key":false,"multi_key_size":0,"multi_key_status_list":{},"multi_key_polling_index":0,"multi_key_mode":"random"}' AS BLOB)
+WHERE id = 40 AND channel_info IS NULL;
+
+UPDATE channels
+SET channel_info = CAST(channel_info AS BLOB)
+WHERE id IN (15, 40, 41)
+  AND typeof(channel_info) = 'text'
+  AND json_valid(channel_info) = 1;
+
+COMMIT;
+SQL
+```
+
+当前主机也有规范修复脚本 `/opt/new-api/repair_channel_info.py`；后续全库修复应在停机、备份后优先复用该脚本，不再临时编写不同语义的写库脚本。
+
+### 3.3 验证与启动
+
+以下检查必须分别返回“零行”和 `ok`，否则不要启动容器，应回滚备份并调查残留行。
+
+```sh
+sqlite3 "$DB" <<'SQL'
+SELECT id, name, typeof(channel_info), json_valid(channel_info)
+FROM channels
+WHERE channel_info IS NULL
+   OR typeof(channel_info) <> 'blob'
+   OR json_valid(channel_info) <> 1;
+PRAGMA integrity_check;
+SQL
+
+podman start new-api
+```
+
+启动后确认容器日志无 `channel_info` Scan error、`GET /api/channel` 返回渠道数据且前端列表恢复；再调用一个代表性 relay 模型确认转发仍为 200。本次验证结果均通过，`channels synced from database` 正常。
+
+### 3.4 回滚
+
+若检查、启动或管理面验证失败，停止容器并恢复上一步打印的备份路径：
+
+```sh
+podman stop new-api
+cp -- /opt/new-api/data/backups/one-api.before-channel-info-blob-<timestamp>.db /opt/new-api/data/one-api.db
+podman start new-api
+```
 
 ## 4. 注意
 
-- **直写 NewAPI DB 用 sqlite3 CLI 而非 Python sqlite3**：CLI 的 `UPDATE ... SET col='...'` 对 json 列存为 TEXT 也可能触发同样问题；最稳是写完用 `CAST(col AS BLOB)` 归一化类型，或直接用 `x'...'` BLOB 字面量。
-- **新渠道务必设 channel_info 合法 JSON 且为 BLOB**：NULL 或 TEXT 都会触发 GORM Scan error，连带整个 `/api/channel` 列表返回空（一个坏渠道影响全部渠道显示）。
-- 此问题只影响管理后台渠道列表显示与 channel_cache 同步，不影响 relay 转发。
+- 写库工具无关，关键是显式写入 BLOB：Python 使用 `bytes`/`sqlite3.Binary(...)`；SQLite CLI 使用 `CAST(... AS BLOB)` 或 BLOB 字面量。写后必须检查 `typeof(channel_info)='blob'`。
+- 新渠道必须设置合法 JSON BLOB。NULL、TEXT 或非法 JSON 都会触发 `ChannelInfo.Scan` 错误，并可能使整个 `/api/channel` 列表读取失败。
+- 本次三个异常渠道均为单 key，实测 relay 未受影响；不能据此推断所有 Scan 错误都不影响 relay。多 key 渠道若丢失 `channel_info`，会破坏 key 轮询状态。
 
 > 安全：本文档不含 API key、VPS 密码。
