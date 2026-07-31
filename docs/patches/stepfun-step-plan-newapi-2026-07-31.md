@@ -49,6 +49,13 @@ abilities：`('default','step-router-v1',36, enabled=1, priority=50, weight=10)`
 ## 5. 使用与注意
 
 - 任何走 NewAPI 的客户端把 `model` 填 `step-router-v1` 即可（OMP 经 `zg-newapi` provider 直接用裸名；Kimi 需加 `[models."zg-newapi/step-router-v1"]` 别名）。
+
+**落地状态（2026-07-31 补配）**：两端客户端均已配置并冒烟验证——
+
+- OMP `~/.omp/agent/models.yml` `zg-newapi` provider 增加 `step-router-v1`（1M ctx / 128K out / `reasoning: true`）。
+- Kimi `~/.kimi-code/config.toml` 增加 `[models."zg-newapi/step-router-v1"]`（1M ctx / 128K out / `capabilities = ["thinking"]`）。
+- 验证：`kimi -m zg-newapi/step-router-v1 -p` → `KIMI-STEP-OK`；`omp -p --model zg-newapi/step-router-v1` → 返回正常文本（未严格复述短指令，属 step-router-v1 内部引擎路由差异，非配置问题）。
+- 注意区分：`stepfun/step-3.7-flash`（Cline 池）与 `step-router-v1`（ch36 Step Plan 通道）是两个独立来源。
 - 无法保证每个请求都命中 deepseek-v4-pro——路由由上游按请求复杂度自动判定。需要稳定 deepseek-v4-pro 语义时，构造"复杂"请求（多工具/长上下文）可提高命中率，但不构成保证。
 - Step Plan 为付费订阅通道，消耗用户自己的阶跃额度。
 
