@@ -29,7 +29,7 @@ usage.completion_tokens: 92（其中 reasoning_tokens: 90）
 | weight | 5 |
 | group | default |
 | auto_ban | 1 |
-| key | 2 个 key 换行分隔 |
+| key | 单 key（第二个 0v0 key 备用，rc.21 多 key 模式不可靠，见下方注意） |
 
 abilities 表同步启用 `channel_id=40, model=glm-5.2, enabled=1`。
 
@@ -50,8 +50,8 @@ abilities 表同步启用 `channel_id=40, model=glm-5.2, enabled=1`。
 ## 4. 注意
 
 - 0v0.club 的 `glm-5.2` 流式内容为空，当前客户端默认走非流式不受影响；若后续开启流式需单独评估。
-- channels.key 字段写入 2 个 0v0.club key（换行分隔），NewAPI 会自动轮询，单 key 限流/封禁时可 fallback。
-- 多 key 验证：追加第二个 key 后连打 5 次，全部 http200 且有 content。
+- **rc.21 多 key 模式不可靠**：原写入 2 个 key 换行分隔，实际触发 `net/http: invalid header field value for "Authorization"`（换行泄漏到 header）。已改单 key（第一个），第二个 0v0 key 备用；需轮换就建独立渠道，不用多 key 模式。详见 [deepseek-v4-flash 503 救火](newapi-deepseek-v4-flash-503-rescue-2026-07-31.md)。
+- **ch40 后续扩挂 deepseek-v4-flash**（0v0 直连 200），与 sensenova ch15 共两源，消除 deepseek-v4-flash 单点。
 - 若 0v0.club 稳定性好，后续可考虑把权重提到 10 与主源平权。
 
 > 安全：本文档不含完整 API key、VPS 密码。
