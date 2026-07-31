@@ -38,16 +38,20 @@
 
 > ch34（4router-gpt）已于 2026-08-01 删除（用户账户余额不足触发 403 排查时移除）。
 
-## 4. claude-opus-5 / claude-opus-4-8 聚合池（四源）
+## 4. claude-opus-5 / claude-opus-4-8 / claude-opus-4-7 聚合池（七源）
 
-| 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
-|------|------|------|------|----------|------|
-| ch26 | gorouter-claude | 付费中转 | 5 | 0 | type=1（原 14 已改） |
-| ch27 | gorouter-claude-2 | 付费中转 | 3 | 0 | type=1 |
-| ch28 | gorouter-claude-opus-3 | 付费中转 | 4 | 0 | type=1 |
-| ch45 | agentrouter（本机） | 代理池 | 5 | 0 | |
+| 渠道 | 来源 | 类型 | 权重 | priority | auto_ban | 备注 |
+|------|------|------|------|----------|----------|------|
+| ch3 | baibei-100xlabs | 付费中转 | 40 | 30 | 1 | type=14；多 key 池额度大账号多，不稳定 |
+| ch9 | linxi-k40 | 付费中转 | 20 | 30 | 1 | type=14；不稳定但额度大 |
+| ch18 | linxi-k40-opus5-backup | 付费中转 | 10 | 30 | 1 | type=14；502 频发但额度大 |
+| ch26 | gorouter-claude | 付费中转 | 5 | 40 | 0 | type=1（原 14 已改） |
+| ch27 | gorouter-claude-2 | 付费中转 | 3 | 40 | 0 | type=1 |
+| ch28 | gorouter-claude-opus-3 | 付费中转 | 4 | 40 | 0 | type=1 |
+| ch45 | agentrouter（本机） | 代理池 | 5 | 40 | 0 | Tailscale |
 
-> ch18（linxi-k40-opus5-backup）已于 2026-07-31 禁用（502 频发）+ abilities 同步禁用；claude-opus-4-7 无替代源，已从 OMP/Kimi 移除。
+> ch3/9/18 为 **type=14**：OpenAI 格式 `/v1/chat/completions` 测试路由不到它们（与 gorouter 旧坑同源），真实 OMP 走 `zg-newapi-anthropic` 端点才命中。priority 由 57/54 降至 30 作**保守后备**——稳定时靠高 weight 吃流量，挂时不优先吸流量拖累体验。
+> **保守后备守护**：`/opt/new-api/k40-baibei-revive.py` + systemd timer `k40-baibei-revive.timer`（每分钟）赦免被 auto_ban 的 ch3/9/18（status=3→1），SQL 带 `AND status=3` 故手动禁用（status=2）不被误赦免；判活权交 NewAPI 下轮定时测试，零误判。改 DB 后依赖 NewAPI channels sync goroutine（~1-2min）拉入内存。
 
 ## 5. 其他单源模型（非聚合）
 
@@ -69,6 +73,7 @@
 - **亲和系统全局关闭**：`channel_affinity_setting.enabled=false`、`switch_on_success=false`（排查 gorouter 不分流时关闭，保留 codex/glm/grok/deepseek/longcat/qwen 六条规则定义但未启用）。
 - **auto_ban 策略**：本机源（ch44/45）+ 免费紧 RPM 源（ch46/47 bazaarlink 10 RPM）auto_ban=0（桌面断连/突发 429 是常态，误杀得不偿失）；VPS/付费源全部 auto_ban=1（稳定源真挂该禁）。
 - **gorouter type 修复**：ch26/27/28 由 type=14（Anthropic）改 type=1（OpenAI）——type=14 时 NewAPI 定时测试用 OpenAI 格式返回空 → 内存标记降级 → 路由跳过全走 ch45。改 type=1 + 重建容器清缓存后恢复正常分流。
+- **k40/baibei 保守后备**：ch3/9/18 priority 降 30 + 每分钟赦免守护（见 §4 注）。auto_ban 负责 ban，守护负责及时恢复，priority 降后备防抖动。
 
 ## 7. 验证记录
 
@@ -76,5 +81,6 @@
 - claude-opus-5 Anthropic 格式 10 发：ch26/27/28/45 全部分流。
 - deepseek-v4-flash 隔离验证 ch46/47：base_url 初设 `https://bazaarlink.ai/api/v1` 致 NewAPI 拼成 `/api/v1/v1/...` 返 404，改 `https://bazaarlink.ai/api` 后 `finish:stop content:BZ-OK` 通过。九源全 enabled。
 - ch18 禁用后近 2min 零错误（此前每分钟 10+ 502）。
+- k40/baibei 守护脚本端到端验证：模拟 ch3 status=3 → 脚本输出 `赦免 auto_ban: ch3(baibei-100xlabs)` → 回 status=1；手动 status=2 不被赦免。
 
 > 安全：本文档不含任何 API key。
