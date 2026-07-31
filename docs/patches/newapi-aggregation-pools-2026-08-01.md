@@ -2,7 +2,7 @@
 
 本文件是 NewAPI 各模型聚合池的**当前事实快照**，防止文档漂移。任何渠道增删/权重调整/状态变化都应同步更新本文件。
 
-## 1. deepseek-v4-flash 聚合池（九源）
+## 1. deepseek-v4-flash 聚合池（十源）
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -15,6 +15,7 @@
 | ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 5 | 0 | Tailscale 100.83.32.95:8787 |
 | ch46 | bazaarlink-flash-1 | 免费 | 3 | 0 | 10 RPM/150 每日加权扣量；base_url `https://bazaarlink.ai/api`（NewAPI 自动补 /v1） |
 | ch47 | bazaarlink-flash-2 | 免费 | 3 | 0 | 同上，第二 key 单渠道（避开多 key 换行 header 坑） |
+| ch48 | opencode-go-flash | 订阅 | 5 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅 |
 
 ## 2. glm-5.2 聚合池（五源）
 
