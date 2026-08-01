@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **claude 池熔断恢复 + ch9/ch18 再禁用**: 排查"agentrouter claude 没进池"——配置上 ch45 早已融合（claude-opus-5 weight=15 最高），但 21:31 上游故障爆发 104 条 type=2 错误后 NewAPI 熔断器将其踢出 claude 路由，3h 零命中，流量全落 ch9/ch57。重启 new-api 重置熔断，ch45 恢复吃流量（近 3min 5 次命中最多）。**更正本日核查"ch9/ch18 enabled 且健康"**：二者虽 enabled 但实测 avg 51-67s 龟速拖慢 claude 池 → 重新禁用（status=2 + abilities.enabled=0 双保险，防 AutomaticEnableChannelEnabled 再拉回）。claude 池最终二源：ch45 agentrouter（weight 15, priority 50 主源）+ ch57 gorouter（weight 4 备源），连打 7/8 成功、延迟回健康区间。教训：统计渠道命中必须按 logs.type 过滤，type=2 是错误日志不是成功命中。
 - **NewAPI 渠道实测核查（2026-08-02）**: `docs/patches/newapi-channel-audit-2026-08-02.md` — 经管理 API 实测全量 37 渠道 + 近 100 条日志。**ch9/ch18（linxi-k40）实测仍 enabled 且健康**（推断 auto-ban 后被守护脚本赦免、上游已恢复），claude 池实际四源（ch45/ch57/ch9/ch18），更正 08-01 快照"ch3/9/18 全禁"记录；ch40（0v0）/ch41（zzzcoding）确认已删除（无文档记录）；ch24（welfare）实测 status=2 已禁；ch16/25 实测 status=2 有效禁用（快照"status=0"表述错误已改）；ch122-126 旧体系渠道全部不存在；channels 层权重与文档多处漂移（ch42/46/47/48/53/55，路由实际看 abilities 表，API 查不到需 DB 核对）。
 
 - **本机代理服务群 code review 修复（5 项）**: 深度审查 agentrouter/anyrouter/atomcode-bridge/codebuddy 四个服务（2787 行）。① anyrouter 502/503 误冷却 key——服务器故障不该惩罚 key，分离为仅 429 冷却、5xx 换 key 不冷却（防上游抖动致全 key 瘫痪）；② atomcode-bridge 请求体无限制→加 2MB 上限防 OOM；③ bridge token 刷新失败无恢复路径→加指数退避后台重试 + 上游 401 自动 force-refresh 重试一次（防永久卡死需手动登录）；④ bridge 客户端断连后上游连接泄漏→监听 `clientRes.close` 立即 destroy；⑤ bridge 强制注入 thinking 改为仅客户端明确请求时注入。两服务重启验证健康。
