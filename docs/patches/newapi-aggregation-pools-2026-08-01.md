@@ -2,7 +2,7 @@
 
 本文件是 NewAPI 各模型聚合池的**当前事实快照**，防止文档漂移。任何渠道增删/权重调整/状态变化都应同步更新本文件。
 
-## 1. deepseek-v4-flash 聚合池（十源）
+## 1. deepseek-v4-flash 聚合池（九源）
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -11,11 +11,12 @@
 | ch37 | tokenrhythm-1（基元） | 付费中转 | 10 | 1 | |
 | ch38 | tokenrhythm-2（基元） | 付费中转 | 10 | 1 | |
 | ch42 | DeepSeek 官方直连 | 官方 | 10 | 1 | models 含裸名，官方别名走 `deepseek-official-v4-flash` |
-| ch43 | atomcode CodingPlan Lite | 免费 | 10 | 1 | 800 次/5h 滚动窗口 |
 | ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 5 | 0 | Tailscale 100.83.32.95:8787 |
 | ch46 | bazaarlink-flash-1 | 免费 | 3 | 0 | 10 RPM/150 每日加权扣量；base_url `https://bazaarlink.ai/api`（NewAPI 自动补 /v1） |
 | ch47 | bazaarlink-flash-2 | 免费 | 3 | 0 | 同上，第二 key 单渠道（避开多 key 换行 header 坑） |
 | ch48 | opencode-go-flash | 订阅 | 5 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅 |
+
+> **ch43（atomcode CodingPlan Lite）已于 2026-08-01 退出 deepseek 池**（abilities enabled=0 + models 清空）。根因（详见 §6「ch43 atomcode 根因纠正」）：`status-v2` 显示 `calls_used:0/usage_percent:0`（额度**未消耗**），不是"额度打满"；实为上游双网关策略——旧网关 `api-ai.gitcode.com` 对 deepseek 返业务 403 `model is not enabled for codingplan 'Lite'`（Lite 档不启用），新网关 `llm-api.atomgit.com` 要求真客户端签名（代理被拒 `SIG_MISSING`）。ch43 对 deepseek 不可用，退出池避免污染。
 
 ## 2. glm-5.2 聚合池（五源）
 
@@ -77,10 +78,13 @@
 - **gorouter type 修复**：ch26/27/28 由 type=14（Anthropic）改 type=1（OpenAI）——type=14 时 NewAPI 定时测试用 OpenAI 格式返回空 → 内存标记降级 → 路由跳过全走 ch45。改 type=1 + 重建容器清缓存后恢复正常分流。
 - **k40/baibei 保守后备**：ch3/9/18 priority 降 30 + 每分钟赦免守护（见 §4 注）。auto_ban 负责 ban，守护负责及时恢复，priority 降后备防抖动。
 - **402 加入重试状态码**（2026-08-01）：`AutomaticRetryStatusCodes` 由 `100-199,300-399,409-499,500-504,505-599` 改为 `100-199,300-399,402,409-499,500-504,505-599`。根因：bazaarlink（ch46/47）免费额度打满时上游返回 402 `Insufficient credits`，但 402 不在重试范围 → NewAPI 不 failover 直接返给客户端 → OMP 报 `402 Insufficient credits`。修复后额度打满的源 402 触发重试/切其他源，不再报错。402 是网关层快速失败（额度检查毫秒级），重试代价可忽略；ch46/47 auto_ban=0 保持（免费源突发 429 常态，见上）。
+- **auto_ban 阈值 50→3**（2026-08-01）：`ChannelDisableThreshold` 由 50 降 3——免费/月度配额打满源（sensenova、bazaarlink 等）返 429/402 时 3 次即自动禁用，`AutomaticEnableChannelEnabled=true` 额度回血自动拉回。代价：任何渠道连续 3 次失败会被临时禁（网络闪断可能导致），靠自动恢复机制拉回。
+- **ch43 atomcode 根因纠正 + 退出 deepseek 池**（2026-08-01）：之前判定"每月token额度打满"是**错误的**——`status-v2` 显示 `calls_used:0 / usage_percent:0`（额度未消耗）。实为上游双网关策略：旧网关 `api-ai.gitcode.com` 对 deepseek 返业务 403 `not enabled for codingplan 'Lite'`（Lite 档不启用），新网关 `llm-api.atomgit.com` 要求真客户端签名（代理被拒 `SIG_MISSING`）。代理补真实签名（`sign_request`）+ `User-Agent: atomcode/5.0.3` + `x-atomcode-session-id` 后，旧网关不再伪装"每月token额度已不足"（200 content 陷阱）而是暴露真 403 → ch43 对 deepseek 不可用（上游业务决策 + 签名墙，非配置可解），已从 deepseek 聚合池摘除（abilities enabled=0 + models 清空），deepseek 靠其他 9 源。代理签名/UA/429 拦截补丁直接改 `gateway.py`/`server.py`，`pip upgrade` 覆盖会丢（ch43 停用中，丢了不影响）。Qwen3-VL 纯文本在旧网关可用（签名修复后），图片输入仍被上游"独享"校验拦截，未进任何池。
 
 ## 7. 验证记录
 
 - deepseek-v4-flash 近 1h 命中：ch42:44, ch43:32, ch15:28, ch35:27, ch38:30, ch37:21, ch44:9 —— 全源命中，权重均衡。
+- **ch43 退出后 deepseek 池验证**：连打 5 发全 `finish:stop`（length 为 12 token 推理被吃），近 2min ch43 命中 0 —— 退出生效，deepseek 靠其他 9 源正常。
 - claude-opus-5 Anthropic 格式 10 发：ch26/27/28/45 全部分流。
 - deepseek-v4-flash 隔离验证 ch46/47：base_url 初设 `https://bazaarlink.ai/api/v1` 致 NewAPI 拼成 `/api/v1/v1/...` 返 404，改 `https://bazaarlink.ai/api` 后 `finish:stop content:BZ-OK` 通过。九源全 enabled。
 - ch18 禁用后近 2min 零错误（此前每分钟 10+ 502）。
