@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **NewAPI 渠道实测核查（2026-08-02）**: `docs/patches/newapi-channel-audit-2026-08-02.md` — 经管理 API 实测全量 37 渠道 + 近 100 条日志。**ch9/ch18（linxi-k40）实测仍 enabled 且健康**（推断 auto-ban 后被守护脚本赦免、上游已恢复），claude 池实际四源（ch45/ch57/ch9/ch18），更正 08-01 快照"ch3/9/18 全禁"记录；ch40（0v0）/ch41（zzzcoding）确认已删除（无文档记录）；ch24（welfare）实测 status=2 已禁；ch16/25 实测 status=2 有效禁用（快照"status=0"表述错误已改）；ch122-126 旧体系渠道全部不存在；channels 层权重与文档多处漂移（ch42/46/47/48/53/55，路由实际看 abilities 表，API 查不到需 DB 核对）。
+
 - **本机代理服务群 code review 修复（5 项）**: 深度审查 agentrouter/anyrouter/atomcode-bridge/codebuddy 四个服务（2787 行）。① anyrouter 502/503 误冷却 key——服务器故障不该惩罚 key，分离为仅 429 冷却、5xx 换 key 不冷却（防上游抖动致全 key 瘫痪）；② atomcode-bridge 请求体无限制→加 2MB 上限防 OOM；③ bridge token 刷新失败无恢复路径→加指数退避后台重试 + 上游 401 自动 force-refresh 重试一次（防永久卡死需手动登录）；④ bridge 客户端断连后上游连接泄漏→监听 `clientRes.close` 立即 destroy；⑤ bridge 强制注入 thinking 改为仅客户端明确请求时注入。两服务重启验证健康。
 - **Reasonix CLI 接入聚合池 + 官方 + OpenCode Go 三源**: 新装 reasonix@1.18.0 配置 `~\AppData\Roaming\reasonix\config.toml`。默认 `zg-newapi/deepseek-v4-flash` 走 NewAPI 十四源聚合池；另配 `deepseek-official`（api.deepseek.com 官方直连）+ `opencode-go`（opencode.ai/zen/go）两个独立 provider 供 `--model` 切换。清理：删 balance_url（NewAPI key 打官方余额必 401）、context_window 1M→393216、排除 `~/.claude/skills`（工具注册表不兼容）。三源冒烟全通过。
 - **deepseek-official-v4-pro 全链路禁用 + contextWindow 修正**: 用户要求禁用官方 pro 模型——NewAPI ch42 `abilities.enabled=0`（flash 保留）、Kimi Code 删除模型块、OMP 删除模型条目并将 `slow` 角色从 pro 改为 `agentrouter/claude-opus-5:high`。同时修正 deepseek-v4-flash 全系 `contextWindow` 从 1048576（理论值）→ 393216（上游真实上限），OMP 3 处 + Kimi 4 处，避免长会话撞墙 400 后被动压缩，改为接近上限主动压缩。

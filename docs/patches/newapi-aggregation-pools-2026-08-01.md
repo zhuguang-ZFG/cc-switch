@@ -45,7 +45,7 @@
 | gpt-5.5 | ch30 fastaitoken | 20 | 1 | 单源 |
 | gpt-image-2 | ch30 fastaitoken | 20 | 1 | 单源 |
 
-> ch16/ch25（centos.hk 同上游两 key）已于 2026-08-01 禁用：centos 上游账户欠费返 403「预扣费额度失败 用户剩余额度 ¥0.09」（该"用户"指 centos 账户，**非**本地无限钱包），且 NewAPI 对上游 403 默认不 failover，故双保险摘除（status=0 + abilities enabled=0）。
+> ch16/ch25（centos.hk 同上游两 key）已于 2026-08-01 禁用：centos 上游账户欠费返 403「预扣费额度失败 用户剩余额度 ¥0.09」（该"用户"指 centos 账户，**非**本地无限钱包），且 NewAPI 对上游 403 默认不 failover，故双保险摘除（status=2 + abilities enabled=0）。
 > **副作用**：gpt-5.6-luna / gpt-5.6-terra 仅挂 centos，摘除后零源，已从 OMP/Kimi 配置移除（避免选到报"无可用渠道"）；centos 充值/换 key 后可恢复 ch16/25。
 
 ## 4. claude-opus-5 / claude-opus-4-8 / claude-opus-4-7 聚合池（二源）
@@ -55,7 +55,8 @@
 | ch45 | agentrouter（本机） | 代理池 | 15 | 50 | 0 | Tailscale 100.83.32.95:8788；主源（权重 15/19 ≈ 79%） |
 | ch57 | gorouter 合并（三 key） | 付费中转 | 4 | 40 | 0 | `https://gorouter.app`；ch26/27/28 三把 key 合并换行分隔；备源（权重 4/19 ≈ 21%）。**多 key 正确姿势**：key 真实换行（0x0A）分隔 + `channel_info` 以 **bytes** 写入（`is_multi_key:true, multi_key_size:3, multi_key_status_list:{"0":1,"1":1,"2":1}, multi_key_mode:"polling"`）——str 写入致 GORM 二次编码、`multi_key_mode` 写数字、key 写 `\n` 字面量，三种坑都导致渠道不可路由 |
 
-> **2026-08-01 整合**：原七源 → 二源。ch26/27/28（gorouter 三把 key 同上游）合并为 ch57；ch45 权重 5→15 成主源；ch3/9/18（baibei/linxi-k40）直测全部 503 `All available accounts exhausted`（上游账户耗尽），与旧 ch26/27/28 一并禁用（status=2 + abilities enabled=0）。
+> **2026-08-01 整合**：原七源 → 二源。ch26/27/28（gorouter 三把 key 同上游）合并为 ch57；ch45 权重 5→15 成主源；ch3/9/18（baibei/linxi-k40）直测全部 503 `All available accounts exhausted`（上游账户耗尽），ch3 已禁用（status=2 + abilities enabled=0）。
+> **2026-08-02 实测更正**：ch9/ch18 实际**仍 enabled 且健康**（`GET /api/channel/` 实测 status=1；日志 12/12、1/1 成功零失败，claude-opus-5/4-7 流量继续命中）——推断当时为 auto-ban（status=3）后被 `auto-ban-revive.py` 赦免回 1，且上游已恢复。claude 池**实际四源**：ch45 + ch57 + ch9 + ch18。
 > **重要教训**：NewAPI 渠道禁用**必须双保险**——`status=2`（ManuallyDisabled）+ `abilities.enabled=0`。只改 status 不生效（路由过滤看 abilities 表；status=0 是 Unknown 非 Disabled，更无效）。之前 ch16/25/43 的「status=0 禁用」实际从未生效，靠 abilities 兜底。
 > **保守后备守护**：`/opt/new-api/auto-ban-revive.py` + systemd timer `k40-baibei-revive.timer`（每分钟）赦免**所有**被 auto_ban 的渠道（`status=3 AND auto_ban=1`→1；替代原仅覆盖 ch3/9/18 的 k40-baibei-revive.py）。SQL 带 `AND status=3` 故手动禁用（status=2）不被误赦免；`auto_ban=0` 渠道（免费源）不赦免（有意不禁用）。判活权交 NewAPI 下轮定时测试，零误判。改 DB 后依赖 NewAPI channels sync goroutine（~1-2min）拉入内存。
 
@@ -65,13 +66,15 @@
 |------|------|
 | sensenova-6.7-flash-lite | ch15 |
 | grok-4.5 | ch17 (w10) / ch29 (w20) / ch39 (w10) 三源 |
-| gpt-5.5 | ch16/25/30 三源 |
-| gpt-5.6-luna | ch16/25 二源 |
-| gpt-5.6-terra | ch25 单源 |
-| claude-sonnet-5 | ch26/27 二源 |
+| gpt-5.5 | ch30 单源（ch2/16/25 已禁、ch41 已删） |
+| gpt-5.6-luna | **零源**（仅 centos ch16/25 曾挂，已禁；ch41 已删） |
+| gpt-5.6-terra | **零源**（仅 centos ch25 曾挂，已禁） |
+| claude-sonnet-5 | ch57（ch26/27 已合并禁用） |
 | qwen3.8-max-preview | ch31 |
 | k3/kimi-for-coding | ch33 |
 | step-router-v1 | ch36 |
+
+> **2026-08-02 实测更正**：本节原写 gpt-5.5 三源 ch16/25/30、luna 二源 ch16/25、terra 单源 ch25、sonnet-5 二源 ch26/27——均过时（ch16/25 已禁、ch41 已删、ch26/27 已并入 ch57）。以上为实测后版本。
 
 ## 6. 路由与亲和策略（2026-08-01 生效）
 
