@@ -112,8 +112,35 @@
 - [ ] 确认 ch9/18 保留意图（上游已恢复，健康；若保留需把快照/CHANGELOG 描述改对）
 - [ ] 若需核对真实路由权重：查 DB `abilities` 表 weight/priority
 
+## 补充核查：deepseek-v4-flash 各源版本（2026-08-02）
+
+背景：官方 2026-07-31 发布 `DeepSeek-V4-Flash-0731`（同一 model ID `deepseek-v4-flash` 后端静默升级，官方措辞 "public beta"、非 GA 字样；V4-Pro 仍是 Preview）。核查各聚合源挂的是否为 0731 正式版。
+
+### ✅ 已确认 0731 正式版
+
+| 渠道 | 证据 |
+|---|---|
+| ch42 deepseek-official | 官方直连（用户指示不查，按官方语义即最新版） |
+| ch48 opencode-go | 用户指示不查 |
+| ch56 hf-deepseek-0731 | **实测** `/v1/models` 真实 ID `deepseek-ai/DeepSeek-V4-Flash-0731`（key 任意可查） |
+| ch50 / ch55 inferx | model_mapping → `deepseek-v4-flash-0731`；CHANGELOG 记录接入时即挂 0731 |
+| **ch35 cline-free** | **用户确认（2026-08-02）**：cline 网关的 `deepseek/deepseek-v4-flash` 为正式版 |
+
+### ⚠️ 裸名透传，版本由上游决定（待各平台确认）
+
+| 渠道 | model_mapping | 说明 |
+|---|---|---|
+| ch15 sensenova | 无（裸名） | 商汤源，需其控制台确认 |
+| ch37/38 tokenrhythm | 无（裸名） | 付费中转，/v1/models 需认证（401） |
+| ch44 codebuddy | 无（裸名） | CodeBuddy 官方后端内置，本机 bridge 需 key（401） |
+| ch46/47 bazaarlink | 无（裸名） | 免费源，端点无响应 |
+| ch53 atomcode-bridge | 无（裸名） | 实测 bridge `/v1/models` 返回 `deepseek-v4-flash`（owned_by atomgit），非版本号 |
+| ch58 hf.space | 无（裸名） | share-api，需真 key（403） |
+
+> 判断依据：官方升级是**同一 model ID 静默换模型**（"simply use deepseek-v4-flash to access the latest version"），故凡透传官方 API 的中转源（tokenrhythm/bazaarlink/codebuddy 等）裸名即最新版；仅独立部署快照型上游（如 HF 单独部署 Preview 权重）可能停在旧版。上表未确认源大概率也是正式版，但无直接证据。
+
 ## 安全
 
 - 本文档不含任何 API key。
-- 本次核查仅用管理 API 只读请求（`GET /api/channel/`、`GET /api/log/`），未做任何写操作。
+- 本次核查仅用管理 API 只读请求（`GET /api/channel/`、`GET /api/log/`、`GET /v1/models`），未做任何写操作。
 - 访问令牌仅存在于会话环境变量，未落盘、未提交。
