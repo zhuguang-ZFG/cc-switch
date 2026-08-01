@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **auto-ban 赦免守护全渠道化 + ch32 孤儿渠道清理**: 日志审查发现配置矛盾——`AutomaticEnableChannelEnabled=true` 但 `monitor_setting.auto_test_channel_enabled=false`（定时测试关）→ auto_ban 渠道永不自动恢复（ch32 tokenrouter kimi-k3 被卡死多日，且上游 key 已无 kimi-k3 权限返 403，孤儿渠道已删）。守护脚本由 `k40-baibei-revive.py`（仅 ch3/9/18）升级为 `auto-ban-revive.py`：赦免所有 `status=3 AND auto_ban=1` 渠道，`status=2` 手动禁用与 `auto_ban=0` 免费源不碰。systemd timer 每分钟运行，端到端验证（模拟 ch15 status=3→赦免回 1）。
 
 - **atomcode 本机 bridge 接入 NewAPI（ch53 替代 ch43）**: 旧 VPS 代理 `atomcode-open-api` 签名错误被上游拒；改用 GitHub 开源 `Small-tailqwq/atomgit-opencode-bridge`（正确 HKDF-SHA256 + master key 签名 + 真实 UA + token 自动续命）。本机（Windows）`node proxy.js` 监听 `0.0.0.0:9457`，watchdog.js 每 30s 检测保活，任务计划开机自启。经 Tailscale 100.83.32.95 接 NewAPI ch53，deepseek 池十一源。验证 `finish:stop content:BRIDGE-NEWAPI-OK`。旧 ch43 已删，VPS 全量 atomcode 清理干净。
-- **InferX 双 key 渠道（ch54 glm-52-b + ch55 deepseek-b）**: InferX 免费源追加第二个 key，glm-5.2 池七源（+ch54）、deepseek 池十二源（+ch55），与 ch49/50 轮换分摊容量（免费源 capacity 间歇 429）。验证 `IX2-GLM-OK`/`IX2-DS-OK` 均 finish:stop。
+- **HF DeepSeek-V4-Flash-0731 推理端点接入（ch56）**: HuggingFace 托管端点 `q5dh1rfszfym23hj.us-east-2.aws.endpoints.huggingface.cloud`，真实模型 id `deepseek-ai/DeepSeek-V4-Flash-0731`（页面提示的 `deepseek-v4-flash-0731` 不存在，`/v1/models` 可查真实 id）。API key 任意值，IP 限流 20 突发/12 每分钟（超限 429）。weight=3 低权重分流避开单 IP 限流。模型映射 `deepseek-v4-flash→deepseek-ai/DeepSeek-V4-Flash-0731`，deepseek 池十三源。直测与 NewAPI 路由均 `finish:stop content:HF-OK`；连打 30 发全 200 无 429。
+- **InferX 双 key 渠道（ch54 glm-52-b + ch55 deepseek-b）**: InferX 免费源追加第二个 key，glm-5.2 池七源（+ch54）、deepseek 池十二源（+ch55），与 ch49/50 轮换分摊容量（免费源 capacity 间歇 429）。验证 `IX2-GLM-OK`/`IX2-DS-OK` 均 finish:stop。: InferX 免费源追加第二个 key，glm-5.2 池七源（+ch54）、deepseek 池十二源（+ch55），与 ch49/50 轮换分摊容量（免费源 capacity 间歇 429）。验证 `IX2-GLM-OK`/`IX2-DS-OK` 均 finish:stop。
 
 
 ### Fixed (database / local binary)
