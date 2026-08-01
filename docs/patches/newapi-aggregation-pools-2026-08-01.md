@@ -2,7 +2,7 @@
 
 本文件是 NewAPI 各模型聚合池的**当前事实快照**，防止文档漂移。任何渠道增删/权重调整/状态变化都应同步更新本文件。
 
-## 1. deepseek-v4-flash 聚合池（十一源）
+## 1. deepseek-v4-flash 聚合池（十二源）
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -17,10 +17,11 @@
 | ch48 | opencode-go-flash | 订阅 | 5 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅 |
 | ch50 | inferx-deepseek | 免费 | 5 | 0 | `model.inferx.net/endpoints/v1`（InferX serverless）；`deepseek-v4-flash-0731` 每 100 万 token 免费；容量不足时 429 capacity（间歇） |
 | ch53 | atomcode-bridge | 免费 | 10 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
+| ch55 | inferx-deepseek-b | 免费 | 5 | 0 | 同上，第二 key（ix_0caa...）；与 ch50 轮换分摊容量 |
 
 > **ch43（旧 Python 代理）已于 2026-08-01 删除**，被本机 `atomgit-opencode-bridge` 替代（ch53）。旧代理签名算法不对被上游拒，bridge 用正确 `atomcode-signing-v1` HMAC 签名 + 真实 UA，成功过上游验证。
 
-## 2. glm-5.2 聚合池（六源）
+## 2. glm-5.2 聚合池（七源）
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -30,6 +31,7 @@
 | ch38 | tokenrhythm-2 | 付费中转 | 10 | 1 | |
 | ch44 | codebuddy（本机） | 桌面依赖 | 5 | 0 | |
 | ch49 | inferx-glm52 | 免费 | 5 | 0 | `model.inferx.net/endpoints/v1`；`glm-52`（上游 `cyankiwi/GLM-5.2-AWQ-INT4`）免费 |
+| ch54 | inferx-glm52-b | 免费 | 5 | 0 | 同上，第二 key；与 ch49 轮换分摊容量 |
 
 ## 3. gpt 聚合池（centos 摘除后）
 
