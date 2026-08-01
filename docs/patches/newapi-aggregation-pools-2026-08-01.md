@@ -14,7 +14,7 @@
 | ch48 | opencode-go-flash | 订阅 | 8 | 0 | `https://opencode.ai/zen/go`（带 /v1 会 404）；OpenCode Go $10/月订阅；中速（avg 21s），从 22 降权 |
 | ch42 | DeepSeek 官方直连 | 官方 | 8 | 1 | 官方稳定（avg 22s）；models 含裸名，官方别名走 `deepseek-official-v4-flash`；从 1 提权（用户要求） |
 | ch56 | hf-deepseek-0731 | 免费 | 5 | 0 | `huggingface.co` 端点 `deepseek-ai/DeepSeek-V4-Flash-0731`；key 任意；IP 限流 20 突发/12 每分钟 |
-| ch53 | atomcode-bridge | 免费 | 3 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1）；CodingPlan Lite 额度 |
+| ch53 | atomcode-bridge | 免费 | 8 | 0 | 中速（avg 11s，2-22s）；本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1）；CodingPlan Lite 额度；从 3 提权（比 sensenova/opencode 快） |
 | ch58 | hfspace-deepseek | 免费 | 2 | 0 | `2c2ch1u11-share-api-0.hf.space`（base_url 不带 /v1）；120 RPM/key 限流；上游慢（冷启动 60s+）；上下文非 1M |
 | ch46 | bazaarlink-flash-1 | 免费 | 2 | 0 | 慢源（avg 32s）降权；10 RPM/150 每日加权扣量 |
 | ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 2 | 0 | 慢源（avg 28s）降权；Tailscale 100.83.32.95:8787 |
