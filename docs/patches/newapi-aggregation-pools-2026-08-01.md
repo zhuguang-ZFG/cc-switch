@@ -15,8 +15,8 @@
 | ch46 | bazaarlink-flash-1 | 免费 | 3 | 0 | 10 RPM/150 每日加权扣量；base_url `https://bazaarlink.ai/api`（NewAPI 自动补 /v1） |
 | ch47 | bazaarlink-flash-2 | 免费 | 3 | 0 | 同上，第二 key 单渠道（避开多 key 换行 header 坑） |
 | ch48 | opencode-go-flash | 订阅 | 5 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅 |
-| ch50 | inferx-deepseek | 免费 | 5 | 0 | `model.inferx.net/endpoints/v1`（InferX serverless）；`deepseek-v4-flash-0731` 每 100 万 token 免费；容量不足时 429 capacity（间歇） |
-| ch53 | atomcode-bridge | 免费 | 10 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
+| ch50 | inferx-deepseek | 免费 | 5 | 0 | `model.inferx.net/endpoints`（不带 /v1）；`deepseek-v4-flash-0731` 每 100 万 token 免费；容量不足时 429 capacity（间歇） |
+| ch53 | atomcode-bridge | 免费 | 10 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
 | ch55 | inferx-deepseek-b | 免费 | 5 | 0 | 同上，第二 key（ix_0caa...）；与 ch50 轮换分摊容量 |
 
 > **ch43（旧 Python 代理）已于 2026-08-01 删除**，被本机 `atomgit-opencode-bridge` 替代（ch53）。旧代理签名算法不对被上游拒，bridge 用正确 `atomcode-signing-v1` HMAC 签名 + 真实 UA，成功过上游验证。
@@ -30,7 +30,7 @@
 | ch37 | tokenrhythm-1 | 付费中转 | 10 | 1 | |
 | ch38 | tokenrhythm-2 | 付费中转 | 10 | 1 | |
 | ch44 | codebuddy（本机） | 桌面依赖 | 5 | 0 | |
-| ch49 | inferx-glm52 | 免费 | 5 | 0 | `model.inferx.net/endpoints/v1`；`glm-52`（上游 `cyankiwi/GLM-5.2-AWQ-INT4`）免费 |
+| ch49 | inferx-glm52 | 免费 | 5 | 0 | `model.inferx.net/endpoints`（不带 /v1）；`glm-52`（上游 `cyankiwi/GLM-5.2-AWQ-INT4`）免费 |
 | ch54 | inferx-glm52-b | 免费 | 5 | 0 | 同上，第二 key；与 ch49 轮换分摊容量 |
 
 ## 3. gpt 聚合池（centos 摘除后）
@@ -92,6 +92,7 @@
 - **ch43 退出后 deepseek 池验证**：连打 5 发全 `finish:stop`（length 为 12 token 推理被吃），近 2min ch43 命中 0 —— 退出生效，deepseek 靠其他 9 源正常。
 - **ch49/50 inferx 接入验证**：glm-5.2 `finish:stop content:GLM-IX-OK`；deepseek `finish:stop content:DS-IX-OK`。
 - **ch53 本机 bridge 验证**：`finish:stop content:BRIDGE-NEWAPI-OK`（本机 atomgit-opencode-bridge 经 Tailscale 接入）。
+- **新渠道不参与路由的三坑修复**（2026-08-01）：新增渠道（ch49/50/53/54/55）创建时 abilities 行 `group` 为空（不在 default 组）、`priority=30`（主渠道为 50）、base_url 带 `/v1`（NewAPI type=1 自动补 `/v1` 拼成 `/v1/v1/...` 404）。修复后 deepseek 十二源全渠道均衡命中（ch15:8 ch42:6 ch37/38:5 ch44:5 ch47:5 ch46:3 ch48:2 ch53:2 ch55:2 ch50:1）。
 - claude-opus-5 Anthropic 格式 10 发：ch26/27/28/45 全部分流。
 - deepseek-v4-flash 隔离验证 ch46/47：base_url 初设 `https://bazaarlink.ai/api/v1` 致 NewAPI 拼成 `/api/v1/v1/...` 返 404，改 `https://bazaarlink.ai/api` 后 `finish:stop content:BZ-OK` 通过。九源全 enabled。
 - ch18 禁用后近 2min 零错误（此前每分钟 10+ 502）。
