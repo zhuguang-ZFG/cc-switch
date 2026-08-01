@@ -2,7 +2,7 @@
 
 本文件是 NewAPI 各模型聚合池的**当前事实快照**，防止文档漂移。任何渠道增删/权重调整/状态变化都应同步更新本文件。
 
-## 1. deepseek-v4-flash 聚合池（九源）
+## 1. deepseek-v4-flash 聚合池（十源）
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -15,10 +15,11 @@
 | ch46 | bazaarlink-flash-1 | 免费 | 3 | 0 | 10 RPM/150 每日加权扣量；base_url `https://bazaarlink.ai/api`（NewAPI 自动补 /v1） |
 | ch47 | bazaarlink-flash-2 | 免费 | 3 | 0 | 同上，第二 key 单渠道（避开多 key 换行 header 坑） |
 | ch48 | opencode-go-flash | 订阅 | 5 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅 |
+| ch50 | inferx-deepseek | 免费 | 5 | 0 | `model.inferx.net/endpoints/v1`（InferX serverless）；`deepseek-v4-flash-0731` 每 100 万 token 免费；容量不足时 429 capacity（间歇） |
 
 > **ch43（atomcode CodingPlan Lite）已于 2026-08-01 退出 deepseek 池**（abilities enabled=0 + models 清空）。根因（详见 §6「ch43 atomcode 根因纠正」）：`status-v2` 显示 `calls_used:0/usage_percent:0`（额度**未消耗**），不是"额度打满"；实为上游双网关策略——旧网关 `api-ai.gitcode.com` 对 deepseek 返业务 403 `model is not enabled for codingplan 'Lite'`（Lite 档不启用），新网关 `llm-api.atomgit.com` 要求真客户端签名（代理被拒 `SIG_MISSING`）。ch43 对 deepseek 不可用，退出池避免污染。
 
-## 2. glm-5.2 聚合池（五源）
+## 2. glm-5.2 聚合池（六源）
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -27,6 +28,7 @@
 | ch37 | tokenrhythm-1 | 付费中转 | 10 | 1 | |
 | ch38 | tokenrhythm-2 | 付费中转 | 10 | 1 | |
 | ch44 | codebuddy（本机） | 桌面依赖 | 5 | 0 | |
+| ch49 | inferx-glm52 | 免费 | 5 | 0 | `model.inferx.net/endpoints/v1`；`glm-52`（上游 `cyankiwi/GLM-5.2-AWQ-INT4`）免费 |
 
 ## 3. gpt 聚合池（centos 摘除后）
 
@@ -85,6 +87,7 @@
 
 - deepseek-v4-flash 近 1h 命中：ch42:44, ch43:32, ch15:28, ch35:27, ch38:30, ch37:21, ch44:9 —— 全源命中，权重均衡。
 - **ch43 退出后 deepseek 池验证**：连打 5 发全 `finish:stop`（length 为 12 token 推理被吃），近 2min ch43 命中 0 —— 退出生效，deepseek 靠其他 9 源正常。
+- **ch49/50 inferx 接入验证**：glm-5.2 `finish:stop content:GLM-IX-OK`；deepseek `finish:stop content:DS-IX-OK`。
 - claude-opus-5 Anthropic 格式 10 发：ch26/27/28/45 全部分流。
 - deepseek-v4-flash 隔离验证 ch46/47：base_url 初设 `https://bazaarlink.ai/api/v1` 致 NewAPI 拼成 `/api/v1/v1/...` 返 404，改 `https://bazaarlink.ai/api` 后 `finish:stop content:BZ-OK` 通过。九源全 enabled。
 - ch18 禁用后近 2min 零错误（此前每分钟 10+ 502）。
