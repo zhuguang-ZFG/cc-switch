@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **atomcode 本机 bridge 接入 NewAPI（ch53 替代 ch43）**: 旧 VPS 代理 `atomcode-open-api` 签名错误被上游拒；改用 GitHub 开源 `Small-tailqwq/atomgit-opencode-bridge`（正确 HKDF-SHA256 + master key 签名 + 真实 UA + token 自动续命）。本机（Windows）`node proxy.js` 监听 `0.0.0.0:9457`，watchdog.js 每 30s 检测保活，任务计划开机自启。经 Tailscale 100.83.32.95 接 NewAPI ch53，deepseek 池十一源。验证 `finish:stop content:BRIDGE-NEWAPI-OK`。旧 ch43 已删，VPS 全量 atomcode 清理干净。
+
+
 ### Fixed (database / local binary)
 
 - **`providers`/`prompts`/`profiles` TEXT `created_at` no longer bricks startup** (`SCHEMA_VERSION` 18): ad-hoc `datetime('now')` writes caused `Invalid column type Text … created_at` during setup and Claude Code 500 retries. Added `OptionalUnixMillis` lenient decode, a v17→v18 normalize migration, and safer `save_provider` millis defaults. See `docs/patches/schema-v18-created-at-text.md`.
