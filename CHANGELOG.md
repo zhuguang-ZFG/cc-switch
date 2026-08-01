@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **auto-ban 赦免守护全渠道化 + ch32 孤儿渠道清理**: 日志审查发现配置矛盾——`AutomaticEnableChannelEnabled=true` 但 `monitor_setting.auto_test_channel_enabled=false`（定时测试关）→ auto_ban 渠道永不自动恢复（ch32 tokenrouter kimi-k3 被卡死多日，且上游 key 已无 kimi-k3 权限返 403，孤儿渠道已删）。守护脚本由 `k40-baibei-revive.py`（仅 ch3/9/18）升级为 `auto-ban-revive.py`：赦免所有 `status=3 AND auto_ban=1` 渠道，`status=2` 手动禁用与 `auto_ban=0` 免费源不碰。systemd timer 每分钟运行，端到端验证（模拟 ch15 status=3→赦免回 1）。
+
 - **atomcode 本机 bridge 接入 NewAPI（ch53 替代 ch43）**: 旧 VPS 代理 `atomcode-open-api` 签名错误被上游拒；改用 GitHub 开源 `Small-tailqwq/atomgit-opencode-bridge`（正确 HKDF-SHA256 + master key 签名 + 真实 UA + token 自动续命）。本机（Windows）`node proxy.js` 监听 `0.0.0.0:9457`，watchdog.js 每 30s 检测保活，任务计划开机自启。经 Tailscale 100.83.32.95 接 NewAPI ch53，deepseek 池十一源。验证 `finish:stop content:BRIDGE-NEWAPI-OK`。旧 ch43 已删，VPS 全量 atomcode 清理干净。
 - **InferX 双 key 渠道（ch54 glm-52-b + ch55 deepseek-b）**: InferX 免费源追加第二个 key，glm-5.2 池七源（+ch54）、deepseek 池十二源（+ch55），与 ch49/50 轮换分摊容量（免费源 capacity 间歇 429）。验证 `IX2-GLM-OK`/`IX2-DS-OK` 均 finish:stop。
 

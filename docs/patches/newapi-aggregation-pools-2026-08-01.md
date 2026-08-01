@@ -59,7 +59,7 @@
 | ch45 | agentrouter（本机） | 代理池 | 5 | 40 | 0 | Tailscale |
 
 > ch3/9/18 为 **type=14**：OpenAI 格式 `/v1/chat/completions` 测试路由不到它们（与 gorouter 旧坑同源），真实 OMP 走 `zg-newapi-anthropic` 端点才命中。priority 由 57/54 降至 30 作**保守后备**——稳定时靠高 weight 吃流量，挂时不优先吸流量拖累体验。
-> **保守后备守护**：`/opt/new-api/k40-baibei-revive.py` + systemd timer `k40-baibei-revive.timer`（每分钟）赦免被 auto_ban 的 ch3/9/18（status=3→1），SQL 带 `AND status=3` 故手动禁用（status=2）不被误赦免；判活权交 NewAPI 下轮定时测试，零误判。改 DB 后依赖 NewAPI channels sync goroutine（~1-2min）拉入内存。
+> **保守后备守护**：`/opt/new-api/auto-ban-revive.py` + systemd timer `k40-baibei-revive.timer`（每分钟）赦免**所有**被 auto_ban 的渠道（`status=3 AND auto_ban=1`→1；替代原仅覆盖 ch3/9/18 的 k40-baibei-revive.py）。SQL 带 `AND status=3` 故手动禁用（status=2）不被误赦免；`auto_ban=0` 渠道（免费源）不赦免（有意不禁用）。判活权交 NewAPI 下轮定时测试，零误判。改 DB 后依赖 NewAPI channels sync goroutine（~1-2min）拉入内存。
 
 ## 5. 其他单源模型（非聚合）
 
