@@ -16,7 +16,7 @@
 | ch47 | bazaarlink-flash-2 | 免费 | 3 | 0 | 同上，第二 key 单渠道（避开多 key 换行 header 坑） |
 | ch48 | opencode-go-flash | 订阅 | 22 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅；权重 25% 主源 |
 | ch50 | inferx-deepseek | 免费 | 5 | 0 | `model.inferx.net/endpoints`（不带 /v1）；`deepseek-v4-flash-0731` 每 100 万 token 免费；容量不足时 429 capacity（间歇） |
-| ch53 | atomcode-bridge | 免费 | 10 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
+| ch53 | atomcode-bridge | 免费 | 5 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
 | ch55 | inferx-deepseek-b | 免费 | 5 | 0 | 同上，第二 key（ix_0caa...）；与 ch50 轮换分摊容量 |
 
 > **ch43（旧 Python 代理）已于 2026-08-01 删除**，被本机 `atomgit-opencode-bridge` 替代（ch53）。旧代理签名算法不对被上游拒，bridge 用正确 `atomcode-signing-v1` HMAC 签名 + 真实 UA，成功过上游验证。
@@ -88,7 +88,7 @@
 
 ## 7. 验证记录
 
-- deepseek-v4-flash 近 1h 命中：ch42:44, ch43:32, ch15:28, ch35:27, ch38:30, ch37:21, ch44:9 —— 全源命中，权重均衡。
+- **deepseek 十二源均衡命中验证**（2026-08-01）：ch15:8 ch42:6 ch37/38:5 ch44:5 ch47:5 ch46:3 ch48:2 ch53:2 ch55:2 ch50:1（权重 10/1/10/10/5/3/3/22/5/5/5 比例吻合）。
 - **ch43 退出后 deepseek 池验证**：连打 5 发全 `finish:stop`（length 为 12 token 推理被吃），近 2min ch43 命中 0 —— 退出生效，deepseek 靠其他 9 源正常。
 - **ch49/50 inferx 接入验证**：glm-5.2 `finish:stop content:GLM-IX-OK`；deepseek `finish:stop content:DS-IX-OK`。
 - **ch53 本机 bridge 验证**：`finish:stop content:BRIDGE-NEWAPI-OK`（本机 atomgit-opencode-bridge 经 Tailscale 接入）。
