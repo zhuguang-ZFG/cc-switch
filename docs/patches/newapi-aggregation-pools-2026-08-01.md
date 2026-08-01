@@ -52,7 +52,7 @@
 | 渠道 | 来源 | 类型 | 权重 | priority | auto_ban | 备注 |
 |------|------|------|------|----------|----------|------|
 | ch45 | agentrouter（本机） | 代理池 | 15 | 50 | 0 | Tailscale 100.83.32.95:8788；主源（权重 15/19 ≈ 79%） |
-| ch57 | gorouter 合并（三 key） | 付费中转 | 4 | 40 | 0 | `https://gorouter.app`；ch26/27/28 三把 key 合并换行分隔；备源（权重 4/19 ≈ 21%） |
+| ch57 | gorouter 合并（三 key） | 付费中转 | 4 | 40 | 0 | `https://gorouter.app`；ch26/27/28 三把 key 合并换行分隔；备源（权重 4/19 ≈ 21%）。**多 key 正确姿势**：key 真实换行（0x0A）分隔 + `channel_info` 以 **bytes** 写入（`is_multi_key:true, multi_key_size:3, multi_key_status_list:{"0":1,"1":1,"2":1}, multi_key_mode:"polling"`）——str 写入致 GORM 二次编码、`multi_key_mode` 写数字、key 写 `\n` 字面量，三种坑都导致渠道不可路由 |
 
 > **2026-08-01 整合**：原七源 → 二源。ch26/27/28（gorouter 三把 key 同上游）合并为 ch57；ch45 权重 5→15 成主源；ch3/9/18（baibei/linxi-k40）直测全部 503 `All available accounts exhausted`（上游账户耗尽），与旧 ch26/27/28 一并禁用（status=2 + abilities enabled=0）。
 > **重要教训**：NewAPI 渠道禁用**必须双保险**——`status=2`（ManuallyDisabled）+ `abilities.enabled=0`。只改 status 不生效（路由过滤看 abilities 表；status=0 是 Unknown 非 Disabled，更无效）。之前 ch16/25/43 的「status=0 禁用」实际从未生效，靠 abilities 兜底。
