@@ -6,20 +6,20 @@
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
-| ch15 | sensenova（商汤日日新） | 付费中转 | 10 | 1 | |
-| ch35 | cline-free 多账号池 | 免费 | 10 | 1 | `model_mapping: deepseek-v4-flash→deepseek/deepseek-v4-flash` |
-| ch37 | tokenrhythm-1（基元） | 付费中转 | 10 | 1 | |
-| ch38 | tokenrhythm-2（基元） | 付费中转 | 10 | 1 | |
-| ch42 | DeepSeek 官方直连 | 官方 | 1 | 1 | models 含裸名，官方别名走 `deepseek-official-v4-flash`；权重降 1% 保底（官方计费贵，仅缓存/兜底） |
-| ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 5 | 0 | Tailscale 100.83.32.95:8787 |
-| ch46 | bazaarlink-flash-1 | 免费 | 3 | 0 | 10 RPM/150 每日加权扣量；base_url `https://bazaarlink.ai/api`（NewAPI 自动补 /v1） |
-| ch47 | bazaarlink-flash-2 | 免费 | 3 | 0 | 同上，第二 key 单渠道 |
-| ch48 | opencode-go-flash | 订阅 | 22 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅；权重 25% 主源 |
-| ch50 | inferx-deepseek | 免费 | 5 | 0 | `model.inferx.net/endpoints`（不带 /v1）；`deepseek-v4-flash-0731` 每 100 万 token 免费；容量不足时 429 capacity（间歇） |
-| ch53 | atomcode-bridge | 免费 | 5 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
-| ch55 | inferx-deepseek-b | 免费 | 5 | 0 | 同上，第二 key（ix_0caa...）；与 ch50 轮换分摊容量 |
-| ch56 | hf-deepseek-0731 | 免费 | 3 | 0 | `huggingface.co` 推理端点 `deepseek-ai/DeepSeek-V4-Flash-0731`；key 任意；IP 限流 20 突发/12 每分钟（VPS 单 IP，低权重 3 分流避开） |
-| ch58 | hfspace-deepseek | 免费 | 2 | 0 | `2c2ch1u11-share-api-0.hf.space`（base_url **不带 /v1**——NewAPI type=1 自动补 `/v1/chat/completions`；带 `/v1` 会拼成 `/v1/v1/...` 404）；模型 `deepseek-v4-flash`；key `sk-82de10c1-...`；120 RPM/key 限流（连打即 429）；上游响应慢（首次 60s+ 冷启动）；上下文非 1M（用户确认）；weight=2 极低分流避免限流 |
+| ch37 | tokenrhythm-1（基元） | 付费中转 | 20 | 1 | 快源（avg 5s），主源 |
+| ch38 | tokenrhythm-2（基元） | 付费中转 | 20 | 1 | 快源（avg 6s），主源 |
+| ch35 | cline-free 多账号池 | 免费 | 18 | 1 | 快源（avg 7s）；`model_mapping: deepseek-v4-flash→deepseek/deepseek-v4-flash` |
+| ch47 | bazaarlink-flash-2 | 免费 | 12 | 0 | 快源（avg 5s）；base_url `https://bazaarlink.ai/api`（NewAPI 自动补 /v1） |
+| ch15 | sensenova（商汤日日新） | 付费中转 | 10 | 1 | 中速（avg 19s） |
+| ch48 | opencode-go-flash | 订阅 | 8 | 0 | `https://opencode.ai/zen/go`（带 /v1 会 404）；OpenCode Go $10/月订阅；中速（avg 21s），从 22 降权 |
+| ch42 | DeepSeek 官方直连 | 官方 | 8 | 1 | 官方稳定（avg 22s）；models 含裸名，官方别名走 `deepseek-official-v4-flash`；从 1 提权（用户要求） |
+| ch56 | hf-deepseek-0731 | 免费 | 5 | 0 | `huggingface.co` 端点 `deepseek-ai/DeepSeek-V4-Flash-0731`；key 任意；IP 限流 20 突发/12 每分钟 |
+| ch53 | atomcode-bridge | 免费 | 3 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1）；CodingPlan Lite 额度 |
+| ch58 | hfspace-deepseek | 免费 | 2 | 0 | `2c2ch1u11-share-api-0.hf.space`（base_url 不带 /v1）；120 RPM/key 限流；上游慢（冷启动 60s+）；上下文非 1M |
+| ch46 | bazaarlink-flash-1 | 免费 | 2 | 0 | 慢源（avg 32s）降权；10 RPM/150 每日加权扣量 |
+| ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 2 | 0 | 慢源（avg 28s）降权；Tailscale 100.83.32.95:8787 |
+| ch55 | inferx-deepseek-b | 免费 | 1 | 0 | 最慢（avg 65s）兜底；`model.inferx.net/endpoints`（不带 /v1）；每 100 万 token 免费 |
+| ch50 | inferx-deepseek | 免费 | 1 | 0 | 最慢（avg 38s）兜底；同上第一 key |
 
 > **ch43（旧 Python 代理）已于 2026-08-01 删除**，被本机 `atomgit-opencode-bridge` 替代（ch53）。旧代理签名算法不对被上游拒，bridge 用正确 `atomcode-signing-v1` HMAC 签名 + 真实 UA，成功过上游验证。
 
