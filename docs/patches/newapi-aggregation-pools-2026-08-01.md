@@ -47,19 +47,15 @@
 > ch16/ch25（centos.hk 同上游两 key）已于 2026-08-01 禁用：centos 上游账户欠费返 403「预扣费额度失败 用户剩余额度 ¥0.09」（该"用户"指 centos 账户，**非**本地无限钱包），且 NewAPI 对上游 403 默认不 failover，故双保险摘除（status=0 + abilities enabled=0）。
 > **副作用**：gpt-5.6-luna / gpt-5.6-terra 仅挂 centos，摘除后零源，已从 OMP/Kimi 配置移除（避免选到报"无可用渠道"）；centos 充值/换 key 后可恢复 ch16/25。
 
-## 4. claude-opus-5 / claude-opus-4-8 / claude-opus-4-7 聚合池（七源）
+## 4. claude-opus-5 / claude-opus-4-8 / claude-opus-4-7 聚合池（二源）
 
 | 渠道 | 来源 | 类型 | 权重 | priority | auto_ban | 备注 |
 |------|------|------|------|----------|----------|------|
-| ch3 | baibei-100xlabs | 付费中转 | 40 | 30 | 1 | type=14；多 key 池额度大账号多，不稳定 |
-| ch9 | linxi-k40 | 付费中转 | 20 | 30 | 1 | type=14；不稳定但额度大 |
-| ch18 | linxi-k40-opus5-backup | 付费中转 | 10 | 30 | 1 | type=14；502 频发但额度大 |
-| ch26 | gorouter-claude | 付费中转 | 5 | 40 | 0 | type=1（原 14 已改） |
-| ch27 | gorouter-claude-2 | 付费中转 | 3 | 40 | 0 | type=1 |
-| ch28 | gorouter-claude-opus-3 | 付费中转 | 4 | 40 | 0 | type=1 |
-| ch45 | agentrouter（本机） | 代理池 | 5 | 40 | 0 | Tailscale |
+| ch45 | agentrouter（本机） | 代理池 | 15 | 50 | 0 | Tailscale 100.83.32.95:8788；主源（权重 15/19 ≈ 79%） |
+| ch57 | gorouter 合并（三 key） | 付费中转 | 4 | 40 | 0 | `https://gorouter.app`；ch26/27/28 三把 key 合并换行分隔；备源（权重 4/19 ≈ 21%） |
 
-> ch3/9/18 为 **type=14**：OpenAI 格式 `/v1/chat/completions` 测试路由不到它们（与 gorouter 旧坑同源），真实 OMP 走 `zg-newapi-anthropic` 端点才命中。priority 由 57/54 降至 30 作**保守后备**——稳定时靠高 weight 吃流量，挂时不优先吸流量拖累体验。
+> **2026-08-01 整合**：原七源 → 二源。ch26/27/28（gorouter 三把 key 同上游）合并为 ch57；ch45 权重 5→15 成主源；ch3/9/18（baibei/linxi-k40）直测全部 503 `All available accounts exhausted`（上游账户耗尽），与旧 ch26/27/28 一并禁用（status=2 + abilities enabled=0）。
+> **重要教训**：NewAPI 渠道禁用**必须双保险**——`status=2`（ManuallyDisabled）+ `abilities.enabled=0`。只改 status 不生效（路由过滤看 abilities 表；status=0 是 Unknown 非 Disabled，更无效）。之前 ch16/25/43 的「status=0 禁用」实际从未生效，靠 abilities 兜底。
 > **保守后备守护**：`/opt/new-api/auto-ban-revive.py` + systemd timer `k40-baibei-revive.timer`（每分钟）赦免**所有**被 auto_ban 的渠道（`status=3 AND auto_ban=1`→1；替代原仅覆盖 ch3/9/18 的 k40-baibei-revive.py）。SQL 带 `AND status=3` 故手动禁用（status=2）不被误赦免；`auto_ban=0` 渠道（免费源）不赦免（有意不禁用）。判活权交 NewAPI 下轮定时测试，零误判。改 DB 后依赖 NewAPI channels sync goroutine（~1-2min）拉入内存。
 
 ## 5. 其他单源模型（非聚合）
@@ -78,11 +74,11 @@
 
 ## 6. 路由与亲和策略（2026-08-01 生效）
 
-- **claude 亲和性已移除**：`channel_affinity_setting.rules` 删除 `claude cli trace`，Claude 模型纯按权重轮询（gorouter 三渠道 + agentrouter 均匀分流）。
-- **亲和系统全局关闭**：`channel_affinity_setting.enabled=false`、`switch_on_success=false`（排查 gorouter 不分流时关闭，保留 codex/glm/grok/deepseek/longcat/qwen 六条规则定义但未启用）。
+- **claude 亲和性已移除**：`channel_affinity_setting.rules` 删除 `claude cli trace`，Claude 模型纯按权重轮询（agentrouter ch45 主源 + gorouter ch57 备源）。
+- **亲和系统全局关闭**：`channel_affinity_setting.enabled=false`、`switch_on_success=false`（保留 codex/glm/grok/deepseek/longcat/qwen 六条规则定义但未启用）。
 - **auto_ban 策略**：本机源（ch44/45）+ 免费紧 RPM 源（ch46/47 bazaarlink 10 RPM）auto_ban=0（桌面断连/突发 429 是常态，误杀得不偿失）；VPS/付费源全部 auto_ban=1（稳定源真挂该禁）。
-- **gorouter type 修复**：ch26/27/28 由 type=14（Anthropic）改 type=1（OpenAI）——type=14 时 NewAPI 定时测试用 OpenAI 格式返回空 → 内存标记降级 → 路由跳过全走 ch45。改 type=1 + 重建容器清缓存后恢复正常分流。
-- **k40/baibei 保守后备**：ch3/9/18 priority 降 30 + 每分钟赦免守护（见 §4 注）。auto_ban 负责 ban，守护负责及时恢复，priority 降后备防抖动。
+- **gorouter 三源合并 + claude 池重组**：ch26/27/28（gorouter 同上游三 key）合并为 ch57，weight=4；ch45 权重 5→15 成主源；ch3/9/18（baibei/linxi-k40）直测 503 `All available accounts exhausted` 禁用，与旧 ch26/27/28 一并 status=2 + abilities enabled=0。
+- **k40/baibei 已禁用**：ch3/9/18 上游账户全耗尽（503→自动摘除），不再需要保守后备守护。
 - **402 加入重试状态码**（2026-08-01）：`AutomaticRetryStatusCodes` 由 `100-199,300-399,409-499,500-504,505-599` 改为 `100-199,300-399,402,409-499,500-504,505-599`。根因：bazaarlink（ch46/47）免费额度打满时上游返回 402 `Insufficient credits`，但 402 不在重试范围 → NewAPI 不 failover 直接返给客户端 → OMP 报 `402 Insufficient credits`。修复后额度打满的源 402 触发重试/切其他源，不再报错。402 是网关层快速失败（额度检查毫秒级），重试代价可忽略；ch46/47 auto_ban=0 保持（免费源突发 429 常态，见上）。
 - **auto_ban 阈值 50→3**（2026-08-01）：`ChannelDisableThreshold` 由 50 降 3——免费/月度配额打满源（sensenova、bazaarlink 等）返 429/402 时 3 次即自动禁用，`AutomaticEnableChannelEnabled=true` 额度回血自动拉回。代价：任何渠道连续 3 次失败会被临时禁（网络闪断可能导致），靠自动恢复机制拉回。
 - **ch43 atomcode 根因纠正 + 本机 bridge 替代（ch53）**（2026-08-01）：旧 Python 代理（`atomcode-open-api`）签名算法不对——`atomcode-signing-v1` 实现错误，被上游 `llm-api.atomgit.com` 拒（`SIG_MISSING`）；旧网关 `api-ai.gitcode.com` 则对 deepseek 返业务 403 `not enabled for codingplan 'Lite'`（伪装"每月token额度已不足"）。**根因非额度**（status-v2 显示 calls_used:0）。改用 GitHub 开源项目 `Small-tailqwq/atomgit-opencode-bridge`：正确 `atomcode-signing-v1` HMAC 签名（HKDF-SHA256 + master key）+ 真实 UA + 自动 token 续命，本机（Windows）跑 `node proxy.js` 监听 0.0.0.0:9457，读本机 `~/.atomcode/auth.toml`。ch53 经 Tailscale 100.83.32.95:9457 接 NewAPI，验证 `finish:stop content:BRIDGE-NEWAPI-OK`。旧 ch43 已删除。Qwen3-VL 纯文本可用，图片仍被"独享"校验拦截（未进池）。
