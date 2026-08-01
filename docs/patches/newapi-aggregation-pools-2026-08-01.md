@@ -2,7 +2,7 @@
 
 本文件是 NewAPI 各模型聚合池的**当前事实快照**，防止文档漂移。任何渠道增删/权重调整/状态变化都应同步更新本文件。
 
-## 1. deepseek-v4-flash 聚合池（十源）
+## 1. deepseek-v4-flash 聚合池（十一源）
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -16,8 +16,9 @@
 | ch47 | bazaarlink-flash-2 | 免费 | 3 | 0 | 同上，第二 key 单渠道（避开多 key 换行 header 坑） |
 | ch48 | opencode-go-flash | 订阅 | 5 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅 |
 | ch50 | inferx-deepseek | 免费 | 5 | 0 | `model.inferx.net/endpoints/v1`（InferX serverless）；`deepseek-v4-flash-0731` 每 100 万 token 免费；容量不足时 429 capacity（间歇） |
+| ch53 | atomcode-bridge | 免费 | 10 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
 
-> **ch43（atomcode CodingPlan Lite）已于 2026-08-01 退出 deepseek 池**（abilities enabled=0 + models 清空）。根因（详见 §6「ch43 atomcode 根因纠正」）：`status-v2` 显示 `calls_used:0/usage_percent:0`（额度**未消耗**），不是"额度打满"；实为上游双网关策略——旧网关 `api-ai.gitcode.com` 对 deepseek 返业务 403 `model is not enabled for codingplan 'Lite'`（Lite 档不启用），新网关 `llm-api.atomgit.com` 要求真客户端签名（代理被拒 `SIG_MISSING`）。ch43 对 deepseek 不可用，退出池避免污染。
+> **ch43（旧 Python 代理）已于 2026-08-01 删除**，被本机 `atomgit-opencode-bridge` 替代（ch53）。旧代理签名算法不对被上游拒，bridge 用正确 `atomcode-signing-v1` HMAC 签名 + 真实 UA，成功过上游验证。
 
 ## 2. glm-5.2 聚合池（六源）
 
@@ -81,13 +82,14 @@
 - **k40/baibei 保守后备**：ch3/9/18 priority 降 30 + 每分钟赦免守护（见 §4 注）。auto_ban 负责 ban，守护负责及时恢复，priority 降后备防抖动。
 - **402 加入重试状态码**（2026-08-01）：`AutomaticRetryStatusCodes` 由 `100-199,300-399,409-499,500-504,505-599` 改为 `100-199,300-399,402,409-499,500-504,505-599`。根因：bazaarlink（ch46/47）免费额度打满时上游返回 402 `Insufficient credits`，但 402 不在重试范围 → NewAPI 不 failover 直接返给客户端 → OMP 报 `402 Insufficient credits`。修复后额度打满的源 402 触发重试/切其他源，不再报错。402 是网关层快速失败（额度检查毫秒级），重试代价可忽略；ch46/47 auto_ban=0 保持（免费源突发 429 常态，见上）。
 - **auto_ban 阈值 50→3**（2026-08-01）：`ChannelDisableThreshold` 由 50 降 3——免费/月度配额打满源（sensenova、bazaarlink 等）返 429/402 时 3 次即自动禁用，`AutomaticEnableChannelEnabled=true` 额度回血自动拉回。代价：任何渠道连续 3 次失败会被临时禁（网络闪断可能导致），靠自动恢复机制拉回。
-- **ch43 atomcode 根因纠正 + 退出 deepseek 池**（2026-08-01）：之前判定"每月token额度打满"是**错误的**——`status-v2` 显示 `calls_used:0 / usage_percent:0`（额度未消耗）。实为上游双网关策略：旧网关 `api-ai.gitcode.com` 对 deepseek 返业务 403 `not enabled for codingplan 'Lite'`（Lite 档不启用），新网关 `llm-api.atomgit.com` 要求真客户端签名（代理被拒 `SIG_MISSING`）。代理补真实签名（`sign_request`）+ `User-Agent: atomcode/5.0.3` + `x-atomcode-session-id` 后，旧网关不再伪装"每月token额度已不足"（200 content 陷阱）而是暴露真 403 → ch43 对 deepseek 不可用（上游业务决策 + 签名墙，非配置可解），已从 deepseek 聚合池摘除（abilities enabled=0 + models 清空），deepseek 靠其他 9 源。代理签名/UA/429 拦截补丁直接改 `gateway.py`/`server.py`，`pip upgrade` 覆盖会丢（ch43 停用中，丢了不影响）。Qwen3-VL 纯文本在旧网关可用（签名修复后），图片输入仍被上游"独享"校验拦截，未进任何池。
+- **ch43 atomcode 根因纠正 + 本机 bridge 替代（ch53）**（2026-08-01）：旧 Python 代理（`atomcode-open-api`）签名算法不对——`atomcode-signing-v1` 实现错误，被上游 `llm-api.atomgit.com` 拒（`SIG_MISSING`）；旧网关 `api-ai.gitcode.com` 则对 deepseek 返业务 403 `not enabled for codingplan 'Lite'`（伪装"每月token额度已不足"）。**根因非额度**（status-v2 显示 calls_used:0）。改用 GitHub 开源项目 `Small-tailqwq/atomgit-opencode-bridge`：正确 `atomcode-signing-v1` HMAC 签名（HKDF-SHA256 + master key）+ 真实 UA + 自动 token 续命，本机（Windows）跑 `node proxy.js` 监听 0.0.0.0:9457，读本机 `~/.atomcode/auth.toml`。ch53 经 Tailscale 100.83.32.95:9457 接 NewAPI，验证 `finish:stop content:BRIDGE-NEWAPI-OK`。旧 ch43 已删除。Qwen3-VL 纯文本可用，图片仍被"独享"校验拦截（未进池）。
 
 ## 7. 验证记录
 
 - deepseek-v4-flash 近 1h 命中：ch42:44, ch43:32, ch15:28, ch35:27, ch38:30, ch37:21, ch44:9 —— 全源命中，权重均衡。
 - **ch43 退出后 deepseek 池验证**：连打 5 发全 `finish:stop`（length 为 12 token 推理被吃），近 2min ch43 命中 0 —— 退出生效，deepseek 靠其他 9 源正常。
 - **ch49/50 inferx 接入验证**：glm-5.2 `finish:stop content:GLM-IX-OK`；deepseek `finish:stop content:DS-IX-OK`。
+- **ch53 本机 bridge 验证**：`finish:stop content:BRIDGE-NEWAPI-OK`（本机 atomgit-opencode-bridge 经 Tailscale 接入）。
 - claude-opus-5 Anthropic 格式 10 发：ch26/27/28/45 全部分流。
 - deepseek-v4-flash 隔离验证 ch46/47：base_url 初设 `https://bazaarlink.ai/api/v1` 致 NewAPI 拼成 `/api/v1/v1/...` 返 404，改 `https://bazaarlink.ai/api` 后 `finish:stop content:BZ-OK` 通过。九源全 enabled。
 - ch18 禁用后近 2min 零错误（此前每分钟 10+ 502）。
