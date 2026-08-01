@@ -10,11 +10,11 @@
 | ch35 | cline-free 多账号池 | 免费 | 10 | 1 | `model_mapping: deepseek-v4-flash→deepseek/deepseek-v4-flash` |
 | ch37 | tokenrhythm-1（基元） | 付费中转 | 10 | 1 | |
 | ch38 | tokenrhythm-2（基元） | 付费中转 | 10 | 1 | |
-| ch42 | DeepSeek 官方直连 | 官方 | 10 | 1 | models 含裸名，官方别名走 `deepseek-official-v4-flash` |
+| ch42 | DeepSeek 官方直连 | 官方 | 1 | 1 | models 含裸名，官方别名走 `deepseek-official-v4-flash`；权重降 1% 保底（官方计费贵，仅缓存/兜底） |
 | ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 5 | 0 | Tailscale 100.83.32.95:8787 |
 | ch46 | bazaarlink-flash-1 | 免费 | 3 | 0 | 10 RPM/150 每日加权扣量；base_url `https://bazaarlink.ai/api`（NewAPI 自动补 /v1） |
 | ch47 | bazaarlink-flash-2 | 免费 | 3 | 0 | 同上，第二 key 单渠道（避开多 key 换行 header 坑） |
-| ch48 | opencode-go-flash | 订阅 | 5 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅 |
+| ch48 | opencode-go-flash | 订阅 | 22 | 0 | `https://opencode.ai/zen/go`（NewAPI 补 /v1/chat/completions，带 /v1 会 404）；OpenCode Go $10/月订阅；权重 25% 主源 |
 | ch50 | inferx-deepseek | 免费 | 5 | 0 | `model.inferx.net/endpoints`（不带 /v1）；`deepseek-v4-flash-0731` 每 100 万 token 免费；容量不足时 429 capacity（间歇） |
 | ch53 | atomcode-bridge | 免费 | 10 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
 | ch55 | inferx-deepseek-b | 免费 | 5 | 0 | 同上，第二 key（ix_0caa...）；与 ch50 轮换分摊容量 |
