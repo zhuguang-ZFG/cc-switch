@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **本机代理服务群 code review 修复（5 项）**: 深度审查 agentrouter/anyrouter/atomcode-bridge/codebuddy 四个服务（2787 行）。① anyrouter 502/503 误冷却 key——服务器故障不该惩罚 key，分离为仅 429 冷却、5xx 换 key 不冷却（防上游抖动致全 key 瘫痪）；② atomcode-bridge 请求体无限制→加 2MB 上限防 OOM；③ bridge token 刷新失败无恢复路径→加指数退避后台重试 + 上游 401 自动 force-refresh 重试一次（防永久卡死需手动登录）；④ bridge 客户端断连后上游连接泄漏→监听 `clientRes.close` 立即 destroy；⑤ bridge 强制注入 thinking 改为仅客户端明确请求时注入。两服务重启验证健康。
+- **Reasonix CLI 接入聚合池 + 官方 + OpenCode Go 三源**: 新装 reasonix@1.18.0 配置 `~\AppData\Roaming\reasonix\config.toml`。默认 `zg-newapi/deepseek-v4-flash` 走 NewAPI 十四源聚合池；另配 `deepseek-official`（api.deepseek.com 官方直连）+ `opencode-go`（opencode.ai/zen/go）两个独立 provider 供 `--model` 切换。清理：删 balance_url（NewAPI key 打官方余额必 401）、context_window 1M→393216、排除 `~/.claude/skills`（工具注册表不兼容）。三源冒烟全通过。
 - **deepseek-official-v4-pro 全链路禁用 + contextWindow 修正**: 用户要求禁用官方 pro 模型——NewAPI ch42 `abilities.enabled=0`（flash 保留）、Kimi Code 删除模型块、OMP 删除模型条目并将 `slow` 角色从 pro 改为 `agentrouter/claude-opus-5:high`。同时修正 deepseek-v4-flash 全系 `contextWindow` 从 1048576（理论值）→ 393216（上游真实上限），OMP 3 处 + Kimi 4 处，避免长会话撞墙 400 后被动压缩，改为接近上限主动压缩。
 - **atomcode-bridge ch53 提权 3→8**: 实测 avg 11s（2-22s），比同档 sensenova(19s)/opencode(21s)/官方(22s) 都快，提至与官方同级。
 - **deepseek-v4-flash 聚合池按延迟重分配权重**: 排查聚合慢——日志统计各源 avg 延迟，慢源（inferx ch50/55 avg 38-65s、bazaarlink ch46 avg 32s、codebuddy ch44 avg 28s、opencode ch48 avg 21s）占 48% 权重拖垮整体。按延迟重排：快源 tokenrhythm ch37/38（avg 5-6s）提至 20、cline ch35 提至 18、bazaarlink-2 ch47 提至 12；慢源降至 1-2 兜底。官方 ch42 应要求从 1 提至 8。重分配后快源占 70% 权重，实测多数请求 0.7-6s（此前 20-60s），近 3min 零超时。
