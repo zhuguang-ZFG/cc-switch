@@ -126,18 +126,15 @@
 | ch50 / ch55 inferx | model_mapping → `deepseek-v4-flash-0731`；CHANGELOG 记录接入时即挂 0731 |
 | **ch35 cline-free** | **用户确认（2026-08-02）**：cline 网关的 `deepseek/deepseek-v4-flash` 为正式版 |
 | **ch58 hf.space** | **用户确认（2026-08-02）**：share-api 的 `deepseek-v4-flash` 为正式版 |
+| **ch15 sensenova** | **用户确认（2026-08-02）**：裸名透传，正式版 |
+| **ch37 / ch38 tokenrhythm** | **用户确认（2026-08-02）**：裸名透传，正式版 |
+| **ch44 codebuddy** | **用户确认（2026-08-02）**：裸名透传，正式版 |
+| **ch46 / ch47 bazaarlink** | **用户确认（2026-08-02）**：裸名透传，正式版 |
+| **ch53 atomcode-bridge** | **用户确认（2026-08-02）**：裸名透传，正式版 |
 
-### ⚠️ 裸名透传，版本由上游决定（待各平台确认）
+> **结论（2026-08-02）**：deepseek-v4-flash 聚合池**全部 14 源均为 0731 正式版**（官方语义：同一 model ID 静默升级，裸名透传即最新版；ch56 实测、ch50/55 mapping、ch35/58/其余 5 源用户确认）。
 
-| 渠道 | model_mapping | 说明 |
-|---|---|---|
-| ch15 sensenova | 无（裸名） | 商汤源，需其控制台确认 |
-| ch37/38 tokenrhythm | 无（裸名） | 付费中转，/v1/models 需认证（401） |
-| ch44 codebuddy | 无（裸名） | CodeBuddy 官方后端内置，本机 bridge 需 key（401） |
-| ch46/47 bazaarlink | 无（裸名） | 免费源，端点无响应 |
-| ch53 atomcode-bridge | 无（裸名） | 实测 bridge `/v1/models` 返回 `deepseek-v4-flash`（owned_by atomgit），非版本号 |
-
-> 判断依据：官方升级是**同一 model ID 静默换模型**（"simply use deepseek-v4-flash to access the latest version"），故凡透传官方 API 的中转源（tokenrhythm/bazaarlink/codebuddy 等）裸名即最新版；仅独立部署快照型上游（如 HF 单独部署 Preview 权重）可能停在旧版。上表未确认源大概率也是正式版，但无直接证据。
+> 判断依据：官方升级是**同一 model ID 静默换模型**（"simply use deepseek-v4-flash to access the latest version"），故凡透传官方 API 的中转源（tokenrhythm/bazaarlink/codebuddy 等）裸名即最新版；仅独立部署快照型上游（如 HF 单独部署 Preview 权重）可能停在旧版。
 
 ## 安全
 
