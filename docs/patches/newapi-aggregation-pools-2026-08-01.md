@@ -2,7 +2,9 @@
 
 本文件是 NewAPI 各模型聚合池的**当前事实快照**，防止文档漂移。任何渠道增删/权重调整/状态变化都应同步更新本文件。
 
-## 1. deepseek-v4-flash 聚合池（十四源）
+## 1. deepseek-v4-flash 聚合池（十二源）
+
+> **2026-08-02 权重重排 + 慢源禁用**：按日志实测延迟重排 abilities 权重（快源 tokenrhythm ch37/38→20、cline ch35→18、bazaarlink-2 ch47→12、sensenova ch15→10；慢源降 1-2 兜底），并**禁用 ch55/ch50（inferx，avg 48-65s 毒瘤慢源）**——`status=2 + abilities.enabled=0` 双保险。修复后 20 发实测：快源主导（ch37:5 ch38:4），整体 avg ~2.5s（修复前 ~27s），慢源零命中。另清理 ch35 重复 abilities 条目（`deepseek/deepseek-v4-flash` 别名已删，保留裸名 weight=18）。
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -18,8 +20,8 @@
 | ch58 | hfspace-deepseek | 免费 | 2 | 0 | `2c2ch1u11-share-api-0.hf.space`（base_url 不带 /v1）；120 RPM/key 限流；上游慢（冷启动 60s+）；上下文非 1M |
 | ch46 | bazaarlink-flash-1 | 免费 | 2 | 0 | 慢源（avg 32s）降权；10 RPM/150 每日加权扣量 |
 | ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 2 | 0 | 慢源（avg 28s）降权；Tailscale 100.83.32.95:8787 |
-| ch55 | inferx-deepseek-b | 免费 | 1 | 0 | 最慢（avg 65s）兜底；`model.inferx.net/endpoints`（不带 /v1）；每 100 万 token 免费 |
-| ch50 | inferx-deepseek | 免费 | 1 | 0 | 最慢（avg 38s）兜底；同上第一 key |
+| ~~ch55~~ | ~~inferx-deepseek-b~~ | 免费 | 1 | 0 | **2026-08-02 已禁用**（avg 65s 最慢毒瘤）；`model.inferx.net/endpoints`（不带 /v1）；每 100 万 token 免费 |
+| ~~ch50~~ | ~~inferx-deepseek~~ | 免费 | 1 | 0 | **2026-08-02 已禁用**（avg 38s 慢源）；同上第一 key |
 
 > **ch43（旧 Python 代理）已于 2026-08-01 删除**，被本机 `atomgit-opencode-bridge` 替代（ch53）。旧代理签名算法不对被上游拒，bridge 用正确 `atomcode-signing-v1` HMAC 签名 + 真实 UA，成功过上游验证。
 
@@ -56,7 +58,7 @@
 | ch57 | gorouter 合并（三 key） | 付费中转 | 4 | 40 | 0 | `https://gorouter.app`；ch26/27/28 三把 key 合并换行分隔；备源（权重 4/19 ≈ 21%）。**多 key 正确姿势**：key 真实换行（0x0A）分隔 + `channel_info` 以 **bytes** 写入（`is_multi_key:true, multi_key_size:3, multi_key_status_list:{"0":1,"1":1,"2":1}, multi_key_mode:"polling"`）——str 写入致 GORM 二次编码、`multi_key_mode` 写数字、key 写 `\n` 字面量，三种坑都导致渠道不可路由 |
 
 > **2026-08-01 整合**：原七源 → 二源。ch26/27/28（gorouter 三把 key 同上游）合并为 ch57；ch45 权重 5→15 成主源；ch3/9/18（baibei/linxi-k40）直测全部 503 `All available accounts exhausted`（上游账户耗尽），ch3 已禁用（status=2 + abilities enabled=0）。
-> **2026-08-02 实测更正**：ch9/ch18 实际**仍 enabled 且健康**（`GET /api/channel/` 实测 status=1；日志 12/12、1/1 成功零失败，claude-opus-5/4-7 流量继续命中）——推断当时为 auto-ban（status=3）后被 `auto-ban-revive.py` 赦免回 1，且上游已恢复。claude 池**实际四源**：ch45 + ch57 + ch9 + ch18。
+> **2026-08-02 终态**：ch9/ch18 曾被 auto-ban 赦免回 1 且上游恢复，测得 avg 51-67s 龟速拖慢 claude 池 → **重新禁用**（status=2 + abilities.enabled=0 双保险，防 AutomaticEnableChannelEnabled 再拉回）。claude 池最终二源：ch45 agentrouter（weight=15, priority=50 主源）+ ch57 gorouter（weight=4 备源）。
 > **重要教训**：NewAPI 渠道禁用**必须双保险**——`status=2`（ManuallyDisabled）+ `abilities.enabled=0`。只改 status 不生效（路由过滤看 abilities 表；status=0 是 Unknown 非 Disabled，更无效）。之前 ch16/25/43 的「status=0 禁用」实际从未生效，靠 abilities 兜底。
 > **保守后备守护**：`/opt/new-api/auto-ban-revive.py` + systemd timer `k40-baibei-revive.timer`（每分钟）赦免**所有**被 auto_ban 的渠道（`status=3 AND auto_ban=1`→1；替代原仅覆盖 ch3/9/18 的 k40-baibei-revive.py）。SQL 带 `AND status=3` 故手动禁用（status=2）不被误赦免；`auto_ban=0` 渠道（免费源）不赦免（有意不禁用）。判活权交 NewAPI 下轮定时测试，零误判。改 DB 后依赖 NewAPI channels sync goroutine（~1-2min）拉入内存。
 
@@ -89,6 +91,7 @@
 
 ## 7. 验证记录
 
+- **deepseek 权重重排后路由验证**（2026-08-02）：重启 new-api 后连打 20 发实测分布 ch37:5 ch38:4 ch42:3 ch46:3 ch47:3 ch48:3 ch53:3 ch56:2 ch15:1——**快源主导（ch37/38 权重 20 命中 9/27≈33%）**，整体 avg ~2.5s（修复前 ~27s），**慢源 ch50/ch55 零命中**（已禁用）。此前观测到 ch35 偶发 502（上游 `10.88.0.1:3457` 间歇性故障），NewAPI 自动重试到其他源，不影响整体。
 - **deepseek 十二源均衡命中验证**（2026-08-01）：ch15:8 ch42:6 ch37/38:5 ch44:5 ch47:5 ch46:3 ch48:2 ch53:2 ch55:2 ch50:1（权重 10/1/10/10/5/3/3/22/5/5/5 比例吻合）。
 - **ch43 退出后 deepseek 池验证**：连打 5 发全 `finish:stop`（length 为 12 token 推理被吃），近 2min ch43 命中 0 —— 退出生效，deepseek 靠其他 9 源正常。
 - **ch49/50 inferx 接入验证**：glm-5.2 `finish:stop content:GLM-IX-OK`；deepseek `finish:stop content:DS-IX-OK`。
