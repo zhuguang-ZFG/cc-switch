@@ -39,7 +39,7 @@
 
 | 模型 | 渠道 | 权重 | auto_ban | 备注 |
 |------|------|------|----------|------|
-| gpt-5.6-sol | ch30 fastaitoken | 5 | 1 | |
+| gpt-5.6-sol | ch30 fastaitoken | 5→20（修复） | 1 | 2026-08-01 修复：abilities priority 10→50、weight 5→20（此前被降级致付费主源零命中，流量全压免费本机源） |
 | gpt-5.6-sol | ch44 codebuddy（本机） | 5 | 0 | |
 | gpt-5.6-sol | ch45 agentrouter（本机） | 5 | 0 | |
 | gpt-5.5 | ch30 fastaitoken | 20 | 1 | 单源 |
