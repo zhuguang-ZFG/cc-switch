@@ -2,7 +2,7 @@
 
 本文件是 NewAPI 各模型聚合池的**当前事实快照**，防止文档漂移。任何渠道增删/权重调整/状态变化都应同步更新本文件。
 
-## 1. deepseek-v4-flash 聚合池（十三源）
+## 1. deepseek-v4-flash 聚合池（十四源）
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -19,6 +19,7 @@
 | ch53 | atomcode-bridge | 免费 | 5 | 0 | 本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1），正确签名接入 `llm-api.atomgit.com`；CodingPlan Lite 额度 |
 | ch55 | inferx-deepseek-b | 免费 | 5 | 0 | 同上，第二 key（ix_0caa...）；与 ch50 轮换分摊容量 |
 | ch56 | hf-deepseek-0731 | 免费 | 3 | 0 | `huggingface.co` 推理端点 `deepseek-ai/DeepSeek-V4-Flash-0731`；key 任意；IP 限流 20 突发/12 每分钟（VPS 单 IP，低权重 3 分流避开） |
+| ch58 | hfspace-deepseek | 免费 | 2 | 0 | `2c2ch1u11-share-api-0.hf.space/v1`（base_url **带 /v1**，HF share-api 路径含 v1）；模型 `deepseek-v4-flash`；key `sk-82de10c1-...`；120 RPM/key 限流（连打即 429）；上游响应慢（首次 60s+，冷启动）；上下文非 1M（用户确认）；weight=2 极低分流避免限流 |
 
 > **ch43（旧 Python 代理）已于 2026-08-01 删除**，被本机 `atomgit-opencode-bridge` 替代（ch53）。旧代理签名算法不对被上游拒，bridge 用正确 `atomcode-signing-v1` HMAC 签名 + 真实 UA，成功过上游验证。
 
