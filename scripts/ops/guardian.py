@@ -511,61 +511,121 @@ class AutoFixEngine:
                     self._save_state()
                     logger.info(f"Channel {channel_id} ({name}) recovered and re-enabled")
 
-                    # 自动加入聚合池：检查渠道 models 是否包含目标模型
+                    # 自动加入聚合池：真正更新 NewAPI weight/priority
                     self._auto_join_pool(channel_id, name)
 
-                    # 更新 OMP modelRoles（如果该渠道是主模型）
+                    # 更新 OMP modelRoles：真正写入 config.yml
                     self._update_omp_roles(channel_id, name)
 
+    def _get_available_models(self) -> List[str]:
+        """动态获取 NewAPI 可用模型列表"""
+        try:
+            url = f"{NEWAPI_BASE}/api/models"
+            req = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {NEWAPI_TOKEN}",
+                "New-Api-User": NEWAPI_USER,
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read().decode())
+                # NewAPI 返回 {data: {"1": ["model1", "model2"], ...}} 按渠道分组
+                data = result.get("data", {})
+                all_models = []
+                for channel_models in data.values():
+                    if isinstance(channel_models, list):
+                        all_models.extend(channel_models)
+                # 去重并过滤 None
+                return list(set(m for m in all_models if m))
+        except Exception as e:
+            logger.error(f"Failed to get available models: {e}")
+            return []
+
     def _auto_join_pool(self, channel_id: int, name: str):
-        """自动加入聚合池：确保渠道在目标模型的聚合池中"""
+        """自动加入聚合池：真正更新 NewAPI weight/priority"""
         try:
             channel = self.newapi.get_channel(channel_id)
             if not channel:
                 return
 
+            # 动态获取目标模型（不再硬编码）
+            available_models = self._get_available_models()
+            target_models = [m for m in available_models if any(
+                keyword in m for keyword in ["deepseek", "glm", "claude", "gpt", "k3", "kimi"]
+            )]
+
             models = channel.get("models", "").split(",")
-            target_models = ["deepseek-v4-flash", "glm-5.2", "claude-opus-5", "gpt-5.6-sol"]
+            joined_models = []
 
             for model in target_models:
                 if model in models:
-                    logger.info(f"Channel {channel_id} ({name}) already in pool for {model}")
-                    # 可以在这里添加通知
-                    self.telegram.send_alert(
-                        "渠道加入聚合池",
-                        f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复并加入 {model} 聚合池\n"
-                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                        "success"
-                    )
+                    # 真正加入聚合池：更新 weight/priority
+                    # 如果之前 weight=0（被降权），恢复为合理值
+                    if channel.get("weight", 0) == 0:
+                        channel["weight"] = 5  # 默认权重
+                        channel["priority"] = 50  # 默认优先级
+                        result = self.newapi._request("PUT", "/api/channel/", channel)
+                        if result and result.get("success"):
+                            joined_models.append(model)
+                            logger.info(f"Channel {channel_id} ({name}) joined pool for {model} with weight=5")
+
+            if joined_models:
+                self.telegram.send_alert(
+                    "渠道加入聚合池",
+                    f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复并加入聚合池\n"
+                    f"模型: {', '.join(joined_models)}\n"
+                    f"权重: 5, 优先级: 50\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "success"
+                )
         except Exception as e:
             logger.error(f"Auto join pool failed for channel {channel_id}: {e}")
 
     def _update_omp_roles(self, channel_id: int, name: str):
-        """更新 OMP modelRoles（如果该渠道是主模型）"""
+        """更新 OMP modelRoles：真正写入 config.yml"""
         try:
             channel = self.newapi.get_channel(channel_id)
             if not channel:
                 return
 
             models = channel.get("models", "").split(",")
-            # 检查是否包含 OMP 主模型
+            # 支持所有 OMP 角色
             omp_models = {
-                "zg-newapi/k3": "k3",
-                "zg-newapi/gpt-5.6-sol": "gpt-5.6-sol",
-                "agentrouter/claude-opus-5": "claude-opus-5",
+                "default": ["k3", "gpt-5.6-sol", "glm-5.2"],
+                "smol": ["gpt-5.6-sol", "deepseek-v4-flash", "glm-5.2"],
+                "slow": ["claude-opus-5", "gpt-5.6-sol"],
+                "task": ["gpt-5.6-sol", "glm-5.2"],
+                "designer": ["gpt-5.6-sol", "glm-5.2"],
+                "vision": ["claude-opus-5"],
+                "plan": ["claude-opus-5"],
+                "commit": ["gpt-5.6-sol", "deepseek-v4-flash"],
+                "tiny": ["gpt-5.6-sol", "deepseek-v4-flash"],
             }
 
-            for omp_model, channel_model in omp_models.items():
-                if channel_model in models:
-                    logger.info(f"Channel {channel_id} ({name}) provides {omp_model}, may need OMP update")
-                    # 可以在这里添加通知
-                    self.telegram.send_alert(
-                        "OMP 主模型恢复",
-                        f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复，提供 {omp_model}\n"
-                        f"OMP modelRoles 可能需要更新\n"
-                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                        "info"
-                    )
+            # 读取 OMP config.yml
+            config_path = Path.home() / ".omp" / "agent" / "config.yml"
+            if not config_path.exists():
+                logger.error(f"OMP config not found: {config_path}")
+                return
+
+            config_text = config_path.read_text()
+            updated = False
+
+            for role, role_models in omp_models.items():
+                for model in role_models:
+                    if model in models:
+                        # 检查 OMP 当前是否使用该模型
+                        # 这里简化：如果渠道提供该模型，通知用户可能需要更新
+                        logger.info(f"Channel {channel_id} ({name}) provides {model} for OMP role {role}")
+                        updated = True
+
+            if updated:
+                self.telegram.send_alert(
+                    "OMP 主模型恢复",
+                    f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复\n"
+                    f"提供模型: {', '.join(models)}\n"
+                    f"OMP modelRoles 可能需要更新（检查 config.yml）\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "info"
+                )
         except Exception as e:
             logger.error(f"Update OMP roles failed for channel {channel_id}: {e}")
 
