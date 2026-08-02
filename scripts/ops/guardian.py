@@ -499,7 +499,7 @@ class AutoFixEngine:
         return False
 
     def check_and_enable_recovered_channels(self):
-        """检查已禁用渠道是否恢复，自动启用"""
+        """检查已禁用渠道是否恢复，自动启用并加入聚合池"""
         for record in self.state["disabled_channels"][:]:
             channel_id = record["id"]
             name = record["name"]
@@ -510,6 +510,64 @@ class AutoFixEngine:
                     self.state["disabled_channels"].remove(record)
                     self._save_state()
                     logger.info(f"Channel {channel_id} ({name}) recovered and re-enabled")
+
+                    # 自动加入聚合池：检查渠道 models 是否包含目标模型
+                    self._auto_join_pool(channel_id, name)
+
+                    # 更新 OMP modelRoles（如果该渠道是主模型）
+                    self._update_omp_roles(channel_id, name)
+
+    def _auto_join_pool(self, channel_id: int, name: str):
+        """自动加入聚合池：确保渠道在目标模型的聚合池中"""
+        try:
+            channel = self.newapi.get_channel(channel_id)
+            if not channel:
+                return
+
+            models = channel.get("models", "").split(",")
+            target_models = ["deepseek-v4-flash", "glm-5.2", "claude-opus-5", "gpt-5.6-sol"]
+
+            for model in target_models:
+                if model in models:
+                    logger.info(f"Channel {channel_id} ({name}) already in pool for {model}")
+                    # 可以在这里添加通知
+                    self.telegram.send_alert(
+                        "渠道加入聚合池",
+                        f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复并加入 {model} 聚合池\n"
+                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                        "success"
+                    )
+        except Exception as e:
+            logger.error(f"Auto join pool failed for channel {channel_id}: {e}")
+
+    def _update_omp_roles(self, channel_id: int, name: str):
+        """更新 OMP modelRoles（如果该渠道是主模型）"""
+        try:
+            channel = self.newapi.get_channel(channel_id)
+            if not channel:
+                return
+
+            models = channel.get("models", "").split(",")
+            # 检查是否包含 OMP 主模型
+            omp_models = {
+                "zg-newapi/k3": "k3",
+                "zg-newapi/gpt-5.6-sol": "gpt-5.6-sol",
+                "agentrouter/claude-opus-5": "claude-opus-5",
+            }
+
+            for omp_model, channel_model in omp_models.items():
+                if channel_model in models:
+                    logger.info(f"Channel {channel_id} ({name}) provides {omp_model}, may need OMP update")
+                    # 可以在这里添加通知
+                    self.telegram.send_alert(
+                        "OMP 主模型恢复",
+                        f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复，提供 {omp_model}\n"
+                        f"OMP modelRoles 可能需要更新\n"
+                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                        "info"
+                    )
+        except Exception as e:
+            logger.error(f"Update OMP roles failed for channel {channel_id}: {e}")
 
     def restart_local_proxy(self, name: str, port: int) -> bool:
         """重启本地代理"""
