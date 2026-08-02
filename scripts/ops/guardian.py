@@ -74,6 +74,11 @@ JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，�
 ERROR_SCAN_INTERVAL = 4  # 每 N 个检查周期扫描一次（4*15s=60s）
 ERROR_SCAN_BATCH_SIZE = 10  # 每次最多测试 N 个渠道（避免 API 过载）
 ERROR_DISABLE_KEYWORDS = ["余额不足", "INSUFFICIENT_BALANCE", "credit balance", "quota", "402", "401", "invalid"]  # 触发禁用的错误关键词
+TEST_CHANNEL_TIMEOUT = 5  # test_channel 独立超时（秒），死渠道不阻塞主循环
+RECOVERY_BATCH_SIZE = 3  # 每周期最多验证 N 个禁用渠道（避免阻塞主循环）
+RECOVERY_BACKOFF_BASE = 1  # 失败退避基数（分钟）
+RECOVERY_BACKOFF_MAX = 30  # 失败退避上限（分钟）
+OMP_ROLE_CHECK_INTERVAL = 40  # 每 N 周期主动检测 OMP 角色指向的渠道存活（40*15s=10min）
 
 # 本地代理
 LOCAL_PROXIES = {
@@ -300,7 +305,7 @@ class NewAPIClient:
         self.token = token
         self.user_id = user_id
 
-    def _request(self, method: str, path: str, data: Optional[dict] = None) -> Optional[dict]:
+    def _request(self, method: str, path: str, data: Optional[dict] = None, timeout: int = 15) -> Optional[dict]:
         """发送 NewAPI 管理 API 请求"""
         try:
             url = f"{self.base_url}{path}"
@@ -311,7 +316,7 @@ class NewAPIClient:
             }
             body = json.dumps(data).encode() if data else None
             req = urllib.request.Request(url, data=body, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             logger.error(f"NewAPI {method} {path} failed: {e.code} {e.read().decode()[:200]}")
@@ -356,10 +361,10 @@ class NewAPIClient:
         result = self._request("POST", f"/api/channel/{channel_id}/status", {"status": 1})
         return result.get("success", False) if result else False
 
-    def test_channel(self, channel_id: int) -> Tuple[bool, str]:
-        """测试渠道（发送真实请求）"""
+    def test_channel(self, channel_id: int, timeout: int = TEST_CHANNEL_TIMEOUT) -> Tuple[bool, str]:
+        """测试渠道（发送真实请求）— 独立短超时，避免死渠道阻塞主循环"""
         try:
-            result = self._request("GET", f"/api/channel/test/{channel_id}")
+            result = self._request("GET", f"/api/channel/test/{channel_id}", timeout=timeout)
             if result and result.get("success"):
                 return True, "测试通过"
             return False, result.get("message", "测试失败") if result else "无响应"
@@ -468,6 +473,7 @@ class AutoFixEngine:
         self._scan_count = 0       # 错误扫描独立计数器
         self._stability_count = 0  # 稳定性检查独立计数器
         self._scan_offset = 0      # 错误扫描批次轮转偏移
+        self._omp_check_count = 0  # OMP 角色主动检测计数器
 
     def _load_state(self) -> dict:
         if STATE_FILE.exists():
@@ -726,11 +732,17 @@ class AutoFixEngine:
         return False
 
     def check_and_enable_recovered_channels(self):
-        """检查已禁用渠道是否恢复，自动启用并加入聚合池（P0: 防抖动 + 多次验证）
+        """检查已禁用渠道是否恢复，自动启用并加入聚合池
 
-        手动禁用（manual=True）的渠道不会被自动恢复，尊重用户意图。
+        - 手动禁用（manual=True）的渠道不自动恢复，尊重用户意图
+        - 失败渠道指数退避：不每周期重测，避免 14 个死渠道阻塞主循环 11 分钟
+        - 每周期最多验证 RECOVERY_BATCH_SIZE 个渠道
         """
+        tested = 0
         for record in self.state["disabled_channels"][:]:
+            if tested >= RECOVERY_BATCH_SIZE:
+                break
+
             channel_id = record["id"]
             name = record["name"]
 
@@ -738,15 +750,18 @@ class AutoFixEngine:
             if record.get("manual"):
                 continue
 
-            # 防抖动：检查恢复冷却
-            recovered_time = record.get("recovered_time")
-            if recovered_time:
-                recovered_dt = datetime.fromisoformat(recovered_time)
-                if datetime.now() - recovered_dt < timedelta(minutes=RECOVERY_COOLDOWN_MIN):
-                    logger.debug(f"Channel {channel_id} ({name}) still in cooldown, skipping")
+            # 指数退避：上次失败后按 2^failures 分钟退避（上限 RECOVERY_BACKOFF_MAX）
+            failures = record.get("recovery_failures", 0)
+            last_attempt = record.get("last_recovery_attempt")
+            if last_attempt and failures > 0:
+                backoff_min = min(RECOVERY_BACKOFF_BASE * (2 ** (failures - 1)), RECOVERY_BACKOFF_MAX)
+                if datetime.now() - datetime.fromisoformat(last_attempt) < timedelta(minutes=backoff_min):
                     continue
 
-            # 防抖动：多次 test_channel 验证稳定性
+            tested += 1
+            record["last_recovery_attempt"] = datetime.now().isoformat()
+
+            # 多次 test_channel 验证稳定性（独立短超时）
             stable_count = 0
             for _ in range(RECOVERY_TEST_COUNT):
                 test_ok, test_msg = self.newapi.test_channel(channel_id)
@@ -756,16 +771,16 @@ class AutoFixEngine:
 
             if stable_count >= RECOVERY_TEST_PASS_MIN:
                 if self.enable_channel(channel_id, name):
-                    record["recovered_time"] = datetime.now().isoformat()
                     self.state["disabled_channels"].remove(record)
                     self._save_state()
                     logger.info(f"Channel {channel_id} ({name}) recovered and re-enabled")
-
-                    # P0: 自动加入聚合池（真正更新 abilities 表）
                     self._auto_join_pool(channel_id, name)
-
-                    # P0: 更新 OMP modelRoles（真正写入 config.yml）
                     self._update_omp_roles(channel_id, name)
+            else:
+                # 失败：递增退避计数
+                record["recovery_failures"] = failures + 1
+                self._save_state()
+                logger.debug(f"Channel {channel_id} ({name}) recovery failed, backoff #{failures + 1}")
 
     def _get_available_models(self) -> List[str]:
         """动态获取 NewAPI 可用模型列表"""
@@ -1111,6 +1126,105 @@ class AutoFixEngine:
         except Exception as e:
             logger.error(f"Update OMP roles failed for channel {channel_id}: {e}")
 
+    def check_omp_roles_health(self):
+        """主动检测 OMP 角色指向的 provider 端点是否存活（只报警，不自动切换）
+
+        每 OMP_ROLE_CHECK_INTERVAL 周期运行一次。读取 config.yml 的 modelRoles 和
+        models.yml 的 provider baseUrl，对本地代理端点做 HTTP 探测。
+        尊重用户意图：发现死端点只发 Telegram 报警，不擅自修改 modelRoles。
+        """
+        self._omp_check_count += 1
+        if self._omp_check_count % OMP_ROLE_CHECK_INTERVAL != 0:
+            return
+
+        try:
+            config_path = Path.home() / ".omp" / "agent" / "config.yml"
+            models_path = Path.home() / ".omp" / "agent" / "models.yml"
+            if not config_path.exists() or not models_path.exists():
+                return
+
+            # 解析 models.yml 的 provider → baseUrl（简单行解析，避免依赖 yaml 模块）
+            provider_base: Dict[str, str] = {}
+            current_provider = None
+            for line in models_path.read_text(encoding="utf-8").split("\n"):
+                # provider 键：2 空格缩进，以冒号结尾
+                m_prov = re.match(r'^  ([\w\-]+):\s*$', line)
+                if m_prov:
+                    current_provider = m_prov.group(1)
+                    continue
+                m_base = re.match(r'^    baseUrl:\s*(\S+)', line)
+                if m_base and current_provider:
+                    provider_base[current_provider] = m_base.group(1).strip()
+
+            # 解析 config.yml 的 modelRoles：role → provider/model
+            dead_roles = []
+            in_roles = False
+            for line in config_path.read_text(encoding="utf-8").split("\n"):
+                if line.startswith("modelRoles:"):
+                    in_roles = True
+                    continue
+                if in_roles:
+                    m_role = re.match(r'^  ([\w]+):\s*(.+)$', line)
+                    if not m_role:
+                        if line and not line.startswith(" "):
+                            in_roles = False  # 离开 modelRoles 块
+                        continue
+                    role, value = m_role.group(1), m_role.group(2).strip()
+                    if value.startswith('"'):
+                        value = value.strip('"')
+                    if value.startswith("@") or "/" not in value:
+                        continue  # 引用角色或无 provider，跳过
+                    provider = value.split("/", 1)[0]
+                    base = provider_base.get(provider)
+                    if not base:
+                        continue
+                    # 只探测本地代理端点（127.0.0.1 / localhost），远程端点由 NewAPI 渠道状态覆盖
+                    if "127.0.0.1" not in base and "localhost" not in base:
+                        continue
+                    if not self._probe_endpoint(base):
+                        dead_roles.append(f"{role}: {value} ({base})")
+
+            if dead_roles and self.telegram:
+                self.telegram.send_alert(
+                    "OMP 角色端点故障",
+                    "以下 OMP 角色指向的本地代理端点无响应:\n  "
+                    + "\n  ".join(dead_roles)
+                    + "\n\n请检查对应代理或手动切换角色",
+                    "warning"
+                )
+        except Exception as e:
+            logger.error(f"check_omp_roles_health failed: {e}")
+
+    @staticmethod
+    def _probe_endpoint(base_url: str) -> bool:
+        """探测端点存活（短超时）
+
+        - 路径感知：base 已含 /v1 时只拼 /models，否则拼 /v1/models（避免 /v1/v1/models 404）
+        - host 回退：127.0.0.1 失败时试 Tailscale IP（agentrouter 只绑 100.83.32.95）
+        - 语义：任何 HTTP 响应（含 401/403）都算存活，只有连接失败/超时才算死
+        """
+        base = base_url.rstrip("/")
+        if base.endswith("/v1"):
+            models_path = base + "/models"
+        else:
+            models_path = base + "/v1/models"
+
+        # 候选 URL：原始路径 + Tailscale IP 回退
+        candidates = [models_path]
+        if "127.0.0.1" in models_path or "localhost" in models_path:
+            candidates.append(models_path.replace("127.0.0.1", "100.83.32.95").replace("localhost", "100.83.32.95"))
+
+        for url in candidates:
+            try:
+                req = urllib.request.Request(url, headers={"Authorization": "Bearer any"})
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    return resp.status < 500  # 2xx/3xx/4xx 都算存活
+            except urllib.error.HTTPError:
+                return True  # 4xx/5xx 是 HTTP 响应，服务存活（只是拒绝/出错）
+            except Exception:
+                continue  # 连接失败/超时 → 试下一个候选
+        return False
+
     # ── P2: 余额趋势分析 ──────────────────────────────────────────────────
 
     def record_balance(self, remaining: int):
@@ -1384,6 +1498,9 @@ class Guardian:
 
         # 5. P0: 检查已加入渠道的稳定性（回滚机制）
         self.autofix._check_joined_channels_stability()
+
+        # 5.5 OMP 角色端点主动检测（只报警，不自动切换）
+        self.autofix.check_omp_roles_health()
 
         # 6. 本地代理健康
         for name, info in LOCAL_PROXIES.items():
