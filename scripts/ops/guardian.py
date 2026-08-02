@@ -1507,18 +1507,36 @@ class AutoFixEngine:
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             )
 
+            # 重启后验证：等待进程启动并探测端口（最多 10s）
+            verified = False
+            for _ in range(5):
+                time.sleep(2)
+                ok, _ = self.health.check_local_proxy(port, name)
+                if ok:
+                    verified = True
+                    break
+
             self.state["restart_counts"][name] = restart_count + 1
             self.state["restarted_proxies"][name] = datetime.now().isoformat()
             self._save_state()
 
-            self.telegram.send_alert(
-                "本地代理重启",
-                f"代理 <b>{name}</b> (端口 {port}) 已重启\n"
-                f"次数: {restart_count + 1}\n"
-                f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                "restart"
-            )
-            return True
+            if verified:
+                self.telegram.send_alert(
+                    "本地代理重启",
+                    f"代理 <b>{name}</b> (端口 {port}) 已重启并验证存活\n"
+                    f"次数: {restart_count + 1}\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "restart"
+                )
+            else:
+                self.telegram.send_alert(
+                    "本地代理重启未验证",
+                    f"代理 <b>{name}</b> (端口 {port}) 已启动但端口未响应\n"
+                    f"次数: {restart_count + 1}，可能启动失败\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "warning"
+                )
+            return verified
         except Exception as e:
             logger.error(f"Restart {name} failed: {e}")
             return False
