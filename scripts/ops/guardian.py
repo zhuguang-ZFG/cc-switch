@@ -825,8 +825,11 @@ class AutoFixEngine:
             last_attempt = record.get("last_recovery_attempt")
             if last_attempt and failures > 0:
                 backoff_min = min(RECOVERY_BACKOFF_BASE * (2 ** (failures - 1)), RECOVERY_BACKOFF_MAX)
-                if datetime.now() - datetime.fromisoformat(last_attempt) < timedelta(minutes=backoff_min):
-                    continue
+                try:
+                    if datetime.now() - datetime.fromisoformat(last_attempt) < timedelta(minutes=backoff_min):
+                        continue
+                except (ValueError, TypeError):
+                    pass  # 时间戳损坏，跳过退避直接测试
 
             tested += 1
             record["last_recovery_attempt"] = datetime.now().isoformat()
@@ -1027,7 +1030,13 @@ class AutoFixEngine:
 
         for channel_id_str, join_info in list(self.state["joined_channels"].items()):
             channel_id = int(channel_id_str)
-            join_time = datetime.fromisoformat(join_info["time"])
+            try:
+                join_time = datetime.fromisoformat(join_info["time"])
+            except (ValueError, TypeError, KeyError):
+                # 时间戳损坏，清理该记录
+                del self.state["joined_channels"][channel_id_str]
+                self._save_state()
+                continue
 
             # 加入后 JOIN_STABILITY_WINDOW_MIN 分钟内检查
             if datetime.now() - join_time > timedelta(minutes=JOIN_STABILITY_WINDOW_MIN):
