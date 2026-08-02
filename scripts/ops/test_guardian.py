@@ -1289,18 +1289,28 @@ class ProxyRestartTests(unittest.TestCase):
         calls = []
         with (
             patch.object(
+                guardian.Path, "write_text",
+                side_effect=lambda *a, **k: calls.append(("write", str(a[0]))),
+            ),
+            patch.object(
                 guardian.os, "replace",
                 side_effect=lambda src, dst: calls.append(("replace", str(src), str(dst))),
-            ) as replace,
-            patch.object(guardian.logger, "error") as err,
+            ),
+            patch.object(guardian.logger, "error"),
             patch.object(guardian.time, "sleep"),
         ):
             g.run()
 
-        # os.replace 被调用（tmp → heartbeat.json）
-        self.assertGreaterEqual(len(calls), 1)
-        self.assertTrue(calls[0][2].endswith("heartbeat.json"))
-        self.assertTrue(calls[0][1].endswith("heartbeat.json.tmp"))
+        # 顺序：write(tmp) 必须严格先于 replace(tmp, heartbeat.json)
+        writes = [c for c in calls if c[0] == "write"]
+        replaces = [c for c in calls if c[0] == "replace"]
+        self.assertGreaterEqual(len(replaces), 1)
+        self.assertGreaterEqual(len(writes), 1)
+        self.assertTrue(replaces[0][2].endswith("heartbeat.json"))
+        self.assertTrue(replaces[0][1].endswith("heartbeat.json.tmp"))
+        write_idx = calls.index(writes[0])
+        replace_idx = calls.index(replaces[0])
+        self.assertLess(write_idx, replace_idx)  # tmp 写入先于原子替换
         g._check_cycle.assert_called()
 
     def test_heartbeat_replace_failure_does_not_block_cycle(self):
@@ -1416,6 +1426,36 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(len(backups), 2)  # 无覆盖：两份都在
         contents = {b.read_bytes() for b in backups}
         self.assertIn(b"{ bad one", contents)
+
+    def test_state_backup_retention_keeps_latest_five_by_mtime(self):
+        """固定时间连续 7 次损坏：按 mtime 保留最后 5 份，最新取证不被误删"""
+        state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        for old in state_file.parent.glob("state.json.corrupt-*"):
+            old.unlink()
+
+        engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+        fixed = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        fake_now = datetime.fromisoformat(f"{fixed[:8]}T{fixed[8:14]}.{fixed[14:]}")
+        with patch.object(guardian.logger, "error"):
+            with patch.object(guardian, "datetime", wraps=guardian.datetime) as dt:
+                dt.now.return_value = fake_now
+                for i in range(7):
+                    state_file.write_text(f"{{ bad {i}", encoding="utf-8")
+                    engine._load_state()
+
+        backups = sorted(
+            state_file.parent.glob("state.json.corrupt-*"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        self.assertEqual(len(backups), 5)  # 保留最后 5 份
+        # 最新一份（第 7 次）必须在保留列表内，且内容未被误删
+        latest = backups[-1].read_bytes()
+        self.assertEqual(latest, b"{ bad 6")
+        # 最旧的两份（第 1、2 次）被清理
+        remaining = {b.read_bytes() for b in backups}
+        self.assertNotIn(b"{ bad 0", remaining)
+        self.assertNotIn(b"{ bad 1", remaining)
 
 class OmpRoleTests(unittest.TestCase):
     def test_codebuddy_recovery_restores_default_role_without_touching_task(self):

@@ -681,8 +681,12 @@ class AutoFixEngine:
                     logger.error(f"state.json corrupted, backed up to {backup}: {e}")
                 except OSError as be:
                     logger.error(f"state.json corrupted AND backup failed: {e}; backup error: {be}")
-                # 保留最近 5 个备份，防止无限积累
-                backups = sorted(STATE_FILE.parent.glob("state.json.corrupt-*"))
+                # 保留最近 5 个备份：按创建时间（mtime）排序——文件名 lexical 排序
+                # 会把无后缀 base 排在 base-1 前，误删刚创建的最新备份
+                backups = sorted(
+                    STATE_FILE.parent.glob("state.json.corrupt-*"),
+                    key=lambda p: p.stat().st_mtime,
+                )
                 for old in backups[:-5]:
                     try:
                         old.unlink()
