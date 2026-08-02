@@ -271,7 +271,7 @@ class TelegramBot:
         if not channel:
             self.send(f"渠道不存在: {cid}")
             return
-        success = guardian.autofix.disable_slow_channel(channel)
+        success = guardian.autofix.disable_slow_channel(channel, manual=True)
         if success:
             self.send(f"✅ 渠道 {cid} ({channel['name']}) 已禁用")
         else:
@@ -465,7 +465,9 @@ class AutoFixEngine:
         self.channel_perf: Dict[int, deque] = defaultdict(lambda: deque(maxlen=WEIGHT_ADJUST_WINDOW))
         # P2: 余额历史（用于趋势分析）
         self.balance_history: deque = deque(maxlen=BALANCE_TREND_WINDOW)
-        self._cycle_count = 0
+        self._scan_count = 0       # 错误扫描独立计数器
+        self._stability_count = 0  # 稳定性检查独立计数器
+        self._scan_offset = 0      # 错误扫描批次轮转偏移
 
     def _load_state(self) -> dict:
         if STATE_FILE.exists():
@@ -518,15 +520,20 @@ class AutoFixEngine:
         check_channel 只看 response_time，402 瞬间返回（rt<1s）永远不触发慢渠道检测。
         此方法用 test_channel 主动探测，匹配错误关键词后自动禁用。
         """
-        self._cycle_count += 1
-        if self._cycle_count % ERROR_SCAN_INTERVAL != 0:
+        self._scan_count += 1
+        if self._scan_count % ERROR_SCAN_INTERVAL != 0:
             return
 
         channels = self.newapi.get_channels()
         enabled = [c for c in channels if c.get("status") == 1 and c.get("weight", 0) > 0]
 
-        # 分批测试，避免 API 过载
-        batch = enabled[:ERROR_SCAN_BATCH_SIZE]
+        # 分批轮转测试，确保所有启用渠道都被扫描到
+        n = len(enabled)
+        if n == 0:
+            return
+        offset = self._scan_offset % n
+        batch = (enabled[offset:] + enabled[:offset])[:ERROR_SCAN_BATCH_SIZE]
+        self._scan_offset = (offset + ERROR_SCAN_BATCH_SIZE) % n
         for channel in batch:
             channel_id = channel["id"]
             name = channel["name"]
@@ -652,8 +659,11 @@ class AutoFixEngine:
 
     # ── P0: 防抖动 + 恢复 + 加入聚合池 ────────────────────────────────────
 
-    def disable_slow_channel(self, channel: dict) -> bool:
-        """禁用慢渠道（P1: 先检查是否已降权，降权后仍慢则禁用）"""
+    def disable_slow_channel(self, channel: dict, manual: bool = False) -> bool:
+        """禁用慢渠道（P1: 先检查是否已降权，降权后仍慢则禁用）
+
+        manual=True 表示用户手动禁用（/disable 命令），不会被自动恢复。
+        """
         channel_id = channel["id"]
         name = channel["name"]
         response_time = channel.get("response_time", 0)
@@ -673,18 +683,20 @@ class AutoFixEngine:
                 "name": name,
                 "reason": f"response_time: {response_time}ms",
                 "time": datetime.now().isoformat(),
+                "manual": manual,
             })
             # 清理降权记录
             self.state.setdefault("degraded_channels", {})
             self.state["degraded_channels"].pop(str(channel_id), None)
             self._save_state()
-            self.telegram.send_alert(
-                "渠道自动禁用",
-                f"渠道 <b>{name}</b> (id: {channel_id}) 已自动禁用\n"
-                f"原因: 响应过慢 ({response_time}ms)\n"
-                f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                "warning"
-            )
+            if not manual:
+                self.telegram.send_alert(
+                    "渠道自动禁用",
+                    f"渠道 <b>{name}</b> (id: {channel_id}) 已自动禁用\n"
+                    f"原因: 响应过慢 ({response_time}ms)\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "warning"
+                )
             return True
         return False
 
@@ -701,10 +713,17 @@ class AutoFixEngine:
         return False
 
     def check_and_enable_recovered_channels(self):
-        """检查已禁用渠道是否恢复，自动启用并加入聚合池（P0: 防抖动 + 多次验证）"""
+        """检查已禁用渠道是否恢复，自动启用并加入聚合池（P0: 防抖动 + 多次验证）
+
+        手动禁用（manual=True）的渠道不会被自动恢复，尊重用户意图。
+        """
         for record in self.state["disabled_channels"][:]:
             channel_id = record["id"]
             name = record["name"]
+
+            # 手动禁用的渠道不自动恢复
+            if record.get("manual"):
+                continue
 
             # 防抖动：检查恢复冷却
             recovered_time = record.get("recovered_time")
@@ -892,8 +911,8 @@ class AutoFixEngine:
         if "joined_channels" not in self.state or not self.state["joined_channels"]:
             return
 
-        self._cycle_count += 1
-        if self._cycle_count % JOIN_STABILITY_CHECK_INTERVAL != 0:
+        self._stability_count += 1
+        if self._stability_count % JOIN_STABILITY_CHECK_INTERVAL != 0:
             return
 
         for channel_id_str, join_info in list(self.state["joined_channels"].items()):
@@ -979,6 +998,16 @@ class AutoFixEngine:
             original_text = config_text
             updated_roles = []
 
+            # 提取 modelRoles 块（从 modelRoles: 到下一个顶级键之前），只在块内操作
+            # 避免误改 theme/retry 等其他块里的同名键
+            block_match = re.search(r'^(modelRoles:\s*\n)((?:[ \t]+\S.*\n?)*)', config_text, re.MULTILINE)
+            if not block_match:
+                logger.error("modelRoles block not found in config.yml")
+                return
+            block_header = block_match.group(1)
+            block_body = block_match.group(2)
+            block_start, block_end = block_match.span()
+
             for role, model_specs in omp_role_models.items():
                 for provider_model, thinking_level in model_specs:
                     if provider_model.startswith("@"):
@@ -989,11 +1018,10 @@ class AutoFixEngine:
                         continue
                     provider, model = parts[0], parts[1]
 
-                    # 检查恢复的渠道是否匹配该 provider
+                    # 检查恢复的渠道是否匹配该 provider（精确匹配，避免子串误匹配损坏 config）
                     provider_matches = (
-                        provider in channel_name
-                        or channel_name in provider
-                        or (provider == "zg-newapi" and "newapi" in channel_name)
+                        channel_name == provider
+                        or (provider == "zg-newapi" and channel_name == "newapi")
                     )
 
                     if not (provider_matches and model in channel_models):
@@ -1002,18 +1030,17 @@ class AutoFixEngine:
                     # 构造目标值: "provider/model:level" 或 "provider/model"
                     target_value = f"{provider_model}:{thinking_level}" if thinking_level else provider_model
 
-                    # 用 re.sub 真正修改 config_text
-                    pattern = rf'^(\s*{re.escape(role)}:\s*)(.+)$'
-                    match = re.search(pattern, config_text, re.MULTILINE)
+                    # 在 modelRoles 块内查找角色键（2 空格缩进）
+                    pattern = rf'^(  {re.escape(role)}:\s*)(.+)$'
+                    match = re.search(pattern, block_body, re.MULTILINE)
 
                     if match:
                         current_value = match.group(2).strip()
                         if provider_model not in current_value:
-                            # 角色当前使用其他模型 → 切换到恢复的渠道
-                            config_text = re.sub(
+                            block_body = re.sub(
                                 pattern,
                                 rf'\g<1>{target_value}',
-                                config_text,
+                                block_body,
                                 count=1,
                                 flags=re.MULTILINE,
                             )
@@ -1022,14 +1049,15 @@ class AutoFixEngine:
                         else:
                             logger.debug(f"OMP role '{role}' already uses '{provider_model}'")
                     else:
-                        # 角色不存在 → 在 modelRoles 块末尾添加
-                        mr_match = re.search(r'^(modelRoles:\s*\n(?:\s+\S.*\n)*)', config_text, re.MULTILINE)
-                        if mr_match:
-                            insert_pos = mr_match.end()
-                            new_line = f"  {role}: {target_value}\n"
-                            config_text = config_text[:insert_pos] + new_line + config_text[insert_pos:]
-                            updated_roles.append(f"{role}: (new) {target_value}")
-                            logger.info(f"OMP role '{role}' added: {target_value}")
+                        # 角色不存在 → 在 modelRoles 块末尾追加
+                        if block_body and not block_body.endswith("\n"):
+                            block_body += "\n"
+                        block_body += f"  {role}: {target_value}\n"
+                        updated_roles.append(f"{role}: (new) {target_value}")
+                        logger.info(f"OMP role '{role}' added: {target_value}")
+
+            # 拼回：只替换 modelRoles 块，其他内容不动
+            config_text = config_text[:block_start] + block_header + block_body + config_text[block_end:]
 
             # 真正写回 config.yml
             if config_text != original_text:
