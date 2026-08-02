@@ -1552,6 +1552,7 @@ class AutoFixEngine:
             if stale:
                 del self.state["restarted_proxies"][name]
                 self.state.setdefault("restart_counts", {}).pop(name, None)
+                self.state.setdefault("restart_alerted", {}).pop(name, None)
                 cleaned += 1
 
         if cleaned:
@@ -2007,9 +2008,11 @@ class Guardian:
         for name, info in LOCAL_PROXIES.items():
             ok, msg = self.health.check_local_proxy(info["port"], name)
             if ok:
-                # 代理健康 → 重置断路器（否则满 3 次后永久放弃自愈）
+                # 代理健康 → 重置断路器（否则满 3 次后永久放弃自愈），
+                # 同步清理 restart_alerted，避免残留标记抑制下一次故障告警
                 if self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
                     self.autofix.state["restart_counts"][name] = 0
+                    self.autofix.state.setdefault("restart_alerted", {}).pop(name, None)
                     self.autofix._save_state()
             else:
                 # 自愈动作（重启）不受告警冷却限制，始终执行；冷却只控通知。

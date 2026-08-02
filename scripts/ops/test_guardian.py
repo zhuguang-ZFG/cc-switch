@@ -994,7 +994,32 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertFalse(ok)
         # 命令已执行 → 进入长冷却（restart_time），而不是只写 60s fail_time
         self.assertIsNotNone(engine.state.get("newapi_restart_time"))
+        self.assertNotIn("newapi_restart_fail_time", engine.state)
+        self.assertIs(engine.state.get("newapi_restart_verified"), False)
+        engine._save_state.assert_called()
         engine.telegram.send_alert.assert_called_once()
+
+    def test_newapi_restart_verification_timeout_blocks_second_call(self):
+        """验证超时进入 30min 长冷却：冷却期内二次调用被挡住，不执行 SSH"""
+        engine = make_engine({
+            "newapi_restart_time": datetime.now().isoformat(),
+            "newapi_restart_fail_time": None,
+            "newapi_restart_verified": False,
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+        engine.newapi.get_status = Mock(return_value=False)
+
+        with (
+            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)) as run,
+            patch.object(guardian.time, "sleep"),
+        ):
+            ok = engine.restart_newapi_container()
+
+        self.assertFalse(ok)
+        run.assert_not_called()
 
     def test_local_proxy_401_treated_as_alive(self):
         """401/403 是鉴权问题，服务存活；不得触发重启"""
@@ -1005,6 +1030,22 @@ class ProxyRestartTests(unittest.TestCase):
             "urlopen",
             side_effect=guardian.urllib.error.HTTPError(
                 "http://100.83.32.95:8788/v1/models", 401, "Unauthorized", None, None
+            ),
+        ):
+            ok, msg = health.check_local_proxy(8788, "agentrouter")
+
+        self.assertTrue(ok)
+        self.assertIn("鉴权失败", msg)
+
+    def test_local_proxy_403_treated_as_alive(self):
+        """403 同 401：服务存活，不得触发重启"""
+        health = guardian.HealthChecker(Mock())
+
+        with patch.object(
+            guardian.urllib.request,
+            "urlopen",
+            side_effect=guardian.urllib.error.HTTPError(
+                "http://100.83.32.95:8788/v1/models", 403, "Forbidden", None, None
             ),
         ):
             ok, msg = health.check_local_proxy(8788, "agentrouter")
@@ -1026,25 +1067,70 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(engine.telegram.send_alert.call_count, 1)
 
     def test_circuit_breaker_success_resets_alert_flag(self):
-        """代理恢复后 restart_counts 清零，断路器告警标记随之复位"""
+        """真实 _check_cycle 中代理恢复 → restart_counts 与 restart_alerted 一并复位"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {
+            "restart_counts": {"agentrouter": 3},
+            "restarted_proxies": {"agentrouter": "2026-08-03T02:00:00"},
+            "restart_alerted": {"agentrouter": True},
+        }
+        g.autofix.get_balance_trend.return_value = None
+        g.autofix._save_state = Mock()
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+
+        self.assertEqual(g.autofix.state["restart_counts"]["agentrouter"], 0)
+        self.assertNotIn("agentrouter", g.autofix.state.get("restart_alerted", {}))
+        g.autofix._save_state.assert_called()
+
+    def test_circuit_breaker_alert_reenabled_after_recovery(self):
+        """恢复后再故障：断路器告警必须再次触发（残留标记已清理）"""
+        # 第一段：3 次失败 → 断路器打开 → 告警一次
         engine = make_engine({
             "restart_counts": {"agentrouter": 3},
             "restarted_proxies": {"agentrouter": "x"},
-            "restart_alerted": {"agentrouter": True},
         })
-        engine._save_state = Mock()
+        engine.telegram = Mock()
+        engine.restart_local_proxy("agentrouter", 8788)
+        self.assertEqual(engine.telegram.send_alert.call_count, 1)
 
-        engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok")
+        # 第二段：恢复后 _check_cycle 复位（含 restart_alerted）
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = engine.state
+        g.autofix.get_balance_trend.return_value = None
+        g.autofix._save_state = Mock()
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+        g._check_cycle()
+        self.assertNotIn("agentrouter", g.autofix.state.get("restart_alerted", {}))
 
-        # 模拟 _check_cycle 的健康恢复分支
-        if engine.state.get("restart_counts", {}).get("agentrouter", 0) > 0:
-            engine.state["restart_counts"]["agentrouter"] = 0
-            engine.state.pop("restart_alerted", None)
-            engine._save_state()
-
-        self.assertEqual(engine.state["restart_counts"]["agentrouter"], 0)
-        self.assertNotIn("restart_alerted", engine.state)
+        # 第三段：再次 3 次失败 → 断路器告警必须重新触发
+        engine.state["restart_counts"]["agentrouter"] = 3
+        engine.telegram = Mock()
+        engine.restart_local_proxy("agentrouter", 8788)
+        self.assertEqual(engine.telegram.send_alert.call_count, 1)
 
     def test_url_with_userinfo_skips_omp_role_update(self):
         """带 userinfo 的 base_url（user@host）不符合纯 endpoint 契约，不得篡改 OMP 角色"""
