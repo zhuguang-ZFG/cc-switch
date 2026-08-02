@@ -811,6 +811,77 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs.get("shell", False), False)
         self.assertEqual(run.call_count, 1)
 
+    def test_newapi_restart_respects_failure_backoff(self):
+        """重启失败进入 60s 退避：冷却期内再次调用被挡住，不执行 SSH"""
+        engine = make_engine({
+            "newapi_restart_time": None,
+            "newapi_restart_fail_time": datetime.now().isoformat(),
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+        engine.newapi.get_status = Mock(return_value=True)
+
+        with (
+            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)) as run,
+            patch.object(guardian.time, "sleep"),
+        ):
+            ok = engine.restart_newapi_container()
+
+        self.assertFalse(ok)
+        run.assert_not_called()
+
+    def test_newapi_restart_respects_success_cooldown(self):
+        """重启成功后 30min 冷却：冷却期内再次调用被挡住，不执行 SSH"""
+        engine = make_engine({
+            "newapi_restart_time": datetime.now().isoformat(),
+            "newapi_restart_fail_time": None,
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+        engine.newapi.get_status = Mock(return_value=True)
+
+        with (
+            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)) as run,
+            patch.object(guardian.time, "sleep"),
+        ):
+            ok = engine.restart_newapi_container()
+
+        self.assertFalse(ok)
+        run.assert_not_called()
+
+    def test_fail_streak_survives_guardian_restart(self):
+        """失败计数持久化在 state：Guardian 崩溃重启后计数保留，补足 3 次即触发重启"""
+        state = {
+            "restart_counts": {},
+            "newapi_fail_streak": 2,
+        }
+
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (False, "down")
+        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = state
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+
+        # state 里已有 2 次计数 → 本次失败即达 3 次门槛，触发重启并清零
+        self.assertEqual(g.autofix.restart_newapi_container.call_count, 1)
+        self.assertEqual(state["newapi_fail_streak"], 0)
+
 
 class OmpRoleTests(unittest.TestCase):
     def test_codebuddy_recovery_restores_default_role_without_touching_task(self):

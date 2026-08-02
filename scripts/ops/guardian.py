@@ -636,6 +636,7 @@ class AutoFixEngine:
             "weight_history": {},
             "joined_channels": {},
             "degraded_channels": {},
+            "newapi_fail_streak": 0,
         }
         if STATE_FILE.exists():
             try:
@@ -1941,14 +1942,20 @@ class Guardian:
         # 避免单次网络抖动/超时误重启生产容器
         newapi_ok, newapi_msg = self.health.check_newapi()
         if not newapi_ok:
-            self._newapi_fail_streak = getattr(self, "_newapi_fail_streak", 0) + 1
-            if self._newapi_fail_streak >= NEWAPI_FAIL_THRESHOLD:
+            # 失败计数持久化在 state：Guardian 崩溃/重启后计数保留，
+            # 避免故障期间每次重启都重新累计 3 次门槛
+            streak = self.autofix.state.get("newapi_fail_streak", 0) + 1
+            self.autofix.state["newapi_fail_streak"] = streak
+            if streak >= NEWAPI_FAIL_THRESHOLD:
                 self.autofix.restart_newapi_container()
-                self._newapi_fail_streak = 0
+                self.autofix.state["newapi_fail_streak"] = 0
+                self.autofix._save_state()
             if self.alerts.should_alert("newapi_down", "error"):
                 self.telegram.send_alert("NewAPI 宕机", newapi_msg, "error")
         else:
-            self._newapi_fail_streak = 0
+            if self.autofix.state.get("newapi_fail_streak", 0):
+                self.autofix.state["newapi_fail_streak"] = 0
+                self.autofix._save_state()
 
         # 2. 渠道健康（P1: 先降权再禁用）
         channels = self.newapi.get_channels()
@@ -1989,10 +1996,13 @@ class Guardian:
                     self.autofix._save_state()
             else:
                 # 自愈动作（重启）不受告警冷却限制，始终执行；冷却只控通知。
-                # restart_local_proxy 内部有 3 次重启上限断路器。
                 self.autofix.restart_local_proxy(name, info["port"])
                 if self.alerts.should_alert(f"proxy_{name}", "error"):
                     self.telegram.send_alert("本地代理故障", msg, "error")
+                else:
+                    # 告警冷却期内不重复通知，但失败原因不丢弃，降级为日志
+                    logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
+
 
         # 7. 错误率
         ok, rate, errors, total = self.health.check_error_rate()
