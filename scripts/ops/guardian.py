@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 NewAPI Guardian — 自愈监控系统
-完整的健康检查、自动修复、Telegram 报警、每日报告
+完整的健康检查、自动修复、Telegram 报警、每日报告、命令处理
 """
 
 import json
@@ -36,9 +36,10 @@ BALANCE_WARNING_THRESHOLD = 1000000  # 100 万 quota
 
 # 本地代理
 LOCAL_PROXIES = {
-    "agentrouter": {"port": 8788, "name": "agentrouter"},
-    "codebuddy": {"port": 8787, "name": "codebuddy"},
-    "anyrouter": {"port": 8789, "name": "anyrouter"},
+    "agentrouter": {"port": 8788, "name": "agentrouter", "script": "agentrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
+    "codebuddy": {"port": 8787, "name": "codebuddy", "script": "converter.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/codebuddy2openai"},
+    "anyrouter": {"port": 8789, "name": "anyrouter", "script": "anyrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/anyrouter-proxy"},
+    "atomcode": {"port": 9457, "name": "atomcode", "script": "proxy.js", "dir": "C:/Users/zhugu/atomgit-opencode-bridge"},
 }
 
 # 日志
@@ -70,6 +71,7 @@ class TelegramBot:
         self.token = token
         self.chat_id = chat_id
         self.base_url = f"https://api.telegram.org/bot{token}"
+        self.offset = 0
 
     def send(self, text: str, parse_mode: str = "HTML") -> bool:
         """发送 Telegram 消息"""
@@ -97,6 +99,156 @@ class TelegramBot:
         icon = icons.get(level, "⚠️")
         text = f"{icon} <b>{title}</b>\n\n{message}\n\n<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
         return self.send(text)
+
+    def get_updates(self) -> List[dict]:
+        """获取 Telegram 更新（新消息）"""
+        try:
+            url = f"{self.base_url}/getUpdates?offset={self.offset}&timeout=5"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                result = json.loads(resp.read().decode())
+                if result.get("ok") and result.get("result"):
+                    updates = result["result"]
+                    if updates:
+                        self.offset = updates[-1]["update_id"] + 1
+                    return updates
+                return []
+        except Exception as e:
+            logger.error(f"Telegram getUpdates failed: {e}")
+            return []
+
+    def process_commands(self, guardian) -> None:
+        """处理 Telegram 命令"""
+        updates = self.get_updates()
+        for update in updates:
+            if "message" not in update:
+                continue
+            message = update["message"]
+            text = message.get("text", "")
+            if not text.startswith("/"):
+                continue
+
+            # 解析命令
+            parts = text.split()
+            cmd = parts[0].lower()
+            args = parts[1:] if len(parts) > 1 else []
+
+            logger.info(f"Telegram command: {cmd} {args}")
+
+            # 路由命令
+            if cmd == "/status":
+                self._cmd_status(guardian)
+            elif cmd == "/channels":
+                self._cmd_channels(guardian)
+            elif cmd == "/report":
+                self._cmd_report(guardian)
+            elif cmd == "/restart" and args:
+                self._cmd_restart(guardian, args[0])
+            elif cmd == "/enable" and args:
+                self._cmd_enable(guardian, args[0])
+            elif cmd == "/disable" and args:
+                self._cmd_disable(guardian, args[0])
+            elif cmd == "/help":
+                self._cmd_help()
+            else:
+                self.send(f"未知命令: {cmd}\n使用 /help 查看可用命令")
+
+    def _cmd_status(self, guardian):
+        """处理 /status 命令"""
+        newapi_ok, newapi_msg = guardian.health.check_newapi()
+        ok, rate, errors, total = guardian.health.check_error_rate()
+        ok, remaining, quota = guardian.health.check_balance()
+
+        channels = guardian.newapi.get_channels()
+        healthy = sum(1 for c in channels if c.get("status") == 1)
+        disabled = len([c for c in channels if c.get("status") != 1])
+
+        text = (
+            f"📊 <b>系统状态</b>\n\n"
+            f"NewAPI: {'✓ 正常' if newapi_ok else '✗ 异常'}\n"
+            f"渠道: {healthy} 正常 / {disabled} 禁用 / {len(channels)} 总计\n"
+            f"错误率: {rate:.1%} ({errors}/{total})\n"
+            f"余额: {remaining:,} / {quota:,}\n"
+            f"Guardian 运行中: {'✓' if guardian.running else '✗'}\n"
+            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        self.send(text)
+
+    def _cmd_channels(self, guardian):
+        """处理 /channels 命令"""
+        channels = guardian.newapi.get_channels()
+        lines = ["📋 <b>渠道状态</b>\n"]
+        for ch in channels[:20]:  # 最多显示 20 个
+            status = "✓" if ch.get("status") == 1 else "✗"
+            rt = ch.get("response_time", 0)
+            lines.append(f"{status} ch{ch['id']} {ch['name']} ({rt}ms)")
+        if len(channels) > 20:
+            lines.append(f"... 还有 {len(channels) - 20} 个渠道")
+        self.send("\n".join(lines))
+
+    def _cmd_report(self, guardian):
+        """处理 /report 命令"""
+        guardian._maybe_daily_report(force=True)
+        self.send("📊 健康报告已生成")
+
+    def _cmd_restart(self, guardian, proxy_name: str):
+        """处理 /restart 命令"""
+        if proxy_name not in LOCAL_PROXIES:
+            self.send(f"未知代理: {proxy_name}\n可用: {', '.join(LOCAL_PROXIES.keys())}")
+            return
+        info = LOCAL_PROXIES[proxy_name]
+        success = guardian.autofix.restart_local_proxy(proxy_name, info["port"])
+        if success:
+            self.send(f"✅ {proxy_name} 已重启")
+        else:
+            self.send(f"✗ {proxy_name} 重启失败")
+
+    def _cmd_enable(self, guardian, channel_id: str):
+        """处理 /enable 命令"""
+        try:
+            cid = int(channel_id)
+        except ValueError:
+            self.send(f"无效的渠道 ID: {channel_id}")
+            return
+        channel = guardian.newapi.get_channel(cid)
+        if not channel:
+            self.send(f"渠道不存在: {cid}")
+            return
+        success = guardian.autofix.enable_channel(cid, channel["name"])
+        if success:
+            self.send(f"✅ 渠道 {cid} ({channel['name']}) 已启用")
+        else:
+            self.send(f"✗ 渠道 {cid} 启用失败")
+
+    def _cmd_disable(self, guardian, channel_id: str):
+        """处理 /disable 命令"""
+        try:
+            cid = int(channel_id)
+        except ValueError:
+            self.send(f"无效的渠道 ID: {channel_id}")
+            return
+        channel = guardian.newapi.get_channel(cid)
+        if not channel:
+            self.send(f"渠道不存在: {cid}")
+            return
+        success = guardian.autofix.disable_slow_channel(channel)
+        if success:
+            self.send(f"✅ 渠道 {cid} ({channel['name']}) 已禁用")
+        else:
+            self.send(f"✗ 渠道 {cid} 禁用失败")
+
+    def _cmd_help(self):
+        """处理 /help 命令"""
+        text = (
+            "🤖 <b>Guardian 命令</b>\n\n"
+            "/status - 查看系统状态\n"
+            "/channels - 列出所有渠道\n"
+            "/report - 生成健康报告\n"
+            "/restart <proxy> - 重启本地代理\n"
+            "/enable <channel_id> - 启用渠道\n"
+            "/disable <channel_id> - 禁用渠道\n"
+            "/help - 显示此帮助"
+        )
+        self.send(text)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # NewAPI 客户端
@@ -152,7 +304,6 @@ class NewAPIClient:
         channel = self.get_channel(channel_id)
         if not channel:
             return False
-        # 保留所有字段，只改 status
         channel["status"] = 2
         result = self._request("PUT", "/api/channel/", channel)
         return result.get("success", False) if result else False
@@ -165,6 +316,16 @@ class NewAPIClient:
         channel["status"] = 1
         result = self._request("PUT", "/api/channel/", channel)
         return result.get("success", False) if result else False
+
+    def test_channel(self, channel_id: int) -> Tuple[bool, str]:
+        """测试渠道（发送真实请求）"""
+        try:
+            result = self._request("GET", f"/api/channel/test/{channel_id}")
+            if result and result.get("success"):
+                return True, "测试通过"
+            return False, result.get("message", "测试失败") if result else "无响应"
+        except Exception as e:
+            return False, str(e)
 
     def get_logs(self, limit: int = 100) -> List[dict]:
         """获取最近日志"""
@@ -209,7 +370,11 @@ class HealthChecker:
         if response_time > CHANNEL_SLOW_THRESHOLD_MS:
             self.channel_slow[channel_id] = self.channel_slow.get(channel_id, 0) + 1
             if self.channel_slow[channel_id] >= CHANNEL_FAIL_THRESHOLD:
-                return False, f"响应过慢 ({response_time}ms)", response_time
+                # 发送真实测试请求验证
+                test_ok, test_msg = self.newapi.test_channel(channel_id)
+                if not test_ok:
+                    return False, f"响应过慢 ({response_time}ms) + 测试失败: {test_msg}", response_time
+                return True, f"响应慢 ({response_time}ms) 但测试通过", response_time
             return True, f"响应慢 ({response_time}ms)", response_time
         else:
             self.channel_slow[channel_id] = 0
@@ -217,14 +382,28 @@ class HealthChecker:
         return True, "正常", response_time
 
     def check_local_proxy(self, port: int, name: str) -> Tuple[bool, str]:
-        """检查本地代理健康"""
-        try:
-            url = f"http://127.0.0.1:{port}/v1/models"
-            req = urllib.request.Request(url, headers={"Authorization": "Bearer any"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                return True, f"{name} 正常"
-        except Exception as e:
-            return False, f"{name} 无响应: {e}"
+        """检查本地代理健康（测试 Tailscale IP 和 localhost，使用正确 API key 和端点）"""
+        # 每个代理的 API key 和测试端点
+        proxy_config = {
+            "agentrouter": {"key": "any", "endpoint": "/v1/models"},
+            "codebuddy": {"key": "mEZCydQrTtYzKad5wHmU1pnEMb7DplcafmToLIlLpMg", "endpoint": "/v1/models"},
+            "anyrouter": {"key": "any", "endpoint": "/health"},  # Anthropic 协议，用 /health
+            "atomcode": {"key": "any", "endpoint": "/v1/usage"},  # Node.js 代理，用 /v1/usage
+        }
+        config = proxy_config.get(name, {"key": "any", "endpoint": "/v1/models"})
+        api_key = config["key"]
+        endpoint = config["endpoint"]
+
+        # 优先测试 Tailscale IP（NewAPI 通过 Tailscale 访问）
+        for host in ["100.83.32.95", "127.0.0.1"]:
+            try:
+                url = f"http://{host}:{port}{endpoint}"
+                req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    return True, f"{name} 正常 ({host})"
+            except Exception:
+                continue
+        return False, f"{name} 无响应（Tailscale 和 localhost 都失败）"
 
     def check_error_rate(self) -> Tuple[bool, float, int, int]:
         """检查错误率
@@ -234,8 +413,9 @@ class HealthChecker:
         if not logs:
             return True, 0.0, 0, 0
 
+        # 只统计真正的错误（有 channel_id 或 model_name 的 type=2）
         total = len(logs)
-        errors = sum(1 for log in logs if log.get("type") == 2)
+        errors = sum(1 for log in logs if log.get("type") == 2 and (log.get("channel_id") or log.get("model_name")))
         rate = errors / total if total > 0 else 0.0
 
         return rate <= ERROR_RATE_THRESHOLD, rate, errors, total
@@ -318,6 +498,19 @@ class AutoFixEngine:
             return True
         return False
 
+    def check_and_enable_recovered_channels(self):
+        """检查已禁用渠道是否恢复，自动启用"""
+        for record in self.state["disabled_channels"][:]:
+            channel_id = record["id"]
+            name = record["name"]
+            # 测试渠道是否恢复
+            test_ok, test_msg = self.newapi.test_channel(channel_id)
+            if test_ok:
+                if self.enable_channel(channel_id, name):
+                    self.state["disabled_channels"].remove(record)
+                    self._save_state()
+                    logger.info(f"Channel {channel_id} ({name}) recovered and re-enabled")
+
     def restart_local_proxy(self, name: str, port: int) -> bool:
         """重启本地代理"""
         restart_count = self.state["restart_counts"].get(name, 0)
@@ -330,18 +523,68 @@ class AutoFixEngine:
             )
             return False
 
-        # Windows 下用 taskkill + 启动脚本
         try:
             # 查找并杀死进程
+            ps_cmd = f'Get-CimInstance Win32_Process -Filter "Name=\'pythonw.exe\'" | Where-Object {{ $_.CommandLine -match \'{name}\' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'
             subprocess.run(
-                f'taskkill /F /FI "WINDOWTITLE eq {name}*" 2>nul',
-                shell=True, capture_output=True
+                f'powershell -Command "{ps_cmd}"',
+                shell=True, capture_output=True, timeout=10
             )
-            time.sleep(1)
 
-            # 启动代理（假设有启动脚本）
-            # 这里需要根据实际启动方式调整
-            # 例如: subprocess.Popen(f"python {name}.py", shell=True)
+            time.sleep(2)
+
+            # 启动代理
+            info = LOCAL_PROXIES.get(name)
+            if not info:
+                logger.error(f"Unknown proxy: {name}")
+                return False
+
+            script_path = Path(info["dir"]) / info["script"]
+            if not script_path.exists():
+                logger.error(f"Script not found: {script_path}")
+                return False
+
+            # 根据代理类型选择启动参数
+            if name == "agentrouter":
+                cmd = [
+                    "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
+                    str(script_path),
+                    "--host", "100.83.32.95",
+                    "--port", str(port),
+                    "--log", "proxy.log"
+                ]
+            elif name == "codebuddy":
+                cmd = [
+                    "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
+                    str(script_path),
+                    "--host", "0.0.0.0",
+                    "--api-key", "mEZCydQrTtYzKad5wHmU1pnEMb7DplcafmToLIlLpMg",
+                    "--log", "converter.log"
+                ]
+            elif name == "anyrouter":
+                cmd = [
+                    "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
+                    str(script_path),
+                    "--port", str(port),
+                    "--log", "proxy.log"
+                ]
+            elif name == "atomcode":
+                # Node.js 代理，使用 node 启动
+                cmd = [
+                    "node",
+                    str(script_path)
+                ]
+            else:
+                logger.error(f"Unknown proxy type: {name}")
+                return False
+
+            subprocess.Popen(
+                cmd,
+                cwd=info["dir"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            )
 
             self.state["restart_counts"][name] = restart_count + 1
             self.state["restarted_proxies"][name] = datetime.now().isoformat()
@@ -360,21 +603,37 @@ class AutoFixEngine:
             return False
 
     def restart_newapi_container(self) -> bool:
-        """重启 NewAPI 容器"""
+        """重启 NewAPI 容器（多种方式）"""
         try:
-            # 通过 SSH 或本地命令重启
-            # 这里假设有 SSH 访问或本地 podman
-            subprocess.run(
-                "ssh donglicao@aliyun 'podman restart new-api'",
+            # 方式 1: SSH
+            result = subprocess.run(
+                "ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no donglicao@aliyun 'podman restart new-api'",
                 shell=True, capture_output=True, timeout=30
             )
-            self.telegram.send_alert(
-                "NewAPI 容器重启",
-                f"NewAPI 容器已重启\n"
-                f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                "restart"
+            if result.returncode == 0:
+                self.telegram.send_alert(
+                    "NewAPI 容器重启",
+                    f"NewAPI 容器已重启（SSH）\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "restart"
+                )
+                return True
+
+            # 方式 2: 本地 podman（如果 NewAPI 在本地）
+            result = subprocess.run(
+                "podman restart new-api",
+                shell=True, capture_output=True, timeout=30
             )
-            return True
+            if result.returncode == 0:
+                self.telegram.send_alert(
+                    "NewAPI 容器重启",
+                    f"NewAPI 容器已重启（本地 podman）\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "restart"
+                )
+                return True
+
+            raise Exception("All restart methods failed")
         except Exception as e:
             logger.error(f"Restart NewAPI failed: {e}")
             self.telegram.send_alert(
@@ -394,13 +653,21 @@ class AlertManager:
     def __init__(self, telegram: TelegramBot):
         self.telegram = telegram
         self.last_alerts: Dict[str, datetime] = {}
-        self.alert_cooldown = timedelta(minutes=5)  # 同类报警 5 分钟冷却
+        # 按级别设置不同冷却时间
+        self.alert_cooldowns = {
+            "error": timedelta(minutes=1),      # 严重错误 1 分钟
+            "warning": timedelta(minutes=5),    # 警告 5 分钟
+            "info": timedelta(minutes=30),      # 信息 30 分钟
+            "success": timedelta(minutes=10),   # 成功 10 分钟
+            "restart": timedelta(minutes=10),   # 重启 10 分钟
+        }
 
-    def should_alert(self, alert_type: str) -> bool:
-        """检查是否应该报警（冷却）"""
+    def should_alert(self, alert_type: str, level: str = "warning") -> bool:
+        """检查是否应该报警（按级别冷却）"""
         if alert_type not in self.last_alerts:
             return True
-        return datetime.now() - self.last_alerts[alert_type] > self.alert_cooldown
+        cooldown = self.alert_cooldowns.get(level, timedelta(minutes=5))
+        return datetime.now() - self.last_alerts[alert_type] > cooldown
 
     def send_daily_report(self, stats: dict):
         """发送每日健康报告"""
@@ -438,12 +705,17 @@ class Guardian:
             "Guardian 启动",
             "NewAPI 自愈系统已启动\n"
             f"监控间隔: {HEALTH_CHECK_INTERVAL} 秒\n"
-            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"发送 /help 查看可用命令",
             "info"
         )
 
         while self.running:
             try:
+                # 处理 Telegram 命令
+                self.telegram.process_commands(self)
+
+                # 执行健康检查
                 self._check_cycle()
                 time.sleep(HEALTH_CHECK_INTERVAL)
             except KeyboardInterrupt:
@@ -458,30 +730,33 @@ class Guardian:
         # 1. NewAPI 健康
         newapi_ok, newapi_msg = self.health.check_newapi()
         if not newapi_ok:
-            if self.alerts.should_alert("newapi_down"):
+            if self.alerts.should_alert("newapi_down", "error"):
                 self.telegram.send_alert("NewAPI 宕机", newapi_msg, "error")
                 self.autofix.restart_newapi_container()
 
-        # 2. 渠道健康
+        # 2. 渠道健康（禁用慢渠道）
         channels = self.newapi.get_channels()
         for channel in channels:
             healthy, msg, rt = self.health.check_channel(channel)
             if not healthy:
-                if self.alerts.should_alert(f"channel_{channel['id']}"):
+                if self.alerts.should_alert(f"channel_{channel['id']}", "warning"):
                     self.autofix.disable_slow_channel(channel)
 
-        # 3. 本地代理健康
+        # 3. 检查已禁用渠道是否恢复（自动启用）
+        self.autofix.check_and_enable_recovered_channels()
+
+        # 4. 本地代理健康
         for name, info in LOCAL_PROXIES.items():
             ok, msg = self.health.check_local_proxy(info["port"], name)
             if not ok:
-                if self.alerts.should_alert(f"proxy_{name}"):
+                if self.alerts.should_alert(f"proxy_{name}", "error"):
                     self.telegram.send_alert("本地代理故障", msg, "error")
                     self.autofix.restart_local_proxy(name, info["port"])
 
-        # 4. 错误率
+        # 5. 错误率
         ok, rate, errors, total = self.health.check_error_rate()
         if not ok:
-            if self.alerts.should_alert("error_rate"):
+            if self.alerts.should_alert("error_rate", "warning"):
                 self.telegram.send_alert(
                     "错误率超标",
                     f"错误率: {rate:.1%} ({errors}/{total})\n"
@@ -489,10 +764,10 @@ class Guardian:
                     "warning"
                 )
 
-        # 5. 余额
+        # 6. 余额
         ok, remaining, quota = self.health.check_balance()
         if not ok:
-            if self.alerts.should_alert("balance"):
+            if self.alerts.should_alert("balance", "warning"):
                 self.telegram.send_alert(
                     "余额不足",
                     f"剩余: {remaining:,}\n"
@@ -501,15 +776,15 @@ class Guardian:
                     "warning"
                 )
 
-        # 6. 每日报告
+        # 7. 每日报告
         self._maybe_daily_report()
 
-    def _maybe_daily_report(self):
+    def _maybe_daily_report(self, force: bool = False):
         """每日报告"""
         last_report = self.autofix.state.get("last_daily_report")
         today = datetime.now().strftime("%Y-%m-%d")
 
-        if last_report != today:
+        if force or last_report != today:
             # 统计今日数据
             channels = self.newapi.get_channels()
             healthy = sum(1 for c in channels if c.get("status") == 1)
@@ -526,7 +801,7 @@ class Guardian:
                 "auto_restarts": restarts,
                 "error_rate": rate,
                 "balance": remaining,
-                "manual_interventions": 0,  # 需要手动统计
+                "manual_interventions": 0,
             })
 
             self.autofix.state["last_daily_report"] = today
