@@ -110,6 +110,7 @@ ABILITY_FIX_INTERVAL = 480  # 每 N 周期修复 abilities 表（480*15s=2h）
 STATE_CLEANUP_INTERVAL = 960  # 每 N 周期清理陈旧状态（960*15s=4h）
 STATE_MAX_AGE_HOURS = 48  # 陈旧状态阈值（小时）
 CYCLE_TIME_WARN_MS = 30000  # 周期耗时预警阈值（毫秒）
+CYCLE_BUDGET_SEC = 90  # 单轮执行预算：超时后跳过剩余低优先级步骤，避免周期无限拉长
 
 # 本地代理
 LOCAL_PROXIES = {
@@ -123,8 +124,11 @@ LOCAL_PROXIES = {
 LOG_DIR = CONFIG_DIR
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "guardian.log"
-STATE_FILE = LOG_DIR / "state.json"
 METRICS_FILE = LOG_DIR / "metrics.json"
+STATE_FILE = LOG_DIR / "state.json"
+HEARTBEAT_FILE = LOG_DIR / "heartbeat.json"  # 心跳文件：外部 watchdog 监视新鲜度
+HEARTBEAT_STALE_SEC = 180  # 心跳过期阈值（秒）：超过视为 Guardian 卡死
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 日志（P2: 日志轮转）
@@ -638,6 +642,7 @@ class AutoFixEngine:
 
     def _load_state(self) -> dict:
         defaults = {
+            "schema_version": 1,
             "disabled_channels": [],
             "restarted_proxies": {},
             "last_daily_report": None,
@@ -650,13 +655,35 @@ class AutoFixEngine:
         if STATE_FILE.exists():
             try:
                 loaded = json.loads(STATE_FILE.read_text())
+                if not isinstance(loaded, dict):
+                    raise ValueError("state.json root is not an object")
                 # 合并默认值，确保旧版 state.json 缺键不 KeyError
                 for k, v in defaults.items():
                     if k not in loaded:
                         loaded[k] = v
                 return loaded
-            except Exception:
-                pass
+            except (json.JSONDecodeError, ValueError) as e:
+                # 仅内容损坏（解析/类型错误）才备份留证——OSError 是 I/O 问题，不搬文件
+                # ns + pid 后缀防同秒冲突；先快照损坏字节再保留，避免搬走并发新写
+                try:
+                    raw = STATE_FILE.read_bytes()
+                    backup = STATE_FILE.with_name(
+                        f"state.json.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{os.getpid()}"
+                    )
+                    backup.write_bytes(raw)
+                    logger.error(f"state.json corrupted, backed up to {backup}: {e}")
+                except OSError as be:
+                    logger.error(f"state.json corrupted AND backup failed: {e}; backup error: {be}")
+                # 保留最近 5 个备份，防止无限积累
+                backups = sorted(STATE_FILE.parent.glob("state.json.corrupt-*"))
+                for old in backups[:-5]:
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
+            except OSError as e:
+                # I/O 错误（权限/占用/读盘）：不搬文件，记录后重试
+                logger.error(f"state.json read failed (not corrupted): {e}")
         return defaults
 
     def _save_state(self):
@@ -1932,6 +1959,17 @@ class Guardian:
         while self.running:
             cycle_start = time.time()
             try:
+                # 心跳：外部 watchdog 监视此文件新鲜度，超时判定 Guardian 卡死。
+                # 独立 try：写失败只影响存活信号，不阻断本轮自愈
+                try:
+                    hb_tmp = HEARTBEAT_FILE.with_suffix(".json.tmp")
+                    hb_tmp.write_text(json.dumps({
+                        "ts": datetime.now().isoformat(),
+                        "pid": os.getpid(),
+                    }), encoding="utf-8")
+                    os.replace(hb_tmp, HEARTBEAT_FILE)
+                except OSError as hb_err:
+                    logger.error(f"Heartbeat write failed: {hb_err}")
                 self.telegram.process_commands(self)
                 self._check_cycle()
             except KeyboardInterrupt:
@@ -1955,6 +1993,9 @@ class Guardian:
             time.sleep(HEALTH_CHECK_INTERVAL)
 
     def _check_cycle(self):
+        # 单轮预算：故障时避免无限拉长周期。高优先级（1/2/6 代理重启）必须做，
+        # 其余步骤超预算则跳过并记日志，下轮再补
+        self._cycle_deadline = time.monotonic() + CYCLE_BUDGET_SEC
         # 1. NewAPI 健康：连续 NEWAPI_FAIL_THRESHOLD 次失败才触发破坏性重启，
         # 避免单次网络抖动/超时误重启生产容器
         newapi_ok, newapi_msg = self.health.check_newapi()
@@ -1986,23 +2027,28 @@ class Guardian:
                 # P1: 先尝试降权，降权后仍慢则禁用。
                 # 自愈动作不依赖告警冷却（冷却只控通知），降权自身有冷却节流。
                 self.autofix.degrade_channel_weight(channel, msg)
-
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
-        self.autofix.scan_error_channels()
+        if self._budget_left("error scan"):
+            self.autofix.scan_error_channels()
 
         # 3. P1: 权重自动调整（根据性能历史）
-        # 重新获取渠道列表：步骤 2/2.5 可能已禁用/降权某些渠道，过期列表会错误处理它们
-        channels = self.newapi.get_channels()
-        self.autofix._auto_adjust_weights(channels)
+        if self._budget_left("weight adjust"):
+            # 重新获取渠道列表：步骤 2/2.5 可能已禁用/降权某些渠道，过期列表会错误处理它们
+            channels = self.newapi.get_channels()
+            self.autofix._auto_adjust_weights(channels)
 
         # 4. P0: 检查已禁用渠道是否恢复（自动启用 + 防抖动）
-        self.autofix.check_and_enable_recovered_channels()
+        if self._budget_left("recovery check"):
+            self.autofix.check_and_enable_recovered_channels()
 
-        # 5. P0: 检查已加入渠道的稳定性（回滚机制）
+        # 5. P0: 检查已加入渠道的稳定性（回滚机制）— 安全关键，不参与预算跳过：
+        # 预算风暴时仍须回滚不稳定渠道，防止其继续服务
         self.autofix._check_joined_channels_stability()
 
         # 5.5 OMP 角色端点主动检测（只报警，不自动切换）
-        self.autofix.check_omp_roles_health()
+        if self._budget_left("OMP role check"):
+            self.autofix.check_omp_roles_health()
+
 
         # 6. 本地代理健康
         for name, info in LOCAL_PROXIES.items():
@@ -2024,52 +2070,72 @@ class Guardian:
                     logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
 
 
-        # 7. 错误率
-        ok, rate, errors, total = self.health.check_error_rate()
-        if not ok:
-            if self.alerts.should_alert("error_rate", "warning"):
-                self.telegram.send_alert(
-                    "错误率超标",
-                    f"错误率: {rate:.1%} ({errors}/{total})\n"
-                    f"阈值: {ERROR_RATE_THRESHOLD:.0%}",
-                    "warning"
-                )
-
-        # 8. 余额 + P2: 趋势分析
-        ok, remaining, quota = self.health.check_balance()
-        if remaining >= 0:  # -1 表示 API 失败，不记录不告警
-            self.autofix.record_balance(remaining)
+        # 7. 错误率（get_logs 网络调用，超预算跳过并给默认值）
+        if self._budget_left("error rate check"):
+            ok, rate, errors, total = self.health.check_error_rate()
             if not ok:
-                if self.alerts.should_alert("balance", "warning"):
+                if self.alerts.should_alert("error_rate", "warning"):
                     self.telegram.send_alert(
-                        "余额不足",
-                        f"剩余: {remaining:,}\n"
-                        f"总额: {quota:,}\n"
-                        f"建议充值或切换 provider",
+                        "错误率超标",
+                        f"错误率: {rate:.1%} ({errors}/{total})\n"
+                        f"阈值: {ERROR_RATE_THRESHOLD:.0%}",
                         "warning"
                     )
-        # P2: 余额趋势预警
-        trend = self.autofix.get_balance_trend()
-        if trend and trend["hours_to_depletion"] < BALANCE_TREND_DEPLETION_HOURS and trend["rate_per_hour"] > 0:
-            if self.alerts.should_alert("balance_trend", "warning"):
-                self.telegram.send_alert(
-                    "余额趋势预警",
-                    f"消耗速度: {trend['rate_per_hour']:,}/h\n"
-                    f"预计 {trend['hours_to_depletion']:.1f}h 后耗尽\n"
-                    f"建议尽快充值",
-                    "warning"
-                )
+        else:
+            rate, remaining = 0.0, -1  # 默认值，metrics 不因跳过而 NameError
+
+        # 8. 余额 + P2: 趋势分析（get_user_info 网络调用，预算守卫）
+        if self._budget_left("balance check"):
+            ok, remaining, quota = self.health.check_balance()
+            if remaining >= 0:  # -1 表示 API 失败，不记录不告警
+                self.autofix.record_balance(remaining)
+                if not ok:
+                    if self.alerts.should_alert("balance", "warning"):
+                        self.telegram.send_alert(
+                            "余额不足",
+                            f"剩余: {remaining:,}\n"
+                            f"总额: {quota:,}\n"
+                            f"建议充值或切换 provider",
+                            "warning"
+                        )
+            # P2: 余额趋势预警
+            trend = self.autofix.get_balance_trend()
+            if trend and trend["hours_to_depletion"] < BALANCE_TREND_DEPLETION_HOURS and trend["rate_per_hour"] > 0:
+                if self.alerts.should_alert("balance_trend", "warning"):
+                    self.telegram.send_alert(
+                        "余额趋势预警",
+                        f"消耗速度: {trend['rate_per_hour']:,}/h\n"
+                        f"预计 {trend['hours_to_depletion']:.1f}h 后耗尽\n"
+                        f"建议尽快充值",
+                        "warning"
+                    )
+        else:
+            remaining = -1
 
         # 9. P2: 导出指标
-        self.autofix.export_metrics(channels, rate, remaining)
+        if self._budget_left("metrics export"):
+            self.autofix.export_metrics(channels, rate, remaining)
 
         # 10. 自循环维护（无需人工干预持续运转）
-        self.autofix.full_health_scan()
-        self.autofix.periodic_ability_fix()
-        self.autofix.cleanup_stale_state()
+        if self._budget_left("full health scan"):
+            self.autofix.full_health_scan()
+        if self._budget_left("ability fix"):
+            self.autofix.periodic_ability_fix()
+        if self._budget_left("state cleanup"):
+            self.autofix.cleanup_stale_state()
 
         # 11. 每日报告
-        self._maybe_daily_report()
+        if self._budget_left("daily report"):
+            self._maybe_daily_report()
+
+    def _budget_left(self, step: str) -> bool:
+        """预算还剩时间？超预算则跳过该低优先级步骤并记日志"""
+        left = self._cycle_deadline - time.monotonic()
+        if left <= 0:
+            logger.warning(f"Cycle budget exceeded, skipping {step}")
+            return False
+        return True
+
     def _maybe_daily_report(self, force: bool = False) -> bool:
         last_report = self.autofix.state.get("last_daily_report")
         today = datetime.now().strftime("%Y-%m-%d")

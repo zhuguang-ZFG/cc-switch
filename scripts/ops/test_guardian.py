@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import time
 import tempfile
 import logging
 import unittest
@@ -1155,6 +1157,187 @@ class ProxyRestartTests(unittest.TestCase):
 
         updated = config_path.read_text(encoding="utf-8")
         self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
+
+    def test_budget_exceeded_skips_low_priority_steps(self):
+        """预算耗尽：高优先级步骤仍执行，低优先级步骤跳过"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        now = time.monotonic()
+        # 第一次 monotonic() 设 deadline（now+90s），之后所有返回 now+91s（已超预算）
+        with (
+            patch.object(
+                guardian.time, "monotonic",
+                side_effect=[now, now + guardian.CYCLE_BUDGET_SEC + 1] + [now + guardian.CYCLE_BUDGET_SEC + 1] * 20,
+            ),
+            patch.object(guardian.logger, "warning"),
+        ):
+            g._check_cycle()
+
+        # 低优先级步骤全部跳过（错误率/余额/指标/全扫/cleanup/报告）
+        g.autofix.scan_error_channels.assert_not_called()
+        g.autofix._auto_adjust_weights.assert_not_called()
+        g.autofix.check_and_enable_recovered_channels.assert_not_called()
+        g.autofix.check_omp_roles_health.assert_not_called()
+        g.autofix.full_health_scan.assert_not_called()
+        g.autofix.cleanup_stale_state.assert_not_called()
+        g._maybe_daily_report.assert_not_called()
+        g.health.check_error_rate.assert_not_called()
+        g.health.check_balance.assert_not_called()
+        # 稳定性检查是安全关键，不参与预算跳过
+        g.autofix._check_joined_channels_stability.assert_called_once()
+
+
+    def test_budget_ok_runs_low_priority_steps(self):
+        """预算充足：低优先级步骤全部执行"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+
+        g.autofix.scan_error_channels.assert_called_once()
+        g.autofix.check_and_enable_recovered_channels.assert_called_once()
+        g.autofix.full_health_scan.assert_called_once()
+        g._maybe_daily_report.assert_called_once()
+
+    def test_heartbeat_written_each_cycle(self):
+        """run() 循环每轮写心跳文件"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.running = True
+        g.newapi = Mock()
+        g.newapi.exclude_retry_status_code.return_value = True
+        g.telegram = Mock()
+        g.telegram.send_alert.return_value = True
+        g._check_cycle = Mock(side_effect=[None, KeyboardInterrupt])
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        heartbeat = guardian.Path.home() / ".omp" / "guardian" / "heartbeat.json"
+
+        with patch.object(guardian.time, "sleep"):
+            g.run()
+
+        self.assertTrue(heartbeat.exists())
+        data = json.loads(heartbeat.read_text(encoding="utf-8"))
+        self.assertIn("ts", data)
+        self.assertIn("pid", data)
+
+    def test_heartbeat_write_failure_does_not_block_cycle(self):
+        """心跳写失败只记日志，不阻断本轮 process_commands / _check_cycle"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.running = True
+        g.newapi = Mock()
+        g.newapi.exclude_retry_status_code.return_value = True
+        g.telegram = Mock()
+        g.telegram.send_alert.return_value = True
+        g._check_cycle = Mock(side_effect=[None, KeyboardInterrupt])
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+
+        with (
+            patch.object(
+                guardian.Path,
+                "write_text",
+                side_effect=OSError("disk full"),
+            ),
+            patch.object(guardian.logger, "error") as err,
+            patch.object(guardian.time, "sleep"),
+        ):
+            g.run()
+
+        # 心跳写失败被记录，但 _check_cycle 仍被调用
+        err.assert_called()
+        g._check_cycle.assert_called()
+
+
+    def test_state_corrupt_backed_up_not_silent(self):
+        """state.json 损坏：快照备份留证 + 日志，不静默回默认值，原文件保留"""
+        state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        # 清理其他测试可能残留的备份
+        for old in state_file.parent.glob("state.json.corrupt-*"):
+            old.unlink()
+        state_file.write_text("{ not valid json", encoding="utf-8")
+
+        with patch.object(guardian.logger, "error") as err:
+            engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+            loaded = engine._load_state()
+
+        self.assertEqual(loaded["newapi_fail_streak"], 0)
+        err.assert_called()
+        # 原文件保留（下次可重试），损坏字节快照到备份
+        self.assertTrue(state_file.exists())
+        backups = list(state_file.parent.glob("state.json.corrupt-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), b"{ not valid json")
+
+    def test_state_oserror_not_backed_up(self):
+        """state.json 读 I/O 错误（非内容损坏）：不搬文件，只记录"""
+        state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        # 清理前一个测试可能残留的备份
+        for old in state_file.parent.glob("state.json.corrupt-*"):
+            old.unlink()
+        state_file.write_text('{"ok": true}', encoding="utf-8")
+
+        with (
+            patch.object(
+                guardian.json,
+                "loads",
+                side_effect=OSError("sharing violation"),
+            ) as loads,
+            patch.object(guardian.logger, "error") as err,
+        ):
+            engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+            loaded = engine._load_state()
+
+        loads.assert_called()
+        err.assert_called()
+        # 原文件未被动（未被搬走/改名）
+        self.assertTrue(state_file.exists())
+        self.assertEqual(state_file.read_text(encoding="utf-8"), '{"ok": true}')
+        self.assertEqual(list(state_file.parent.glob("state.json.corrupt-*")), [])
+
+    def test_state_backup_retention_bounded(self):
+        """备份保留上限 5 个，不无限积累"""
+        state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        # 预置 6 个旧备份
+        for i in range(6):
+            (state_file.parent / f"state.json.corrupt-2026080300000{i}-1").write_bytes(b"x")
+        state_file.write_text("{ bad", encoding="utf-8")
+
+        engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+        with patch.object(guardian.logger, "error"):
+            engine._load_state()
+
+        backups = list(state_file.parent.glob("state.json.corrupt-*"))
+        self.assertLessEqual(len(backups), 5)
 
 class OmpRoleTests(unittest.TestCase):
     def test_codebuddy_recovery_restores_default_role_without_touching_task(self):

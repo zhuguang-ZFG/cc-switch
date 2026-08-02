@@ -5,7 +5,7 @@
 
 ## Guardian 当前状态
 
-Guardian 核心闭环已实现；当前回归为 59/59 通过。现场已验证 Guardian/agentrouter 持续运行、Telegram `/help` 发送、渠道 45 权重恢复和本地代理路由。NewAPI 容器重启属于破坏性路径，本次未主动触发。
+Guardian 核心闭环已实现；当前回归为 69/69 通过。现场已验证 Guardian/agentrouter 持续运行、Telegram `/help` 发送、渠道 45 权重恢复和本地代理路由。NewAPI 容器重启属于破坏性路径，本次未主动触发。
 - 运行副本: `~/.omp/guardian/guardian.py`
 - 仓库副本: `scripts/ops/guardian.py`
 
@@ -41,7 +41,16 @@ Guardian 核心闭环已实现；当前回归为 59/59 通过。现场已验证 
 | 6 | `_balance_pool_weights` 恢复时会额外调用一次 `get_channels()` | P2 |
 | 7 | NewAPI 容器 SSH/podman 重启路径本次未做破坏性现场测试 | 风险说明 |
 
+### 双主仲裁规则（NewAPI 自动启用 vs Guardian 恢复）
+
+`AutomaticEnableChannelEnabled=true`（NewAPI 可自动启用）+ Guardian 恢复循环构成双主。
+仲裁规则：**NewAPI 自动启用只负责"快速拉起"，Guardian 拥有"是否稳定加入"的最终决定权**。
+Guardian 对 NewAPI 自动启用的渠道仍执行 3 次 `test_channel` 稳定验证，不通过即再次禁用
+（`test_rechecks_and_re_disables_newapi_auto_enabled_channel`）。本规则属设计约束，不关闭
+NewAPI 自动启用，避免丢失快速恢复路径。
+
 ## NewAPI 侧配置变更
+
 
 | 设置 | 旧值 | 新值 | 原因 |
 |---|---|---|---|

@@ -124,6 +124,9 @@ Windows 当前使用两个用户登录入口：现有 `NewAPI Guardian` 计划�
 | `~/.omp/guardian/state.json` | 状态（禁用/降权/加入/权重历史） |
 | `~/.omp/guardian/metrics.json` | 指标导出 |
 | Startup `cline-glm-proxy.bat` | 登录时启动代理 watchdog 与 Guardian |
+| `~/.omp/guardian/heartbeat.json` | 心跳（Guardian.run() 每轮原子写 ts+pid） |
+| `~/.omp/guardian/watchdog.ps1` | Guardian watchdog：心跳超 180s 杀卡死进程，hub on-failure 拉起 |
+| `~/.omp/guardian/watchdog.log` | watchdog 运行日志 |
 
 ## 安全
 
@@ -131,6 +134,8 @@ Windows 当前使用两个用户登录入口：现有 `NewAPI Guardian` 计划�
 - NewAPI 容器重启需连续 3 次探测失败才触发，避免瞬态抖动误重启；SSH 走 argv 调用，无本地 podman fallback
 - 所有自愈动作都发送 Telegram 通知，可随时人工干预
 - 自动禁用/启用渠道需要 NewAPI 管理权限
+- 单轮预算 `CYCLE_BUDGET_SEC=90`：故障时跳过低优先级步骤（错误率/余额/指标/全扫/cleanup/报告），稳定性回滚与代理重启始终执行
+- state.json 损坏时快照备份（`state.json.corrupt-<ts>-<pid>`，保留 5 份），不静默丢弃
 
 ## 参考
 
