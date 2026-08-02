@@ -87,7 +87,9 @@ RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）
 WEIGHT_DEGRADE_COOLDOWN_MIN = 5  # 降权最小间隔（分钟）— 自愈节流独立于告警冷却
-NEWAPI_RESTART_COOLDOWN_MIN = 30  # NewAPI 容器重启最小间隔（分钟）
+NEWAPI_RESTART_COOLDOWN_MIN = 30  # NewAPI 容器重启最小间隔（成功后冷却）
+NEWAPI_FAIL_THRESHOLD = 3  # 连续失败次数才触发破坏性重启（防瞬态抖动）
+NEWAPI_RESTART_BACKOFF_SEC = 60  # 重启失败后的退避间隔（秒），成功才进 30min 冷却
 
 # 错误渠道检测（补充 NewAPI 内置 30min 自动测试，不重复）
 # NewAPI 已内置: 每 30min 全量测试 + 401/402/403 自动禁用 + 自动启用
@@ -1680,35 +1682,45 @@ class AutoFixEngine:
             return False
 
     def restart_newapi_container(self) -> bool:
-        """重启 NewAPI 容器（多种方式）+ 重启后验证
+        """重启 NewAPI 容器 + 重启后验证
 
-        自带冷却节流（NEWAPI_RESTART_COOLDOWN_MIN），避免 NewAPI 无响应期间
-        每个检查周期都触发容器重启。冷却独立于告警冷却。
+        冷却区分成功与失败：成功后进 NEWAPI_RESTART_COOLDOWN_MIN 长冷却；
+        失败只退避 NEWAPI_RESTART_BACKOFF_SEC，避免失败期间被长冷却卡死。
         """
         last = self.state.get("newapi_restart_time")
         if last:
             try:
-                if datetime.now() - datetime.fromisoformat(last) < timedelta(
-                    minutes=NEWAPI_RESTART_COOLDOWN_MIN
-                ):
+                gap = datetime.now() - datetime.fromisoformat(last)
+                if gap < timedelta(minutes=NEWAPI_RESTART_COOLDOWN_MIN):
                     logger.info("NewAPI container restart skipped (cooldown)")
                     return False
             except (ValueError, TypeError):
                 pass
+        last_fail = self.state.get("newapi_restart_fail_time")
+        if last_fail:
+            try:
+                if datetime.now() - datetime.fromisoformat(last_fail) < timedelta(
+                    seconds=NEWAPI_RESTART_BACKOFF_SEC
+                ):
+                    logger.info("NewAPI container restart skipped (failure backoff)")
+                    return False
+            except (ValueError, TypeError):
+                pass
         try:
-            self.state["newapi_restart_time"] = datetime.now().isoformat()
-            self._save_state()
             result = subprocess.run(
-                "ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no donglicao@aliyun 'podman restart new-api'",
-                shell=True, capture_output=True, timeout=30
+                [
+                    "ssh",
+                    "-o", "ConnectTimeout=10",
+                    "-o", "BatchMode=yes",
+                    "donglicao@aliyun",
+                    "podman restart new-api",
+                ],
+                capture_output=True, timeout=30,
             )
             if result.returncode != 0:
-                result = subprocess.run(
-                    "podman restart new-api",
-                    shell=True, capture_output=True, timeout=30
+                raise Exception(
+                    f"SSH restart failed: {result.stderr.decode(errors='replace')[:200]}"
                 )
-            if result.returncode != 0:
-                raise Exception("All restart methods failed")
 
             # 重启后验证：等待 NewAPI 恢复响应（最多 30s）
             verified = False
@@ -1719,6 +1731,9 @@ class AutoFixEngine:
                     break
 
             if verified:
+                self.state["newapi_restart_time"] = datetime.now().isoformat()
+                self.state.pop("newapi_restart_fail_time", None)
+                self._save_state()
                 self.telegram.send_alert(
                     "NewAPI 容器重启",
                     f"NewAPI 容器已重启并验证存活\n"
@@ -1726,6 +1741,8 @@ class AutoFixEngine:
                     "restart"
                 )
             else:
+                self.state["newapi_restart_fail_time"] = datetime.now().isoformat()
+                self._save_state()
                 self.telegram.send_alert(
                     "NewAPI 重启未验证",
                     f"NewAPI 容器重启命令成功但 API 未响应\n"
@@ -1735,6 +1752,8 @@ class AutoFixEngine:
             return verified
         except Exception as e:
             logger.error(f"Restart NewAPI failed: {e}")
+            self.state["newapi_restart_fail_time"] = datetime.now().isoformat()
+            self._save_state()
             self.telegram.send_alert(
                 "NewAPI 重启失败",
                 f"NewAPI 容器重启失败\n"
@@ -1918,13 +1937,18 @@ class Guardian:
             time.sleep(HEALTH_CHECK_INTERVAL)
 
     def _check_cycle(self):
-        # 1. NewAPI 健康
+        # 1. NewAPI 健康：连续 NEWAPI_FAIL_THRESHOLD 次失败才触发破坏性重启，
+        # 避免单次网络抖动/超时误重启生产容器
         newapi_ok, newapi_msg = self.health.check_newapi()
         if not newapi_ok:
-            # 自愈动作（容器重启）不依赖告警冷却，只受自身冷却节流限制
-            self.autofix.restart_newapi_container()
+            self._newapi_fail_streak = getattr(self, "_newapi_fail_streak", 0) + 1
+            if self._newapi_fail_streak >= NEWAPI_FAIL_THRESHOLD:
+                self.autofix.restart_newapi_container()
+                self._newapi_fail_streak = 0
             if self.alerts.should_alert("newapi_down", "error"):
                 self.telegram.send_alert("NewAPI 宕机", newapi_msg, "error")
+        else:
+            self._newapi_fail_streak = 0
 
         # 2. 渠道健康（P1: 先降权再禁用）
         channels = self.newapi.get_channels()
@@ -1964,9 +1988,11 @@ class Guardian:
                     self.autofix.state["restart_counts"][name] = 0
                     self.autofix._save_state()
             else:
+                # 自愈动作（重启）不受告警冷却限制，始终执行；冷却只控通知。
+                # restart_local_proxy 内部有 3 次重启上限断路器。
+                self.autofix.restart_local_proxy(name, info["port"])
                 if self.alerts.should_alert(f"proxy_{name}", "error"):
                     self.telegram.send_alert("本地代理故障", msg, "error")
-                    self.autofix.restart_local_proxy(name, info["port"])
 
         # 7. 错误率
         ok, rate, errors, total = self.health.check_error_rate()

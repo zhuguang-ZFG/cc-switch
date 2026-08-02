@@ -670,6 +670,147 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertTrue(command[1].endswith("anyrouter-proxy.py"))
         self.assertTrue(popen.call_args.kwargs["cwd"].endswith("anyrouter-proxy"))
 
+    def test_newapi_restart_requires_three_consecutive_failures(self):
+        """单次/两次瞬态失败不得触发破坏性重启；连续 3 次才重启"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (False, "down")
+        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+        g._check_cycle()
+        self.assertEqual(g.autofix.restart_newapi_container.call_count, 0)
+
+        g._check_cycle()
+        self.assertEqual(g.autofix.restart_newapi_container.call_count, 1)
+
+    def test_newapi_restart_streak_resets_on_recovery(self):
+        """失败 2 次后恢复健康，计数清零，不触发重启"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.side_effect = [(False, "down"), (False, "down"), (True, "ok")]
+        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        for _ in range(3):
+            g._check_cycle()
+
+        self.assertEqual(g.autofix.restart_newapi_container.call_count, 0)
+
+    def test_local_proxy_restart_not_blocked_by_alert_cooldown(self):
+        """代理故障时自愈重启不受告警冷却限制；冷却只控通知"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (False, "down")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False  # 告警在冷却 → 不发通知
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+
+        # 4 个本地代理全部失败时，重启必须全部执行
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 4)
+        g.telegram.send_alert.assert_not_called()
+
+    def test_newapi_restart_success_enters_long_cooldown(self):
+        """重启成功写 newapi_restart_time（长冷却）；失败只写 fail_time（短退避）"""
+        engine = make_engine({
+            "newapi_restart_time": None,
+            "newapi_restart_fail_time": None,
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.newapi.get_status = Mock(return_value=True)
+        engine.telegram = Mock()
+
+        with (
+            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)),
+            patch.object(guardian.time, "sleep"),
+        ):
+            ok = engine.restart_newapi_container()
+
+        self.assertTrue(ok)
+        self.assertIsNotNone(engine.state.get("newapi_restart_time"))
+        self.assertNotIn("newapi_restart_fail_time", engine.state)
+        engine._save_state.assert_called()
+
+    def test_newapi_restart_failure_sets_short_backoff(self):
+        """重启失败只写 fail_time 短退避，不写成功冷却"""
+        engine = make_engine({
+            "newapi_restart_time": None,
+            "newapi_restart_fail_time": None,
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+
+        with (
+            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=1)),
+            patch.object(guardian.time, "sleep"),
+        ):
+            ok = engine.restart_newapi_container()
+
+        self.assertFalse(ok)
+        self.assertIsNone(engine.state.get("newapi_restart_time"))
+        self.assertIsNotNone(engine.state.get("newapi_restart_fail_time"))
+        engine._save_state.assert_called()
+
+    def test_newapi_restart_uses_argv_ssh_without_local_fallback(self):
+        """SSH 用 argv 调用、不含 StrictHostKeyChecking=no、无本地 podman fallback"""
+        engine = make_engine({
+            "newapi_restart_time": None,
+            "newapi_restart_fail_time": None,
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+        engine.newapi.get_status = Mock(return_value=True)
+
+        with (
+            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)) as run,
+            patch.object(guardian.time, "sleep"),
+        ):
+            engine.restart_newapi_container()
+
+        args = run.call_args.args[0]
+        self.assertEqual(args[0], "ssh")  # 顶层命令是 ssh，不是本地 podman fallback
+        self.assertNotIn("StrictHostKeyChecking=no", args)
+        self.assertEqual(run.call_args.kwargs.get("shell", False), False)
+        self.assertEqual(run.call_count, 1)
+
 
 class OmpRoleTests(unittest.TestCase):
     def test_codebuddy_recovery_restores_default_role_without_touching_task(self):

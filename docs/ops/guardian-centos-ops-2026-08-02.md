@@ -5,7 +5,7 @@
 
 ## Guardian 当前状态
 
-Guardian 核心闭环已实现；当前回归为 24/24 通过。现场已验证 Guardian/agentrouter 持续运行、Telegram `/help` 发送、渠道 45 权重恢复和本地代理路由。NewAPI 容器重启属于破坏性路径，本次未主动触发。
+Guardian 核心闭环已实现；当前回归为 48/48 通过。现场已验证 Guardian/agentrouter 持续运行、Telegram `/help` 发送、渠道 45 权重恢复和本地代理路由。NewAPI 容器重启属于破坏性路径，本次未主动触发。
 - 运行副本: `~/.omp/guardian/guardian.py`
 - 仓库副本: `scripts/ops/guardian.py`
 
@@ -26,6 +26,8 @@ Guardian 核心闭环已实现；当前回归为 24/24 通过。现场已验证 
 | P2 | 余额趋势、日志轮转、metrics.json、定期 abilities 修复 | 单测/代码路径；未逐项做破坏性现场演练 |
 | 运行 | agentrouter 使用 `100.83.32.95:8788`，watchdog 探测同一地址 | 真实 `/v1/models` 返回成功 |
 | 运行 | Guardian 与 agentrouter watchdog 常驻，用户登录自动启动 | 当前进程 ready，Startup 入口已配置 |
+| 运行 | NewAPI 容器重启需连续 3 次探测失败；成功后 30min 冷却，失败 60s 退避 | 单测通过；SSH 走 argv、无本地 podman fallback |
+| 运行 | 本地代理自愈重启与告警冷却解耦（冷却只控通知） | 单测通过 |
 
 ### 已知限制
 
@@ -83,6 +85,6 @@ ch17 openoneapi-grok:   401 无效的令牌 → status 1→2 自动禁用 ✓
 
 ## 相关文档
 
-- Guardian README: `~/.omp/guardian/README.md`
+- Guardian README: `scripts/ops/README.md`（运行时镜像 `~/.omp/guardian/README.md`）
 - Guardian 代码: `scripts/ops/guardian.py`
 - Ops 约束: `docs/ops/do-not-modify-cc-switch.md`
