@@ -2,9 +2,9 @@
 
 本文件是 NewAPI 各模型聚合池的**当前事实快照**，防止文档漂移。任何渠道增删/权重调整/状态变化都应同步更新本文件。
 
-## 1. deepseek-v4-flash 聚合池（十二源）
+## 1. deepseek-v4-flash 聚合池（十六源）
 
-> **2026-08-02 权重重排 + 慢源禁用**：按日志实测延迟重排 abilities 权重（快源 tokenrhythm ch37/38→20、cline ch35→18、bazaarlink-2 ch47→12、sensenova ch15→10；慢源降 1-2 兜底），并**禁用 ch55/ch50（inferx，avg 48-65s 毒瘤慢源）**——`status=2 + abilities.enabled=0` 双保险。修复后 20 发实测：快源主导（ch37:5 ch38:4），整体 avg ~2.5s（修复前 ~27s），慢源零命中。另清理 ch35 重复 abilities 条目（`deepseek/deepseek-v4-flash` 别名已删，保留裸名 weight=18）。
+> **2026-08-02 nihaox-k3 + p0-systems 接入**：新增 ch59（nihaox-k3，weight=5）和 ch60（p0-systems，weight=5）两个 0731 版本渠道。nihaox 配额已用完（weight=0 禁用），p0 可用（weight=5）。**关键修复**：POST 创建渠道需要 `{"mode":"single","channel":{...}}` 包装层（之前平铺致 nil pointer panic）；PUT 更新不能含 `status` 字段（`UpdateChannel` 明确禁止）。
 
 | 渠道 | 来源 | 类型 | 权重 | auto_ban | 备注 |
 |------|------|------|------|----------|------|
@@ -15,14 +15,15 @@
 | ch15 | sensenova（商汤日日新） | 付费中转 | 10 | 1 | 中速（avg 19s） |
 | ch48 | opencode-go-flash | 订阅 | 8 | 0 | `https://opencode.ai/zen/go`（带 /v1 会 404）；OpenCode Go $10/月订阅；中速（avg 21s），从 22 降权 |
 | ch42 | DeepSeek 官方直连 | 官方 | 8 | 1 | 官方稳定（avg 22s）；models 含裸名，官方别名走 `deepseek-official-v4-flash`；从 1 提权（用户要求） |
-| ch56 | hf-deepseek-0731 | 免费 | 5 | 0 | `huggingface.co` 端点 `deepseek-ai/DeepSeek-V4-Flash-0731`；key 任意；IP 限流 20 突发/12 每分钟 |
+| **ch59** | **nihaox-k3** | **免费** | **0** | **1** | **2026-08-02 新增**：`https://k3.nihaox.cc.cd/v1`；**0731 版本**；**配额已用完，weight=0 禁用** |
+| **ch60** | **p0-systems** | **免费** | **5** | **1** | **2026-08-02 新增**：`https://api.p0.systems/api/agents`（**不带 /v1**——初设带 /v1 致 NewAPI 拼 `/v1/v1/...` 404，去 /v1 后修复）；**0731 版本**；**可用** |
+| ch56 | hf-deepseek-0731 | 免费 | 3 | 0 | `huggingface.co` 端点 `deepseek-ai/DeepSeek-V4-Flash-0731`；key 任意；IP 限流 20 突发/12 每分钟 |
 | ch53 | atomcode-bridge | 免费 | 8 | 0 | 中速（avg 11s，2-22s）；本机 `atomgit-opencode-bridge`（Tailscale 100.83.32.95:9457，base_url 不带 /v1）；CodingPlan Lite 额度；从 3 提权（比 sensenova/opencode 快） |
 | ch58 | hfspace-deepseek | 免费 | 2 | 0 | `2c2ch1u11-share-api-0.hf.space`（base_url 不带 /v1）；120 RPM/key 限流；上游慢（冷启动 60s+）；上下文非 1M |
-| ch46 | bazaarlink-flash-1 | 免费 | 2 | 0 | 慢源（avg 32s）降权；10 RPM/150 每日加权扣量 |
-| ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 2 | 0 | 慢源（avg 28s）降权；Tailscale 100.83.32.95:8787 |
+| ch46 | bazaarlink-flash-1 | 免费 | 3 | 0 | 慢源（avg 32s）降权；10 RPM/150 每日加权扣量 |
+| ch44 | codebuddy（WorkBuddy 本机） | 桌面依赖 | 5 | 0 | 慢源（avg 28s）降权；Tailscale 100.83.32.95:8787 |
 | ~~ch55~~ | ~~inferx-deepseek-b~~ | 免费 | 1 | 0 | **2026-08-02 已禁用**（avg 65s 最慢毒瘤）；`model.inferx.net/endpoints`（不带 /v1）；每 100 万 token 免费 |
 | ~~ch50~~ | ~~inferx-deepseek~~ | 免费 | 1 | 0 | **2026-08-02 已禁用**（avg 38s 慢源）；同上第一 key |
-
 > **ch43（旧 Python 代理）已于 2026-08-01 删除**，被本机 `atomgit-opencode-bridge` 替代（ch53）。旧代理签名算法不对被上游拒，bridge 用正确 `atomcode-signing-v1` HMAC 签名 + 真实 UA，成功过上游验证。
 
 ## 2. glm-5.2 聚合池（七源）
