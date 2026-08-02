@@ -544,6 +544,12 @@ class AutoFixEngine:
         tmp.write_text(json.dumps(self.state, indent=2))
         os.replace(tmp, STATE_FILE)
 
+    def _append_disabled(self, record: dict):
+        """追加禁用渠道记录（防重复：同 id 不重复追加）"""
+        self.state.setdefault("disabled_channels", [])
+        if not any(r["id"] == record["id"] for r in self.state["disabled_channels"]):
+            self.state["disabled_channels"].append(record)
+
     # ── P1: 渠道性能监控 ──────────────────────────────────────────────────
 
     def _record_channel_perf(self, channel_id: int, response_time: int, healthy: bool):
@@ -618,7 +624,7 @@ class AutoFixEngine:
                     }
                 # 直接禁用（错误渠道不需要降权缓冲）
                 if self.newapi.disable_channel(channel_id):
-                    self.state["disabled_channels"].append({
+                    self._append_disabled({
                         "id": channel_id,
                         "name": name,
                         "reason": f"error_scan: {matched_keyword} — {test_msg[:80]}",
@@ -710,8 +716,10 @@ class AutoFixEngine:
             cid_str = str(channel_id)
             is_degraded = cid_str in degraded
 
-            # 成功率低 → 降权
+            # 降权路径：检查 is_degraded 防止步骤 2 降权后步骤 3 再降（双降权）
             if stats["success_rate"] < WEIGHT_ADJUST_SUCCESS_THRESHOLD:
+                if is_degraded:
+                    continue  # 已降权中，不重复降权（步骤 2 已处理）
                 new_weight = max(MIN_WEIGHT, int(current_weight * WEIGHT_DEGRADE_FACTOR))
                 if new_weight < current_weight:
                     channel["weight"] = new_weight
@@ -767,7 +775,7 @@ class AutoFixEngine:
             }
 
         if self.newapi.disable_channel(channel_id):
-            self.state["disabled_channels"].append({
+            self._append_disabled({
                 "id": channel_id,
                 "name": name,
                 "reason": f"response_time: {response_time}ms",
@@ -1060,7 +1068,7 @@ class AutoFixEngine:
                     channel = self.newapi.get_channel(channel_id)
                     if channel and self.newapi.disable_channel(channel_id):
                         logger.warning(f"Channel {channel_id} unstable after join, disabled (status=2)")
-                        self.state["disabled_channels"].append({
+                        self._append_disabled({
                             "id": channel_id,
                             "name": channel.get("name", str(channel_id)),
                             "reason": f"stability_rollback: {test_msg[:80]}",
@@ -1349,7 +1357,7 @@ class AutoFixEngine:
                             "time": datetime.now().isoformat(),
                         }
                     if self.newapi.disable_channel(channel_id):
-                        self.state["disabled_channels"].append({
+                        self._append_disabled({
                             "id": channel_id, "name": channel["name"],
                             "reason": f"full_scan: {test_msg[:80]}",
                             "time": datetime.now().isoformat(), "manual": False,
@@ -1803,6 +1811,8 @@ class Guardian:
         self.autofix.scan_error_channels()
 
         # 3. P1: 权重自动调整（根据性能历史）
+        # 重新获取渠道列表：步骤 2/2.5 可能已禁用/降权某些渠道，过期列表会错误处理它们
+        channels = self.newapi.get_channels()
         self.autofix._auto_adjust_weights(channels)
 
         # 4. P0: 检查已禁用渠道是否恢复（自动启用 + 防抖动）
