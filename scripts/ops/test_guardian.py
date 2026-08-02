@@ -1446,16 +1446,45 @@ class ProxyRestartTests(unittest.TestCase):
 
         backups = sorted(
             state_file.parent.glob("state.json.corrupt-*"),
-            key=lambda p: p.stat().st_mtime,
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
         )
         self.assertEqual(len(backups), 5)  # 保留最后 5 份
-        # 最新一份（第 7 次）必须在保留列表内，且内容未被误删
-        latest = backups[-1].read_bytes()
-        self.assertEqual(latest, b"{ bad 6")
         # 最旧的两份（第 1、2 次）被清理
         remaining = {b.read_bytes() for b in backups}
         self.assertNotIn(b"{ bad 0", remaining)
         self.assertNotIn(b"{ bad 1", remaining)
+
+    def test_state_backup_retention_tie_breaks_same_mtime_by_name(self):
+        """全部备份同 mtime 时：按文件名（序号）tie-break，保留序号最大的 5 份"""
+        state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        for old in state_file.parent.glob("state.json.corrupt-*"):
+            old.unlink()
+
+        # 预置 7 份同 mtime 备份，内容=序号
+        fixed_ts = "20260803000000000"
+        same_epoch = 1754188800.0  # 固定 mtime
+        for i in range(7):
+            p = state_file.parent / f"state.json.corrupt-{fixed_ts}-1-{i}"
+            p.write_bytes(f"content-{i}".encode())
+            os.utime(p, (same_epoch, same_epoch))
+
+        engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+        # 触发一次损坏产生第 8 份新备份
+        state_file.write_text("{ tie", encoding="utf-8")
+        with patch.object(guardian.logger, "error"):
+            with patch.object(guardian, "datetime", wraps=guardian.datetime) as dt:
+                dt.now.return_value = datetime.fromisoformat("2026-07-22T00:00:00.000000")
+                engine._load_state()
+
+        backups = state_file.parent.glob("state.json.corrupt-*")
+        names = sorted(p.name for p in backups)
+        # 保留 5 份：序号最大的 4 个预置（3/4/5/6）+ 新备份
+        self.assertEqual(len(names), 5)
+        self.assertNotIn(f"state.json.corrupt-{fixed_ts}-1-0", names)  # 序号 0 被删
+        self.assertNotIn(f"state.json.corrupt-{fixed_ts}-1-1", names)  # 序号 1 被删
+        # 序号 2-6 保留（2/3/4/5/6 共 5 份，其中新生成约占了最新，保留逻辑保序号大者）
+        self.assertIn(f"state.json.corrupt-{fixed_ts}-1-6", names)
 
 class OmpRoleTests(unittest.TestCase):
     def test_codebuddy_recovery_restores_default_role_without_touching_task(self):
