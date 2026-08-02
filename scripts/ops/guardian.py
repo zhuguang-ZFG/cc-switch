@@ -1548,35 +1548,43 @@ class AutoFixEngine:
             return False
 
     def restart_newapi_container(self) -> bool:
-        """重启 NewAPI 容器（多种方式）"""
+        """重启 NewAPI 容器（多种方式）+ 重启后验证"""
         try:
             result = subprocess.run(
                 "ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no donglicao@aliyun 'podman restart new-api'",
                 shell=True, capture_output=True, timeout=30
             )
-            if result.returncode == 0:
+            if result.returncode != 0:
+                result = subprocess.run(
+                    "podman restart new-api",
+                    shell=True, capture_output=True, timeout=30
+                )
+            if result.returncode != 0:
+                raise Exception("All restart methods failed")
+
+            # 重启后验证：等待 NewAPI 恢复响应（最多 30s）
+            verified = False
+            for _ in range(6):
+                time.sleep(5)
+                if self.newapi.get_status():
+                    verified = True
+                    break
+
+            if verified:
                 self.telegram.send_alert(
                     "NewAPI 容器重启",
-                    f"NewAPI 容器已重启（SSH）\n"
+                    f"NewAPI 容器已重启并验证存活\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "restart"
                 )
-                return True
-
-            result = subprocess.run(
-                "podman restart new-api",
-                shell=True, capture_output=True, timeout=30
-            )
-            if result.returncode == 0:
+            else:
                 self.telegram.send_alert(
-                    "NewAPI 容器重启",
-                    f"NewAPI 容器已重启（本地 podman）\n"
+                    "NewAPI 重启未验证",
+                    f"NewAPI 容器重启命令成功但 API 未响应\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                    "restart"
+                    "warning"
                 )
-                return True
-
-            raise Exception("All restart methods failed")
+            return verified
         except Exception as e:
             logger.error(f"Restart NewAPI failed: {e}")
             self.telegram.send_alert(
