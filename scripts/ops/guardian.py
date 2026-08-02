@@ -440,13 +440,19 @@ class HealthChecker:
         return False, f"{name} 无响应（Tailscale 和 localhost 都失败）"
 
     def check_error_rate(self) -> Tuple[bool, float, int, int]:
+        """检查错误率
+
+        NewAPI 日志类型（源码 model/log.go）：
+        LogTypeConsume=2（正常消费）, LogTypeError=5（真正错误）。
+        错误率 = 错误请求 / 实际请求数（消费+错误），而非全部日志。
+        """
         logs = self.newapi.get_logs(100)
         if not logs:
             return True, 0.0, 0, 0
-        total = len(logs)
-        errors = sum(1 for log in logs if log.get("type") == 2 and (log.get("channel_id") or log.get("model_name")))
-        rate = errors / total if total > 0 else 0.0
-        return rate <= ERROR_RATE_THRESHOLD, rate, errors, total
+        errors = sum(1 for log in logs if log.get("type") == 5)
+        requests = sum(1 for log in logs if log.get("type") in (2, 5))
+        rate = errors / requests if requests > 0 else 0.0
+        return rate <= ERROR_RATE_THRESHOLD, rate, errors, requests
 
     def check_balance(self) -> Tuple[bool, int, int]:
         user = self.newapi.get_user_info()
@@ -1412,10 +1418,14 @@ class AlertManager:
         }
 
     def should_alert(self, alert_type: str, level: str = "warning") -> bool:
-        if alert_type not in self.last_alerts:
-            return True
+        """检查是否应告警（按级别冷却）。放行时记录时间戳，否则冷却永不生效。"""
+        now = datetime.now()
+        last = self.last_alerts.get(alert_type)
         cooldown = self.alert_cooldowns.get(level, timedelta(minutes=5))
-        return datetime.now() - self.last_alerts[alert_type] > cooldown
+        if last is not None and now - last <= cooldown:
+            return False
+        self.last_alerts[alert_type] = now
+        return True
 
     def send_daily_report(self, stats: dict):
         text = (
@@ -1505,7 +1515,12 @@ class Guardian:
         # 6. 本地代理健康
         for name, info in LOCAL_PROXIES.items():
             ok, msg = self.health.check_local_proxy(info["port"], name)
-            if not ok:
+            if ok:
+                # 代理健康 → 重置断路器（否则满 3 次后永久放弃自愈）
+                if self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
+                    self.autofix.state["restart_counts"][name] = 0
+                    self.autofix._save_state()
+            else:
                 if self.alerts.should_alert(f"proxy_{name}", "error"):
                     self.telegram.send_alert("本地代理故障", msg, "error")
                     self.autofix.restart_local_proxy(name, info["port"])
