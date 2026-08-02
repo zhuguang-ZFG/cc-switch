@@ -517,20 +517,26 @@ class AutoFixEngine:
         self._cleanup_count = 0    # 状态清理计数器
 
     def _load_state(self) -> dict:
-        if STATE_FILE.exists():
-            try:
-                return json.loads(STATE_FILE.read_text())
-            except Exception:
-                pass
-        return {
+        defaults = {
             "disabled_channels": [],
             "restarted_proxies": {},
             "last_daily_report": None,
             "restart_counts": {},
             "weight_history": {},
             "joined_channels": {},
-            "degraded_channels": {},  # P1: 已降权的渠道
+            "degraded_channels": {},
         }
+        if STATE_FILE.exists():
+            try:
+                loaded = json.loads(STATE_FILE.read_text())
+                # 合并默认值，确保旧版 state.json 缺键不 KeyError
+                for k, v in defaults.items():
+                    if k not in loaded:
+                        loaded[k] = v
+                return loaded
+            except Exception:
+                pass
+        return defaults
 
     def _save_state(self):
         """原子写：先写临时文件再 os.replace，避免中途崩溃损坏 state.json"""
