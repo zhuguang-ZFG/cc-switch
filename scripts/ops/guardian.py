@@ -1176,9 +1176,11 @@ class AutoFixEngine:
             # 拼回：只替换 modelRoles 块，其他内容不动
             config_text = config_text[:block_start] + block_header + block_body + config_text[block_end:]
 
-            # 真正写回 config.yml
+            # 真正写回 config.yml（原子写，防中途崩溃损坏）
             if config_text != original_text:
-                config_path.write_text(config_text, encoding="utf-8")
+                tmp = config_path.with_suffix(".tmp")
+                tmp.write_text(config_text, encoding="utf-8")
+                os.replace(tmp, config_path)
                 logger.info(f"OMP config.yml written for channel {channel_id} ({name})")
                 self.telegram.send_alert(
                     "OMP 角色模型更新",
@@ -1408,6 +1410,25 @@ class AutoFixEngine:
                     cleaned += 1
             except (ValueError, TypeError):
                 continue
+
+        # 清理陈旧/失效 disabled_channels：
+        # - 超过 STATE_MAX_AGE_HOURS 的记录
+        # - 渠道已被删除（NewAPI 中不存在）
+        # - 渠道已被外部重新启用（status=1，非 Guardian 记录的状态）
+        existing_ids = {c["id"] for c in self.newapi.get_channels()}
+        for record in self.state.get("disabled_channels", [])[:]:
+            cid = record["id"]
+            stale = False
+            try:
+                if datetime.fromisoformat(record.get("time", "")) < cutoff:
+                    stale = True
+            except (ValueError, TypeError):
+                stale = True
+            if cid not in existing_ids:
+                stale = True  # 渠道已删除
+            if stale:
+                self.state["disabled_channels"].remove(record)
+                cleaned += 1
 
         if cleaned > 0:
             self._save_state()
