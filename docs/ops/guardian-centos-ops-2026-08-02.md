@@ -5,7 +5,7 @@
 
 ## Guardian 当前状态
 
-Guardian 已完成 P0/P1/P2 全部修复（16/16 验证通过），代码位于：
+Guardian 核心闭环已实现；当前回归为 24/24 通过。现场已验证 Guardian/agentrouter 持续运行、Telegram `/help` 发送、渠道 45 权重恢复和本地代理路由。NewAPI 容器重启属于破坏性路径，本次未主动触发。
 - 运行副本: `~/.omp/guardian/guardian.py`
 - 仓库副本: `scripts/ops/guardian.py`
 
@@ -13,41 +13,41 @@ Guardian 已完成 P0/P1/P2 全部修复（16/16 验证通过），代码位于�
 
 | 级别 | 功能 | 状态 |
 |---|---|---|
-| P0 | abilities 表自动同步（PUT /api/channel/ → UpdateAbilities） | ✅ |
-| P0 | OMP config.yml 真正读写（re.sub 替换 + 插入新角色） | ✅ |
-| P0 | 负载均衡（>5 渠道时按比例 scale=0.9） | ✅ |
-| P0 | 回滚机制（每 45s 检查，2 次失败 → weight=0） | ✅ |
-| P0 | 权重历史还原（恢复时从 weight_history 还原） | ✅ |
-| P0 | 防抖动（3x test_channel, ≥2 通过, 5min 冷却） | ✅ |
-| P0 | 错误渠道扫描（402/401/502 瞬间返回错误检测） | ✅ |
-| P1 | 渠道性能监控（deque maxlen=20） | ✅ |
-| P1 | 自动降权（weight×0.5, 最小 1, 仍不健康则禁用） | ✅ |
-| P1 | 权重自动调整（成功率/响应时间驱动） | ✅ |
-| P1 | Telegram 非阻塞（getUpdates timeout=1） | ✅ |
-| P2 | 余额趋势分析（消耗速度 + 预计耗尽时间） | ✅ |
-| P2 | 日志轮转（RotatingFileHandler 5MB×5） | ✅ |
-| P2 | 指标导出（metrics.json） | ✅ |
-| P2 | NewAPI status API（POST /api/channel/{id}/status） | ✅ |
-| P2 | fix abilities API（POST /api/channel/fix） | ✅ |
+| P0 | abilities 同步（PUT `/api/channel/` → `UpdateAbilities`） | 单测 + 源码路径确认 |
+| P0 | OMP `modelRoles` 原子读写，并只恢复对应本地 provider 角色 | 单测通过 |
+| P0 | 大池恢复限权：同模型健康同伴 ≥5 时，不超过同伴平均权重 | 单测通过 |
+| P0 | 稳定性回滚：每 45s 检查，连续 2 次失败后禁用 `status=2` | 单测通过 |
+| P0 | 权重历史还原、防抖动 3 次测 2 次通过、冷却/退避 | 单测通过 |
+| P0 | 402/401/502 关键词硬错误扫描 | 代码 + 历史现场记录 |
+| P1 | 慢结果按不同 `test_time` 去重，3 个独立慢结果才主动复测 | 单测 + 现场误降权复现后修复 |
+| P1 | 全量扫描软错误连续 3 次才降权；成功清零 | 单测通过 |
+| P1 | 性能窗口 20 个不同测试结果；降权后逐步恢复历史权重 | 单测通过 |
+| P1 | Telegram 短轮询，HTML 占位符转义 | 单测 + 真实 `/help` 发送成功 |
+| P2 | 余额趋势、日志轮转、metrics.json、定期 abilities 修复 | 单测/代码路径；未逐项做破坏性现场演练 |
+| 运行 | agentrouter 使用 `100.83.32.95:8788`，watchdog 探测同一地址 | 真实 `/v1/models` 返回成功 |
+| 运行 | Guardian 与 agentrouter watchdog 常驻，用户登录自动启动 | 当前进程 ready，Startup 入口已配置 |
 
 ### 已知限制
 
 | # | 限制 | 优先级 |
 |---|---|---|
-| 1 | `_update_omp_roles` 只在渠道恢复时触发，不主动检测 OMP 角色是否指向死渠道 | P2 |
-| 2 | `_auto_adjust_weights` 需要 3 个样本（~45s）才开始工作 | P2 |
-| 3 | 没有渠道分组/角色感知（某角色所有渠道故障时无法感知） | P2 |
-| 4 | 没有配置热加载（配置变更需重启） | P2 |
-| 5 | Guardian 进程未被配置为 Windows 服务/任务计划 | P1 |
-| 6 | `_balance_pool_weights` 每次调用都 get_channels()（重复 API 请求） | P2 |
+| 1 | OMP 主动探测只报警，不自动切换角色，避免擅自改变用户路由 | 设计约束 |
+| 2 | `_auto_adjust_weights` 需要 20 个不同 NewAPI `test_time` 样本 | P2 |
+| 3 | 没有渠道组/角色池整体可用性判断 | P2 |
+| 4 | 配置变更需要重启 Guardian | P2 |
+| 5 | 现有计划任务设置受管理员权限保护；已增加用户 Startup 登录入口作为可控兜底 | 运维限制 |
+| 6 | `_balance_pool_weights` 恢复时会额外调用一次 `get_channels()` | P2 |
+| 7 | NewAPI 容器 SSH/podman 重启路径本次未做破坏性现场测试 | 风险说明 |
 
 ## NewAPI 侧配置变更
 
 | 设置 | 旧值 | 新值 | 原因 |
 |---|---|---|---|
-| `AutomaticDisableStatusCodes` | `401` | `401,402,403` | 402 余额不足不触发自动禁用 |
-| `AutomaticDisableKeywords` | 7 条英文关键词 | += 余额不足, INSUFFICIENT_BALANCE, credit balance | 中文错误消息不匹配 |
-| `ChannelDisableThreshold` | 默认 | `3` | 个人使用，较少渠道，更快故障检测 |
+| `AutomaticDisableStatusCodes` | 历史值 | `401,402,403,502` | 当前 API 实读值 |
+| `AutomaticDisableKeywords` | 7 条英文关键词 | 增加余额不足、INSUFFICIENT_BALANCE、credit balance | 覆盖中英文余额错误 |
+| `AutomaticRetryStatusCodes` | 曾包含 402 | 当前明确排除 402 | 余额不足不做池内重试 |
+| `AutomaticEnableChannelEnabled` | 历史值 | `true` | Guardian 对自动启用渠道仍做 3 次稳定验证 |
+| `ChannelDisableThreshold` | 默认 | `3` | 连续失败阈值 |
 | `RetryTimes` | 默认 | `2` | 更快故障转移 |
 
 ## centos 渠道变更 (2026-08-02)
@@ -70,11 +70,9 @@ Guardian 已完成 P0/P1/P2 全部修复（16/16 验证通过），代码位于�
 | 删除 | ch16 `centos-api-backup-gpt` | 与 ch62 同 URL 冗余 |
 | 删除 | ch25 `centos-api-newkey-gpt` | 与 ch62 同 URL 冗余 |
 
-### 新 key
+### 凭据处理
 
-```
-sk-B3ha7RRJ9LdG0NGQylkvJalYDgF7eYN3MvqX9bcz1wFpcIMv
-```
+历史文档中的明文 key 已移除。凭据只保存在本机 `~/.omp/guardian/secrets.json`、NewAPI 渠道配置或环境变量中；已经进入版本历史的旧 key 应视为已暴露并轮换。
 
 ## 错误渠道扫描实测
 

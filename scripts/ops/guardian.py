@@ -29,6 +29,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -38,12 +39,28 @@ from typing import Optional, Dict, List, Tuple
 # 配置
 # ═══════════════════════════════════════════════════════════════════════════
 
-NEWAPI_BASE = "https://aliyun.donglicao.com"
-NEWAPI_TOKEN = "xoIunCzgQpkj4oLGjVlI4Cd58JeE"
-NEWAPI_USER = "1"
+CONFIG_DIR = Path.home() / ".omp" / "guardian"
+SECRETS_FILE = CONFIG_DIR / "secrets.json"
+try:
+    _SECRETS = json.loads(SECRETS_FILE.read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    _SECRETS = {}
 
-TELEGRAM_TOKEN = "8754114928:AAE2AUrJT4XOnholAJi6-qwOJ2mkMpxK_rQ"
-TELEGRAM_CHAT_ID = "5345665818"
+def _config_value(env_name: str, secret_name: str, default: str = "") -> str:
+    return os.environ.get(env_name) or str(_SECRETS.get(secret_name, default))
+
+NEWAPI_BASE = _config_value("NEWAPI_BASE", "newapi_base", "https://aliyun.donglicao.com")
+NEWAPI_TOKEN = _config_value("NEWAPI_TOKEN", "newapi_token")
+NEWAPI_USER = _config_value("NEWAPI_USER", "newapi_user", "1")
+TELEGRAM_TOKEN = _config_value("TELEGRAM_TOKEN", "telegram_token")
+TELEGRAM_CHAT_ID = _config_value("TELEGRAM_CHAT_ID", "telegram_chat_id")
+TELEGRAM_ALLOWED_USERS = set(
+    u.strip()
+    for u in _config_value("TELEGRAM_ALLOWED_USERS", "telegram_allowed_users", "").split(",")
+    if u.strip()
+)
+TELEGRAM_PROXY = _config_value("TELEGRAM_PROXY", "telegram_proxy")
+CODEBUDDY_API_KEY = _config_value("CODEBUDDY_API_KEY", "codebuddy_api_key")
 
 # 监控阈值
 HEALTH_CHECK_INTERVAL = 15  # 秒
@@ -57,7 +74,7 @@ BALANCE_TREND_DEPLETION_HOURS = 24  # 预计耗尽时间预警（小时）
 # 降权/禁用阈值（P1: 渐进式处理）
 WEIGHT_DEGRADE_FACTOR = 0.5  # 降权到原来的 50%
 MIN_WEIGHT = 1  # 最小权重
-WEIGHT_ADJUST_WINDOW = 20  # 权重调整统计窗口（检查周期数）
+WEIGHT_ADJUST_WINDOW = 20  # 权重调整统计窗口（不同的 NewAPI 测试结果数）
 WEIGHT_ADJUST_SUCCESS_THRESHOLD = 0.8  # 成功率低于此值则降权
 WEIGHT_ADJUST_SLOW_THRESHOLD = 45000  # 平均响应时间超过此值则降权
 WEIGHT_BOOST_SUCCESS_THRESHOLD = 0.95  # 成功率高于此值且响应快则加权
@@ -69,6 +86,8 @@ RECOVERY_TEST_COUNT = 3  # 恢复验证测试次数
 RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）
+WEIGHT_DEGRADE_COOLDOWN_MIN = 5  # 降权最小间隔（分钟）— 自愈节流独立于告警冷却
+NEWAPI_RESTART_COOLDOWN_MIN = 30  # NewAPI 容器重启最小间隔（分钟）
 
 # 错误渠道检测（补充 NewAPI 内置 30min 自动测试，不重复）
 # NewAPI 已内置: 每 30min 全量测试 + 401/402/403 自动禁用 + 自动启用
@@ -94,12 +113,12 @@ CYCLE_TIME_WARN_MS = 30000  # 周期耗时预警阈值（毫秒）
 LOCAL_PROXIES = {
     "agentrouter": {"port": 8788, "name": "agentrouter", "script": "agentrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
     "codebuddy": {"port": 8787, "name": "codebuddy", "script": "converter.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/codebuddy2openai"},
-    "anyrouter": {"port": 8789, "name": "anyrouter", "script": "router-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
+    "anyrouter": {"port": 8789, "name": "anyrouter", "script": "anyrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/anyrouter-proxy"},
     "atomcode": {"port": 9457, "name": "atomcode", "script": "proxy.js", "dir": "C:/Users/zhugu/atomgit-opencode-bridge"},
 }
 
 # 日志
-LOG_DIR = Path.home() / ".omp" / "guardian"
+LOG_DIR = CONFIG_DIR
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "guardian.log"
 STATE_FILE = LOG_DIR / "state.json"
@@ -127,12 +146,15 @@ class TelegramBot:
     # 同一 chat 最小发送间隔（秒），防止多告警类型同周期 burst 触发 Telegram 限流
     MIN_SEND_INTERVAL = 0.5
 
-    def __init__(self, token: str, chat_id: str):
+    def __init__(self, token: str, chat_id: str, proxy: str = ""):
         self.token = token
         self.chat_id = chat_id
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.offset = 0
         self._last_send = 0.0
+        self._offline_until = 0.0
+        proxies = {"http": proxy, "https": proxy} if proxy else {}
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
 
     def send(self, text: str, parse_mode: str = "HTML") -> bool:
         """发送 Telegram 消息（带速率限制）"""
@@ -142,6 +164,8 @@ class TelegramBot:
         if wait > 0:
             time.sleep(wait)
         self._last_send = time.time()
+        if time.time() < self._offline_until:
+            return False
         try:
             url = f"{self.base_url}/sendMessage"
             data = json.dumps({
@@ -153,10 +177,11 @@ class TelegramBot:
                 url, data=data,
                 headers={"Content-Type": "application/json"}
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with self.opener.open(req, timeout=5) as resp:
                 result = json.loads(resp.read().decode())
                 return result.get("ok", False)
         except Exception as e:
+            self._offline_until = time.time() + 60
             logger.error(f"Telegram send failed: {e}")
             return False
 
@@ -169,9 +194,11 @@ class TelegramBot:
 
     def get_updates(self, timeout: int = 1) -> List[dict]:
         """获取 Telegram 更新（短轮询，不阻塞主循环）"""
+        if time.time() < self._offline_until:
+            return []
         try:
             url = f"{self.base_url}/getUpdates?offset={self.offset}&timeout={timeout}"
-            with urllib.request.urlopen(url, timeout=timeout + 5) as resp:
+            with self.opener.open(url, timeout=timeout + 2) as resp:
                 result = json.loads(resp.read().decode())
                 if result.get("ok") and result.get("result"):
                     updates = result["result"]
@@ -180,6 +207,7 @@ class TelegramBot:
                     return updates
                 return []
         except Exception as e:
+            self._offline_until = time.time() + 60
             logger.debug(f"Telegram getUpdates: {e}")
             return []
 
@@ -193,7 +221,28 @@ class TelegramBot:
             text = message.get("text", "")
             if not text.startswith("/"):
                 continue
-
+            # 鉴权 1: 只接受配置的 chat_id 发送的命令，防止第三方禁用渠道/重启代理
+            chat_id = str(message.get("chat", {}).get("id", ""))
+            if chat_id != str(self.chat_id):
+                logger.warning(f"Ignored Telegram command from unauthorized chat {chat_id}")
+                continue
+            # 鉴权 2: 校验发送者身份。白名单优先；未配置时仅接受私聊 owner
+            #（from.id == chat.id），群组成员天然被拒，避免非授权成员执行管理命令
+            sender_id = str(message.get("from", {}).get("id", ""))
+            allowed_users = getattr(self, "allowed_users", TELEGRAM_ALLOWED_USERS)
+            if allowed_users:
+                if sender_id not in allowed_users:
+                    logger.warning(
+                        f"Ignored Telegram command from unauthorized sender {sender_id} "
+                        f"(chat {chat_id})"
+                    )
+                    continue
+            elif sender_id != chat_id:
+                logger.warning(
+                    f"Ignored Telegram command from sender {sender_id} not matching "
+                    f"chat owner {chat_id} (group or spoofed)"
+                )
+                continue
             parts = text.split()
             cmd = parts[0].lower()
             args = parts[1:] if len(parts) > 1 else []
@@ -256,8 +305,13 @@ class TelegramBot:
         self.send("\n".join(lines))
 
     def _cmd_report(self, guardian):
-        guardian._maybe_daily_report(force=True)
-        self.send("📊 健康报告已生成")
+        sent = guardian._maybe_daily_report(force=True)
+        if sent:
+            self.send("📊 健康报告已生成")
+        else:
+            # 发送失败即 Telegram 通道不可用（已进 offline cooldown），
+            # 再发一条“失败”通知也无法送达，只记录日志待通道恢复。
+            logger.error("健康报告发送失败：Telegram 通道不可用")
 
     def _cmd_restart(self, guardian, proxy_name: str):
         if proxy_name not in LOCAL_PROXIES:
@@ -314,9 +368,9 @@ class TelegramBot:
             "/status - 查看系统状态\n"
             "/channels - 列出所有渠道\n"
             "/report - 生成健康报告\n"
-            "/restart <proxy> - 重启本地代理\n"
-            "/enable <channel_id> - 启用渠道\n"
-            "/disable <channel_id> - 禁用渠道\n"
+            "/restart &lt;proxy&gt; - 重启本地代理\n"
+            "/enable &lt;channel_id&gt; - 启用渠道\n"
+            "/disable &lt;channel_id&gt; - 禁用渠道\n"
             "/help - 显示此帮助"
         )
         self.send(text)
@@ -401,6 +455,51 @@ class NewAPIClient:
         """修复所有渠道的 abilities 表（POST /api/channel/fix）"""
         result = self._request("POST", "/api/channel/fix", {})
         return result.get("success", False) if result else False
+    def exclude_retry_status_code(self, status_code: int) -> bool:
+        """Remove one status from NewAPI's channel-pool retry policy."""
+        result = self._request("GET", "/api/option/")
+        items = result.get("data") if result else None
+        if not isinstance(items, list):
+            return False
+        option = next(
+            (item for item in items if isinstance(item, dict) and item.get("key") == "AutomaticRetryStatusCodes"),
+            None,
+        )
+        if option is None:
+            return False
+
+        value = str(option.get("value") or "")
+        updated_parts = []
+        changed = False
+        for part in value.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            bounds = part.split("-", 1)
+            try:
+                start = int(bounds[0])
+                end = int(bounds[1]) if len(bounds) == 2 else start
+            except ValueError:
+                updated_parts.append(part)
+                continue
+            if not start <= status_code <= end:
+                updated_parts.append(part)
+                continue
+
+            changed = True
+            if start < status_code:
+                updated_parts.append(str(start) if start == status_code - 1 else f"{start}-{status_code - 1}")
+            if status_code < end:
+                updated_parts.append(str(end) if status_code + 1 == end else f"{status_code + 1}-{end}")
+
+        if not changed:
+            return True
+        response = self._request(
+            "PUT",
+            "/api/option/",
+            {"key": "AutomaticRetryStatusCodes", "value": ",".join(updated_parts)},
+        )
+        return bool(response and response.get("success"))
 
     def get_logs(self, limit: int = 100) -> List[dict]:
         result = self._request("GET", f"/api/log/?p=0&page_size={limit}")
@@ -417,8 +516,8 @@ class NewAPIClient:
 class HealthChecker:
     def __init__(self, newapi: NewAPIClient):
         self.newapi = newapi
-        self.channel_failures: Dict[int, int] = {}
         self.channel_slow: Dict[int, int] = {}
+        self.channel_test_times: Dict[int, object] = {}
 
     def check_newapi(self) -> Tuple[bool, str]:
         if self.newapi.get_status():
@@ -431,25 +530,32 @@ class HealthChecker:
         status = channel.get("status", 1)
 
         if status != 1:
+            self.channel_slow[channel_id] = 0
             return True, f"已禁用 (status={status})", response_time
 
         if response_time > CHANNEL_SLOW_THRESHOLD_MS:
+            # 兜底：NewAPI 缺失 test_time 时用 sentinel 去重,避免同一份慢数据被轮询放大。
+            test_time = channel.get("test_time") if channel.get("test_time") is not None else "no-test-time"
+            if self.channel_test_times.get(channel_id) == test_time:
+                return True, f"响应慢 ({response_time}ms，结果已计数)", response_time
+            self.channel_test_times[channel_id] = test_time
+
             self.channel_slow[channel_id] = self.channel_slow.get(channel_id, 0) + 1
             if self.channel_slow[channel_id] >= CHANNEL_FAIL_THRESHOLD:
+                self.channel_slow[channel_id] = 0
                 test_ok, test_msg = self.newapi.test_channel(channel_id)
                 if not test_ok:
                     return False, f"响应过慢 ({response_time}ms) + 测试失败: {test_msg}", response_time
                 return True, f"响应慢 ({response_time}ms) 但测试通过", response_time
             return True, f"响应慢 ({response_time}ms)", response_time
-        else:
-            self.channel_slow[channel_id] = 0
 
+        self.channel_slow[channel_id] = 0
         return True, "正常", response_time
 
     def check_local_proxy(self, port: int, name: str) -> Tuple[bool, str]:
         proxy_config = {
             "agentrouter": {"key": "any", "endpoint": "/v1/models"},
-            "codebuddy": {"key": "mEZCydQrTtYzKad5wHmU1pnEMb7DplcafmToLIlLpMg", "endpoint": "/v1/models"},
+            "codebuddy": {"key": CODEBUDDY_API_KEY, "endpoint": "/v1/models"},
             "anyrouter": {"key": "any", "endpoint": "/health"},
             "atomcode": {"key": "any", "endpoint": "/v1/usage"},
         }
@@ -499,12 +605,14 @@ class HealthChecker:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class AutoFixEngine:
-    def __init__(self, newapi: NewAPIClient, telegram: TelegramBot):
+    def __init__(self, newapi: NewAPIClient, telegram: TelegramBot, health: HealthChecker):
         self.newapi = newapi
         self.telegram = telegram
+        self.health = health
         self.state = self._load_state()
-        # P1: 渠道性能历史（内存中）
+        # P1: 渠道性能历史（只记录不同的 NewAPI test_time）
         self.channel_perf: Dict[int, deque] = defaultdict(lambda: deque(maxlen=WEIGHT_ADJUST_WINDOW))
+        self._last_channel_tests: Dict[int, object] = {}
         # P2: 余额历史（用于趋势分析）
         self.balance_history: deque = deque(maxlen=BALANCE_TREND_WINDOW)
         self._scan_count = 0       # 错误扫描独立计数器
@@ -513,6 +621,7 @@ class AutoFixEngine:
         self._omp_check_count = 0  # OMP 角色主动检测计数器
         self._full_scan_count = 0  # 全量健康扫描计数器
         self._full_scan_offset = 0  # 全量扫描批次轮转偏移
+        self._full_scan_failures: Dict[int, int] = {}
         self._ability_fix_count = 0  # abilities 修复计数器
         self._cleanup_count = 0    # 状态清理计数器
 
@@ -552,18 +661,24 @@ class AutoFixEngine:
 
     # ── P1: 渠道性能监控 ──────────────────────────────────────────────────
 
-    def _record_channel_perf(self, channel_id: int, response_time: int, healthy: bool):
-        """记录渠道性能历史"""
+    def _record_channel_perf(self, channel: dict, healthy: bool) -> bool:
+        """每个 NewAPI 测试结果只记录一次，避免轮询重复放大同一数据。"""
+        channel_id = channel["id"]
+        test_time = channel.get("test_time")
+        if not test_time or self._last_channel_tests.get(channel_id) == test_time:
+            return False
+        self._last_channel_tests[channel_id] = test_time
         self.channel_perf[channel_id].append({
-            "time": datetime.now().isoformat(),
-            "response_time": response_time,
+            "time": test_time,
+            "response_time": channel.get("response_time") or 0,
             "healthy": healthy,
         })
+        return True
 
     def _get_channel_stats(self, channel_id: int) -> Optional[dict]:
         """获取渠道性能统计"""
         history = self.channel_perf.get(channel_id)
-        if not history or len(history) < 3:
+        if not history or len(history) < WEIGHT_ADJUST_WINDOW:
             return None
         rts = [h["response_time"] for h in history if h["response_time"] > 0]
         success_count = sum(1 for h in history if h["healthy"])
@@ -649,6 +764,21 @@ class AutoFixEngine:
         channel_id = channel["id"]
         name = channel["name"]
         current_weight = channel.get("weight", 0)
+        # 自愈节流：距上次降权不足 WEIGHT_DEGRADE_COOLDOWN_MIN 则跳过。
+        # 独立于告警冷却 — 告警是否发送不应决定自愈动作是否执行。
+        degraded = self.state.get("degraded_channels", {})
+        last_degrade = degraded.get(str(channel_id), {}).get("time")
+        if last_degrade:
+            try:
+                if datetime.now() - datetime.fromisoformat(last_degrade) < timedelta(
+                    minutes=WEIGHT_DEGRADE_COOLDOWN_MIN
+                ):
+                    logger.debug(
+                        f"Channel {channel_id} ({name}) degrade skipped (cooldown)"
+                    )
+                    return False
+            except (ValueError, TypeError):
+                pass
 
         # 首次降权时记录原始权重（if not present 保证不被后续降权覆盖），
         # 供恢复时还原。否则降权链 10→5→2→1 后禁用会记录 weight=1 丢失原始值。
@@ -693,66 +823,60 @@ class AutoFixEngine:
     # ── P1: 权重自动调整 ──────────────────────────────────────────────────
 
     def _auto_adjust_weights(self, channels: List[dict]):
-        """根据性能自动调整渠道权重（每个检查周期调用）
-
-        自循环规则：
-        - 降权中的渠道（degraded_channels）不加权，防止同周期撤销降权
-        - 加权恢复到原始权重后清理 degraded_channels，防止状态泄漏
-        """
+        """按完整的新测试窗口调权；每个窗口最多执行一次动作。"""
         degraded = self.state.get("degraded_channels", {})
         for channel in channels:
             channel_id = channel["id"]
-            if channel.get("status") != 1:
+            if channel.get("status") != 1 or channel.get("weight", 0) == 0:
                 continue
 
             stats = self._get_channel_stats(channel_id)
             if not stats:
                 continue
 
+            history = self.channel_perf[channel_id]
             current_weight = channel.get("weight", 0)
-            if current_weight == 0:
-                continue
-
             cid_str = str(channel_id)
             is_degraded = cid_str in degraded
-
-            # 降权路径：检查 is_degraded 防止步骤 2 降权后步骤 3 再降（双降权）
-            if stats["success_rate"] < WEIGHT_ADJUST_SUCCESS_THRESHOLD:
-                if is_degraded:
-                    continue  # 已降权中，不重复降权（步骤 2 已处理）
-                new_weight = max(MIN_WEIGHT, int(current_weight * WEIGHT_DEGRADE_FACTOR))
-                if new_weight < current_weight:
-                    channel["weight"] = new_weight
-                    self.newapi.update_channel(channel)
-                    logger.info(f"Channel {channel_id} auto-degrade: weight {current_weight} → {new_weight} (success_rate={stats['success_rate']:.0%})")
-            # 平均响应慢 → 降权
-            elif stats["avg_response_time"] > WEIGHT_ADJUST_SLOW_THRESHOLD:
-                new_weight = max(MIN_WEIGHT, int(current_weight * WEIGHT_DEGRADE_FACTOR))
-                if new_weight < current_weight:
-                    channel["weight"] = new_weight
-                    self.newapi.update_channel(channel)
-                    logger.info(f"Channel {channel_id} auto-degrade: weight {current_weight} → {new_weight} (avg_rt={stats['avg_response_time']:.0f}ms)")
-            # 成功率高且响应快 → 加权
-            elif stats["success_rate"] >= WEIGHT_BOOST_SUCCESS_THRESHOLD and stats["avg_response_time"] < 10000:
-                if is_degraded:
-                    # 降权渠道渐进恢复：每次 +1，到达原始权重后清理记录
-                    original_w = degraded[cid_str].get("original_weight", current_weight)
-                    if current_weight < original_w:
-                        new_weight = min(original_w, current_weight + 1)
-                        channel["weight"] = new_weight
-                        self.newapi.update_channel(channel)
-                        logger.info(f"Channel {channel_id} degraded-recovery: weight {current_weight} → {new_weight} (target={original_w})")
+            try:
+                if stats["success_rate"] < WEIGHT_ADJUST_SUCCESS_THRESHOLD:
+                    if not is_degraded:
+                        self.degrade_channel_weight(
+                            channel,
+                            f"success_rate={stats['success_rate']:.0%}",
+                        )
+                elif stats["avg_response_time"] > WEIGHT_ADJUST_SLOW_THRESHOLD:
+                    if not is_degraded:
+                        self.degrade_channel_weight(
+                            channel,
+                            f"avg_response_time={stats['avg_response_time']:.0f}ms",
+                        )
+                elif (
+                    is_degraded
+                    and stats["success_rate"] >= WEIGHT_BOOST_SUCCESS_THRESHOLD
+                    and 0 < stats["avg_response_time"] < 10000
+                ):
+                    saved = self.state.get("weight_history", {}).get(cid_str, {})
+                    original_weight = saved.get(
+                        "weight",
+                        degraded[cid_str].get("original_weight", current_weight),
+                    )
+                    if current_weight < original_weight:
+                        new_weight = min(original_weight, current_weight + 1)
+                        updated = channel.copy()
+                        updated["weight"] = new_weight
+                        if self.newapi.update_channel(updated):
+                            channel["weight"] = new_weight
+                            logger.info(
+                                f"Channel {channel_id} degraded-recovery: weight "
+                                f"{current_weight} → {new_weight} (target={original_weight})"
+                            )
                     else:
-                        # 已恢复到原始权重，清理降权记录
                         del self.state["degraded_channels"][cid_str]
                         self._save_state()
                         logger.info(f"Channel {channel_id} fully recovered, cleared degraded record")
-                else:
-                    new_weight = min(MAX_AUTO_WEIGHT, current_weight + 1)
-                    if new_weight > current_weight:
-                        channel["weight"] = new_weight
-                        self.newapi.update_channel(channel)
-                        logger.info(f"Channel {channel_id} auto-boost: weight {current_weight} → {new_weight} (success_rate={stats['success_rate']:.0%})")
+            finally:
+                history.clear()
 
     # ── P0: 防抖动 + 恢复 + 加入聚合池 ────────────────────────────────────
 
@@ -810,218 +934,158 @@ class AutoFixEngine:
         return False
 
     def check_and_enable_recovered_channels(self):
-        """检查已禁用渠道是否恢复，自动启用并加入聚合池
-
-        - 手动禁用（manual=True）的渠道不自动恢复，尊重用户意图
-        - 失败渠道指数退避：不每周期重测，避免 14 个死渠道阻塞主循环 11 分钟
-        - 每周期最多验证 RECOVERY_BATCH_SIZE 个渠道
-        """
+        """检查已禁用渠道是否稳定恢复，再启用并加入聚合池。"""
         tested = 0
         for record in self.state["disabled_channels"][:]:
             if tested >= RECOVERY_BATCH_SIZE:
                 break
-
-            channel_id = record["id"]
-            name = record["name"]
-
-            # 手动禁用的渠道不自动恢复
             if record.get("manual"):
                 continue
 
-            # 指数退避：上次失败后按 2^failures 分钟退避（上限 RECOVERY_BACKOFF_MAX）
+            channel_id = record["id"]
+            name = record["name"]
             failures = record.get("recovery_failures", 0)
             last_attempt = record.get("last_recovery_attempt")
+            cooldown_from = last_attempt or record.get("time")
+            backoff_min = RECOVERY_COOLDOWN_MIN
             if last_attempt and failures > 0:
-                backoff_min = min(RECOVERY_BACKOFF_BASE * (2 ** (failures - 1)), RECOVERY_BACKOFF_MAX)
+                backoff_min = max(
+                    RECOVERY_COOLDOWN_MIN,
+                    min(RECOVERY_BACKOFF_BASE * (2 ** (failures - 1)), RECOVERY_BACKOFF_MAX),
+                )
+            if cooldown_from:
                 try:
-                    if datetime.now() - datetime.fromisoformat(last_attempt) < timedelta(minutes=backoff_min):
+                    if datetime.now() - datetime.fromisoformat(cooldown_from) < timedelta(minutes=backoff_min):
                         continue
                 except (ValueError, TypeError):
-                    pass  # 时间戳损坏，跳过退避直接测试
+                    pass
 
             tested += 1
             record["last_recovery_attempt"] = datetime.now().isoformat()
-
-            # 检查渠道是否已被 NewAPI 自动启用（AutomaticEnableChannelEnabled=true）
             current = self.newapi.get_channel(channel_id)
-            if current and current.get("status") == 1:
-                # NewAPI 已自动启用，清理记录并恢复权重
-                self.state["disabled_channels"].remove(record)
-                self._save_state()
-                logger.info(f"Channel {channel_id} ({name}) already re-enabled by NewAPI, restoring weight")
-                self._auto_join_pool(channel_id, name)
-                continue
+            already_enabled = bool(current and current.get("status") == 1)
 
-            # 多次 test_channel 验证稳定性（独立短超时）
             stable_count = 0
-            for _ in range(RECOVERY_TEST_COUNT):
+            test_msg = "无响应"
+            for attempt in range(RECOVERY_TEST_COUNT):
                 test_ok, test_msg = self.newapi.test_channel(channel_id)
-                if test_ok:
-                    stable_count += 1
-                time.sleep(1)
+                stable_count += int(test_ok)
+                if attempt + 1 < RECOVERY_TEST_COUNT:
+                    time.sleep(1)
 
             if stable_count >= RECOVERY_TEST_PASS_MIN:
-                if self.enable_channel(channel_id, name):
+                enabled = already_enabled or self.newapi.enable_channel(channel_id)
+                if enabled and self._auto_join_pool(channel_id, name):
                     self.state["disabled_channels"].remove(record)
                     self._save_state()
-                    logger.info(f"Channel {channel_id} ({name}) recovered and re-enabled")
-                    self._auto_join_pool(channel_id, name)
+                    logger.info(
+                        f"Channel {channel_id} ({name}) recovered "
+                        f"({stable_count}/{RECOVERY_TEST_COUNT} checks passed)"
+                    )
                     self._update_omp_roles(channel_id, name)
-            else:
-                # 失败：递增退避计数
-                record["recovery_failures"] = failures + 1
-                self._save_state()
-                logger.debug(f"Channel {channel_id} ({name}) recovery failed, backoff #{failures + 1}")
+                    continue
+                test_msg = "聚合池加入失败" if enabled else "渠道启用失败"
+                if enabled and self.newapi.disable_channel(channel_id):
+                    logger.warning(f"Channel {channel_id} ({name}) recovery commit failed; disabled again")
+            elif already_enabled:
+                if self.newapi.disable_channel(channel_id):
+                    logger.warning(f"Channel {channel_id} ({name}) auto-enabled before stable; disabled again")
+                else:
+                    logger.error(f"Channel {channel_id} ({name}) failed recovery and could not be re-disabled")
 
-    def _get_available_models(self) -> List[str]:
-        """动态获取 NewAPI 可用模型列表"""
-        result = self.newapi._request("GET", "/api/models", timeout=10)
-        if not result:
-            return []
-        data = result.get("data", {})
-        all_models = []
-        for channel_models in data.values():
-            if isinstance(channel_models, list):
-                all_models.extend(channel_models)
-        return list(set(m for m in all_models if m))
+            record["recovery_failures"] = failures + 1
+            self._save_state()
+            logger.debug(
+                f"Channel {channel_id} ({name}) recovery failed: {test_msg}; "
+                f"backoff #{failures + 1}"
+            )
 
-    def _auto_join_pool(self, channel_id: int, name: str):
-        """P0: 自动加入聚合池 — 真正更新 NewAPI weight/priority（同步 abilities 表）
-
-        NewAPI 源码证据：
-        - Channel.Update() 调用 channel.UpdateAbilities(nil)
-        - PUT /api/channel/ 触发 Channel.Update()
-        - 因此 weight/priority 变更自动同步到 abilities 表
-        - 无需额外的 abilities API
-        """
+    def _auto_join_pool(self, channel_id: int, name: str) -> bool:
+        """恢复渠道权重并登记稳定性监控；PUT 会同步 NewAPI abilities。"""
         try:
             channel = self.newapi.get_channel(channel_id)
             if not channel:
-                return
-
-            channel_models = [m.strip() for m in channel.get("models", "").split(",") if m.strip()]
-
-            # P0: 用 _get_available_models 动态获取聚合池可用模型，过滤出本渠道可贡献的
-            available_models = self._get_available_models()
-            if available_models:
-                # 只保留聚合池中实际存在且匹配目标关键词的模型
-                target_keywords = ["deepseek", "glm", "claude", "gpt", "k3", "kimi", "qwen", "hy3"]
-                pool_models = [m for m in channel_models
-                               if m in available_models
-                               and any(kw in m.lower() for kw in target_keywords)]
-            else:
-                pool_models = channel_models  # 动态发现失败时 fallback 到渠道自身模型
-
+                return False
+            # 渠道声明的模型名即 NewAPI 公开路由名（含 model_mapping 左侧别名），
+            # 是加入聚合池的 SSOT。/api/models 返回上游发现模型，不保证包含这些别名
+            # （如 opencode-go、deepseek-official-v4-flash），不得用它过滤。
+            pool_models = [m.strip() for m in channel.get("models", "").split(",") if m.strip()]
             if not pool_models:
-                logger.info(f"Channel {channel_id} ({name}) has no pool-eligible models, skipping join")
-                return
+                logger.info(f"Channel {channel_id} ({name}) has no models, skipping join")
+                return False
 
-            # P0: 权重历史还原 — 恢复时还原历史值而非硬编码
             history = self.state.setdefault("weight_history", {}).get(str(channel_id))
             if history and history.get("weight", 0) > 0:
-                new_weight = history["weight"]
-                new_priority = history["priority"]
-                logger.info(f"Channel {channel_id} restoring weight from history: {new_weight}")
+                desired_weight = history["weight"]
+                desired_priority = history.get("priority", 50)
+                logger.info(f"Channel {channel_id} restoring weight from history: {desired_weight}")
             else:
-                new_weight = 5
-                new_priority = 50
+                desired_weight = 5
+                desired_priority = 50
 
-            # 只在 weight 为 0 或被降权时才更新
+            desired_weight = self._balance_pool_weights(pool_models, channel_id, desired_weight)
             current_weight = channel.get("weight", 0)
-            if current_weight == 0 or str(channel_id) in self.state.get("degraded_channels", {}):
-                channel["weight"] = new_weight
-                channel["priority"] = new_priority
-
-                if self.newapi.update_channel(channel):
-                    logger.info(f"Channel {channel_id} ({name}) joined pool: weight={new_weight}, priority={new_priority}, models={pool_models}")
-
-                    # 清理降权记录
-                    self.state.setdefault("degraded_channels", {})
-                    self.state["degraded_channels"].pop(str(channel_id), None)
-
-                    self.telegram.send_alert(
-                        "渠道加入聚合池",
-                        f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复并加入聚合池\n"
-                        f"模型: {', '.join(pool_models)}\n"
-                        f"权重: {new_weight}, 优先级: {new_priority}\n"
-                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                        "success"
-                    )
-
-                    # P0: 负载均衡 — 调整其他渠道权重
-                    self._balance_pool_weights(pool_models, channel_id, new_weight)
-
-                    # P0: 回滚机制 — 记录加入时间，用于后续稳定性监控
-                    if "joined_channels" not in self.state:
-                        self.state["joined_channels"] = {}
-                    self.state["joined_channels"][str(channel_id)] = {
-                        "time": datetime.now().isoformat(),
-                        "models": pool_models,
-                        "weight": new_weight,
-                        "priority": new_priority,
-                        "stability_checks": 0,
-                        "stability_fails": 0,
-                    }
-                    self._save_state()
-                else:
+            current_priority = channel.get("priority", 50)
+            needs_update = current_weight != desired_weight or current_priority != desired_priority
+            if needs_update:
+                updated = channel.copy()
+                updated["weight"] = desired_weight
+                updated["priority"] = desired_priority
+                if not self.newapi.update_channel(updated):
                     logger.error(f"Channel {channel_id} update_channel failed during auto_join_pool")
-            else:
-                logger.info(f"Channel {channel_id} ({name}) weight={current_weight}, no join needed")
+                    return False
+
+            self.state.setdefault("degraded_channels", {}).pop(str(channel_id), None)
+            self.state.setdefault("joined_channels", {})[str(channel_id)] = {
+                "time": datetime.now().isoformat(),
+                "models": pool_models,
+                "weight": desired_weight,
+                "priority": desired_priority,
+                "stability_checks": 0,
+                "stability_fails": 0,
+            }
+            self._save_state()
+            logger.info(
+                f"Channel {channel_id} ({name}) joined pool: weight={desired_weight}, "
+                f"priority={desired_priority}, models={pool_models}"
+            )
+            self.telegram.send_alert(
+                "渠道加入聚合池",
+                f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复并加入聚合池\n"
+                f"模型: {', '.join(pool_models)}\n"
+                f"权重: {desired_weight}, 优先级: {desired_priority}\n"
+                f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                "success",
+            )
+            return True
         except Exception as e:
             logger.error(f"Auto join pool failed for channel {channel_id}: {e}")
+            return False
 
-    def _balance_pool_weights(self, joined_models: List[str], new_channel_id: int, new_weight: int):
-        """P0: 聚合池负载均衡 — 按比例调整其他渠道权重
-
-        策略：如果某个模型已有 N 个活跃渠道，新渠道加入后总权重增加，
-        为保持每个渠道的相对份额，适当降低其他渠道权重。
-        """
+    def _balance_pool_weights(self, joined_models: List[str], new_channel_id: int, new_weight: int) -> int:
+        """大池中仅限制恢复渠道权重，不改写健康同伴的用户配置。"""
         try:
             channels = self.newapi.get_channels()
-            # 收集每个渠道需要的最小缩放因子（跨所有模型），避免多模型渠道被重复缩放
-            channel_scale: Dict[int, float] = {}
-            channel_obj: Dict[int, dict] = {}
-
+            balanced_weight = new_weight
             for model in joined_models:
-                model = model.strip()
-                if not model:
-                    continue
-
-                model_channels = [
+                peers = [
                     ch for ch in channels
                     if ch.get("status") == 1
-                    and model in ch.get("models", "").split(",")
-                    and ch["id"] != new_channel_id
+                    and ch.get("weight", 0) > 0
+                    and ch.get("id") != new_channel_id
+                    and model in [m.strip() for m in ch.get("models", "").split(",")]
                 ]
-
-                if len(model_channels) >= 5:
-                    total_weight = sum(ch.get("weight", 0) for ch in model_channels) + new_weight
-                    target_total = max(total_weight * 0.9, new_weight)
-                    scale = target_total / total_weight if total_weight > 0 else 1.0
-                    for ch in model_channels:
-                        cid = ch["id"]
-                        # 取最激进的（最小）缩放因子
-                        if cid not in channel_scale or scale < channel_scale[cid]:
-                            channel_scale[cid] = scale
-                            channel_obj[cid] = ch
-
-            # 每个渠道只缩放一次
-            adjusted = 0
-            for cid, scale in channel_scale.items():
-                ch = channel_obj[cid]
-                old_w = ch.get("weight", 0)
-                if old_w <= MIN_WEIGHT:
-                    continue
-                new_w = max(MIN_WEIGHT, int(old_w * scale))
-                if new_w < old_w:
-                    ch["weight"] = new_w
-                    self.newapi.update_channel(ch)
-                    adjusted += 1
-
-            if adjusted > 0:
-                logger.info(f"Balanced pool: adjusted {adjusted} channels' weights")
+                if len(peers) >= 5:
+                    peer_average = max(MIN_WEIGHT, sum(ch["weight"] for ch in peers) // len(peers))
+                    balanced_weight = min(balanced_weight, peer_average)
+            if balanced_weight < new_weight:
+                logger.info(
+                    f"Balanced recovered channel {new_channel_id}: weight {new_weight} → {balanced_weight}"
+                )
+            return balanced_weight
         except Exception as e:
             logger.error(f"Balance pool weights failed: {e}")
+            return new_weight
 
     def _check_joined_channels_stability(self):
         """P0: 回滚机制 — 定期检查 joined_channels 稳定性，不稳定时自动回滚
@@ -1099,29 +1163,81 @@ class AutoFixEngine:
     def _update_omp_roles(self, channel_id: int, name: str):
         """P0: 更新 OMP modelRoles — 真正读取、修改、写回 config.yml
 
-        当渠道恢复时，检查 OMP 角色是否应切换到该渠道提供的模型。
-        如果角色当前指向的 provider/model 不是恢复渠道提供的，则切换。
+        仅当渠道确认为本地代理的上游镜像（base_url 端口匹配）且本地端点存活时
+        才切换角色，避免同名渠道误触发。渠道恢复 ≠ 本地代理健康，双重校验。
         """
         try:
             channel = self.newapi.get_channel(channel_id)
             if not channel:
                 return
 
-            channel_models = set(m.strip() for m in channel.get("models", "").split(",") if m.strip())
             channel_name = name.lower()
-
-            # OMP 角色 → 首选模型映射（provider/model 格式）
-            omp_role_models = {
-                "slow": [("agentrouter/claude-opus-5", "xhigh"), ("zg-newapi-anthropic/claude-opus-5", None)],
-                "plan": [("@slow", None)],
-                "commit": [("zg-newapi/gpt-5.6-sol", "high")],
-                "tiny": [("zg-newapi/gpt-5.6-sol", "medium")],
-                "vision": [("agentrouter/claude-opus-5", "xhigh")],
-                "default": [("agentrouter/claude-opus-4-8", "xhigh")],
-                "smol": [("zg-newapi/gpt-5.6-sol", "high")],
-                "designer": [("zg-newapi/gpt-5.6-sol", "high")],
-                "task": [("zg-newapi/gpt-5.6-sol", "high")],
+            # 渠道名 → 本地 provider 契约：base_url 必须指向本地代理端点
+            provider_roles = {
+                "agentrouter": {
+                    "hosts": {"100.83.32.95"},
+                    "port": 8788,
+                    "proxy": "agentrouter",
+                    "roles": {
+                        "slow": ("agentrouter/claude-opus-5", "xhigh"),
+                        "vision": ("agentrouter/claude-opus-5", "xhigh"),
+                    },
+                },
+                "codebuddy": {
+                    "hosts": {"100.83.32.95"},
+                    "port": 8787,
+                    "proxy": "codebuddy",
+                    "roles": {
+                        "default": ("codebuddy/gpt-5.6-sol", "max"),
+                    },
+                },
             }
+            contract = provider_roles.get(channel_name)
+            if not contract:
+                return
+            # 校验 1: base_url 严格匹配本地代理端点（scheme/host/port），
+            # 防止同名渠道或任意同端口主机误绑定
+            base_url = str(channel.get("base_url") or "")
+            try:
+                parsed = urlparse(base_url)
+                scheme_ok = parsed.scheme in {"http", "https"}
+                host_ok = parsed.hostname in contract["hosts"]
+                port_ok = parsed.port == contract["port"]
+            except (ValueError, AttributeError):
+                scheme_ok = host_ok = port_ok = False
+            if not (scheme_ok and host_ok and port_ok):
+                logger.warning(
+                    f"Channel {channel_id} ({name}) base_url {base_url} does not match "
+                    f"local proxy endpoint (host in {sorted(contract['hosts'])}, "
+                    f"port {contract['port']}), skipping OMP role update"
+                )
+                return
+
+            # 校验 2: 本地端点存活（渠道恢复 ≠ 本地代理健康）
+            local_ok = True
+            if self.health:
+                try:
+                    local_ok, _ = self.health.check_local_proxy(
+                        contract["port"], contract["proxy"]
+                    )
+                except Exception as e:
+                    logger.error(f"OMP role local proxy probe failed for {name}: {e}")
+                    local_ok = False
+            if not local_ok:
+                logger.warning(
+                    f"Channel {channel_id} ({name}) recovered but local proxy "
+                    f"{contract['proxy']} is down, skipping OMP role update"
+                )
+                self.telegram.send_alert(
+                    "OMP 角色未切换",
+                    f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复，但本地代理 "
+                    f"<b>{contract['proxy']}</b> 无响应，OMP 角色保持原样",
+                    "warning",
+                )
+                return
+
+            channel_models = set(m.strip() for m in channel.get("models", "").split(",") if m.strip())
+            omp_role_models = contract["roles"]
 
             config_path = Path.home() / ".omp" / "agent" / "config.yml"
             if not config_path.exists():
@@ -1142,53 +1258,32 @@ class AutoFixEngine:
             block_body = block_match.group(2)
             block_start, block_end = block_match.span()
 
-            for role, model_specs in omp_role_models.items():
-                for provider_model, thinking_level in model_specs:
-                    if provider_model.startswith("@"):
-                        continue  # 引用角色（如 @slow），跳过
+            for role, (provider_model, thinking_level) in omp_role_models.items():
+                model = provider_model.split("/", 1)[1]
+                if model not in channel_models:
+                    continue
 
-                    parts = provider_model.split("/", 1)
-                    if len(parts) != 2:
-                        continue
-                    provider, model = parts[0], parts[1]
-
-                    # 检查恢复的渠道是否匹配该 provider（精确匹配，避免子串误匹配损坏 config）
-                    provider_matches = (
-                        channel_name == provider
-                        or (provider == "zg-newapi" and channel_name == "newapi")
-                    )
-
-                    if not (provider_matches and model in channel_models):
-                        continue
-
-                    # 构造目标值: "provider/model:level" 或 "provider/model"
-                    target_value = f"{provider_model}:{thinking_level}" if thinking_level else provider_model
-
-                    # 在 modelRoles 块内查找角色键（2 空格缩进）
-                    pattern = rf'^(  {re.escape(role)}:\s*)(.+)$'
-                    match = re.search(pattern, block_body, re.MULTILINE)
-
-                    if match:
-                        current_value = match.group(2).strip()
-                        if provider_model not in current_value:
-                            block_body = re.sub(
-                                pattern,
-                                rf'\g<1>{target_value}',
-                                block_body,
-                                count=1,
-                                flags=re.MULTILINE,
-                            )
-                            updated_roles.append(f"{role}: {current_value} → {target_value}")
-                            logger.info(f"OMP role '{role}' switched: {current_value} → {target_value}")
-                        else:
-                            logger.debug(f"OMP role '{role}' already uses '{provider_model}'")
-                    else:
-                        # 角色不存在 → 在 modelRoles 块末尾追加
-                        if block_body and not block_body.endswith("\n"):
-                            block_body += "\n"
-                        block_body += f"  {role}: {target_value}\n"
-                        updated_roles.append(f"{role}: (new) {target_value}")
-                        logger.info(f"OMP role '{role}' added: {target_value}")
+                target_value = f"{provider_model}:{thinking_level}" if thinking_level else provider_model
+                pattern = rf'^(  {re.escape(role)}:\s*)(.+)$'
+                match = re.search(pattern, block_body, re.MULTILINE)
+                if match:
+                    current_value = match.group(2).strip()
+                    if current_value != target_value:
+                        block_body = re.sub(
+                            pattern,
+                            rf'\g<1>{target_value}',
+                            block_body,
+                            count=1,
+                            flags=re.MULTILINE,
+                        )
+                        updated_roles.append(f"{role}: {current_value} → {target_value}")
+                        logger.info(f"OMP role '{role}' switched: {current_value} → {target_value}")
+                else:
+                    if block_body and not block_body.endswith("\n"):
+                        block_body += "\n"
+                    block_body += f"  {role}: {target_value}\n"
+                    updated_roles.append(f"{role}: (new) {target_value}")
+                    logger.info(f"OMP role '{role}' added: {target_value}")
 
             # 拼回：只替换 modelRoles 块，其他内容不动
             config_text = config_text[:block_start] + block_header + block_body + config_text[block_end:]
@@ -1269,8 +1364,8 @@ class AutoFixEngine:
                     base = provider_base.get(provider)
                     if not base:
                         continue
-                    # 只探测本地代理端点（127.0.0.1 / localhost），远程端点由 NewAPI 渠道状态覆盖
-                    if "127.0.0.1" not in base and "localhost" not in base:
+                    # 仅探测本机代理端点；agentrouter 绑定本机 Tailscale 地址供 VPS 访问。
+                    if not any(host in base for host in ("127.0.0.1", "localhost", "100.83.32.95")):
                         continue
                     if not self._probe_endpoint(base):
                         dead_roles.append(f"{role}: {value} ({base})")
@@ -1310,8 +1405,9 @@ class AutoFixEngine:
                 req = urllib.request.Request(url, headers={"Authorization": "Bearer any"})
                 with urllib.request.urlopen(req, timeout=3) as resp:
                     return resp.status < 500  # 2xx/3xx/4xx 都算存活
-            except urllib.error.HTTPError:
-                return True  # 4xx/5xx 是 HTTP 响应，服务存活（只是拒绝/出错）
+            except urllib.error.HTTPError as error:
+                # 4xx 是客户端拒绝（服务存活）；5xx 是服务端故障，不算存活
+                return error.code < 500
             except Exception:
                 continue  # 连接失败/超时 → 试下一个候选
         return False
@@ -1345,109 +1441,108 @@ class AutoFixEngine:
             channel_id = channel["id"]
             test_ok, test_msg = self.newapi.test_channel(channel_id)
             scanned += 1
-            if not test_ok:
-                msg_lower = test_msg.lower()
-                # 硬错误（402/401）直接禁用
-                if any(kw.lower() in msg_lower for kw in ERROR_DISABLE_KEYWORDS):
-                    self.state.setdefault("weight_history", {})
-                    if str(channel_id) not in self.state["weight_history"]:
-                        self.state["weight_history"][str(channel_id)] = {
-                            "weight": channel.get("weight", 5),
-                            "priority": channel.get("priority", 50),
-                            "time": datetime.now().isoformat(),
-                        }
-                    if self.newapi.disable_channel(channel_id):
-                        self._append_disabled({
-                            "id": channel_id, "name": channel["name"],
-                            "reason": f"full_scan: {test_msg[:80]}",
-                            "time": datetime.now().isoformat(), "manual": False,
-                        })
-                        self._save_state()
-                        logger.warning(f"Full scan disabled channel {channel_id}: {test_msg[:80]}")
-                else:
-                    # 软错误（超时/慢）降权
-                    if self.degrade_channel_weight(channel, f"full_scan: {test_msg[:60]}"):
-                        degraded += 1
-        self._full_scan_count += 1
+            if test_ok:
+                self._full_scan_failures.pop(channel_id, None)
+                continue
+
+            msg_lower = test_msg.lower()
+            # 硬错误（402/401）直接禁用
+            if any(kw.lower() in msg_lower for kw in ERROR_DISABLE_KEYWORDS):
+                self._full_scan_failures.pop(channel_id, None)
+                self.state.setdefault("weight_history", {})
+                if str(channel_id) not in self.state["weight_history"]:
+                    self.state["weight_history"][str(channel_id)] = {
+                        "weight": channel.get("weight", 5),
+                        "priority": channel.get("priority", 50),
+                        "time": datetime.now().isoformat(),
+                    }
+                if self.newapi.disable_channel(channel_id):
+                    self._append_disabled({
+                        "id": channel_id, "name": channel["name"],
+                        "reason": f"full_scan: {test_msg[:80]}",
+                        "time": datetime.now().isoformat(), "manual": False,
+                    })
+                    self._save_state()
+                    logger.warning(f"Full scan disabled channel {channel_id}: {test_msg[:80]}")
+                continue
+
+            failures = self._full_scan_failures.get(channel_id, 0) + 1
+            self._full_scan_failures[channel_id] = failures
+            if failures < CHANNEL_FAIL_THRESHOLD:
+                logger.warning(
+                    f"Full scan soft failure {failures}/{CHANNEL_FAIL_THRESHOLD} "
+                    f"for channel {channel_id}: {test_msg[:80]}"
+                )
+                continue
+
+            # 软错误仅在连续失败达到阈值后降权。
+            if self.degrade_channel_weight(channel, f"full_scan: {test_msg[:60]}"):
+                degraded += 1
+                self._full_scan_failures.pop(channel_id, None)
         logger.info(f"Full health scan batch: {scanned} channels, {degraded} degraded (offset={offset}/{n})")
 
     def periodic_ability_fix(self):
-        """周期性修复 abilities 表：NewAPI 的 abilities 可能与 channels 漂移
-
-        每 ABILITY_FIX_INTERVAL 周期调用 POST /api/channel/fix 重建投影。
-        """
+        """周期性修复 NewAPI 路由投影并排除无意义的 402 池内重试。"""
         self._ability_fix_count += 1
         if self._ability_fix_count % ABILITY_FIX_INTERVAL != 0:
             return
+        if not self.newapi.exclude_retry_status_code(402):
+            logger.warning("Periodic 402 retry policy check failed")
         if self.newapi.fix_channel_abilities():
             logger.info("Periodic ability fix completed")
         else:
             logger.warning("Periodic ability fix failed")
 
     def cleanup_stale_state(self):
-        """周期性清理陈旧状态，防止 state.json 无限膨胀
-
-        - 清理超过 STATE_MAX_AGE_HOURS 的 weight_history 条目
-        - 清理超过阈值的 degraded_channels 条目
-        - 清理已不在禁用列表的 joined_channels 残留
-        """
+        """清理无主状态；仍被 Guardian 管理的禁用/降权记录必须保留。"""
         self._cleanup_count += 1
         if self._cleanup_count % STATE_CLEANUP_INTERVAL != 0:
             return
 
         cutoff = datetime.now() - timedelta(hours=STATE_MAX_AGE_HOURS)
         cleaned = 0
+        channels = {str(c["id"]): c for c in self.newapi.get_channels()}
 
-        # 清理陈旧 weight_history
-        for cid in list(self.state.get("weight_history", {}).keys()):
-            entry = self.state["weight_history"][cid]
-            try:
-                if datetime.fromisoformat(entry.get("time", "")) < cutoff:
-                    del self.state["weight_history"][cid]
-                    cleaned += 1
-            except (ValueError, TypeError):
-                continue
-
-        # 清理陈旧 degraded_channels
-        for cid in list(self.state.get("degraded_channels", {}).keys()):
-            entry = self.state["degraded_channels"][cid]
-            try:
-                if datetime.fromisoformat(entry.get("time", "")) < cutoff:
-                    del self.state["degraded_channels"][cid]
-                    cleaned += 1
-            except (ValueError, TypeError):
-                continue
-
-        # 清理陈旧 restarted_proxies
-        for name in list(self.state.get("restarted_proxies", {}).keys()):
-            try:
-                if datetime.fromisoformat(self.state["restarted_proxies"][name]) < cutoff:
-                    del self.state["restarted_proxies"][name]
-                    self.state.setdefault("restart_counts", {}).pop(name, None)
-                    cleaned += 1
-            except (ValueError, TypeError):
-                continue
-
-        # 清理陈旧/失效 disabled_channels：
-        # - 超过 STATE_MAX_AGE_HOURS 的记录
-        # - 渠道已被删除（NewAPI 中不存在）
-        # - 渠道已被外部重新启用（status=1，非 Guardian 记录的状态）
-        existing_ids = {c["id"] for c in self.newapi.get_channels()}
-        for record in self.state.get("disabled_channels", [])[:]:
-            cid = record["id"]
-            stale = False
-            try:
-                if datetime.fromisoformat(record.get("time", "")) < cutoff:
-                    stale = True
-            except (ValueError, TypeError):
-                stale = True
-            if cid not in existing_ids:
-                stale = True  # 渠道已删除
-            if stale:
-                self.state["disabled_channels"].remove(record)
+        disabled = self.state.get("disabled_channels", [])
+        for record in disabled[:]:
+            cid = str(record["id"])
+            if cid not in channels:
+                disabled.remove(record)
+                self.state.get("weight_history", {}).pop(cid, None)
+                self.state.get("degraded_channels", {}).pop(cid, None)
+                self.state.get("joined_channels", {}).pop(cid, None)
                 cleaned += 1
 
-        if cleaned > 0:
+        managed_ids = {str(record["id"]) for record in disabled}
+        managed_ids.update(self.state.get("degraded_channels", {}))
+        managed_ids.update(self.state.get("joined_channels", {}))
+        for cid, entry in list(self.state.get("weight_history", {}).items()):
+            if cid in managed_ids:
+                continue
+            try:
+                stale = datetime.fromisoformat(entry.get("time", "")) < cutoff
+            except (ValueError, TypeError):
+                stale = True
+            if stale:
+                del self.state["weight_history"][cid]
+                cleaned += 1
+
+        for cid in list(self.state.get("degraded_channels", {})):
+            if cid not in channels:
+                del self.state["degraded_channels"][cid]
+                cleaned += 1
+
+        for name, timestamp in list(self.state.get("restarted_proxies", {}).items()):
+            try:
+                stale = datetime.fromisoformat(timestamp) < cutoff
+            except (ValueError, TypeError):
+                stale = True
+            if stale:
+                del self.state["restarted_proxies"][name]
+                self.state.setdefault("restart_counts", {}).pop(name, None)
+                cleaned += 1
+
+        if cleaned:
             self._save_state()
             logger.info(f"State cleanup: removed {cleaned} stale entries")
 
@@ -1526,8 +1621,15 @@ class AutoFixEngine:
                     "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
                     str(script_path),
                     "--host", "0.0.0.0",
-                    "--api-key", "mEZCydQrTtYzKad5wHmU1pnEMb7DplcafmToLIlLpMg",
+                    "--api-key", CODEBUDDY_API_KEY,
                     "--log", "converter.log"
+                ]
+            elif name == "anyrouter":
+                cmd = [
+                    "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
+                    str(script_path),
+                    "--port", str(port),
+                    "--log", "proxy.log"
                 ]
             elif name == "atomcode":
                 cmd = ["node", str(script_path)]
@@ -1578,8 +1680,24 @@ class AutoFixEngine:
             return False
 
     def restart_newapi_container(self) -> bool:
-        """重启 NewAPI 容器（多种方式）+ 重启后验证"""
+        """重启 NewAPI 容器（多种方式）+ 重启后验证
+
+        自带冷却节流（NEWAPI_RESTART_COOLDOWN_MIN），避免 NewAPI 无响应期间
+        每个检查周期都触发容器重启。冷却独立于告警冷却。
+        """
+        last = self.state.get("newapi_restart_time")
+        if last:
+            try:
+                if datetime.now() - datetime.fromisoformat(last) < timedelta(
+                    minutes=NEWAPI_RESTART_COOLDOWN_MIN
+                ):
+                    logger.info("NewAPI container restart skipped (cooldown)")
+                    return False
+            except (ValueError, TypeError):
+                pass
         try:
+            self.state["newapi_restart_time"] = datetime.now().isoformat()
+            self._save_state()
             result = subprocess.run(
                 "ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no donglicao@aliyun 'podman restart new-api'",
                 shell=True, capture_output=True, timeout=30
@@ -1724,7 +1842,7 @@ class AlertManager:
         self.last_alerts[alert_type] = now
         return True
 
-    def send_daily_report(self, stats: dict):
+    def send_daily_report(self, stats: dict) -> bool:
         text = (
             f"📊 <b>NewAPI 每日健康报告</b>\n\n"
             f"日期: {stats['date']}\n"
@@ -1737,7 +1855,7 @@ class AlertManager:
             f"人工干预: {stats['manual_interventions']}\n\n"
             f"<i>系统运行正常，自愈能力工作正常</i>"
         )
-        self.telegram.send(text)
+        return bool(self.telegram.send(text))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 主循环
@@ -1745,15 +1863,26 @@ class AlertManager:
 
 class Guardian:
     def __init__(self):
-        self.telegram = TelegramBot(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+        required = {
+            "newapi_token": NEWAPI_TOKEN,
+            "telegram_token": TELEGRAM_TOKEN,
+            "telegram_chat_id": TELEGRAM_CHAT_ID,
+            "codebuddy_api_key": CODEBUDDY_API_KEY,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise RuntimeError(f"Missing Guardian secrets: {', '.join(missing)} ({SECRETS_FILE})")
+        self.telegram = TelegramBot(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY)
         self.newapi = NewAPIClient(NEWAPI_BASE, NEWAPI_TOKEN, NEWAPI_USER)
         self.health = HealthChecker(self.newapi)
-        self.autofix = AutoFixEngine(self.newapi, self.telegram)
+        self.autofix = AutoFixEngine(self.newapi, self.telegram, self.health)
         self.alerts = AlertManager(self.telegram)
         self.running = True
 
     def run(self):
         logger.info("NewAPI Guardian 启动")
+        if not self.newapi.exclude_retry_status_code(402):
+            logger.warning("Startup 402 retry policy check failed")
         self.telegram.send_alert(
             "Guardian 启动",
             "NewAPI 自愈系统已启动\n"
@@ -1792,20 +1921,22 @@ class Guardian:
         # 1. NewAPI 健康
         newapi_ok, newapi_msg = self.health.check_newapi()
         if not newapi_ok:
+            # 自愈动作（容器重启）不依赖告警冷却，只受自身冷却节流限制
+            self.autofix.restart_newapi_container()
             if self.alerts.should_alert("newapi_down", "error"):
                 self.telegram.send_alert("NewAPI 宕机", newapi_msg, "error")
-                self.autofix.restart_newapi_container()
 
         # 2. 渠道健康（P1: 先降权再禁用）
         channels = self.newapi.get_channels()
         for channel in channels:
             healthy, msg, rt = self.health.check_channel(channel)
-            # P1: 记录性能历史
-            self.autofix._record_channel_perf(channel["id"], rt, healthy)
+            # P1: 只记录新的 NewAPI 测试结果，避免每 15 秒重复消费同一 test_time
+            if channel.get("status") == 1:
+                self.autofix._record_channel_perf(channel, healthy)
             if not healthy:
-                # P1: 先尝试降权，降权后仍慢则禁用
-                if self.alerts.should_alert(f"channel_{channel['id']}", "warning"):
-                    self.autofix.degrade_channel_weight(channel, msg)
+                # P1: 先尝试降权，降权后仍慢则禁用。
+                # 自愈动作不依赖告警冷却（冷却只控通知），降权自身有冷却节流。
+                self.autofix.degrade_channel_weight(channel, msg)
 
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
         self.autofix.scan_error_channels()
@@ -1883,8 +2014,7 @@ class Guardian:
 
         # 11. 每日报告
         self._maybe_daily_report()
-
-    def _maybe_daily_report(self, force: bool = False):
+    def _maybe_daily_report(self, force: bool = False) -> bool:
         last_report = self.autofix.state.get("last_daily_report")
         today = datetime.now().strftime("%Y-%m-%d")
 
@@ -1896,7 +2026,7 @@ class Guardian:
             _, remaining, quota = self.health.check_balance()
             ok, rate, _, _ = self.health.check_error_rate()
 
-            self.alerts.send_daily_report({
+            sent = self.alerts.send_daily_report({
                 "date": today,
                 "total_channels": len(channels),
                 "healthy_channels": healthy,
@@ -1907,13 +2037,41 @@ class Guardian:
                 "manual_interventions": 0,
             })
 
-            self.autofix.state["last_daily_report"] = today
-            self.autofix._save_state()
+            # 仅发送成功才标记“今日已发送”；失败留给下个周期重试
+            if sent:
+                self.autofix.state["last_daily_report"] = today
+                self.autofix._save_state()
+            return sent
+        # 今日已发送过（或无需发送）→ 视为成功
+        return True
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 入口
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _acquire_single_instance():
+    """Acquire a process-lifetime Windows mutex; return None for a duplicate."""
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.CreateMutexW(None, False, "Local\\NewAPIGuardian")
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        return None
+    return handle
+
+
 if __name__ == "__main__":
+    _instance_handle = _acquire_single_instance()
+    if _instance_handle is None:
+        logger.info("Guardian already running; duplicate instance exiting")
+        raise SystemExit(75)
     guardian = Guardian()
     guardian.run()
