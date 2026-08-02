@@ -825,6 +825,16 @@ class AutoFixEngine:
             tested += 1
             record["last_recovery_attempt"] = datetime.now().isoformat()
 
+            # 检查渠道是否已被 NewAPI 自动启用（AutomaticEnableChannelEnabled=true）
+            current = self.newapi.get_channel(channel_id)
+            if current and current.get("status") == 1:
+                # NewAPI 已自动启用，清理记录并恢复权重
+                self.state["disabled_channels"].remove(record)
+                self._save_state()
+                logger.info(f"Channel {channel_id} ({name}) already re-enabled by NewAPI, restoring weight")
+                self._auto_join_pool(channel_id, name)
+                continue
+
             # 多次 test_channel 验证稳定性（独立短超时）
             stable_count = 0
             for _ in range(RECOVERY_TEST_COUNT):
