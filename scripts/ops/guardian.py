@@ -81,7 +81,7 @@ RECOVERY_BACKOFF_MAX = 30  # 失败退避上限（分钟）
 OMP_ROLE_CHECK_INTERVAL = 40  # 每 N 周期主动检测 OMP 角色指向的渠道存活（40*15s=10min）
 
 # 自循环维护（让系统无需人工干预持续运转）
-FULL_SCAN_INTERVAL = 120  # 每 N 周期全量健康扫描所有启用渠道（120*15s=30min）
+FULL_SCAN_BATCH_SIZE = 2  # 全量扫描每周期测 N 个渠道（轮转，连续覆盖全部）
 ABILITY_FIX_INTERVAL = 240  # 每 N 周期修复 abilities 表（240*15s=1h）
 STATE_CLEANUP_INTERVAL = 480  # 每 N 周期清理陈旧状态（480*15s=2h）
 STATE_MAX_AGE_HOURS = 24  # 陈旧状态阈值（小时）
@@ -121,14 +121,24 @@ logger = logging.getLogger("guardian")
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TelegramBot:
+    # 同一 chat 最小发送间隔（秒），防止多告警类型同周期 burst 触发 Telegram 限流
+    MIN_SEND_INTERVAL = 0.5
+
     def __init__(self, token: str, chat_id: str):
         self.token = token
         self.chat_id = chat_id
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.offset = 0
+        self._last_send = 0.0
 
     def send(self, text: str, parse_mode: str = "HTML") -> bool:
-        """发送 Telegram 消息"""
+        """发送 Telegram 消息（带速率限制）"""
+        # 速率限制：距上次发送不足 MIN_SEND_INTERVAL 则等待
+        now = time.time()
+        wait = self.MIN_SEND_INTERVAL - (now - self._last_send)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_send = time.time()
         try:
             url = f"{self.base_url}/sendMessage"
             data = json.dumps({
@@ -269,6 +279,12 @@ class TelegramBot:
             return
         success = guardian.autofix.enable_channel(cid, channel["name"])
         if success:
+            # 清理 disabled_channels 中的记录，防止恢复循环重复处理
+            guardian.autofix.state["disabled_channels"] = [
+                r for r in guardian.autofix.state.get("disabled_channels", [])
+                if r["id"] != cid
+            ]
+            guardian.autofix._save_state()
             self.send(f"✅ 渠道 {cid} ({channel['name']}) 已启用")
         else:
             self.send(f"✗ 渠道 {cid} 启用失败")
@@ -462,9 +478,14 @@ class HealthChecker:
         return rate <= ERROR_RATE_THRESHOLD, rate, errors, requests
 
     def check_balance(self) -> Tuple[bool, int, int]:
+        """检查余额
+
+        返回: (是否正常, 剩余, 总额)
+        API 失败时返回 (True, -1, -1)，区别于余额真的为 0。
+        """
         user = self.newapi.get_user_info()
         if not user:
-            return False, 0, 0
+            return True, -1, -1  # API 失败，不是余额问题
         quota = user.get("quota", 0)
         used = user.get("used_quota", 0)
         remaining = quota - used
@@ -488,6 +509,7 @@ class AutoFixEngine:
         self._scan_offset = 0      # 错误扫描批次轮转偏移
         self._omp_check_count = 0  # OMP 角色主动检测计数器
         self._full_scan_count = 0  # 全量健康扫描计数器
+        self._full_scan_offset = 0  # 全量扫描批次轮转偏移
         self._ability_fix_count = 0  # abilities 修复计数器
         self._cleanup_count = 0    # 状态清理计数器
 
@@ -1267,20 +1289,26 @@ class AutoFixEngine:
     # ── 自循环维护（让系统无需人工干预持续运转） ──────────────────────────
 
     def full_health_scan(self):
-        """周期性全量健康扫描：对所有启用渠道做一次 test_channel，捕获渐进退化
+        """全量健康扫描：每周期轮转探测一批启用渠道，捕获渐进退化
 
-        常规 check_channel 只看 response_time 字段（可能陈旧），全量扫描主动探测，
-        发现慢/死渠道立即降权或禁用。每 FULL_SCAN_INTERVAL 周期运行一次。
+        常规 check_channel 只看 response_time 字段（可能陈旧），全量扫描主动探测。
+        每周期测 FULL_SCAN_BATCH_SIZE 个渠道并轮转偏移，连续覆盖全部渠道。
+        单次阻塞可控（2 渠道 × 5s = 10s），全部 24 渠道约 3 分钟覆盖一轮。
         """
-        self._full_scan_count += 1
-        if self._full_scan_count % FULL_SCAN_INTERVAL != 0:
-            return
-
         channels = self.newapi.get_channels()
         enabled = [c for c in channels if c.get("status") == 1 and c.get("weight", 0) > 0]
+        n = len(enabled)
+        if n == 0:
+            return
+
+        # 轮转批次：每周期测一批，偏移推进，连续覆盖全部渠道
+        offset = self._full_scan_offset % n
+        batch = (enabled[offset:] + enabled[:offset])[:FULL_SCAN_BATCH_SIZE]
+        self._full_scan_offset = (offset + FULL_SCAN_BATCH_SIZE) % n
+
         scanned = 0
         degraded = 0
-        for channel in enabled:
+        for channel in batch:
             channel_id = channel["id"]
             test_ok, test_msg = self.newapi.test_channel(channel_id)
             scanned += 1
@@ -1307,7 +1335,8 @@ class AutoFixEngine:
                     # 软错误（超时/慢）降权
                     if self.degrade_channel_weight(channel, f"full_scan: {test_msg[:60]}"):
                         degraded += 1
-        logger.info(f"Full health scan: {scanned} channels, {degraded} degraded")
+        self._full_scan_count += 1
+        logger.info(f"Full health scan batch: {scanned} channels, {degraded} degraded (offset={offset}/{n})")
 
     def periodic_ability_fix(self):
         """周期性修复 abilities 表：NewAPI 的 abilities 可能与 channels 漂移
@@ -1741,16 +1770,17 @@ class Guardian:
 
         # 8. 余额 + P2: 趋势分析
         ok, remaining, quota = self.health.check_balance()
-        self.autofix.record_balance(remaining)
-        if not ok:
-            if self.alerts.should_alert("balance", "warning"):
-                self.telegram.send_alert(
-                    "余额不足",
-                    f"剩余: {remaining:,}\n"
-                    f"总额: {quota:,}\n"
-                    f"建议充值或切换 provider",
-                    "warning"
-                )
+        if remaining >= 0:  # -1 表示 API 失败，不记录不告警
+            self.autofix.record_balance(remaining)
+            if not ok:
+                if self.alerts.should_alert("balance", "warning"):
+                    self.telegram.send_alert(
+                        "余额不足",
+                        f"剩余: {remaining:,}\n"
+                        f"总额: {quota:,}\n"
+                        f"建议充值或切换 provider",
+                        "warning"
+                    )
         # P2: 余额趋势预警
         trend = self.autofix.get_balance_trend()
         if trend and trend["hours_to_depletion"] < BALANCE_TREND_DEPLETION_HOURS and trend["rate_per_hour"] > 0:
