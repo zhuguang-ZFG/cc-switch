@@ -243,6 +243,35 @@ class TelegramCommandTests(unittest.TestCase):
 
         bot._cmd_status.assert_called_once()
 
+    def test_handler_error_does_not_drop_following_commands(self):
+        """批内某条命令 handler 抛异常，不中断该批后续合法命令"""
+        bot = guardian.TelegramBot.__new__(guardian.TelegramBot)
+        bot.chat_id = "5345665818"
+        bot.get_updates = lambda timeout=1: [
+            {
+                "message": {
+                    "chat": {"id": 5345665818},
+                    "from": {"id": 5345665818},
+                    "text": "/disable 48",
+                }
+            },
+            {
+                "message": {
+                    "chat": {"id": 5345665818},
+                    "from": {"id": 5345665818},
+                    "text": "/status",
+                }
+            },
+        ]
+        bot._cmd_disable = Mock(side_effect=RuntimeError("boom"))
+        bot._cmd_status = Mock()
+        bot.send = Mock()
+
+        with patch.object(guardian.logger, "exception"):
+            bot.process_commands(object())
+
+        bot._cmd_status.assert_called_once()
+
 
 class FullHealthScanTests(unittest.TestCase):
     def test_requires_three_soft_failures_before_degrading(self):
@@ -777,7 +806,39 @@ class ProxyRestartTests(unittest.TestCase):
         engine.telegram = Mock()
 
         with (
-            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=1)),
+            patch.object(
+                guardian.subprocess,
+                "run",
+                return_value=guardian.subprocess.CompletedProcess(
+                    ["ssh"], 1, stdout=b"", stderr=b"connection refused"
+                ),
+            ),
+            patch.object(guardian.time, "sleep"),
+        ):
+            ok = engine.restart_newapi_container()
+
+        self.assertFalse(ok)
+        self.assertIsNone(engine.state.get("newapi_restart_time"))
+        self.assertIsNotNone(engine.state.get("newapi_restart_fail_time"))
+        engine._save_state.assert_called()
+
+    def test_newapi_restart_timeout_sets_short_backoff(self):
+        """SSH 超时（命令未执行）只写 fail_time 短退避"""
+        engine = make_engine({
+            "newapi_restart_time": None,
+            "newapi_restart_fail_time": None,
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+
+        with (
+            patch.object(
+                guardian.subprocess,
+                "run",
+                side_effect=guardian.subprocess.TimeoutExpired("ssh", 30),
+            ),
             patch.object(guardian.time, "sleep"),
         ):
             ok = engine.restart_newapi_container()
@@ -882,6 +943,132 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(g.autofix.restart_newapi_container.call_count, 1)
         self.assertEqual(state["newapi_fail_streak"], 0)
 
+
+    def test_fail_streak_persisted_on_every_failure(self):
+        """streak 每次递增都必须 _save_state，Guardian 崩溃后计数保留"""
+        state = {
+            "restart_counts": {},
+            "newapi_fail_streak": 0,
+        }
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (False, "down")
+        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = state
+        g.autofix._save_state = Mock()
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+
+        # 首次失败（streak=1，未达门槛）也必须持久化
+        self.assertEqual(state["newapi_fail_streak"], 1)
+        g.autofix._save_state.assert_called()
+
+    def test_newapi_restart_verification_timeout_enters_long_cooldown(self):
+        """SSH 命令已执行（rc=0）但 API 未恢复：进入长冷却，不得短退避反复重启"""
+        engine = make_engine({
+            "newapi_restart_time": None,
+            "newapi_restart_fail_time": None,
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+        engine.newapi.get_status = Mock(return_value=False)  # 验证超时
+
+        with (
+            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)),
+            patch.object(guardian.time, "sleep"),
+        ):
+            ok = engine.restart_newapi_container()
+
+        self.assertFalse(ok)
+        # 命令已执行 → 进入长冷却（restart_time），而不是只写 60s fail_time
+        self.assertIsNotNone(engine.state.get("newapi_restart_time"))
+        engine.telegram.send_alert.assert_called_once()
+
+    def test_local_proxy_401_treated_as_alive(self):
+        """401/403 是鉴权问题，服务存活；不得触发重启"""
+        health = guardian.HealthChecker(Mock())
+
+        with patch.object(
+            guardian.urllib.request,
+            "urlopen",
+            side_effect=guardian.urllib.error.HTTPError(
+                "http://100.83.32.95:8788/v1/models", 401, "Unauthorized", None, None
+            ),
+        ):
+            ok, msg = health.check_local_proxy(8788, "agentrouter")
+
+        self.assertTrue(ok)
+        self.assertIn("鉴权失败", msg)
+
+    def test_circuit_breaker_alert_sent_once(self):
+        """断路器打开后重复调用只发一次告警，不刷屏"""
+        engine = make_engine({
+            "restart_counts": {"agentrouter": 3},
+            "restarted_proxies": {"agentrouter": "x"},
+        })
+        engine.telegram = Mock()
+
+        engine.restart_local_proxy("agentrouter", 8788)
+        engine.restart_local_proxy("agentrouter", 8788)
+
+        self.assertEqual(engine.telegram.send_alert.call_count, 1)
+
+    def test_circuit_breaker_success_resets_alert_flag(self):
+        """代理恢复后 restart_counts 清零，断路器告警标记随之复位"""
+        engine = make_engine({
+            "restart_counts": {"agentrouter": 3},
+            "restarted_proxies": {"agentrouter": "x"},
+            "restart_alerted": {"agentrouter": True},
+        })
+        engine._save_state = Mock()
+
+        engine.health = Mock()
+        engine.health.check_local_proxy.return_value = (True, "ok")
+
+        # 模拟 _check_cycle 的健康恢复分支
+        if engine.state.get("restart_counts", {}).get("agentrouter", 0) > 0:
+            engine.state["restart_counts"]["agentrouter"] = 0
+            engine.state.pop("restart_alerted", None)
+            engine._save_state()
+
+        self.assertEqual(engine.state["restart_counts"]["agentrouter"], 0)
+        self.assertNotIn("restart_alerted", engine.state)
+
+    def test_url_with_userinfo_skips_omp_role_update(self):
+        """带 userinfo 的 base_url（user@host）不符合纯 endpoint 契约，不得篡改 OMP 角色"""
+        config_path = Path.home() / ".omp" / "agent" / "config.yml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            "modelRoles:\n  default: agentrouter/claude-opus-4-8:xhigh\nsymbolPreset: ascii\n",
+            encoding="utf-8",
+        )
+        engine = make_engine()
+        engine.newapi.channels[7] = {
+            "id": 7,
+            "name": "codebuddy",
+            "models": "gpt-5.6-sol",
+            "base_url": "http://user:pass@100.83.32.95:8787",
+        }
+        engine.health = Mock()
+        engine.health.check_local_proxy.return_value = (True, "ok")
+        engine.telegram.send_alert = Mock()
+
+        engine._update_omp_roles(7, "codebuddy")
+
+        updated = config_path.read_text(encoding="utf-8")
+        self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
 
 class OmpRoleTests(unittest.TestCase):
     def test_codebuddy_recovery_restores_default_role_without_touching_task(self):

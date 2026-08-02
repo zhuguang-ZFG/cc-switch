@@ -251,22 +251,26 @@ class TelegramBot:
 
             logger.info(f"Telegram command: {cmd} {args}")
 
-            if cmd == "/status":
-                self._cmd_status(guardian)
-            elif cmd == "/channels":
-                self._cmd_channels(guardian)
-            elif cmd == "/report":
-                self._cmd_report(guardian)
-            elif cmd == "/restart" and args:
-                self._cmd_restart(guardian, args[0])
-            elif cmd == "/enable" and args:
-                self._cmd_enable(guardian, args[0])
-            elif cmd == "/disable" and args:
-                self._cmd_disable(guardian, args[0])
-            elif cmd == "/help":
-                self._cmd_help()
-            else:
-                self.send(f"未知命令: {cmd}\n使用 /help 查看可用命令")
+            try:
+                if cmd == "/status":
+                    self._cmd_status(guardian)
+                elif cmd == "/channels":
+                    self._cmd_channels(guardian)
+                elif cmd == "/report":
+                    self._cmd_report(guardian)
+                elif cmd == "/restart" and args:
+                    self._cmd_restart(guardian, args[0])
+                elif cmd == "/enable" and args:
+                    self._cmd_enable(guardian, args[0])
+                elif cmd == "/disable" and args:
+                    self._cmd_disable(guardian, args[0])
+                elif cmd == "/help":
+                    self._cmd_help()
+                else:
+                    self.send(f"未知命令: {cmd}\n使用 /help 查看可用命令")
+            except Exception as e:
+                # 单条命令失败不中断该批后续命令（getUpdates offset 已推进）
+                logger.exception(f"Telegram command {cmd} failed: {e}")
 
     def _cmd_status(self, guardian):
         newapi_ok, newapi_msg = guardian.health.check_newapi()
@@ -569,6 +573,11 @@ class HealthChecker:
                 req = urllib.request.Request(url, headers={"Authorization": f"Bearer {config['key']}"})
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     return True, f"{name} 正常 ({host})"
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403):
+                    # 服务存活但鉴权失败——重启解决不了，视为存活并记录
+                    return True, f"{name} 存活但鉴权失败 ({host}, HTTP {e.code})"
+                continue  # 5xx 试下一个 host
             except Exception:
                 continue
         return False, f"{name} 无响应（Tailscale 和 localhost 都失败）"
@@ -1198,17 +1207,17 @@ class AutoFixEngine:
             contract = provider_roles.get(channel_name)
             if not contract:
                 return
-            # 校验 1: base_url 严格匹配本地代理端点（scheme/host/port），
-            # 防止同名渠道或任意同端口主机误绑定
             base_url = str(channel.get("base_url") or "")
             try:
                 parsed = urlparse(base_url)
                 scheme_ok = parsed.scheme in {"http", "https"}
                 host_ok = parsed.hostname in contract["hosts"]
                 port_ok = parsed.port == contract["port"]
+                # 契约是纯本地 endpoint，不允许 userinfo（user:pass@host 视为可疑）
+                userinfo_ok = parsed.username is None and parsed.password is None
             except (ValueError, AttributeError):
-                scheme_ok = host_ok = port_ok = False
-            if not (scheme_ok and host_ok and port_ok):
+                scheme_ok = host_ok = port_ok = userinfo_ok = False
+            if not (scheme_ok and host_ok and port_ok and userinfo_ok):
                 logger.warning(
                     f"Channel {channel_id} ({name}) base_url {base_url} does not match "
                     f"local proxy endpoint (host in {sorted(contract['hosts'])}, "
@@ -1577,17 +1586,22 @@ class AutoFixEngine:
             "hours_to_depletion": hours_to_depletion,
         }
 
-    # ── 本地代理重启 ──────────────────────────────────────────────────────
-
     def restart_local_proxy(self, name: str, port: int) -> bool:
         restart_count = self.state["restart_counts"].get(name, 0)
         if restart_count >= 3:
-            self.telegram.send_alert(
-                "本地代理重启失败",
-                f"代理 <b>{name}</b> (端口 {port}) 已重启 {restart_count} 次仍失败\n"
-                f"请手动检查",
-                "error"
-            )
+            # 断路器打开：告警只发一次，避免每 15s 周期重复刷屏
+            alerted = self.state.setdefault("restart_alerted", {}).get(name)
+            if not alerted:
+                self.state["restart_alerted"][name] = True
+                self._save_state()
+                self.telegram.send_alert(
+                    "本地代理重启失败",
+                    f"代理 <b>{name}</b> (端口 {port}) 已重启 {restart_count} 次仍失败\n"
+                    f"请手动检查",
+                    "error"
+                )
+            else:
+                logger.warning(f"代理 {name} 断路器打开（已告警，不再重复）")
             return False
 
         try:
@@ -1730,10 +1744,12 @@ class AutoFixEngine:
                 if self.newapi.get_status():
                     verified = True
                     break
-
+            # 命令已执行（SSH rc=0）→ 进入长冷却，避免验证超时时每 90s 反复重启；
+            # 验证状态另记 restart_verified 供后续诊断
+            self.state["newapi_restart_time"] = datetime.now().isoformat()
+            self.state.pop("newapi_restart_fail_time", None)
             if verified:
-                self.state["newapi_restart_time"] = datetime.now().isoformat()
-                self.state.pop("newapi_restart_fail_time", None)
+                self.state["newapi_restart_verified"] = True
                 self._save_state()
                 self.telegram.send_alert(
                     "NewAPI 容器重启",
@@ -1742,7 +1758,7 @@ class AutoFixEngine:
                     "restart"
                 )
             else:
-                self.state["newapi_restart_fail_time"] = datetime.now().isoformat()
+                self.state["newapi_restart_verified"] = False
                 self._save_state()
                 self.telegram.send_alert(
                     "NewAPI 重启未验证",
@@ -1942,10 +1958,11 @@ class Guardian:
         # 避免单次网络抖动/超时误重启生产容器
         newapi_ok, newapi_msg = self.health.check_newapi()
         if not newapi_ok:
-            # 失败计数持久化在 state：Guardian 崩溃/重启后计数保留，
+            # 失败计数持久化在 state：每次递增都保存，Guardian 崩溃/重启后计数保留，
             # 避免故障期间每次重启都重新累计 3 次门槛
             streak = self.autofix.state.get("newapi_fail_streak", 0) + 1
             self.autofix.state["newapi_fail_streak"] = streak
+            self.autofix._save_state()
             if streak >= NEWAPI_FAIL_THRESHOLD:
                 self.autofix.restart_newapi_container()
                 self.autofix.state["newapi_fail_streak"] = 0

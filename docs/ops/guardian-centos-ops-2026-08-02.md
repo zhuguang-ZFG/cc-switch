@@ -5,7 +5,7 @@
 
 ## Guardian 当前状态
 
-Guardian 核心闭环已实现；当前回归为 51/51 通过。现场已验证 Guardian/agentrouter 持续运行、Telegram `/help` 发送、渠道 45 权重恢复和本地代理路由。NewAPI 容器重启属于破坏性路径，本次未主动触发。
+Guardian 核心闭环已实现；当前回归为 59/59 通过。现场已验证 Guardian/agentrouter 持续运行、Telegram `/help` 发送、渠道 45 权重恢复和本地代理路由。NewAPI 容器重启属于破坏性路径，本次未主动触发。
 - 运行副本: `~/.omp/guardian/guardian.py`
 - 仓库副本: `scripts/ops/guardian.py`
 
