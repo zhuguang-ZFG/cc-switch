@@ -664,13 +664,20 @@ class AutoFixEngine:
                 return loaded
             except (json.JSONDecodeError, ValueError) as e:
                 # 仅内容损坏（解析/类型错误）才备份留证——OSError 是 I/O 问题，不搬文件
-                # ns + pid 后缀防同秒冲突；先快照损坏字节再保留，避免搬走并发新写
+                # 独占创建（xb）防同名覆盖：ns+pid 撞名时用计数器后缀重试
                 try:
                     raw = STATE_FILE.read_bytes()
-                    backup = STATE_FILE.with_name(
-                        f"state.json.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{os.getpid()}"
-                    )
-                    backup.write_bytes(raw)
+                    base = f"state.json.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{os.getpid()}"
+                    backup = STATE_FILE.with_name(base)
+                    attempt = 0
+                    while True:
+                        try:
+                            with open(backup, "xb") as f:
+                                f.write(raw)
+                            break
+                        except FileExistsError:
+                            attempt += 1
+                            backup = STATE_FILE.with_name(f"{base}-{attempt}")
                     logger.error(f"state.json corrupted, backed up to {backup}: {e}")
                 except OSError as be:
                     logger.error(f"state.json corrupted AND backup failed: {e}; backup error: {be}")

@@ -1274,6 +1274,60 @@ class ProxyRestartTests(unittest.TestCase):
         err.assert_called()
         g._check_cycle.assert_called()
 
+    def test_heartbeat_uses_atomic_replace(self):
+        """心跳原子写：先写 tmp 再 os.replace，替换失败只记日志不阻断"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.running = True
+        g.newapi = Mock()
+        g.newapi.exclude_retry_status_code.return_value = True
+        g.telegram = Mock()
+        g.telegram.send_alert.return_value = True
+        g._check_cycle = Mock(side_effect=[None, KeyboardInterrupt])
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+
+        calls = []
+        with (
+            patch.object(
+                guardian.os, "replace",
+                side_effect=lambda src, dst: calls.append(("replace", str(src), str(dst))),
+            ) as replace,
+            patch.object(guardian.logger, "error") as err,
+            patch.object(guardian.time, "sleep"),
+        ):
+            g.run()
+
+        # os.replace 被调用（tmp → heartbeat.json）
+        self.assertGreaterEqual(len(calls), 1)
+        self.assertTrue(calls[0][2].endswith("heartbeat.json"))
+        self.assertTrue(calls[0][1].endswith("heartbeat.json.tmp"))
+        g._check_cycle.assert_called()
+
+    def test_heartbeat_replace_failure_does_not_block_cycle(self):
+        """os.replace 失败（如目标被占用）：只记日志，不阻断本轮"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.running = True
+        g.newapi = Mock()
+        g.newapi.exclude_retry_status_code.return_value = True
+        g.telegram = Mock()
+        g.telegram.send_alert.return_value = True
+        g._check_cycle = Mock(side_effect=[None, KeyboardInterrupt])
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+
+        with (
+            patch.object(
+                guardian.os, "replace",
+                side_effect=OSError("sharing violation"),
+            ),
+            patch.object(guardian.logger, "error") as err,
+            patch.object(guardian.time, "sleep"),
+        ):
+            g.run()
+
+        err.assert_called()
+        g._check_cycle.assert_called()
+
 
     def test_state_corrupt_backed_up_not_silent(self):
         """state.json 损坏：快照备份留证 + 日志，不静默回默认值，原文件保留"""
@@ -1338,6 +1392,30 @@ class ProxyRestartTests(unittest.TestCase):
 
         backups = list(state_file.parent.glob("state.json.corrupt-*"))
         self.assertLessEqual(len(backups), 5)
+    def test_state_backup_exclusive_create_no_overwrite(self):
+        """同进程同 microsecond 两次损坏：独占创建防覆盖，两份取证都保留"""
+        state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        for old in state_file.parent.glob("state.json.corrupt-*"):
+            old.unlink()
+        state_file.write_text("{ bad one", encoding="utf-8")
+
+        engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+        with patch.object(guardian.logger, "error"):
+            fixed = datetime.now().strftime("%Y%m%d%H%M%S%f")
+            fake_now = datetime.fromisoformat(
+                f"{fixed[:8]}T{fixed[8:14]}.{fixed[14:]}"
+            )
+            # patch guardian 模块的 datetime 引用（模块属性可替换，类不可 patch）
+            with patch.object(guardian, "datetime", wraps=guardian.datetime) as dt:
+                dt.now.return_value = fake_now
+                engine._load_state()
+                engine._load_state()  # 同时间戳二次损坏
+
+        backups = list(state_file.parent.glob("state.json.corrupt-*"))
+        self.assertEqual(len(backups), 2)  # 无覆盖：两份都在
+        contents = {b.read_bytes() for b in backups}
+        self.assertIn(b"{ bad one", contents)
 
 class OmpRoleTests(unittest.TestCase):
     def test_codebuddy_recovery_restores_default_role_without_touching_task(self):
