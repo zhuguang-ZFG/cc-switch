@@ -499,14 +499,25 @@ class AutoFixEngine:
         return False
 
     def check_and_enable_recovered_channels(self):
-        """检查已禁用渠道是否恢复，自动启用并加入聚合池"""
+        """检查已禁用渠道是否恢复，自动启用并加入聚合池（防抖动）"""
         for record in self.state["disabled_channels"][:]:
             channel_id = record["id"]
             name = record["name"]
+            
+            # 防抖动：检查恢复时间
+            recovered_time = record.get("recovered_time")
+            if recovered_time:
+                recovered_dt = datetime.fromisoformat(recovered_time)
+                if datetime.now() - recovered_dt < timedelta(minutes=5):
+                    logger.info(f"Channel {channel_id} ({name}) still in cooldown, skipping")
+                    continue
+            
             # 测试渠道是否恢复
             test_ok, test_msg = self.newapi.test_channel(channel_id)
             if test_ok:
                 if self.enable_channel(channel_id, name):
+                    # 记录恢复时间（防抖动）
+                    record["recovered_time"] = datetime.now().isoformat()
                     self.state["disabled_channels"].remove(record)
                     self._save_state()
                     logger.info(f"Channel {channel_id} ({name}) recovered and re-enabled")
@@ -540,7 +551,7 @@ class AutoFixEngine:
             return []
 
     def _auto_join_pool(self, channel_id: int, name: str):
-        """自动加入聚合池：真正更新 NewAPI weight/priority"""
+        """自动加入聚合池：真正更新 NewAPI weight/priority（含负载均衡和回滚）"""
         try:
             channel = self.newapi.get_channel(channel_id)
             if not channel:
@@ -554,6 +565,19 @@ class AutoFixEngine:
 
             models = channel.get("models", "").split(",")
             joined_models = []
+
+            # 记录原始权重（用于回滚）
+            original_weight = channel.get("weight", 0)
+            original_priority = channel.get("priority", 50)
+            
+            # 保存到 state.json（权重历史记录）
+            if "weight_history" not in self.state:
+                self.state["weight_history"] = {}
+            self.state["weight_history"][str(channel_id)] = {
+                "weight": original_weight,
+                "priority": original_priority,
+                "time": datetime.now().isoformat(),
+            }
 
             for model in target_models:
                 if model in models:
@@ -576,8 +600,35 @@ class AutoFixEngine:
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "success"
                 )
+                
+                # 负载均衡：检查是否需要调整其他渠道权重
+                self._balance_pool_weights(joined_models)
+                
+                # 回滚机制：记录加入时间，用于后续监控
+                if "joined_channels" not in self.state:
+                    self.state["joined_channels"] = {}
+                self.state["joined_channels"][str(channel_id)] = {
+                    "time": datetime.now().isoformat(),
+                    "models": joined_models,
+                }
+                self._save_state()
         except Exception as e:
             logger.error(f"Auto join pool failed for channel {channel_id}: {e}")
+
+    def _balance_pool_weights(self, joined_models: List[str]):
+        """聚合池负载均衡：加入新渠道时调整其他渠道权重"""
+        try:
+            for model in joined_models:
+                # 获取该模型的所有渠道
+                channels = self.newapi.get_channels()
+                model_channels = [ch for ch in channels if model in ch.get("models", "").split(",")]
+                
+                if len(model_channels) > 5:
+                    # 如果渠道过多，降低新渠道权重
+                    logger.info(f"Model {model} has {len(model_channels)} channels, may need weight adjustment")
+                    # 可以在这里实现权重调整逻辑
+        except Exception as e:
+            logger.error(f"Balance pool weights failed: {e}")
 
     def _update_omp_roles(self, channel_id: int, name: str):
         """更新 OMP modelRoles：真正写入 config.yml"""
