@@ -70,6 +70,11 @@ RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）
 
+# 错误渠道检测（P0: 402/401/502 等瞬间返回的错误码）
+ERROR_SCAN_INTERVAL = 4  # 每 N 个检查周期扫描一次（4*15s=60s）
+ERROR_SCAN_BATCH_SIZE = 10  # 每次最多测试 N 个渠道（避免 API 过载）
+ERROR_DISABLE_KEYWORDS = ["余额不足", "INSUFFICIENT_BALANCE", "credit balance", "quota", "402", "401", "invalid"]  # 触发禁用的错误关键词
+
 # 本地代理
 LOCAL_PROXIES = {
     "agentrouter": {"port": 8788, "name": "agentrouter", "script": "agentrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
@@ -505,6 +510,69 @@ class AutoFixEngine:
             "sample_count": len(history),
         }
 
+    # ── P0: 错误渠道扫描（402/401/502 等瞬间返回的错误） ─────────────────
+
+    def scan_error_channels(self):
+        """定期扫描启用渠道，检测瞬间返回的错误（402 余额不足、401 无效令牌等）
+
+        check_channel 只看 response_time，402 瞬间返回（rt<1s）永远不触发慢渠道检测。
+        此方法用 test_channel 主动探测，匹配错误关键词后自动禁用。
+        """
+        self._cycle_count += 1
+        if self._cycle_count % ERROR_SCAN_INTERVAL != 0:
+            return
+
+        channels = self.newapi.get_channels()
+        enabled = [c for c in channels if c.get("status") == 1 and c.get("weight", 0) > 0]
+
+        # 分批测试，避免 API 过载
+        batch = enabled[:ERROR_SCAN_BATCH_SIZE]
+        for channel in batch:
+            channel_id = channel["id"]
+            name = channel["name"]
+
+            test_ok, test_msg = self.newapi.test_channel(channel_id)
+            if test_ok:
+                continue
+
+            # 检查错误消息是否匹配禁用关键词
+            msg_lower = test_msg.lower()
+            matched_keyword = None
+            for kw in ERROR_DISABLE_KEYWORDS:
+                if kw.lower() in msg_lower:
+                    matched_keyword = kw
+                    break
+
+            if matched_keyword:
+                logger.warning(f"Channel {channel_id} ({name}) error scan failed: {test_msg[:100]}")
+                # 保存原始权重
+                self.state.setdefault("weight_history", {})
+                if str(channel_id) not in self.state["weight_history"]:
+                    self.state["weight_history"][str(channel_id)] = {
+                        "weight": channel.get("weight", 5),
+                        "priority": channel.get("priority", 50),
+                        "time": datetime.now().isoformat(),
+                    }
+                # 直接禁用（错误渠道不需要降权缓冲）
+                if self.newapi.disable_channel(channel_id):
+                    self.state["disabled_channels"].append({
+                        "id": channel_id,
+                        "name": name,
+                        "reason": f"error_scan: {matched_keyword} — {test_msg[:80]}",
+                        "time": datetime.now().isoformat(),
+                    })
+                    self.state.setdefault("degraded_channels", {})
+                    self.state["degraded_channels"].pop(str(channel_id), None)
+                    self._save_state()
+                    self.telegram.send_alert(
+                        "渠道错误禁用",
+                        f"渠道 <b>{name}</b> (id: {channel_id}) 已自动禁用\n"
+                        f"原因: {matched_keyword}\n"
+                        f"详情: {test_msg[:120]}\n"
+                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                        "warning"
+                    )
+
     # ── P1: 自动降权（渐进式处理） ────────────────────────────────────────
 
     def degrade_channel_weight(self, channel: dict, reason: str) -> bool:
@@ -521,6 +589,7 @@ class AutoFixEngine:
         channel["weight"] = new_weight
 
         if self.newapi.update_channel(channel):
+            self.state.setdefault("degraded_channels", {})
             self.state["degraded_channels"][str(channel_id)] = {
                 "name": name,
                 "original_weight": current_weight,
@@ -590,6 +659,7 @@ class AutoFixEngine:
         response_time = channel.get("response_time", 0)
 
         # 保存原始权重到 weight_history（用于恢复时还原）
+        self.state.setdefault("weight_history", {})
         if str(channel_id) not in self.state["weight_history"]:
             self.state["weight_history"][str(channel_id)] = {
                 "weight": channel.get("weight", 5),
@@ -605,6 +675,7 @@ class AutoFixEngine:
                 "time": datetime.now().isoformat(),
             })
             # 清理降权记录
+            self.state.setdefault("degraded_channels", {})
             self.state["degraded_channels"].pop(str(channel_id), None)
             self._save_state()
             self.telegram.send_alert(
@@ -716,7 +787,7 @@ class AutoFixEngine:
                 return
 
             # P0: 权重历史还原 — 恢复时还原历史值而非硬编码
-            history = self.state["weight_history"].get(str(channel_id))
+            history = self.state.setdefault("weight_history", {}).get(str(channel_id))
             if history and history.get("weight", 0) > 0:
                 new_weight = history["weight"]
                 new_priority = history["priority"]
@@ -735,6 +806,7 @@ class AutoFixEngine:
                     logger.info(f"Channel {channel_id} ({name}) joined pool: weight={new_weight}, priority={new_priority}, models={pool_models}")
 
                     # 清理降权记录
+                    self.state.setdefault("degraded_channels", {})
                     self.state["degraded_channels"].pop(str(channel_id), None)
 
                     self.telegram.send_alert(
@@ -1240,6 +1312,9 @@ class Guardian:
                 # P1: 先尝试降权，降权后仍慢则禁用
                 if self.alerts.should_alert(f"channel_{channel['id']}", "warning"):
                     self.autofix.degrade_channel_weight(channel, msg)
+
+        # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
+        self.autofix.scan_error_channels()
 
         # 3. P1: 权重自动调整（根据性能历史）
         self.autofix._auto_adjust_weights(channels)
