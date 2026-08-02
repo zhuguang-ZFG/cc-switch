@@ -512,9 +512,15 @@ class AutoFixEngine:
                     logger.info(f"Channel {channel_id} ({name}) still in cooldown, skipping")
                     continue
             
-            # 测试渠道是否恢复
-            test_ok, test_msg = self.newapi.test_channel(channel_id)
-            if test_ok:
+            # 防抖动：多次 test_channel 验证稳定性
+            stable_count = 0
+            for _ in range(3):
+                test_ok, test_msg = self.newapi.test_channel(channel_id)
+                if test_ok:
+                    stable_count += 1
+                time.sleep(1)
+            
+            if stable_count >= 2:  # 至少 2 次通过
                 if self.enable_channel(channel_id, name):
                     # 记录恢复时间（防抖动）
                     record["recovered_time"] = datetime.now().isoformat()
@@ -584,25 +590,32 @@ class AutoFixEngine:
                     # 真正加入聚合池：更新 weight/priority
                     # 如果之前 weight=0（被降权），恢复为合理值
                     if channel.get("weight", 0) == 0:
-                        channel["weight"] = 5  # 默认权重
-                        channel["priority"] = 50  # 默认优先级
+                        # 权重历史记录还原：如果有历史值，还原；否则用默认值
+                        history = self.state["weight_history"].get(str(channel_id))
+                        if history and history.get("weight", 0) > 0:
+                            channel["weight"] = history["weight"]
+                            channel["priority"] = history["priority"]
+                        else:
+                            channel["weight"] = 5  # 默认权重
+                            channel["priority"] = 50  # 默认优先级
+                        
                         result = self.newapi._request("PUT", "/api/channel/", channel)
                         if result and result.get("success"):
                             joined_models.append(model)
-                            logger.info(f"Channel {channel_id} ({name}) joined pool for {model} with weight=5")
+                            logger.info(f"Channel {channel_id} ({name}) joined pool for {model} with weight={channel['weight']}")
 
             if joined_models:
                 self.telegram.send_alert(
                     "渠道加入聚合池",
                     f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复并加入聚合池\n"
                     f"模型: {', '.join(joined_models)}\n"
-                    f"权重: 5, 优先级: 50\n"
+                    f"权重: {channel['weight']}, 优先级: {channel['priority']}\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "success"
                 )
                 
                 # 负载均衡：检查是否需要调整其他渠道权重
-                self._balance_pool_weights(joined_models)
+                self._balance_pool_weights(joined_models, channel_id)
                 
                 # 回滚机制：记录加入时间，用于后续监控
                 if "joined_channels" not in self.state:
@@ -610,12 +623,14 @@ class AutoFixEngine:
                 self.state["joined_channels"][str(channel_id)] = {
                     "time": datetime.now().isoformat(),
                     "models": joined_models,
+                    "weight": channel["weight"],
+                    "priority": channel["priority"],
                 }
                 self._save_state()
         except Exception as e:
             logger.error(f"Auto join pool failed for channel {channel_id}: {e}")
 
-    def _balance_pool_weights(self, joined_models: List[str]):
+    def _balance_pool_weights(self, joined_models: List[str], new_channel_id: int):
         """聚合池负载均衡：加入新渠道时调整其他渠道权重"""
         try:
             for model in joined_models:
@@ -625,10 +640,46 @@ class AutoFixEngine:
                 
                 if len(model_channels) > 5:
                     # 如果渠道过多，降低新渠道权重
-                    logger.info(f"Model {model} has {len(model_channels)} channels, may need weight adjustment")
-                    # 可以在这里实现权重调整逻辑
+                    logger.info(f"Model {model} has {len(model_channels)} channels, adjusting weights")
+                    # 降低新渠道权重，避免压垮聚合池
+                    new_channel = self.newapi.get_channel(new_channel_id)
+                    if new_channel and new_channel.get("weight", 0) > 3:
+                        new_channel["weight"] = 3
+                        result = self.newapi._request("PUT", "/api/channel/", new_channel)
+                        if result and result.get("success"):
+                            logger.info(f"Channel {new_channel_id} weight adjusted to 3 for load balancing")
         except Exception as e:
             logger.error(f"Balance pool weights failed: {e}")
+
+    def _check_joined_channels_stability(self):
+        """回滚机制：定期检查 joined_channels 稳定性，不稳定时自动回滚"""
+        if "joined_channels" not in self.state:
+            return
+        
+        for channel_id_str, join_info in list(self.state["joined_channels"].items()):
+            channel_id = int(channel_id_str)
+            join_time = datetime.fromisoformat(join_info["time"])
+            
+            # 加入后 10 分钟内检查稳定性
+            if datetime.now() - join_time < timedelta(minutes=10):
+                # 测试渠道是否仍然稳定
+                test_ok, test_msg = self.newapi.test_channel(channel_id)
+                if not test_ok:
+                    # 不稳定，回滚
+                    channel = self.newapi.get_channel(channel_id)
+                    if channel:
+                        channel["weight"] = 0  # 回滚权重
+                        result = self.newapi._request("PUT", "/api/channel/", channel)
+                        if result and result.get("success"):
+                            logger.warning(f"Channel {channel_id} unstable after join, rolled back")
+                            self.telegram.send_alert(
+                                "渠道回滚",
+                                f"渠道 <b>{channel['name']}</b> (id: {channel_id}) 加入后不稳定，已回滚\n"
+                                f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                                "warning"
+                            )
+                            del self.state["joined_channels"][channel_id_str]
+                            self._save_state()
 
     def _update_omp_roles(self, channel_id: int, name: str):
         """更新 OMP modelRoles：真正写入 config.yml"""
@@ -913,6 +964,9 @@ class Guardian:
 
         # 3. 检查已禁用渠道是否恢复（自动启用）
         self.autofix.check_and_enable_recovered_channels()
+
+        # 3.5 检查已加入渠道的稳定性（回滚机制）
+        self.autofix._check_joined_channels_stability()
 
         # 4. 本地代理健康
         for name, info in LOCAL_PROXIES.items():
