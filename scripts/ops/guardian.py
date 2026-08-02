@@ -23,6 +23,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import subprocess
 import sys
 import time
@@ -697,7 +698,22 @@ class AutoFixEngine:
             if not channel:
                 return
 
-            models = channel.get("models", "").split(",")
+            channel_models = [m.strip() for m in channel.get("models", "").split(",") if m.strip()]
+
+            # P0: 用 _get_available_models 动态获取聚合池可用模型，过滤出本渠道可贡献的
+            available_models = self._get_available_models()
+            if available_models:
+                # 只保留聚合池中实际存在且匹配目标关键词的模型
+                target_keywords = ["deepseek", "glm", "claude", "gpt", "k3", "kimi", "qwen", "hy3"]
+                pool_models = [m for m in channel_models
+                               if m in available_models
+                               and any(kw in m.lower() for kw in target_keywords)]
+            else:
+                pool_models = channel_models  # 动态发现失败时 fallback 到渠道自身模型
+
+            if not pool_models:
+                logger.info(f"Channel {channel_id} ({name}) has no pool-eligible models, skipping join")
+                return
 
             # P0: 权重历史还原 — 恢复时还原历史值而非硬编码
             history = self.state["weight_history"].get(str(channel_id))
@@ -716,7 +732,7 @@ class AutoFixEngine:
                 channel["priority"] = new_priority
 
                 if self.newapi.update_channel(channel):
-                    logger.info(f"Channel {channel_id} ({name}) joined pool: weight={new_weight}, priority={new_priority}")
+                    logger.info(f"Channel {channel_id} ({name}) joined pool: weight={new_weight}, priority={new_priority}, models={pool_models}")
 
                     # 清理降权记录
                     self.state["degraded_channels"].pop(str(channel_id), None)
@@ -724,21 +740,21 @@ class AutoFixEngine:
                     self.telegram.send_alert(
                         "渠道加入聚合池",
                         f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复并加入聚合池\n"
-                        f"模型: {', '.join(m.strip() for m in models if m.strip())}\n"
+                        f"模型: {', '.join(pool_models)}\n"
                         f"权重: {new_weight}, 优先级: {new_priority}\n"
                         f"时间: {datetime.now().strftime('%H:%M:%S')}",
                         "success"
                     )
 
                     # P0: 负载均衡 — 调整其他渠道权重
-                    self._balance_pool_weights(models, channel_id, new_weight)
+                    self._balance_pool_weights(pool_models, channel_id, new_weight)
 
                     # P0: 回滚机制 — 记录加入时间，用于后续稳定性监控
                     if "joined_channels" not in self.state:
                         self.state["joined_channels"] = {}
                     self.state["joined_channels"][str(channel_id)] = {
                         "time": datetime.now().isoformat(),
-                        "models": [m.strip() for m in models if m.strip()],
+                        "models": pool_models,
                         "weight": new_weight,
                         "priority": new_priority,
                         "stability_checks": 0,
@@ -858,8 +874,8 @@ class AutoFixEngine:
     def _update_omp_roles(self, channel_id: int, name: str):
         """P0: 更新 OMP modelRoles — 真正读取、修改、写回 config.yml
 
-        策略：检查渠道提供的模型，如果某个 OMP 角色的主模型可用，
-        且该模型在 config.yml 中不存在或已被注释，则添加/恢复它。
+        当渠道恢复时，检查 OMP 角色是否应切换到该渠道提供的模型。
+        如果角色当前指向的 provider/model 不是恢复渠道提供的，则切换。
         """
         try:
             channel = self.newapi.get_channel(channel_id)
@@ -867,9 +883,9 @@ class AutoFixEngine:
                 return
 
             channel_models = set(m.strip() for m in channel.get("models", "").split(",") if m.strip())
+            channel_name = name.lower()
 
-            # OMP 角色 → 首选模型映射（与 config.yml 中的 modelRoles 对应）
-            # 格式: role: [(provider/model, thinking_level), ...]
+            # OMP 角色 → 首选模型映射（provider/model 格式）
             omp_role_models = {
                 "slow": [("agentrouter/claude-opus-5", "xhigh"), ("zg-newapi-anthropic/claude-opus-5", None)],
                 "plan": [("@slow", None)],
@@ -891,65 +907,77 @@ class AutoFixEngine:
             original_text = config_text
             updated_roles = []
 
-            # 检查哪些渠道提供哪个 provider 的模型
-            # channel.name 可能是 "agentrouter", "zg-newapi", "codebuddy" 等
-            # channel_models 是模型列表如 {"claude-opus-5", "gpt-5.6-sol", ...}
-            channel_name = name.lower()
-
             for role, model_specs in omp_role_models.items():
                 for provider_model, thinking_level in model_specs:
-                    # provider_model 格式: "agentrouter/claude-opus-5" 或 "@slow"
                     if provider_model.startswith("@"):
-                        continue  # 引用角色，跳过
+                        continue  # 引用角色（如 @slow），跳过
 
                     parts = provider_model.split("/", 1)
                     if len(parts) != 2:
                         continue
                     provider, model = parts[0], parts[1]
 
-                    # 检查渠道是否提供该模型
-                    # provider 匹配渠道名（如 "agentrouter" 匹配 channel name "agentrouter"）
-                    # 或渠道名包含 provider
+                    # 检查恢复的渠道是否匹配该 provider
                     provider_matches = (
                         provider in channel_name
                         or channel_name in provider
                         or (provider == "zg-newapi" and "newapi" in channel_name)
                     )
 
-                    if provider_matches and model in channel_models:
-                        # 该渠道提供该模型，检查 config.yml 是否已配置
-                        # 查找 modelRoles 中的 role 行
-                        import re
-                        # 匹配: "  role: provider/model:level" 或 "  role: provider/model"
-                        pattern = rf'^(\s*{re.escape(role)}:\s*)(.+)$'
-                        match = re.search(pattern, config_text, re.MULTILINE)
+                    if not (provider_matches and model in channel_models):
+                        continue
 
-                        if match:
-                            current_value = match.group(2).strip()
-                            # 检查当前值是否已经是该 provider/model
-                            if provider_model not in current_value:
-                                # 该角色当前使用其他模型，不覆盖（用户可能手动切换了）
-                                logger.info(f"OMP role '{role}' currently uses '{current_value}', not overwriting with '{provider_model}'")
-                            else:
-                                logger.debug(f"OMP role '{role}' already uses '{provider_model}'")
-                        # 如果角色不存在或已被注释，不自动添加（避免破坏用户配置）
-                        # 只发通知
-                        updated_roles.append(f"{role}: {provider_model}")
+                    # 构造目标值: "provider/model:level" 或 "provider/model"
+                    target_value = f"{provider_model}:{thinking_level}" if thinking_level else provider_model
 
-            if updated_roles:
+                    # 用 re.sub 真正修改 config_text
+                    pattern = rf'^(\s*{re.escape(role)}:\s*)(.+)$'
+                    match = re.search(pattern, config_text, re.MULTILINE)
+
+                    if match:
+                        current_value = match.group(2).strip()
+                        if provider_model not in current_value:
+                            # 角色当前使用其他模型 → 切换到恢复的渠道
+                            config_text = re.sub(
+                                pattern,
+                                rf'\g<1>{target_value}',
+                                config_text,
+                                count=1,
+                                flags=re.MULTILINE,
+                            )
+                            updated_roles.append(f"{role}: {current_value} → {target_value}")
+                            logger.info(f"OMP role '{role}' switched: {current_value} → {target_value}")
+                        else:
+                            logger.debug(f"OMP role '{role}' already uses '{provider_model}'")
+                    else:
+                        # 角色不存在 → 在 modelRoles 块末尾添加
+                        mr_match = re.search(r'^(modelRoles:\s*\n(?:\s+\S.*\n)*)', config_text, re.MULTILINE)
+                        if mr_match:
+                            insert_pos = mr_match.end()
+                            new_line = f"  {role}: {target_value}\n"
+                            config_text = config_text[:insert_pos] + new_line + config_text[insert_pos:]
+                            updated_roles.append(f"{role}: (new) {target_value}")
+                            logger.info(f"OMP role '{role}' added: {target_value}")
+
+            # 真正写回 config.yml
+            if config_text != original_text:
+                config_path.write_text(config_text, encoding="utf-8")
+                logger.info(f"OMP config.yml written for channel {channel_id} ({name})")
+                self.telegram.send_alert(
+                    "OMP 角色模型更新",
+                    f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复\n"
+                    f"OMP config.yml 已更新:\n  " + "\n  ".join(updated_roles) + "\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "info"
+                )
+            elif updated_roles:
                 self.telegram.send_alert(
                     "OMP 角色模型可用",
                     f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复\n"
-                    f"可用角色模型:\n  " + "\n  ".join(updated_roles) + "\n"
-                    f"OMP config.yml 已检查，无需修改" if original_text == config_text else
-                    f"OMP config.yml 已更新",
+                    f"角色已配置正确，无需修改\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "info"
                 )
-
-            # P0: 真正写回（如果有变更）
-            if config_text != original_text:
-                config_path.write_text(config_text, encoding="utf-8")
-                logger.info(f"OMP config.yml updated for channel {channel_id} ({name})")
         except Exception as e:
             logger.error(f"Update OMP roles failed for channel {channel_id}: {e}")
 
