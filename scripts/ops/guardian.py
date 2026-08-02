@@ -486,7 +486,10 @@ class AutoFixEngine:
         }
 
     def _save_state(self):
-        STATE_FILE.write_text(json.dumps(self.state, indent=2))
+        """原子写：先写临时文件再 os.replace，避免中途崩溃损坏 state.json"""
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.state, indent=2))
+        os.replace(tmp, STATE_FILE)
 
     # ── P1: 渠道性能监控 ──────────────────────────────────────────────────
 
@@ -587,6 +590,16 @@ class AutoFixEngine:
         channel_id = channel["id"]
         name = channel["name"]
         current_weight = channel.get("weight", 0)
+
+        # 首次降权时记录原始权重（if not present 保证不被后续降权覆盖），
+        # 供恢复时还原。否则降权链 10→5→2→1 后禁用会记录 weight=1 丢失原始值。
+        self.state.setdefault("weight_history", {})
+        if str(channel_id) not in self.state["weight_history"] and current_weight > 0:
+            self.state["weight_history"][str(channel_id)] = {
+                "weight": current_weight,
+                "priority": channel.get("priority", 50),
+                "time": datetime.now().isoformat(),
+            }
 
         if current_weight <= MIN_WEIGHT:
             logger.info(f"Channel {channel_id} ({name}) already at min weight, disabling")
@@ -867,12 +880,15 @@ class AutoFixEngine:
         """
         try:
             channels = self.newapi.get_channels()
+            # 收集每个渠道需要的最小缩放因子（跨所有模型），避免多模型渠道被重复缩放
+            channel_scale: Dict[int, float] = {}
+            channel_obj: Dict[int, dict] = {}
+
             for model in joined_models:
                 model = model.strip()
                 if not model:
                     continue
 
-                # 获取该模型的所有活跃渠道
                 model_channels = [
                     ch for ch in channels
                     if ch.get("status") == 1
@@ -881,24 +897,31 @@ class AutoFixEngine:
                 ]
 
                 if len(model_channels) >= 5:
-                    # 渠道过多，按比例降低其他渠道权重（避免新渠道压垮聚合池）
                     total_weight = sum(ch.get("weight", 0) for ch in model_channels) + new_weight
-                    target_total = max(total_weight * 0.9, new_weight)  # 总权重降 10%
+                    target_total = max(total_weight * 0.9, new_weight)
                     scale = target_total / total_weight if total_weight > 0 else 1.0
-
-                    adjusted = 0
                     for ch in model_channels:
-                        old_w = ch.get("weight", 0)
-                        if old_w <= MIN_WEIGHT:
-                            continue
-                        new_w = max(MIN_WEIGHT, int(old_w * scale))
-                        if new_w < old_w:
-                            ch["weight"] = new_w
-                            self.newapi.update_channel(ch)
-                            adjusted += 1
+                        cid = ch["id"]
+                        # 取最激进的（最小）缩放因子
+                        if cid not in channel_scale or scale < channel_scale[cid]:
+                            channel_scale[cid] = scale
+                            channel_obj[cid] = ch
 
-                    if adjusted > 0:
-                        logger.info(f"Model '{model}' has {len(model_channels)} channels, adjusted {adjusted} channels' weights (scale={scale:.2f})")
+            # 每个渠道只缩放一次
+            adjusted = 0
+            for cid, scale in channel_scale.items():
+                ch = channel_obj[cid]
+                old_w = ch.get("weight", 0)
+                if old_w <= MIN_WEIGHT:
+                    continue
+                new_w = max(MIN_WEIGHT, int(old_w * scale))
+                if new_w < old_w:
+                    ch["weight"] = new_w
+                    self.newapi.update_channel(ch)
+                    adjusted += 1
+
+            if adjusted > 0:
+                logger.info(f"Balanced pool: adjusted {adjusted} channels' weights")
         except Exception as e:
             logger.error(f"Balance pool weights failed: {e}")
 
@@ -935,23 +958,30 @@ class AutoFixEngine:
                 join_info["stability_fails"] = join_info.get("stability_fails", 0) + 1
                 logger.warning(f"Channel {channel_id} stability check failed: {test_msg}")
 
-                # 连续 2 次失败 → 回滚
+                # 连续 2 次失败 → 回滚：真正禁用（status=2）并记录，给恢复路径
+                # 不能只设 weight=0 留 status=1，否则成僵尸渠道（无流量且无追踪、永不恢复）
                 if join_info["stability_fails"] >= 2:
                     channel = self.newapi.get_channel(channel_id)
-                    if channel:
-                        channel["weight"] = 0  # 回滚权重
-                        if self.newapi.update_channel(channel):
-                            logger.warning(f"Channel {channel_id} unstable after join, rolled back (weight=0)")
-                            self.telegram.send_alert(
-                                "渠道回滚",
-                                f"渠道 <b>{channel.get('name', channel_id)}</b> (id: {channel_id}) 加入后不稳定，已回滚\n"
-                                f"失败次数: {join_info['stability_fails']}\n"
-                                f"原因: {test_msg}\n"
-                                f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                                "warning"
-                            )
-                            del self.state["joined_channels"][channel_id_str]
-                            self._save_state()
+                    if channel and self.newapi.disable_channel(channel_id):
+                        logger.warning(f"Channel {channel_id} unstable after join, disabled (status=2)")
+                        self.state["disabled_channels"].append({
+                            "id": channel_id,
+                            "name": channel.get("name", str(channel_id)),
+                            "reason": f"stability_rollback: {test_msg[:80]}",
+                            "time": datetime.now().isoformat(),
+                            "manual": False,
+                        })
+                        self.telegram.send_alert(
+                            "渠道回滚",
+                            f"渠道 <b>{channel.get('name', channel_id)}</b> (id: {channel_id}) 加入后不稳定，已禁用\n"
+                            f"失败次数: {join_info['stability_fails']}\n"
+                            f"原因: {test_msg}\n"
+                            f"恢复后将自动重新启用\n"
+                            f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                            "warning"
+                        )
+                        del self.state["joined_channels"][channel_id_str]
+                        self._save_state()
             else:
                 # 测试通过，重置失败计数
                 if join_info.get("stability_fails", 0) > 0:
@@ -1123,7 +1153,9 @@ class AutoFixEngine:
             return False
 
         try:
-            ps_cmd = f'Get-CimInstance Win32_Process -Filter "Name=\'pythonw.exe\'" | Where-Object {{ $_.CommandLine -match \'{name}\' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'
+            # atomcode 用 node 启动，其他用 pythonw.exe — 按运行时过滤进程名
+            proc_name = "node.exe" if name == "atomcode" else "pythonw.exe"
+            ps_cmd = f'Get-CimInstance Win32_Process -Filter "Name=\'{proc_name}\'" | Where-Object {{ $_.CommandLine -match \'{name}\' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'
             subprocess.run(
                 f'powershell -Command "{ps_cmd}"',
                 shell=True, capture_output=True, timeout=10
