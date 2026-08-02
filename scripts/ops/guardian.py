@@ -70,21 +70,24 @@ RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）
 
-# 错误渠道检测（P0: 402/401/502 等瞬间返回的错误码）
-ERROR_SCAN_INTERVAL = 4  # 每 N 个检查周期扫描一次（4*15s=60s）
-ERROR_SCAN_BATCH_SIZE = 10  # 每次最多测试 N 个渠道（避免 API 过载）
-ERROR_DISABLE_KEYWORDS = ["余额不足", "INSUFFICIENT_BALANCE", "credit balance", "quota", "402", "401", "invalid"]  # 触发禁用的错误关键词
-TEST_CHANNEL_TIMEOUT = 5  # test_channel 独立超时（秒），死渠道不阻塞主循环
-RECOVERY_BATCH_SIZE = 3  # 每周期最多验证 N 个禁用渠道（避免阻塞主循环）
-RECOVERY_BACKOFF_BASE = 1  # 失败退避基数（分钟）
-RECOVERY_BACKOFF_MAX = 30  # 失败退避上限（分钟）
-OMP_ROLE_CHECK_INTERVAL = 40  # 每 N 周期主动检测 OMP 角色指向的渠道存活（40*15s=10min）
+# 错误渠道检测（补充 NewAPI 内置 30min 自动测试，不重复）
+# NewAPI 已内置: 每 30min 全量测试 + 401/402/403 自动禁用 + 自动启用
+# Guardian 补充: 更频繁的错误码扫描（NewAPI 只在定时测试时检测）+ 本地代理 + OMP
+ERROR_SCAN_INTERVAL = 20  # 每 N 个检查周期扫描一次（20*15s=5min，NewAPI 30min 太慢）
+ERROR_SCAN_BATCH_SIZE = 5  # 每次最多测试 N 个渠道（降低 API 负载）
+ERROR_DISABLE_KEYWORDS = ["余额不足", "INSUFFICIENT_BALANCE", "credit balance", "quota", "402", "401", "invalid"]
+TEST_CHANNEL_TIMEOUT = 5  # test_channel 独立超时（秒）
+RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
+RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
+RECOVERY_BACKOFF_MAX = 60  # 失败退避上限（分钟）
+OMP_ROLE_CHECK_INTERVAL = 80  # 每 N 周期主动检测 OMP 角色（80*15s=20min）
 
-# 自循环维护（让系统无需人工干预持续运转）
-FULL_SCAN_BATCH_SIZE = 2  # 全量扫描每周期测 N 个渠道（轮转，连续覆盖全部）
-ABILITY_FIX_INTERVAL = 240  # 每 N 周期修复 abilities 表（240*15s=1h）
-STATE_CLEANUP_INTERVAL = 480  # 每 N 周期清理陈旧状态（480*15s=2h）
-STATE_MAX_AGE_HOURS = 24  # 陈旧状态阈值（小时）
+# 自循环维护
+FULL_SCAN_INTERVAL = 240  # 每 N 周期全量扫描（240*15s=1h，补充 NewAPI 30min 测试）
+FULL_SCAN_BATCH_SIZE = 4  # 全量扫描每次测 N 个渠道（轮转）
+ABILITY_FIX_INTERVAL = 480  # 每 N 周期修复 abilities 表（480*15s=2h）
+STATE_CLEANUP_INTERVAL = 960  # 每 N 周期清理陈旧状态（960*15s=4h）
+STATE_MAX_AGE_HOURS = 48  # 陈旧状态阈值（小时）
 CYCLE_TIME_WARN_MS = 30000  # 周期耗时预警阈值（毫秒）
 
 # 本地代理
@@ -1289,19 +1292,22 @@ class AutoFixEngine:
     # ── 自循环维护（让系统无需人工干预持续运转） ──────────────────────────
 
     def full_health_scan(self):
-        """全量健康扫描：每周期轮转探测一批启用渠道，捕获渐进退化
+        """全量健康扫描：定期轮转探测启用渠道，捕获渐进退化
 
-        常规 check_channel 只看 response_time 字段（可能陈旧），全量扫描主动探测。
-        每周期测 FULL_SCAN_BATCH_SIZE 个渠道并轮转偏移，连续覆盖全部渠道。
-        单次阻塞可控（2 渠道 × 5s = 10s），全部 24 渠道约 3 分钟覆盖一轮。
+        补充 NewAPI 内置 30min 自动测试。每 FULL_SCAN_INTERVAL 周期触发，
+        每次测 FULL_SCAN_BATCH_SIZE 个渠道并轮转偏移。
         """
+        self._full_scan_count += 1
+        if self._full_scan_count % FULL_SCAN_INTERVAL != 0:
+            return
+
         channels = self.newapi.get_channels()
         enabled = [c for c in channels if c.get("status") == 1 and c.get("weight", 0) > 0]
         n = len(enabled)
         if n == 0:
             return
 
-        # 轮转批次：每周期测一批，偏移推进，连续覆盖全部渠道
+        # 轮转批次：每次触发测一批，偏移推进，多次触发覆盖全部渠道
         offset = self._full_scan_offset % n
         batch = (enabled[offset:] + enabled[:offset])[:FULL_SCAN_BATCH_SIZE]
         self._full_scan_offset = (offset + FULL_SCAN_BATCH_SIZE) % n
