@@ -864,23 +864,15 @@ class AutoFixEngine:
 
     def _get_available_models(self) -> List[str]:
         """动态获取 NewAPI 可用模型列表"""
-        try:
-            url = f"{NEWAPI_BASE}/api/models"
-            req = urllib.request.Request(url, headers={
-                "Authorization": f"Bearer {NEWAPI_TOKEN}",
-                "New-Api-User": NEWAPI_USER,
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                result = json.loads(resp.read().decode())
-                data = result.get("data", {})
-                all_models = []
-                for channel_models in data.values():
-                    if isinstance(channel_models, list):
-                        all_models.extend(channel_models)
-                return list(set(m for m in all_models if m))
-        except Exception as e:
-            logger.error(f"Failed to get available models: {e}")
+        result = self.newapi._request("GET", "/api/models", timeout=10)
+        if not result:
             return []
+        data = result.get("data", {})
+        all_models = []
+        for channel_models in data.values():
+            if isinstance(channel_models, list):
+                all_models.extend(channel_models)
+        return list(set(m for m in all_models if m))
 
     def _auto_join_pool(self, channel_id: int, name: str):
         """P0: 自动加入聚合池 — 真正更新 NewAPI weight/priority（同步 abilities 表）
