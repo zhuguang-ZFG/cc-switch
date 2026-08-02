@@ -80,6 +80,13 @@ RECOVERY_BACKOFF_BASE = 1  # 失败退避基数（分钟）
 RECOVERY_BACKOFF_MAX = 30  # 失败退避上限（分钟）
 OMP_ROLE_CHECK_INTERVAL = 40  # 每 N 周期主动检测 OMP 角色指向的渠道存活（40*15s=10min）
 
+# 自循环维护（让系统无需人工干预持续运转）
+FULL_SCAN_INTERVAL = 120  # 每 N 周期全量健康扫描所有启用渠道（120*15s=30min）
+ABILITY_FIX_INTERVAL = 240  # 每 N 周期修复 abilities 表（240*15s=1h）
+STATE_CLEANUP_INTERVAL = 480  # 每 N 周期清理陈旧状态（480*15s=2h）
+STATE_MAX_AGE_HOURS = 24  # 陈旧状态阈值（小时）
+CYCLE_TIME_WARN_MS = 30000  # 周期耗时预警阈值（毫秒）
+
 # 本地代理
 LOCAL_PROXIES = {
     "agentrouter": {"port": 8788, "name": "agentrouter", "script": "agentrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
@@ -480,6 +487,9 @@ class AutoFixEngine:
         self._stability_count = 0  # 稳定性检查独立计数器
         self._scan_offset = 0      # 错误扫描批次轮转偏移
         self._omp_check_count = 0  # OMP 角色主动检测计数器
+        self._full_scan_count = 0  # 全量健康扫描计数器
+        self._ability_fix_count = 0  # abilities 修复计数器
+        self._cleanup_count = 0    # 状态清理计数器
 
     def _load_state(self) -> dict:
         if STATE_FILE.exists():
@@ -646,7 +656,13 @@ class AutoFixEngine:
     # ── P1: 权重自动调整 ──────────────────────────────────────────────────
 
     def _auto_adjust_weights(self, channels: List[dict]):
-        """根据性能自动调整渠道权重（每个检查周期调用）"""
+        """根据性能自动调整渠道权重（每个检查周期调用）
+
+        自循环规则：
+        - 降权中的渠道（degraded_channels）不加权，防止同周期撤销降权
+        - 加权恢复到原始权重后清理 degraded_channels，防止状态泄漏
+        """
+        degraded = self.state.get("degraded_channels", {})
         for channel in channels:
             channel_id = channel["id"]
             if channel.get("status") != 1:
@@ -658,7 +674,10 @@ class AutoFixEngine:
 
             current_weight = channel.get("weight", 0)
             if current_weight == 0:
-                continue  # 被手动设为 0 的渠道不自动调整
+                continue
+
+            cid_str = str(channel_id)
+            is_degraded = cid_str in degraded
 
             # 成功率低 → 降权
             if stats["success_rate"] < WEIGHT_ADJUST_SUCCESS_THRESHOLD:
@@ -674,13 +693,27 @@ class AutoFixEngine:
                     channel["weight"] = new_weight
                     self.newapi.update_channel(channel)
                     logger.info(f"Channel {channel_id} auto-degrade: weight {current_weight} → {new_weight} (avg_rt={stats['avg_response_time']:.0f}ms)")
-            # 成功率高且响应快 → 加权（但不超过上限）
+            # 成功率高且响应快 → 加权
             elif stats["success_rate"] >= WEIGHT_BOOST_SUCCESS_THRESHOLD and stats["avg_response_time"] < 10000:
-                new_weight = min(MAX_AUTO_WEIGHT, current_weight + 1)
-                if new_weight > current_weight:
-                    channel["weight"] = new_weight
-                    self.newapi.update_channel(channel)
-                    logger.info(f"Channel {channel_id} auto-boost: weight {current_weight} → {new_weight} (success_rate={stats['success_rate']:.0%})")
+                if is_degraded:
+                    # 降权渠道渐进恢复：每次 +1，到达原始权重后清理记录
+                    original_w = degraded[cid_str].get("original_weight", current_weight)
+                    if current_weight < original_w:
+                        new_weight = min(original_w, current_weight + 1)
+                        channel["weight"] = new_weight
+                        self.newapi.update_channel(channel)
+                        logger.info(f"Channel {channel_id} degraded-recovery: weight {current_weight} → {new_weight} (target={original_w})")
+                    else:
+                        # 已恢复到原始权重，清理降权记录
+                        del self.state["degraded_channels"][cid_str]
+                        self._save_state()
+                        logger.info(f"Channel {channel_id} fully recovered, cleared degraded record")
+                else:
+                    new_weight = min(MAX_AUTO_WEIGHT, current_weight + 1)
+                    if new_weight > current_weight:
+                        channel["weight"] = new_weight
+                        self.newapi.update_channel(channel)
+                        logger.info(f"Channel {channel_id} auto-boost: weight {current_weight} → {new_weight} (success_rate={stats['success_rate']:.0%})")
 
     # ── P0: 防抖动 + 恢复 + 加入聚合池 ────────────────────────────────────
 
@@ -1231,6 +1264,112 @@ class AutoFixEngine:
                 continue  # 连接失败/超时 → 试下一个候选
         return False
 
+    # ── 自循环维护（让系统无需人工干预持续运转） ──────────────────────────
+
+    def full_health_scan(self):
+        """周期性全量健康扫描：对所有启用渠道做一次 test_channel，捕获渐进退化
+
+        常规 check_channel 只看 response_time 字段（可能陈旧），全量扫描主动探测，
+        发现慢/死渠道立即降权或禁用。每 FULL_SCAN_INTERVAL 周期运行一次。
+        """
+        self._full_scan_count += 1
+        if self._full_scan_count % FULL_SCAN_INTERVAL != 0:
+            return
+
+        channels = self.newapi.get_channels()
+        enabled = [c for c in channels if c.get("status") == 1 and c.get("weight", 0) > 0]
+        scanned = 0
+        degraded = 0
+        for channel in enabled:
+            channel_id = channel["id"]
+            test_ok, test_msg = self.newapi.test_channel(channel_id)
+            scanned += 1
+            if not test_ok:
+                msg_lower = test_msg.lower()
+                # 硬错误（402/401）直接禁用
+                if any(kw.lower() in msg_lower for kw in ERROR_DISABLE_KEYWORDS):
+                    self.state.setdefault("weight_history", {})
+                    if str(channel_id) not in self.state["weight_history"]:
+                        self.state["weight_history"][str(channel_id)] = {
+                            "weight": channel.get("weight", 5),
+                            "priority": channel.get("priority", 50),
+                            "time": datetime.now().isoformat(),
+                        }
+                    if self.newapi.disable_channel(channel_id):
+                        self.state["disabled_channels"].append({
+                            "id": channel_id, "name": channel["name"],
+                            "reason": f"full_scan: {test_msg[:80]}",
+                            "time": datetime.now().isoformat(), "manual": False,
+                        })
+                        self._save_state()
+                        logger.warning(f"Full scan disabled channel {channel_id}: {test_msg[:80]}")
+                else:
+                    # 软错误（超时/慢）降权
+                    if self.degrade_channel_weight(channel, f"full_scan: {test_msg[:60]}"):
+                        degraded += 1
+        logger.info(f"Full health scan: {scanned} channels, {degraded} degraded")
+
+    def periodic_ability_fix(self):
+        """周期性修复 abilities 表：NewAPI 的 abilities 可能与 channels 漂移
+
+        每 ABILITY_FIX_INTERVAL 周期调用 POST /api/channel/fix 重建投影。
+        """
+        self._ability_fix_count += 1
+        if self._ability_fix_count % ABILITY_FIX_INTERVAL != 0:
+            return
+        if self.newapi.fix_channel_abilities():
+            logger.info("Periodic ability fix completed")
+        else:
+            logger.warning("Periodic ability fix failed")
+
+    def cleanup_stale_state(self):
+        """周期性清理陈旧状态，防止 state.json 无限膨胀
+
+        - 清理超过 STATE_MAX_AGE_HOURS 的 weight_history 条目
+        - 清理超过阈值的 degraded_channels 条目
+        - 清理已不在禁用列表的 joined_channels 残留
+        """
+        self._cleanup_count += 1
+        if self._cleanup_count % STATE_CLEANUP_INTERVAL != 0:
+            return
+
+        cutoff = datetime.now() - timedelta(hours=STATE_MAX_AGE_HOURS)
+        cleaned = 0
+
+        # 清理陈旧 weight_history
+        for cid in list(self.state.get("weight_history", {}).keys()):
+            entry = self.state["weight_history"][cid]
+            try:
+                if datetime.fromisoformat(entry.get("time", "")) < cutoff:
+                    del self.state["weight_history"][cid]
+                    cleaned += 1
+            except (ValueError, TypeError):
+                continue
+
+        # 清理陈旧 degraded_channels
+        for cid in list(self.state.get("degraded_channels", {}).keys()):
+            entry = self.state["degraded_channels"][cid]
+            try:
+                if datetime.fromisoformat(entry.get("time", "")) < cutoff:
+                    del self.state["degraded_channels"][cid]
+                    cleaned += 1
+            except (ValueError, TypeError):
+                continue
+
+        # 清理陈旧 restarted_proxies
+        for name in list(self.state.get("restarted_proxies", {}).keys()):
+            try:
+                if datetime.fromisoformat(self.state["restarted_proxies"][name]) < cutoff:
+                    del self.state["restarted_proxies"][name]
+                    self.state.setdefault("restart_counts", {}).pop(name, None)
+                    cleaned += 1
+            except (ValueError, TypeError):
+                continue
+
+        if cleaned > 0:
+            self._save_state()
+            logger.info(f"State cleanup: removed {cleaned} stale entries")
+
     # ── P2: 余额趋势分析 ──────────────────────────────────────────────────
 
     def record_balance(self, remaining: int):
@@ -1381,8 +1520,9 @@ class AutoFixEngine:
             return False
 
     def export_metrics(self, channels: List[dict], error_rate: float, remaining: int):
-        """P2: 导出 JSON 指标"""
+        """P2: 导出 JSON 指标（含渠道生命周期状态机视图）"""
         try:
+            lifecycle = self.derive_channel_lifecycle(channels)
             metrics = {
                 "timestamp": datetime.now().isoformat(),
                 "channels": {
@@ -1390,6 +1530,7 @@ class AutoFixEngine:
                     "healthy": sum(1 for c in channels if c.get("status") == 1),
                     "disabled": sum(1 for c in channels if c.get("status") != 1),
                 },
+                "lifecycle": {state: len(items) for state, items in lifecycle.items()},
                 "error_rate": error_rate,
                 "balance_remaining": remaining,
                 "disabled_channels": len(self.state.get("disabled_channels", [])),
@@ -1400,6 +1541,55 @@ class AutoFixEngine:
             METRICS_FILE.write_text(json.dumps(metrics, indent=2))
         except Exception as e:
             logger.error(f"Export metrics failed: {e}")
+
+    def derive_channel_lifecycle(self, channels: List[dict]) -> Dict[str, List[dict]]:
+        """派生每个渠道的统一生命周期状态（显式状态机视图）
+
+        现有自愈逻辑把状态分散在 status/weight/degraded_channels/
+        joined_channels/disabled_channels 多处。此方法派生统一视图，
+        让渠道生命周期可观测、可审计。
+
+        生命周期状态:
+          active         — 正常服务（status=1, weight>0, 无降权/监控标记）
+          degraded       — 降权中（性能差，权重已降，渐进恢复中）
+          monitoring     — 稳定性监控中（刚恢复加入，观察期内）
+          disabled_auto  — 自动禁用（故障，将自动恢复）
+          disabled_manual— 手动禁用（用户操作，不自动恢复）
+          disabled_orphan— 孤儿禁用（Guardian 外禁用，如 NewAPI 自身）
+        """
+        degraded_ids = set(self.state.get("degraded_channels", {}).keys())
+        monitoring_ids = set(self.state.get("joined_channels", {}).keys())
+        disabled_map = {str(r["id"]): r for r in self.state.get("disabled_channels", [])}
+
+        lifecycle: Dict[str, List[dict]] = {
+            "active": [], "degraded": [], "monitoring": [],
+            "disabled_auto": [], "disabled_manual": [], "disabled_orphan": [],
+        }
+
+        for ch in channels:
+            cid = str(ch["id"])
+            info = {"id": ch["id"], "name": ch["name"], "weight": ch.get("weight", 0)}
+
+            if ch.get("status") == 1:
+                if cid in degraded_ids:
+                    lifecycle["degraded"].append(info)
+                elif cid in monitoring_ids:
+                    lifecycle["monitoring"].append(info)
+                elif ch.get("weight", 0) > 0:
+                    lifecycle["active"].append(info)
+                else:
+                    # status=1 但 weight=0：僵尸态（不应出现，回滚已修复）
+                    lifecycle["disabled_orphan"].append(info)
+            else:
+                if cid in disabled_map:
+                    rec = disabled_map[cid]
+                    key = "disabled_manual" if rec.get("manual") else "disabled_auto"
+                    info["reason"] = rec.get("reason", "")
+                    lifecycle[key].append(info)
+                else:
+                    lifecycle["disabled_orphan"].append(info)
+
+        return lifecycle
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 报警管理器
@@ -1467,16 +1657,29 @@ class Guardian:
         )
 
         while self.running:
+            cycle_start = time.time()
             try:
                 self.telegram.process_commands(self)
                 self._check_cycle()
-                time.sleep(HEALTH_CHECK_INTERVAL)
             except KeyboardInterrupt:
                 logger.info("Guardian 停止")
                 break
             except Exception as e:
                 logger.error(f"Check cycle error: {e}")
-                time.sleep(HEALTH_CHECK_INTERVAL)
+
+            # 自身健康监控：周期耗时超阈值则告警（说明某步骤阻塞）
+            cycle_ms = (time.time() - cycle_start) * 1000
+            if cycle_ms > CYCLE_TIME_WARN_MS:
+                if self.alerts.should_alert("cycle_slow", "warning"):
+                    self.telegram.send_alert(
+                        "Guardian 周期过慢",
+                        f"检查周期耗时 {cycle_ms/1000:.1f}s（阈值 {CYCLE_TIME_WARN_MS/1000:.0f}s）\n"
+                        f"某步骤可能阻塞，请检查日志",
+                        "warning"
+                    )
+                logger.warning(f"Cycle took {cycle_ms/1000:.1f}s (threshold {CYCLE_TIME_WARN_MS/1000:.0f}s)")
+
+            time.sleep(HEALTH_CHECK_INTERVAL)
 
     def _check_cycle(self):
         # 1. NewAPI 健康
@@ -1563,7 +1766,12 @@ class Guardian:
         # 9. P2: 导出指标
         self.autofix.export_metrics(channels, rate, remaining)
 
-        # 10. 每日报告
+        # 10. 自循环维护（无需人工干预持续运转）
+        self.autofix.full_health_scan()
+        self.autofix.periodic_ability_fix()
+        self.autofix.cleanup_stale_state()
+
+        # 11. 每日报告
         self._maybe_daily_report()
 
     def _maybe_daily_report(self, force: bool = False):
