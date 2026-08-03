@@ -65,3 +65,22 @@ glm-5.2 回归（CodeBuddy 后端）    -> GLM-OK，原路径未破坏
 9. **/v1/models 含自定义模型**：原只列硬编码 `DEFAULT_MODELS`。改为合并自定义模型（去重保序）。
 
 加固后验证：`gpt-5.6-sol` 非流式 5/5、流式 OK、`glm-5.2` 回归正常、`/health` 无 key→401 且无敏感字段、错误分类单元检查 400/401/403/404/429/500 均不重试。
+
+## 7. 补充修复（2026-08-03 晚间，WorkBuddy sol 不能用）
+
+**现象**：桌面 WorkBuddy（快捷方式 `C:\Users\Public\Desktop\WorkBuddy.lnk` → `C:\Program Files\WorkBuddy\WorkBuddy.exe`）里 sol 请求无响应。
+
+**根因**：`~/.workbuddy/models.json` 的 `apiKey` 是 4 key 池中唯一死的那把（key#1 `fe_oa_05e8...`）。WorkBuddy 桌面端直连 `models.json` 的 `url`（work.freemodel.dev），固定用该 key → 请求超时。4 key 逐把实测（Electron UA/Referer/Origin 头，非流式+流式）：
+
+```text
+key#1 fe_oa_05e8... 超时（死）
+key#2 fe_oa_16e0... 200 15.7s / 流式 18.7s
+key#3 fe_oa_69a9... 200 26.7s / 流式 6.0s
+key#4 fe_oa_2502... 200 13.5s / 流式 2.5s
+```
+
+**修复**：`models.json` 的 `apiKey` 改为 key#4（流式最快 2.5s）；`url` 保持 `https://work.freemodel.dev/v1/chat/completions` 不动；`custom_keys.json` 4 key 池不动（转换器 8787 侧仍按池轮询+冷却）。备份：`models.json.20260803-2258.bak`（原 freemodel+死key）、`models.json.20260803-alternate.bak`（曾试切 aliyun 的版本）。
+
+**验证**：转换器 8787 端到端 sol 流式 200（7.7s，4 chunks + DONE）；3 个活 key 直连 freemodel 流式全 OK。
+
+**注意**：WorkBuddy 主程序启动时缓存 models.json，需重启桌面应用才生效（当前进程受保护无法从外部杀掉，需托盘退出或任务管理器结束）。
