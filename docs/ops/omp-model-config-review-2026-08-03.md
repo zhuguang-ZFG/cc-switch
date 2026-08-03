@@ -63,16 +63,97 @@
 9. **`reasoning: true` 缺失会静音丢弃思维强度**：`clampThinkingLevelForModel` 对 `!model.reasoning` 返回 `undefined`，`:max` 后缀无声失效。`zg-newapi/deepseek-official-v4-flash` 原未标 reasoning，实测返回 `reasoning_content` 且 `reasoning_tokens=288`、`low/medium/high/xhigh/max` 五档全部 200——已补标。反向核验：`gpt-5.5` 与 `codebuddy/hy3-preview-agent` 实测无 `reasoning_content`，保持不标是正确的
 10. **`/health` 探活不等于推理可用**：`anyrouter`（本地 8789，pythonw PID 31408）`/health` 稳定返回 `{"status":"ok","keys":1}`，但 `/v1/messages` 5/5 全返回 502 `all keys failed: HTTP 503 (server)`——上游 anyrouter.top 的 key 已失效。Guardian 判活用的正是 `/health`（`guardian.py:569`），因此不会发现也不会自愈这种「进程活着但凭据死了」的状态。该 provider 已加入 `disabledProviders`，恢复时需手工移除
 11. **`zg-newapi/step-router-v1` 是死条目**：3/3 返回 400 `you have no active step plan subscription`（无 StepPlan 订阅）。原位于 `default` 链第 9 位，故障时会白耗一次重试；已从 models.yml 与 default 链移除
+12. **`agentrouter` 上游对短流式请求敏感词误杀**：`omp bench agentrouter/claude-opus-5:xhigh` 3/3 返回 `500 sensitive words detected`；代理日志证明 stream=True 短请求全 500、stream=False 全 200、`msgs=134` 的长流式会话 200 通过。过滤在 agentrouter.org 上游，非本地非 NewAPI。slow/plan/vision 主路由已切走（见第二轮调优）
+
+## 第二轮调优（2026-08-03 晚间，备份 `config.yml.20260803-211748.bak`）
+
+### OMP 角色/subagent 最终配置（本轮重排）
+
+| 角色                 | 模型（最终）                                                   | 变更理由                                                                                                  |
+| -------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| slow / plan / vision | `zg-newapi-anthropic/claude-opus-5:max`                        | 主路由从 agentrouter 切走（上游敏感词误杀，见下）；聚合池 5/5 采样 200，thinking 2048/4096 正常           |
+| commit / tiny / task | `zg-newapi/opencode-go:max`                                    | 恢复用户确认值；bench `:high` TTFT 1.6s/50 tok/s vs `:max` 1.5s/74 tok/s，max 不慢反快                    |
+| smol                 | `codebuddy/glm-5.2`（无后缀）                                  | 全档支持 minimal~max，scout/librarian/sonic 的 frontmatter（medium/minimal）真正生效；本地代理 20/20 稳定 |
+| designer             | `zg-newapi/gpt-5.6-sol:high`                                   | 保持                                                                                                      |
+| default              | `zg-newapi-anthropic/claude-opus-5:high`                       | OMP 运行时重选覆盖（21:47 写入 gpt-5.6-sol:high → 21:55 观测已变 claude-opus-5:high），易变快照           |
+| security-reviewer    | `@slow`（用户覆盖 `~/.omp/agent/agents/security-reviewer.md`） | bundled 无 model 字段 → 实测继承会话模型不可预测；覆盖后固定 slow                                         |
+
+**fallbackRevertPolicy: never → cooldown-expiry**：复杂工程长会话中一次瞬时故障会永久降级整场会话，改为冷却后自动回主模型。
+
+**链重排**：smol/slow/plan/vision 链首改为 agentrouter（本地后备，真实会话可通过）；慢链/plan 链/vision 链主模型与链首一致化。
+
+### 实测基准（bench，本轮新增证据）
+
+- `zg-newapi/opencode-go:max` 3/3 OK，TTFT 1608ms、79.6 tok/s（上轮）；`:high` vs `:max` 同题对比：TTFT 1.6s vs 1.5s、tok/s 50 vs 74——max 不慢反快
+- `codebuddy/glm-5.2:minimal` TTFT 2.3s/49 tok/s；`:medium` 2.8s/41 tok/s——scout 用 medium 档时成本/延迟可接受
+- `zg-newapi-anthropic/claude-opus-5:max` 2/2 OK，TTFT 2.6s（64 token 短输出）
+- `agentrouter/claude-opus-5:xhigh` 3/3 失败 `500 sensitive words detected`（见下）
+
+### agentrouter 上游敏感词误杀（本轮新发现，踩坑 12）
+
+`omp bench agentrouter/claude-opus-5:xhigh` 3/3 返回 `500 sensitive words detected (type=new_api_error param=sensitive_words_detected)`。追查代理日志（`~/.kimi-code/proxies/agentrouter-proxy/proxy.log`）结论：
+
+- **stream=True 的请求全 500**（bench 用流式），**stream=False 全 200**（curl 直打 8788 全过）
+- 同刻 OMP 主会话 `msgs=134` 的 stream=True 大请求 200 通过——**上游对短流式请求（2-msg 精简 prompt）误杀，对长真实会话放行**
+- 过滤在 agentrouter.org 上游（代理转发目标），非本地、非 NewAPI（NewAPI 日志 0 条该错误）
+
+**处置**：slow/plan/vision 主路由切走（保留 agentrouter 作链首 fallback，真实 subagent 会话 msgs≥2 且内容复杂时能通过，reviewer 探针 2m27s 成功为证）。
+
+### NewAPI 渠道修复（本轮）
+
+| 渠道                        | 处置                                                                                               |
+| --------------------------- | -------------------------------------------------------------------------------------------------- |
+| ch3 baibei-100xlabs         | `auto_ban=0`（根因见下）+ prio 57→50、w 40→20（打散公益池独占顶层）                                |
+| ch9 linxi-k40               | 显式禁用 status=2（自禁 status=3 + 实测超时，防 AutomaticEnable 反复拉起）                         |
+| ch18 linxi-k40-opus5-backup | 降层 prio 54→40、w 10→2（同源 502）                                                                |
+| ch36 stepfun-step-plan      | 禁用 status=2（无 StepPlan 订阅 400）                                                              |
+| ch50/55 inferx-deepseek     | 禁用 status=2（429/慢）                                                                            |
+| ch56 hf-deepseek-0731       | 禁用 status=2（端点退役 404）                                                                      |
+| ch30 fastaitoken-gpt        | 禁用 status=2（INSUFFICIENT_BALANCE 403）                                                          |
+| ch62/63/64/65 centos-gpt    | models 摘掉 `gpt-5.5`（上游 codex测试 组无该模型，503）→ 只留 gpt-5.6-sol；实测 4/4 OK（1.9-3.8s） |
+| ch26/27/28/57 gorouter 池   | 提权 w 5/3/4/4 → 8/6/6/6（实测 2.4-2.6s 健康）                                                     |
+| ch53 atomcode-bridge        | w 0→5（实测 1.8s 健康）                                                                            |
+| ch46/47 bazaarlink          | 降权 w 3→2（实测 5-7s 慢）                                                                         |
+| ch49/54 inferx-glm52        | prio 30→50（实测 1.5-1.8s 比 codebuddy 快）                                                        |
+| ch45 agentrouter            | 提权 w 15→20 同层分流（本地代理稳定）                                                              |
+
+**全局选项**：`ChannelDisableThreshold` 3→50（恢复 newapi-audit-2026-07-29 记录值；公益池抖动不该 3 连击即封）。
+
+### baibei-100xlabs (ch3) 反复自动禁用根因（用户问询）
+
+**不是密钥坏了，是 NewAPI auto-ban 对公益池抖动太敏感形成的 flap 循环**：
+
+1. 100xlabs 是公益共享池：上游并发上限（`Concurrency limit exceeded` 500/429）+ Cloudflare 间歇 502（origin overloaded），抖动是常态
+2. ch3 开着 `auto_ban=1`，`ChannelDisableThreshold=3` → 连续 3 次失败即 auto-ban（`status_reason: All keys are disabled`，multi_key key 0/4 status=3 残留为证）
+3. `AutomaticEnableChannelEnabled=true` → 之后自动恢复 → 流量又打进去 → 又抖 3 次 → 又禁 = **flap 循环**
+4. Guardian `state.json` 无 ch3（disabled 只有 ch38）——**是 NewAPI 自身机制，不是 Guardian**
+
+证据：3 次 `test_channel` 全 200（2.2-3.4s）、日志有正常成功请求；但文档早有记录（`zg-claude-routing.md`：100xlabs 账号并发上限 / `gorouter-claude-newapi.md`：ch3 opus-5 近乎 100% 500 Concurrency limit）。
+
+**修复**：ch3 `auto_ban=0`（对齐 `newapi-aggregation-pools-2026-08-01.md` 公益源 auto_ban=0 策略，同 ch46/47）+ 全局阈值 3→50。
+
+### Guardian 探活加固（guardian.py）
+
+`check_local_proxy` 返回 `(healthy, msg, alive)` 三元组（原二元组）：
+
+- **alive=False**（进程无响应）→ 照旧重启
+- **alive=True 但推理探针失败**（anyrouter 类「进程活着但凭据/上游死了」）→ **只告警不重启**，避免重启风暴
+- anyrouter 增加真实 `/v1/messages` 最小推理探针（`max_tokens:1`，30s 超时）——`/health` 200 但推理 5/5 502 的盲区就此封死（踩坑 10 落地）
+- agentrouter/codebuddy/atomcode 保持 `/v1/models`/`/v1/usage` 浅探针（无推理探针需求）
+
+同步更新：主监控循环（2055 起）、重启后验证（:1752）、OMP 角色写回探活（:1315）；测试 35/35 通过（含新三元组契约 + 修复一个预存 Telegram 测试消息缺 `from` 字段的缺陷）。
 
 ## 当前状态（2026-08-03 观测，非永久结论）
 
-- OMP 配置当日核验全有效：9 角色 + 12 链共 62 条引用 100% 可解析，0 断裂，0 指向 disabled provider
-- **真实推理探测**（不止列模型）：23 组 `模型 × 思维档` 逐个发 chat 请求，20 成功。5 连采样：`agentrouter/claude-opus-5` 5/5、`zg-newapi-anthropic/claude-opus-5` 5/5、`zg-newapi/opencode-go` 5/5、`zg-newapi/gpt-5.6-sol` 4/5（1 次 504/超时，designer 角色偶发抖动，链已覆盖）
-- 本轮审计修复（备份 `*.20260803-203411.bak`）：agentrouter/claude-opus-5 maxTokens 16384→128000（踩坑 8）；deepseek-official-v4-flash 补 `reasoning: true`（踩坑 9）；anyrouter 入 disabledProviders（踩坑 10）；step-router-v1 从 models.yml + default 链移除（踩坑 11）
+- OMP 配置第二轮终态核验全有效：9 角色 + 12 链 100% 可解析，0 断裂，0 指向 disabled provider；`gpt-5.5` 已从 config.yml 两条链 + models.yml 彻底移除（NewAPI 侧零启用渠道，`contextPromotionTarget` 一并删除）
+- **复杂多 agent 工程烟测（第二轮）**：5 角色并发（scout/task/designer/reviewer/security-reviewer）全部完成零失败；raw JSONL 确认模型解析：scout→`codebuddy/glm-5.2`（thinkingLevel=**medium**，frontmatter 生效）、task→`opencode-go:max`、designer→`gpt-5.6-sol:high`、reviewer/security→`zg-newapi-anthropic/claude-opus-5:max`（@slow 覆盖生效）
+- **重启持久性**：config.yml 自 21:47 写入后 8 分钟未被 OMP 改写（default 保持 claude-opus-5:high）；OMP 运行中不持续覆盖配置
+- **failover 验证**：新慢链主模型 `zg-newapi-anthropic/claude-opus-5:max` bench 2/2 OK（TTFT 2.6s）；agentrouter fallback 对真实 subagent 会话可用（reviewer 探针 2m27s 成功），仅短流式 bench 请求被上游敏感词误杀（踩坑 12）
+- 渠道侧：38 渠道全量复核，禁用 ch9/30/36/50/55/56（死渠道 + 余额不足），ch62-65 摘 gpt-5.5，claude-opus-5 池重排（ch3 降层、ch45 提权、gorouter 池提权），`ChannelDisableThreshold` 3→50
+- Guardian 探活加固已落地（三元组 + anyrouter 推理探针），35/35 测试通过
 - 已知未修（可接受）：`zg-newapi/mercury-2`、`zg-newapi/grok-4.5` 零引用但实测存活（200），保留作手动切换候选
-- 长输出压测暴露**上游侧**限制，非配置问题：`agentrouter` 与 `zg-newapi-anthropic` 在 16K 输出的非流式请求上 >200s 无响应（agentrouter 一次返回 502 `deadline exceeded (>120s) ... HTTP 504`）；改流式后两者均正常出流（93KB/282 chunk、170KB/1230 event）。**长任务应依赖 OMP 默认的流式路径**
-- gpt-5.6-sol 池 6 渠道当日 8/8 测试通过（403 消除）；服务端健康非持续保证，复核需重新探测
-- mercury-2 计费已配价（2.0 倍率）
+- 长输出压测暴露**上游侧**限制，非配置问题：`agentrouter` 与 `zg-newapi-anthropic` 在 16K 输出的非流式请求上 >200s 无响应；改流式后正常出流。**长任务应依赖 OMP 默认的流式路径**
+- 本轮备份：`config.yml.20260803-211748.bak`、`config.yml.20260803-203411.bak`、`models.yml.20260803-203411.bak`
 - Guardian（自愈）+ watchdog 当日在运行；`default` 角色取值当前主要由 OMP 启动重选决定（Guardian codebuddy 写回被 ch44 的 channel_models 门控挡住，见踩坑 6），任何时点以 `~/.omp/agent/config.yml` 实际内容为准
 
 ## 相关文件
