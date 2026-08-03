@@ -27,6 +27,7 @@ import re
 import subprocess
 import sys
 import time
+import socket
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
@@ -282,6 +283,8 @@ class TelegramBot:
             try:
                 if cmd == "/status":
                     self._cmd_status(guardian)
+                elif cmd == "/agents":
+                    self._cmd_agents(guardian)
                 elif cmd == "/channels":
                     self._cmd_channels(guardian)
                 elif cmd == "/report":
@@ -325,6 +328,19 @@ class TelegramBot:
             f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         self.send(text)
+
+    def _cmd_agents(self, guardian):
+        roster = guardian.get_subagent_status()
+        if not roster:
+            self.send("没有近期 subagent 会话")
+            return
+        lines = ["🤖 <b>Subagent 实时状态</b>\n"]
+        for item in roster:
+            lines.append(
+                f"{_html_escape(item['status'])} {_html_escape(item['name'])} "
+                f"({_html_escape(item['model'])}, {item['age_sec']}s)"
+            )
+        self.send("\n".join(lines))
 
     def _cmd_channels(self, guardian):
         channels = guardian.newapi.get_channels()
@@ -400,6 +416,7 @@ class TelegramBot:
         text = (
             "🤖 <b>Guardian 命令</b>\n\n"
             "/status - 查看系统状态\n"
+            "/agents - 查看 subagent 实时状态\n"
             "/channels - 列出所有渠道\n"
             "/report - 生成健康报告\n"
             "/restart &lt;proxy&gt; - 重启本地代理\n"
@@ -587,28 +604,48 @@ class HealthChecker:
         return True, "正常", response_time
 
     def check_local_proxy(self, port: int, name: str) -> Tuple[bool, str, bool]:
-        """返回 (healthy, message, alive)；alive=False 才应触发进程重启。"""
-        proxy_config = {
-            "agentrouter": {"key": AGENTROUTER_PROXY_KEY, "endpoint": "/v1/models"},
-            "codebuddy": {"key": CODEBUDDY_API_KEY, "endpoint": "/v1/models"},
-            "atomcode": {"key": ATOMCODE_PROXY_KEY, "endpoint": "/v1/usage"},
+        """完成最小推理探针，区分进程存活与上游可用性。"""
+        proxy_keys = {
+            "agentrouter": AGENTROUTER_PROXY_KEY,
+            "codebuddy": CODEBUDDY_API_KEY,
+            "atomcode": ATOMCODE_PROXY_KEY,
         }
-        config = proxy_config.get(name, {"key": "any", "endpoint": "/v1/models"})
-
-        # 本地代理均只绑定 127.0.0.1
-        for host in ["127.0.0.1"]:
+        models = {
+            "agentrouter": "claude-opus-5",
+            "codebuddy": "gpt-5.6-sol",
+            "atomcode": "deepseek-v4-flash",
+        }
+        url = f"http://127.0.0.1:{port}/v1/chat/completions"
+        payload = json.dumps({
+            "model": models.get(name, "gpt-5.6-sol"),
+            "messages": [{"role": "user", "content": "Reply with pong."}],
+            "max_tokens": 4,
+            "stream": False,
+        }).encode()
+        request = urllib.request.Request(
+            url,
+            data=payload,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {proxy_keys.get(name, 'any')}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                if 200 <= response.status < 300:
+                    return True, f"{name} 推理正常 (127.0.0.1)", True
+                return False, f"{name} 推理失败 (HTTP {response.status})", True
+        except urllib.error.HTTPError as error:
+            if error.code in (401, 403):
+                return True, f"{name} 存活但鉴权失败 (HTTP {error.code})", True
+            return False, f"{name} 推理失败 (HTTP {error.code})", True
+        except Exception:
             try:
-                url = f"http://{host}:{port}{config['endpoint']}"
-                req = urllib.request.Request(url, headers={"Authorization": f"Bearer {config['key']}"})
-                with urllib.request.urlopen(req, timeout=5):
-                    return True, f"{name} 正常 ({host})", True
-            except urllib.error.HTTPError as e:
-                if e.code in (401, 403):
-                    # 服务存活但鉴权失败——重启解决不了，视为存活并记录
-                    return True, f"{name} 存活但鉴权失败 ({host}, HTTP {e.code})", True
-            except Exception:
-                continue
-        return False, f"{name} 无响应（127.0.0.1 探测失败）", False
+                with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    return False, f"{name} 存活但推理超时", True
+            except OSError:
+                return False, f"{name} 无响应（127.0.0.1 端口不可达）", False
 
     def check_error_rate(self) -> Tuple[bool, float, int, int]:
         """检查错误率
@@ -1767,7 +1804,7 @@ class AutoFixEngine:
 
             # 重启后验证：等待进程启动并探测端口（最多 10s）
             verified = False
-            for _ in range(5):
+            for attempt in range(5):
                 ok, _, alive = self.health.check_local_proxy(port, name)
                 if ok:
                     verified = True
@@ -1776,6 +1813,8 @@ class AutoFixEngine:
                     # 进程活着但推理失败——重启已让进程回来，上游故障等 Guardian
                     # 渠道层处理即可，不再空转等待
                     break
+                if attempt + 1 < 5:
+                    time.sleep(2)
 
             self.state["restart_counts"][name] = restart_count + 1
             self.state["restarted_proxies"][name] = datetime.now().isoformat()
@@ -2021,6 +2060,49 @@ class Guardian:
         self.alerts = AlertManager(self.telegram)
         self.running = True
 
+    def get_subagent_status(self) -> List[dict]:
+        """Return recent OMP subagent role, model, and lifecycle snapshots."""
+        root = Path.home() / ".omp" / "agent" / "sessions"
+        if not root.exists():
+            return []
+        now = time.time()
+        result = []
+        for path in root.glob("*/*/*.jsonl"):
+            try:
+                age_sec = int(max(0, now - path.stat().st_mtime))
+                if age_sec > 7200:
+                    continue
+                model = "unknown"
+                completed = False
+                for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if event.get("type") == "model_change":
+                        model = event.get("model") or model
+                    elif event.get("type") == "session_exit" or (
+                        event.get("type") == "custom"
+                        and (
+                            event.get("customType") == "session_exit"
+                            or (
+                                event.get("customType") == "tool_execution_start"
+                                and event.get("data", {}).get("toolName") == "yield"
+                            )
+                        )
+                    ):
+                        completed = True
+                status = "completed" if completed else ("stalled" if age_sec > 300 else "running")
+                result.append({
+                    "name": path.stem,
+                    "model": model,
+                    "status": status,
+                    "age_sec": age_sec,
+                })
+            except OSError:
+                continue
+        return sorted(result, key=lambda item: item["age_sec"])[:20]
+
     def run(self):
         logger.info("NewAPI Guardian 启动")
         if not self.newapi.exclude_retry_status_code(402):
@@ -2093,23 +2175,40 @@ class Guardian:
         # 2. 本地代理健康：只有端口无响应才重启；进程存活但上游异常只告警。
         for name, info in LOCAL_PROXIES.items():
             ok, msg, alive = self.health.check_local_proxy(info["port"], name)
-            if ok:
-                if self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
+            proxy_fail_streaks = self.autofix.state.setdefault("proxy_fail_streaks", {})
+            if ok or alive:
+                if proxy_fail_streaks.get(name, 0):
+                    proxy_fail_streaks[name] = 0
+                    self.autofix._save_state()
+                if ok and self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
                     self.autofix.state["restart_counts"][name] = 0
                     self.autofix.state.setdefault("restart_alerted", {}).pop(name, None)
                     self.autofix._save_state()
-            elif alive:
-                if self.alerts.should_alert(f"proxy_{name}", "error"):
+                if not ok and self.alerts.should_alert(f"proxy_{name}", "error"):
                     self.telegram.send_alert("本地代理推理异常", _html_escape(msg), "error")
-                else:
-                    logger.warning(f"代理 {name} 推理异常（告警冷却期）: {msg}")
             else:
+                streak = proxy_fail_streaks.get(name, 0) + 1
+                proxy_fail_streaks[name] = streak
+                self.autofix._save_state()
+                if streak < 3:
+                    logger.warning(f"代理 {name} 端口探测失败 {streak}/3，等待确认: {msg}")
+                    continue
+                breaker_open = self.autofix.state.get("restart_counts", {}).get(name, 0) >= 3
                 restarted = self.autofix.restart_local_proxy(name, info["port"])
-                if not restarted:
-                    if self.alerts.should_alert(f"proxy_{name}", "error"):
-                        self.telegram.send_alert("本地代理故障", _html_escape(msg), "error")
-                    else:
-                        logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
+                proxy_fail_streaks[name] = 0
+                self.autofix._save_state()
+                if (
+                    not restarted
+                    and not breaker_open
+                    and self.alerts.should_alert(f"proxy_{name}", "error")
+                ):
+                    self.telegram.send_alert("本地代理故障", _html_escape(msg), "error")
+
+        # NewAPI 已判定不可达：保留本地代理检查，但不再向同一故障端点扇出渠道、
+        # 日志、余额和 abilities 请求。下轮健康检查恢复后自动继续完整闭环。
+        if not newapi_ok:
+            logger.warning(f"NewAPI unavailable; skipped dependent work: {newapi_msg}")
+            return
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
         if self._budget_left("error scan"):
             self.autofix.scan_error_channels()

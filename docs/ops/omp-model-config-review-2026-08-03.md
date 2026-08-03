@@ -291,3 +291,27 @@ atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无�
 - 不建议仅缩短 retry delay；真正缺失的是有取消能力的请求/首字节 deadline。OMP 当前配置未暴露该 deadline，不能用 `maxDelayMs` 冒充。
 
 本节是审计结论，未直接改写运行时 fallback 顺序：移动候选会改变 slow/plan/vision 的质量、图像能力与供应商边界，应在独立 smoke 中验证后再切。
+
+### 稳定化落地与现场验证（2026-08-04 03:10）
+
+#### OMP 运行路由
+
+- `slow` / `plan` / `vision` 主模型为 `zg-newapi-anthropic/claude-opus-5:high`；`commit` / `tiny` / `task` 为 `zg-newapi/opencode-go:high`；`smol` 为 `codebuddy/glm-5.2`；`default` 为 `codebuddy/gpt-5.6-sol`。
+- `retry.maxRetries=2`，`fallbackRevertPolicy=cooldown-expiry`，全局并发 6；provider 级并发限制为 4。
+- `slow` 自动备用链已把已知存在敏感词误杀的 `agentrouter/*` 放到末尾。Reviewer smoke 在 NewAPI Opus 路由上超过 10 分钟未完成，因此用户级 `reviewer` 与 `security-reviewer` 固定到 `zg-newapi/gpt-5.6-sol:high`；保留 Opus 给需要长推理的 `slow` / `plan` / `vision`，避免审查门被慢首字节阻塞。
+
+#### Guardian 自愈边界
+
+- 本地代理探活执行最小 `/v1/chat/completions` 推理；`2xx` 为健康，`401/403` 为进程存活但鉴权异常，`5xx` 为进程存活但上游异常。推理连接异常后额外探测 TCP 端口：端口可连接只告警，不重启；端口连续 3 轮不可达才进入代理重启。
+- 该二阶段判定修复了 02:54–03:16 的现场误报：推理等待超过 8 秒时，旧逻辑错误标记 `alive=false`，造成重复“无响应”通知。部署修复并清除旧断路器状态后，Guardian 自动恢复 AgentRouter；现场探针最终确认 AgentRouter、CodeBuddy、AtomCode 三个入口均完成真实推理。
+- NewAPI 不可达时仍检查本地代理，但跳过渠道扫描、日志、余额、abilities 等依赖请求，避免同一故障扇出。
+- NewAPI 重启需要连续 3 次失败；本地代理端口也需要连续 3 次失败。重启验证每 2 秒复测、最多 5 次；断路器通知由重启状态机唯一负责，避免同轮重复“重启失败”和“本地代理故障”。渠道恢复需要 3 次复测至少 2 次通过，随后重新加入池，并接受 10 分钟稳定性回滚。
+- Telegram `/agents` 从 OMP JSONL 会话事件提取角色、实际模型和生命周期；`yield` 或 `session_exit` 记为 completed，5 分钟无新事件记为 stalled。这是外部 Guardian 的观测投影；OMP 进程内 `AgentRegistry` / `hub` 仍是权威实时状态。
+
+#### 验证证据
+
+- Guardian 回归套件：92 tests，全部通过。
+- 定向故障注入：NewAPI 不可达、代理 502、TCP 连接失败、推理超时但 TCP 存活、连续失败防抖和重启断路器，全部通过。
+- 并发 subagent smoke：coding 使用 `zg-newapi/opencode-go` 完成；research 使用 `zg-newapi/sensenova-6.7-flash-lite` 完成；JSONL 状态投影能在运行中显示实际模型，并在 `yield` 后切到 completed。Reviewer 的 Opus 路由卡住，GPT-5.6 重试未产出有效审查结果，因此未将其误报为成功；角色已切至响应稳定的 GPT-5.6。
+- 关键路由独立烟测：`zg-newapi/opencode-go:high` 2.44s 成功，`codebuddy/gpt-5.6-sol:high` 3.16s 成功；三路并发烟测因 Opus 超过 300s 被整体超时，证明 Opus 仍只适合作为长任务能力路由，不应承担快速审查门。
+- Guardian 重启后 PID/心跳更新；自动恢复后 `restart_counts` 与 `proxy_fail_streaks` 均归零，AgentRouter、CodeBuddy、AtomCode 监听端口和真实推理全部验证成功。

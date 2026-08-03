@@ -274,6 +274,33 @@ class TelegramCommandTests(unittest.TestCase):
 
         bot._cmd_status.assert_called_once()
 
+    def test_agents_command_reports_running_and_completed_sessions(self):
+        bot = guardian.TelegramBot.__new__(guardian.TelegramBot)
+        bot.send = Mock()
+        guardian_instance = Mock()
+        guardian_instance.get_subagent_status.return_value = [
+            {"name": "Build", "model": "zg-newapi/opencode-go", "status": "running", "age_sec": 7},
+            {"name": "Review", "model": "claude-opus-5", "status": "completed", "age_sec": 12},
+        ]
+
+        bot._cmd_agents(guardian_instance)
+
+        text = bot.send.call_args.args[0]
+        self.assertIn("Build", text)
+        self.assertIn("running", text)
+        self.assertIn("Review", text)
+        self.assertIn("completed", text)
+
+    def test_agents_command_reports_empty_roster(self):
+        bot = guardian.TelegramBot.__new__(guardian.TelegramBot)
+        bot.send = Mock()
+        guardian_instance = Mock()
+        guardian_instance.get_subagent_status.return_value = []
+
+        bot._cmd_agents(guardian_instance)
+
+        self.assertIn("没有近期 subagent", bot.send.call_args.args[0])
+
 
 class FullHealthScanTests(unittest.TestCase):
     def test_requires_three_soft_failures_before_degrading(self):
@@ -930,7 +957,8 @@ class ProxyRestartTests(unittest.TestCase):
         g.telegram = Mock()
         g._maybe_daily_report = Mock()
 
-        g._check_cycle()
+        for _ in range(3):
+            g._check_cycle()
 
         # 当前只管理 agentrouter/codebuddy/atomcode 三个本地代理
         self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
@@ -955,7 +983,8 @@ class ProxyRestartTests(unittest.TestCase):
         g.telegram = Mock()
         g._maybe_daily_report = Mock()
 
-        g._check_cycle()
+        for _ in range(3):
+            g._check_cycle()
 
         self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
         g.telegram.send_alert.assert_not_called()
@@ -979,12 +1008,39 @@ class ProxyRestartTests(unittest.TestCase):
         g.telegram = Mock()
         g._maybe_daily_report = Mock()
 
-        g._check_cycle()
+        for _ in range(3):
+            g._check_cycle()
 
         self.assertEqual(g.telegram.send_alert.call_count, 3)
         self.assertTrue(
             all(call.args[0] == "本地代理故障" for call in g.telegram.send_alert.call_args_list)
         )
+    def test_open_proxy_breaker_does_not_send_duplicate_cycle_alert(self):
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (False, "down", False)
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {
+            "restart_counts": {name: 3 for name in guardian.LOCAL_PROXIES},
+            "proxy_fail_streaks": {name: 2 for name in guardian.LOCAL_PROXIES},
+        }
+        g.autofix.restart_local_proxy.return_value = False
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = True
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
+        g.telegram.send_alert.assert_not_called()
+
 
     def test_newapi_restart_success_enters_long_cooldown(self):
         """重启成功写 newapi_restart_time（长冷却）；失败只写 fail_time（短退避）"""
@@ -1188,6 +1244,29 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(state["newapi_fail_streak"], 1)
         g.autofix._save_state.assert_called()
 
+    def test_newapi_outage_skips_dependent_channel_work(self):
+        """NewAPI 不可达时不得继续扇出渠道 API 请求，保留本地代理检查。"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (False, "down")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
+        g.newapi = Mock()
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}, "newapi_fail_streak": 0}
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+
+        g._check_cycle()
+
+        g.health.check_local_proxy.assert_called()
+        g.newapi.get_channels.assert_not_called()
+        g.autofix.scan_error_channels.assert_not_called()
+        g.autofix.check_and_enable_recovered_channels.assert_not_called()
+        g.autofix._check_joined_channels_stability.assert_not_called()
+        g.health.check_error_rate.assert_not_called()
+        g.health.check_balance.assert_not_called()
+
     def test_newapi_restart_verification_timeout_enters_long_cooldown(self):
         """SSH 命令已执行（rc=0）但 API 未恢复：进入长冷却，不得短退避反复重启"""
         engine = make_engine({
@@ -1287,6 +1366,71 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertIn("127.0.0.1:8788", called_req)
         auth = mk_req.call_args.kwargs["headers"]["Authorization"]
         self.assertEqual(auth, f"Bearer {guardian.AGENTROUTER_PROXY_KEY}")
+
+    def test_local_proxy_uses_inference_probe_not_models_listing(self):
+        """存活探针必须真正完成一次推理，不能把 /models 200 当可用。"""
+        health = guardian.HealthChecker(Mock())
+        response = Mock(status=200)
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"choices":[{"message":{"content":"pong"}}]}'
+
+        with patch.object(guardian.urllib.request, "urlopen", return_value=response), patch.object(
+            guardian.urllib.request, "Request", wraps=guardian.urllib.request.Request
+        ) as mk_req:
+            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
+
+        request_call = mk_req.call_args_list[0]
+        self.assertEqual(request_call.args[0], "http://127.0.0.1:8788/v1/chat/completions")
+        self.assertEqual(request_call.kwargs["method"], "POST")
+        self.assertIn(b'"model": "claude-opus-5"', request_call.kwargs["data"])
+        self.assertTrue(ok)
+        self.assertTrue(alive)
+        self.assertIn("推理正常", msg)
+
+    def test_local_proxy_upstream_502_is_alive_but_unhealthy(self):
+        """代理返回 5xx 说明进程存活、上游不可用；重启代理不能解决。"""
+        health = guardian.HealthChecker(Mock())
+        with patch.object(
+            guardian.urllib.request,
+            "urlopen",
+            side_effect=guardian.urllib.error.HTTPError(
+                "http://127.0.0.1:8788/v1/chat/completions", 502, "Bad Gateway", None, None
+            ),
+        ):
+            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
+
+        self.assertFalse(ok)
+        self.assertTrue(alive)
+        self.assertIn("推理失败", msg)
+
+    def test_local_proxy_timeout_with_open_port_is_alive_but_unhealthy(self):
+        health = guardian.HealthChecker(Mock())
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+
+        with patch.object(
+            guardian.urllib.request, "urlopen", side_effect=TimeoutError("timed out")
+        ), patch.object(guardian.socket, "create_connection", return_value=connection):
+            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
+
+        self.assertFalse(ok)
+        self.assertTrue(alive)
+        self.assertIn("推理超时", msg)
+
+    def test_local_proxy_connection_failure_is_not_alive(self):
+        health = guardian.HealthChecker(Mock())
+        with patch.object(
+            guardian.urllib.request, "urlopen", side_effect=OSError("connection refused")
+        ), patch.object(
+            guardian.socket, "create_connection", side_effect=OSError("connection refused")
+        ):
+            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
+
+        self.assertFalse(ok)
+        self.assertFalse(alive)
+        self.assertIn("无响应", msg)
 
     def test_circuit_breaker_alert_sent_once(self):
         """断路器打开后重复调用只发一次告警，不刷屏"""
