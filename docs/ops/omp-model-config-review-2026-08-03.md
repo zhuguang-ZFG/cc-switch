@@ -179,3 +179,12 @@
 **验证**：`omp launch -p --model zg-newapi-anthropic/claude-opus-5:high` → OK（7.2s）；9 角色全可解析。
 
 **未做（OMP 无 signature-only）**：thinking `type:"disabled"` 加速需 OMP 上游支持，记录为未来优化点。
+
+### 大型项目加固（2026-08-04 凌晨）
+
+大型项目风险评估后落地两条确定性加固：
+
+1. **opencode-go 双渠道**（消除 task/commit/tiny 单点）：ch53 atomcode-bridge（本地 9457，实测支持 max thinking 2.0s）加 `opencode-go` 模型 + model_mapping→deepseek-v4-flash，w=5 备用。opencode-go 现为 ch48(w22 主力) + ch53(w5 备用)，实测双渠道 OK（3.3s / 7.0s）。OMP 端到端 `zg-newapi/opencode-go:max` → OK。
+2. **ch9 linxi-k40 auto_ban=0**（防翻转循环）：与 ch3 同策略——公益源抖动不该 auto-ban。之前一天内多次 禁用→自动恢复→再禁用。
+
+验证：abilities 重建 38/0；opencode-go 池 2 渠道；OMP task 主模型端到端 OK。
