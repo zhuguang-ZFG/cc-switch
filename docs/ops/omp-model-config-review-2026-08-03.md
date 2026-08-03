@@ -164,3 +164,18 @@
 - OMP 配置: `~/.omp/agent/config.yml`、`~/.omp/agent/models.yml`
 - Guardian: `scripts/ops/guardian.py` + `~/.omp/guardian/`
 - NewAPI: `https://aliyun.donglicao.com`
+
+### TTFT 首字延迟优化（2026-08-03 深夜，社区/GitHub 方案落地）
+
+**证据链**：日志 1000 条 0 错误，但 claude-opus-5 avg 37s、ch45 agentrouter 22% >60s；NewAPI issue #4992（网关 TTFT 劣化 3-4x，thinking done 后 token 慢）官方 closed-not-planned；Claude 官方文档：thinking budget 越大 TTFT 越长。
+
+**关键发现**：OMP `ANTHROPIC_THINKING`（pi-ai/src/stream.ts:1263）：`xhigh: 32768, max: 32768`——**xhigh 与 max 预算相同**，从 max 降 xhigh 不省 TTFT；要省必须降到 high（16384）/medium（8192）。OMP 走 interleaved thinking（`thinkingEnabled+thinkingBudgetTokens`），无 signature-only 开关（`thinking.type:"disabled"` 未暴露）。
+
+**已执行**：
+
+1. OMP slow/plan/vision：`claude-opus-5:max` → `:high`（预算 32768→16384，TTFT 减半预期；备份 `config.yml.20260803-234140.bak`）
+2. ch45 agentrouter 降权 w 20→10（22% >60s 不该最高权重）+ abilities 重建（38/0）
+
+**验证**：`omp launch -p --model zg-newapi-anthropic/claude-opus-5:high` → OK（7.2s）；9 角色全可解析。
+
+**未做（OMP 无 signature-only）**：thinking `type:"disabled"` 加速需 OMP 上游支持，记录为未来优化点。
