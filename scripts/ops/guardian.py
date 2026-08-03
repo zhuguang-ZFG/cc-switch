@@ -112,11 +112,12 @@ STATE_MAX_AGE_HOURS = 48  # 陈旧状态阈值（小时）
 CYCLE_TIME_WARN_MS = 30000  # 周期耗时预警阈值（毫秒）
 CYCLE_BUDGET_SEC = 90  # 单轮执行预算：超时后跳过剩余低优先级步骤，避免周期无限拉长
 
-# 本地代理
+# 本地代理（anyrouter 已从 OMP disabledProviders + 本表移除：上游 anyrouter.top
+# key 失效 502，进程活着但推理不可用，重启解决不了——见踩坑 10；保留进程，
+# 恢复时手工加回本表即可）
 LOCAL_PROXIES = {
     "agentrouter": {"port": 8788, "name": "agentrouter", "script": "agentrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
     "codebuddy": {"port": 8787, "name": "codebuddy", "script": "converter.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/codebuddy2openai"},
-    "anyrouter": {"port": 8789, "name": "anyrouter", "script": "anyrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/anyrouter-proxy"},
     "atomcode": {"port": 9457, "name": "atomcode", "script": "proxy.js", "dir": "C:/Users/zhugu/atomgit-opencode-bridge"},
 }
 
