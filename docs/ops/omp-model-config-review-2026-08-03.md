@@ -215,3 +215,30 @@
 - models.yml 加声明：`zg-newapi/sensenova-6.7-flash-lite`（131K ctx/32K out，无 reasoning 标记）
 - 备份：`config.yml.20260804-001017.bak`、`models.yml.20260804-001017.bak`
 - 验证：OMP 端到端 OK（5.6s 含启动，纯推理 0.5s）；10 角色 13 链 0 断裂
+
+### 本机安全与可靠性加固（2026-08-04）
+
+- NewAPI 管理 token 已轮换；旧 token 验证失效，Guardian 已加载新 token。管理请求继续使用 `Authorization: Bearer` + `New-Api-User`，secret 仅存 `~/.omp/guardian/secrets.json`。
+- atomcode（9457）与 agentrouter（8788）改为仅监听 `127.0.0.1`，均强制 API key。atomcode 同时接受标准 `Authorization: Bearer` 与兼容的 `X-API-Key`；无认证均返回 401，正确认证返回 200，LAN/Tailscale 地址不可达。
+- Guardian 本地代理探针按端口注入对应 Bearer key，不再回退到 Tailscale 地址；重启命令显式传入 localhost 绑定与 secret 环境变量。运行时与仓库镜像已同步。
+- OMP 并发上限：全局 subagent `maxConcurrency=6`、`maxRuntimeMs=1200000`；活跃 provider `maxInFlightRequests=4`；`zg-newapi` 请求重试收敛为 1 次。NewAPI `RetryTimes=1`，自动重试状态码排除 401/402/403/504，避免认证、余额与超时错误放大。
+- Guardian 将 429/rate-limit 归类为瞬时故障：不禁用渠道；连续 3 次软失败后才降权。Telegram HTML 输出统一转义渠道名、错误摘要和 request ID；失败告警 best-effort 补充 NewAPI/upstream request ID。外部命令改为参数数组 + `shell=False`。
+- Windows 解释器通配入站防火墙规则已禁用；运行所需代理依赖 loopback，不再需要 Node/Python 任意端口入站。OMP/Guardian credential 文件 ACL 已限制为当前用户、SYSTEM、Administrators。
+- NewAPI 日志清理通过一次性 `POST /api/system-task/log-cleanup?target_timestamp=<unix>` 执行；当前部署未提供持久 retention-days 配置，需按运维周期再次触发。
+
+**验证证据**：Guardian `py_compile` 通过，完整 `scripts/ops/test_guardian.py` 为 83/83 OK；OMP 10 个角色、13 条 fallback chain 可解析；两个本地代理认证边界按上述 401/200/不可达组合实测通过。
+
+### 书生 Intern S2 Preview 接入（2026-08-04）
+
+- 官方 Claude-like API：`https://chat.intern-ai.org.cn/v1/messages`，模型 ID `intern-s2-preview`，认证头 `x-api-key`。官方文档标注 256K 上下文，单次 `max_tokens` 建议不超过 8K；工具调用场景保持 thinking 开启。
+- 两枚 key 直连最小推理均返回 200（约 0.6s）。为保留逐 key 的健康、限流和额度可观测性，先建为两个独立 NewAPI Anthropic 渠道：ch66 `internlm-s2-a`、ch67 `internlm-s2-b`；均为 priority 50、weight 5、`auto_ban=1`。
+- NewAPI 逐渠道各复测 2 次，4/4 成功，耗时 0.37–0.69s；abilities 重建结果 40 success / 0 fail。
+- OMP 在 `zg-newapi-anthropic` 注册 `intern-s2-preview`：`reasoning: true`、text/image、context 262144、max output 8192。未改现有角色或 fallback chain，仅增加可选模型。
+- OMP 端到端烟测：`omp launch -p --model zg-newapi-anthropic/intern-s2-preview --thinking high` 返回 `OK`，总耗时 6.14s。
+
+### 外部证据 librarian 加固（2026-08-04）
+
+- 不新增 `community-scout`；复用现有 `librarian`，保持大型工程角色数量与编排成本稳定。
+- 用户覆盖 `~/.omp/agent/agents/librarian.md` 将证据优先级明确为：官方文档/发布源码/合并代码 → issues/PR/discussions → 社区报告。GitHub 结果必须区分 released、merged-unreleased、open、proposal、stale；社区内容只可标为 signal，不得作为证明。
+- 默认继续走 `@smol`；需要跨仓深度源码追踪时返回现有证据并建议该具体调查升级 `@slow`，不允许猜测。
+- 烟测以 InternLM/Claude Code 兼容性为题完成：返回官方文档、官方仓库、GitHub issue 状态和社区信号，结构化来源契约生效，全程只读。

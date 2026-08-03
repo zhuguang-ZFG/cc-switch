@@ -49,6 +49,16 @@ except (OSError, ValueError):
 def _config_value(env_name: str, secret_name: str, default: str = "") -> str:
     return os.environ.get(env_name) or str(_SECRETS.get(secret_name, default))
 
+def _html_escape(text: str) -> str:
+    """转义进入 Telegram HTML 的外部字符串（渠道名/错误摘要/request id 等）。"""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
 NEWAPI_BASE = _config_value("NEWAPI_BASE", "newapi_base", "https://aliyun.donglicao.com")
 NEWAPI_TOKEN = _config_value("NEWAPI_TOKEN", "newapi_token")
 NEWAPI_USER = _config_value("NEWAPI_USER", "newapi_user", "1")
@@ -61,6 +71,8 @@ TELEGRAM_ALLOWED_USERS = set(
 )
 TELEGRAM_PROXY = _config_value("TELEGRAM_PROXY", "telegram_proxy")
 CODEBUDDY_API_KEY = _config_value("CODEBUDDY_API_KEY", "codebuddy_api_key")
+ATOMCODE_PROXY_KEY = _config_value("ATOMCODE_PROXY_KEY", "atomcode_proxy_key")
+AGENTROUTER_PROXY_KEY = _config_value("AGENTROUTER_PROXY_KEY", "agentrouter_proxy_key")
 
 # 监控阈值
 HEALTH_CHECK_INTERVAL = 15  # 秒
@@ -97,6 +109,16 @@ NEWAPI_RESTART_BACKOFF_SEC = 60  # 重启失败后的退避间隔（秒），成
 ERROR_SCAN_INTERVAL = 20  # 每 N 个检查周期扫描一次（20*15s=5min，NewAPI 30min 太慢）
 ERROR_SCAN_BATCH_SIZE = 5  # 每次最多测试 N 个渠道（降低 API 负载）
 ERROR_DISABLE_KEYWORDS = ["余额不足", "INSUFFICIENT_BALANCE", "credit balance", "quota", "402", "401", "invalid"]
+
+# 瞬态限流：HTTP 429 / rate limit / too many requests 不是渠道故障——
+# 不禁用、不累计永久失败计数（交给 NewAPI 池内重试/上游退避处理）
+TRANSIENT_RATE_LIMIT_MARKERS = ("429", "rate limit", "rate_limit", "too many requests")
+
+
+def _is_transient_rate_limit(message: str) -> bool:
+    """429 / rate limit / too many requests → 瞬态限流，非渠道故障。"""
+    msg = (message or "").lower()
+    return any(marker in msg for marker in TRANSIENT_RATE_LIMIT_MARKERS)
 TEST_CHANNEL_TIMEOUT = 5  # test_channel 独立超时（秒）
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
@@ -115,6 +137,7 @@ CYCLE_BUDGET_SEC = 90  # 单轮执行预算：超时后跳过剩余低优先级�
 # 本地代理（anyrouter 已从 OMP disabledProviders + 本表移除：上游 anyrouter.top
 # key 失效 502，进程活着但推理不可用，重启解决不了——见踩坑 10；保留进程，
 # 恢复时手工加回本表即可）
+# agentrouter/atomcode 加固后只绑定 127.0.0.1 并要求 Bearer key（secrets.json）
 LOCAL_PROXIES = {
     "agentrouter": {"port": 8788, "name": "agentrouter", "script": "agentrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
     "codebuddy": {"port": 8787, "name": "codebuddy", "script": "converter.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/codebuddy2openai"},
@@ -272,7 +295,7 @@ class TelegramBot:
                 elif cmd == "/help":
                     self._cmd_help()
                 else:
-                    self.send(f"未知命令: {cmd}\n使用 /help 查看可用命令")
+                    self.send(f"未知命令: {_html_escape(cmd)}\n使用 /help 查看可用命令")
             except Exception as e:
                 # 单条命令失败不中断该批后续命令（getUpdates offset 已推进）
                 logger.exception(f"Telegram command {cmd} failed: {e}")
@@ -326,20 +349,20 @@ class TelegramBot:
 
     def _cmd_restart(self, guardian, proxy_name: str):
         if proxy_name not in LOCAL_PROXIES:
-            self.send(f"未知代理: {proxy_name}\n可用: {', '.join(LOCAL_PROXIES.keys())}")
+            self.send(f"未知代理: {_html_escape(proxy_name)}\n可用: {', '.join(LOCAL_PROXIES.keys())}")
             return
         info = LOCAL_PROXIES[proxy_name]
         success = guardian.autofix.restart_local_proxy(proxy_name, info["port"])
         if success:
-            self.send(f"✅ {proxy_name} 已重启")
+            self.send(f"✅ {_html_escape(proxy_name)} 已重启")
         else:
-            self.send(f"✗ {proxy_name} 重启失败")
+            self.send(f"✗ {_html_escape(proxy_name)} 重启失败")
 
     def _cmd_enable(self, guardian, channel_id: str):
         try:
             cid = int(channel_id)
         except ValueError:
-            self.send(f"无效的渠道 ID: {channel_id}")
+            self.send(f"无效的渠道 ID: {_html_escape(channel_id)}")
             return
         channel = guardian.newapi.get_channel(cid)
         if not channel:
@@ -353,7 +376,7 @@ class TelegramBot:
                 if r["id"] != cid
             ]
             guardian.autofix._save_state()
-            self.send(f"✅ 渠道 {cid} ({channel['name']}) 已启用")
+            self.send(f"✅ 渠道 {cid} ({_html_escape(channel['name'])}) 已启用")
         else:
             self.send(f"✗ 渠道 {cid} 启用失败")
 
@@ -369,7 +392,7 @@ class TelegramBot:
             return
         success = guardian.autofix.disable_slow_channel(channel, manual=True)
         if success:
-            self.send(f"✅ 渠道 {cid} ({channel['name']}) 已禁用")
+            self.send(f"✅ 渠道 {cid} ({_html_escape(channel['name'])}) 已禁用")
         else:
             self.send(f"✗ 渠道 {cid} 禁用失败")
 
@@ -566,13 +589,14 @@ class HealthChecker:
     def check_local_proxy(self, port: int, name: str) -> Tuple[bool, str, bool]:
         """返回 (healthy, message, alive)；alive=False 才应触发进程重启。"""
         proxy_config = {
-            "agentrouter": {"key": "any", "endpoint": "/v1/models"},
+            "agentrouter": {"key": AGENTROUTER_PROXY_KEY, "endpoint": "/v1/models"},
             "codebuddy": {"key": CODEBUDDY_API_KEY, "endpoint": "/v1/models"},
-            "atomcode": {"key": "any", "endpoint": "/v1/usage"},
+            "atomcode": {"key": ATOMCODE_PROXY_KEY, "endpoint": "/v1/usage"},
         }
         config = proxy_config.get(name, {"key": "any", "endpoint": "/v1/models"})
 
-        for host in ["100.83.32.95", "127.0.0.1"]:
+        # 本地代理均只绑定 127.0.0.1
+        for host in ["127.0.0.1"]:
             try:
                 url = f"http://{host}:{port}{config['endpoint']}"
                 req = urllib.request.Request(url, headers={"Authorization": f"Bearer {config['key']}"})
@@ -584,7 +608,7 @@ class HealthChecker:
                     return True, f"{name} 存活但鉴权失败 ({host}, HTTP {e.code})", True
             except Exception:
                 continue
-        return False, f"{name} 无响应（Tailscale 和 localhost 都失败）", False
+        return False, f"{name} 无响应（127.0.0.1 探测失败）", False
 
     def check_error_rate(self) -> Tuple[bool, float, int, int]:
         """检查错误率
@@ -742,6 +766,30 @@ class AutoFixEngine:
 
     # ── P0: 错误渠道扫描（402/401/502 等瞬间返回的错误） ─────────────────
 
+
+    def _error_request_ids(self, channel_id: int, message: str) -> str:
+        """Best-effort: 在最近 NewAPI 日志中检索匹配该渠道错误的
+        request_id / upstream_request_id，附加到 Telegram 告警。
+        任何失败只记日志并返回空串，绝不抛出影响主循环。"""
+        try:
+            logs = self.newapi.get_logs(20) or []
+        except Exception as e:
+            logger.warning(f"Request-id lookup failed: {e}")
+            return ""
+        fragment = (message or "").strip()[:60].lower()
+        for log in logs:
+            if not isinstance(log, dict):
+                continue
+            log_channel = log.get("channel_id")
+            if log_channel is not None and str(log_channel) != str(channel_id):
+                continue
+            if fragment and fragment not in str(log.get("content") or "").lower():
+                continue
+            ids = [str(log[k]) for k in ("request_id", "upstream_request_id") if log.get(k)]
+            if ids:
+                return " ".join(ids)
+        return ""
+
     def scan_error_channels(self):
         """定期扫描启用渠道，检测瞬间返回的错误（402 余额不足、401 无效令牌等）
 
@@ -768,6 +816,12 @@ class AutoFixEngine:
 
             test_ok, test_msg = self.newapi.test_channel(channel_id)
             if test_ok:
+                continue
+            # 瞬态限流（429/rate limit）：不是渠道故障——不禁用、不累计永久失败
+            if _is_transient_rate_limit(test_msg):
+                logger.info(
+                    f"Channel {channel_id} ({name}) error scan rate-limited, skipped: {test_msg[:100]}"
+                )
                 continue
 
             # 检查错误消息是否匹配禁用关键词
@@ -799,12 +853,17 @@ class AutoFixEngine:
                     self.state.setdefault("degraded_channels", {})
                     self.state["degraded_channels"].pop(str(channel_id), None)
                     self._save_state()
+                    request_ids = self._error_request_ids(channel_id, test_msg)
+                    detail = (
+                        f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已自动禁用\n"
+                        f"原因: {_html_escape(matched_keyword)}\n"
+                        f"详情: {_html_escape(test_msg[:120])}\n"
+                    )
+                    if request_ids:
+                        detail += f"请求ID: {_html_escape(request_ids)}\n"
                     self.telegram.send_alert(
                         "渠道错误禁用",
-                        f"渠道 <b>{name}</b> (id: {channel_id}) 已自动禁用\n"
-                        f"原因: {matched_keyword}\n"
-                        f"详情: {test_msg[:120]}\n"
-                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                        detail + f"时间: {datetime.now().strftime('%H:%M:%S')}",
                         "warning"
                     )
 
@@ -861,8 +920,8 @@ class AutoFixEngine:
 
             self.telegram.send_alert(
                 "渠道降权",
-                f"渠道 <b>{name}</b> (id: {channel_id}) 已降权\n"
-                f"原因: {reason}\n"
+                f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已降权\n"
+                f"原因: {_html_escape(reason)}\n"
                 f"权重: {current_weight} → {new_weight}\n"
                 f"时间: {datetime.now().strftime('%H:%M:%S')}",
                 "warning"
@@ -964,7 +1023,7 @@ class AutoFixEngine:
             if not manual:
                 self.telegram.send_alert(
                     "渠道自动禁用",
-                    f"渠道 <b>{name}</b> (id: {channel_id}) 已自动禁用\n"
+                    f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已自动禁用\n"
                     f"原因: 响应过慢 ({response_time}ms)\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "warning"
@@ -977,7 +1036,7 @@ class AutoFixEngine:
         if self.newapi.enable_channel(channel_id):
             self.telegram.send_alert(
                 "渠道自动启用",
-                f"渠道 <b>{name}</b> (id: {channel_id}) 已自动启用\n"
+                f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已自动启用\n"
                 f"时间: {datetime.now().strftime('%H:%M:%S')}",
                 "success"
             )
@@ -1102,8 +1161,8 @@ class AutoFixEngine:
             )
             self.telegram.send_alert(
                 "渠道加入聚合池",
-                f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复并加入聚合池\n"
-                f"模型: {', '.join(pool_models)}\n"
+                f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已恢复并加入聚合池\n"
+                f"模型: {_html_escape(', '.join(pool_models))}\n"
                 f"权重: {desired_weight}, 优先级: {desired_priority}\n"
                 f"时间: {datetime.now().strftime('%H:%M:%S')}",
                 "success",
@@ -1192,9 +1251,9 @@ class AutoFixEngine:
                         })
                         self.telegram.send_alert(
                             "渠道回滚",
-                            f"渠道 <b>{channel.get('name', channel_id)}</b> (id: {channel_id}) 加入后不稳定，已禁用\n"
+                            f"渠道 <b>{_html_escape(channel.get('name', channel_id))}</b> (id: {channel_id}) 加入后不稳定，已禁用\n"
                             f"失败次数: {join_info['stability_fails']}\n"
-                            f"原因: {test_msg}\n"
+                            f"原因: {_html_escape(test_msg)}\n"
                             f"恢复后将自动重新启用\n"
                             f"时间: {datetime.now().strftime('%H:%M:%S')}",
                             "warning"
@@ -1226,7 +1285,7 @@ class AutoFixEngine:
             # 渠道名 → 本地 provider 契约：base_url 必须指向本地代理端点
             provider_roles = {
                 "agentrouter": {
-                    "hosts": {"100.83.32.95"},
+                    "hosts": {"127.0.0.1"},
                     "port": 8788,
                     "proxy": "agentrouter",
                     "roles": {
@@ -1235,7 +1294,7 @@ class AutoFixEngine:
                     },
                 },
                 "codebuddy": {
-                    "hosts": {"100.83.32.95"},
+                    "hosts": {"127.0.0.1"},
                     "port": 8787,
                     "proxy": "codebuddy",
                     "roles": {
@@ -1281,8 +1340,8 @@ class AutoFixEngine:
                 )
                 self.telegram.send_alert(
                     "OMP 角色未切换",
-                    f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复，但本地代理 "
-                    f"<b>{contract['proxy']}</b> 无响应，OMP 角色保持原样",
+                    f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已恢复，但本地代理 "
+                    f"<b>{_html_escape(contract['proxy'])}</b> 无响应，OMP 角色保持原样",
                     "warning",
                 )
                 return
@@ -1347,15 +1406,15 @@ class AutoFixEngine:
                 logger.info(f"OMP config.yml written for channel {channel_id} ({name})")
                 self.telegram.send_alert(
                     "OMP 角色模型更新",
-                    f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复\n"
-                    f"OMP config.yml 已更新:\n  " + "\n  ".join(updated_roles) + "\n"
+                    f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已恢复\n"
+                    f"OMP config.yml 已更新:\n  " + "\n  ".join(_html_escape(r) for r in updated_roles) + "\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "info"
                 )
             elif updated_roles:
                 self.telegram.send_alert(
                     "OMP 角色模型可用",
-                    f"渠道 <b>{name}</b> (id: {channel_id}) 已恢复\n"
+                    f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已恢复\n"
                     f"角色已配置正确，无需修改\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "info"
@@ -1415,8 +1474,8 @@ class AutoFixEngine:
                     base = provider_base.get(provider)
                     if not base:
                         continue
-                    # 仅探测本机代理端点；agentrouter 绑定本机 Tailscale 地址供 VPS 访问。
-                    if not any(host in base for host in ("127.0.0.1", "localhost", "100.83.32.95")):
+                    # 仅探测本机代理端点（本地代理均只绑定 127.0.0.1）
+                    if not any(host in base for host in ("127.0.0.1", "localhost")):
                         continue
                     if not self._probe_endpoint(base):
                         dead_roles.append(f"{role}: {value} ({base})")
@@ -1425,7 +1484,7 @@ class AutoFixEngine:
                 self.telegram.send_alert(
                     "OMP 角色端点故障",
                     "以下 OMP 角色指向的本地代理端点无响应:\n  "
-                    + "\n  ".join(dead_roles)
+                    + "\n  ".join(_html_escape(d) for d in dead_roles)
                     + "\n\n请检查对应代理或手动切换角色",
                     "warning"
                 )
@@ -1437,7 +1496,7 @@ class AutoFixEngine:
         """探测端点存活（短超时）
 
         - 路径感知：base 已含 /v1 时只拼 /models，否则拼 /v1/models（避免 /v1/v1/models 404）
-        - host 回退：127.0.0.1 失败时试 Tailscale IP（agentrouter 只绑 100.83.32.95）
+        - 本地代理需鉴权：按端口带对应 Bearer key（atomcode 9457 / agentrouter 8788 / codebuddy 8787）
         - 语义：任何 HTTP 响应（含 401/403）都算存活，只有连接失败/超时才算死
         """
         base = base_url.rstrip("/")
@@ -1446,22 +1505,22 @@ class AutoFixEngine:
         else:
             models_path = base + "/v1/models"
 
-        # 候选 URL：原始路径 + Tailscale IP 回退
-        candidates = [models_path]
-        if "127.0.0.1" in models_path or "localhost" in models_path:
-            candidates.append(models_path.replace("127.0.0.1", "100.83.32.95").replace("localhost", "100.83.32.95"))
+        # 本地代理端口 → 探针 key
+        probe_key = "any"
+        for port, key in ((9457, ATOMCODE_PROXY_KEY), (8788, AGENTROUTER_PROXY_KEY), (8787, CODEBUDDY_API_KEY)):
+            if f":{port}" in models_path:
+                probe_key = key
+                break
 
-        for url in candidates:
-            try:
-                req = urllib.request.Request(url, headers={"Authorization": "Bearer any"})
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    return resp.status < 500  # 2xx/3xx/4xx 都算存活
-            except urllib.error.HTTPError as error:
-                # 4xx 是客户端拒绝（服务存活）；5xx 是服务端故障，不算存活
-                return error.code < 500
-            except Exception:
-                continue  # 连接失败/超时 → 试下一个候选
-        return False
+        try:
+            req = urllib.request.Request(models_path, headers={"Authorization": f"Bearer {probe_key}"})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                return resp.status < 500  # 2xx/3xx/4xx 都算存活
+        except urllib.error.HTTPError as error:
+            # 4xx 是客户端拒绝（服务存活）；5xx 是服务端故障，不算存活
+            return error.code < 500
+        except Exception:
+            return False
 
     # ── 自循环维护（让系统无需人工干预持续运转） ──────────────────────────
 
@@ -1494,6 +1553,12 @@ class AutoFixEngine:
             scanned += 1
             if test_ok:
                 self._full_scan_failures.pop(channel_id, None)
+                continue
+            # 瞬态限流（429/rate limit）：不触发禁用、不累计永久失败计数
+            if _is_transient_rate_limit(test_msg):
+                logger.info(
+                    f"Full scan: channel {channel_id} rate-limited, skipped (transient): {test_msg[:100]}"
+                )
                 continue
 
             msg_lower = test_msg.lower()
@@ -1641,7 +1706,7 @@ class AutoFixEngine:
                 self._save_state()
                 self.telegram.send_alert(
                     "本地代理重启失败",
-                    f"代理 <b>{name}</b> (端口 {port}) 已重启 {restart_count} 次仍失败\n"
+                    f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已重启 {restart_count} 次仍失败\n"
                     f"请手动检查",
                     "error"
                 )
@@ -1654,8 +1719,8 @@ class AutoFixEngine:
             proc_name = "node.exe" if name == "atomcode" else "pythonw.exe"
             ps_cmd = f'Get-CimInstance Win32_Process -Filter "Name=\'{proc_name}\'" | Where-Object {{ $_.CommandLine -match \'{name}\' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'
             subprocess.run(
-                f'powershell -Command "{ps_cmd}"',
-                shell=True, capture_output=True, timeout=10
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                shell=False, capture_output=True, timeout=10
             )
 
             time.sleep(2)
@@ -1666,12 +1731,14 @@ class AutoFixEngine:
                 logger.error(f"Script not found: {script_path}")
                 return False
 
+            env = None
             if name == "agentrouter":
                 cmd = [
                     "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
                     str(script_path),
-                    "--host", "100.83.32.95",
+                    "--host", "127.0.0.1",
                     "--port", str(port),
+                    "--api-key", AGENTROUTER_PROXY_KEY,
                     "--log", "proxy.log"
                 ]
             elif name == "codebuddy":
@@ -1684,6 +1751,7 @@ class AutoFixEngine:
                 ]
             elif name == "atomcode":
                 cmd = ["node", str(script_path)]
+                env = {**os.environ, "LOCAL_API_KEY": ATOMCODE_PROXY_KEY}
             else:
                 logger.error(f"Unknown proxy type: {name}")
                 return False
@@ -1691,6 +1759,7 @@ class AutoFixEngine:
             subprocess.Popen(
                 cmd,
                 cwd=info["dir"],
+                env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -1715,7 +1784,7 @@ class AutoFixEngine:
             if verified:
                 self.telegram.send_alert(
                     "本地代理重启",
-                    f"代理 <b>{name}</b> (端口 {port}) 已重启并验证存活\n"
+                    f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已重启并验证存活\n"
                     f"次数: {restart_count + 1}\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "restart"
@@ -1723,7 +1792,7 @@ class AutoFixEngine:
             else:
                 self.telegram.send_alert(
                     "本地代理重启未验证",
-                    f"代理 <b>{name}</b> (端口 {port}) 已启动但端口未响应\n"
+                    f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已启动但端口未响应\n"
                     f"次数: {restart_count + 1}，可能启动失败\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "warning"
@@ -1811,7 +1880,7 @@ class AutoFixEngine:
             self.telegram.send_alert(
                 "NewAPI 重启失败",
                 f"NewAPI 容器重启失败\n"
-                f"错误: {e}\n"
+                f"错误: {_html_escape(e)}\n"
                 f"请手动检查",
                 "error"
             )
@@ -2031,13 +2100,13 @@ class Guardian:
                     self.autofix._save_state()
             elif alive:
                 if self.alerts.should_alert(f"proxy_{name}", "error"):
-                    self.telegram.send_alert("本地代理推理异常", msg, "error")
+                    self.telegram.send_alert("本地代理推理异常", _html_escape(msg), "error")
                 else:
                     logger.warning(f"代理 {name} 推理异常（告警冷却期）: {msg}")
             else:
                 self.autofix.restart_local_proxy(name, info["port"])
                 if self.alerts.should_alert(f"proxy_{name}", "error"):
-                    self.telegram.send_alert("本地代理故障", msg, "error")
+                    self.telegram.send_alert("本地代理故障", _html_escape(msg), "error")
                 else:
                     logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）

@@ -300,6 +300,169 @@ class FullHealthScanTests(unittest.TestCase):
 
         self.assertEqual(engine.newapi.updates[0]["weight"], 7)
 
+class TransientRateLimitTests(unittest.TestCase):
+    def test_error_scan_rate_limit_does_not_disable(self):
+        """429/rate limit 是瞬态：错误扫描不得禁用渠道、不写 weight_history"""
+        engine = make_engine()
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine._scan_offset = 0
+        engine.newapi.channels[45] = {
+            "id": 45, "name": "agentrouter", "status": 1, "weight": 15, "priority": 50,
+            "models": "claude-opus-5",
+        }
+        engine.newapi.test_results.append((False, "HTTP 429 too many requests, retry later"))
+        engine.telegram = Mock()
+
+        engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertNotIn("45", engine.state["weight_history"])
+        engine.telegram.send_alert.assert_not_called()
+
+    def test_full_scan_rate_limit_does_not_accumulate_failures(self):
+        """全量扫描中 429 不累计永久失败计数、不降权、不禁用"""
+        engine = make_engine()
+        engine._full_scan_offset = 0
+        engine.newapi.channels[45] = {
+            "id": 45, "name": "agentrouter", "status": 1, "weight": 15, "priority": 50,
+            "models": "claude-opus-5",
+        }
+        engine.newapi.test_results.append((False, "rate limit exceeded"))
+
+        engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
+        engine.full_health_scan()
+
+        self.assertNotIn(45, engine._full_scan_failures)
+        self.assertEqual(engine.newapi.updates, [])
+        self.assertEqual(engine.newapi.disable_calls, [])
+
+    def test_error_scan_401_still_disables(self):
+        """401/402 等硬错误仍立即禁用"""
+        engine = make_engine()
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine._scan_offset = 0
+        engine.newapi.channels[45] = {
+            "id": 45, "name": "agentrouter", "status": 1, "weight": 15, "priority": 50,
+            "models": "claude-opus-5",
+        }
+        engine.newapi.test_results.append((False, "invalid token (401)"))
+        engine.telegram = Mock()
+
+        engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [45])
+        self.assertIn("45", engine.state["weight_history"])
+        engine.telegram.send_alert.assert_called_once()
+
+    def test_full_scan_402_still_disables(self):
+        """全量扫描中 402 硬错误仍立即禁用"""
+        engine = make_engine()
+        engine._full_scan_offset = 0
+        engine.newapi.channels[45] = {
+            "id": 45, "name": "agentrouter", "status": 1, "weight": 15, "priority": 50,
+            "models": "claude-opus-5",
+        }
+        engine.newapi.test_results.append((False, "余额不足 (402)"))
+        engine.telegram = Mock()
+
+        engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
+        engine.full_health_scan()
+
+        self.assertEqual(engine.newapi.disable_calls, [45])
+
+    def test_request_id_lookup_failure_does_not_block_alert(self):
+        """日志查询抛异常：告警照发，主循环不受影响"""
+        engine = make_engine()
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine._scan_offset = 0
+        engine.newapi.channels[45] = {
+            "id": 45, "name": "agentrouter", "status": 1, "weight": 15, "priority": 50,
+            "models": "claude-opus-5",
+        }
+        engine.newapi.test_results.append((False, "invalid token (401)"))
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("logs API down")
+
+        engine.newapi.get_logs = boom
+        engine.telegram = Mock()
+
+        engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [45])
+        engine.telegram.send_alert.assert_called_once()
+
+    def test_alert_includes_request_ids_from_logs(self):
+        """日志命中时告警附带 request_id / upstream_request_id"""
+        engine = make_engine()
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine._scan_offset = 0
+        engine.newapi.channels[45] = {
+            "id": 45, "name": "agentrouter", "status": 1, "weight": 15, "priority": 50,
+            "models": "claude-opus-5",
+        }
+        engine.newapi.test_results.append((False, "invalid token (401)"))
+        engine.newapi.get_logs = lambda limit=20: [
+            {
+                "channel_id": 45,
+                "content": "invalid token (401)",
+                "request_id": "req-abc",
+                "upstream_request_id": "up-xyz",
+            }
+        ]
+        engine.telegram = Mock()
+
+        engine.scan_error_channels()
+
+        text = engine.telegram.send_alert.call_args.args[1]
+        self.assertIn("req-abc", text)
+        self.assertIn("up-xyz", text)
+
+
+class HtmlEscapeTests(unittest.TestCase):
+    def test_channel_name_with_html_is_escaped_in_disable_alert(self):
+        """渠道名含 HTML 标签时转义，避免注入/破坏 Telegram 格式"""
+        engine = make_engine()
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine._scan_offset = 0
+        engine.newapi.channels[45] = {
+            "id": 45, "name": "bad<b>chan</b>", "status": 1, "weight": 15, "priority": 50,
+            "models": "claude-opus-5",
+        }
+        engine.newapi.test_results.append((False, "invalid token (401)"))
+        engine.telegram = Mock()
+
+        engine.scan_error_channels()
+
+        text = engine.telegram.send_alert.call_args.args[1]
+        self.assertIn("bad&lt;b&gt;chan&lt;/b&gt;", text)
+        self.assertNotIn("bad<b>chan", text)
+
+
+class PowerShellInvocationTests(unittest.TestCase):
+    def test_proxy_kill_uses_argv_without_shell(self):
+        """杀进程用 argv + shell=False，白名单渠道名仍嵌入过滤条件"""
+        engine = make_engine({
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine.health = Mock()
+        engine.health.check_local_proxy.return_value = (True, "ok", True)
+
+        with (
+            patch.object(guardian.subprocess, "run") as run,
+            patch.object(guardian.subprocess, "Popen"),
+            patch.object(guardian.time, "sleep"),
+        ):
+            engine.restart_local_proxy("atomcode", 9457)
+
+        args = run.call_args.args[0]
+        self.assertIsInstance(args, list)
+        self.assertEqual(args[0], "powershell")
+        self.assertIn("-Command", args)
+        self.assertIn("shell", run.call_args.kwargs)
+        self.assertIs(run.call_args.kwargs["shell"], False)
+        self.assertIn("atomcode", args[-1])
 
 class RetryPolicyTests(unittest.TestCase):
     def make_client(self, value):
@@ -1029,9 +1192,13 @@ class ProxyRestartTests(unittest.TestCase):
 
         with patch.object(
             guardian.urllib.request,
+            "Request",
+            wraps=guardian.urllib.request.Request,
+        ) as mk_req, patch.object(
+            guardian.urllib.request,
             "urlopen",
             side_effect=guardian.urllib.error.HTTPError(
-                "http://100.83.32.95:8788/v1/models", 401, "Unauthorized", None, None
+                "http://127.0.0.1:8788/v1/models", 401, "Unauthorized", None, None
             ),
         ):
             ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
@@ -1039,6 +1206,11 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("鉴权失败", msg)
         self.assertTrue(alive)
+        # 断言只探 127.0.0.1 且携带对应 Bearer key
+        called_req = mk_req.call_args.args[0]
+        self.assertIn("127.0.0.1:8788", called_req)
+        auth = mk_req.call_args.kwargs["headers"]["Authorization"]
+        self.assertEqual(auth, f"Bearer {guardian.AGENTROUTER_PROXY_KEY}")
 
     def test_local_proxy_403_treated_as_alive(self):
         """403 同 401：服务存活，不得触发重启"""
@@ -1046,9 +1218,13 @@ class ProxyRestartTests(unittest.TestCase):
 
         with patch.object(
             guardian.urllib.request,
+            "Request",
+            wraps=guardian.urllib.request.Request,
+        ) as mk_req, patch.object(
+            guardian.urllib.request,
             "urlopen",
             side_effect=guardian.urllib.error.HTTPError(
-                "http://100.83.32.95:8788/v1/models", 403, "Forbidden", None, None
+                "http://127.0.0.1:8788/v1/models", 403, "Forbidden", None, None
             ),
         ):
             ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
@@ -1056,6 +1232,11 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("鉴权失败", msg)
         self.assertTrue(alive)
+        # 断言只探 127.0.0.1 且携带对应 Bearer key
+        called_req = mk_req.call_args.args[0]
+        self.assertIn("127.0.0.1:8788", called_req)
+        auth = mk_req.call_args.kwargs["headers"]["Authorization"]
+        self.assertEqual(auth, f"Bearer {guardian.AGENTROUTER_PROXY_KEY}")
 
     def test_circuit_breaker_alert_sent_once(self):
         """断路器打开后重复调用只发一次告警，不刷屏"""
@@ -1504,7 +1685,7 @@ class OmpRoleTests(unittest.TestCase):
             "id": 7,
             "name": "codebuddy",
             "models": "gpt-5.6-sol",
-            "base_url": "http://100.83.32.95:8787",
+            "base_url": "http://127.0.0.1:8787",
         }
         engine.health = Mock()
         engine.health.check_local_proxy.return_value = (True, "ok", True)
@@ -1602,7 +1783,7 @@ class OmpRoleTests(unittest.TestCase):
             "id": 7,
             "name": "codebuddy",
             "models": "gpt-5.6-sol",
-            "base_url": "http://100.83.32.95:8787",
+            "base_url": "http://127.0.0.1:8787",
         }
         engine.health = Mock()
         engine.health.check_local_proxy.return_value = (False, "down", False)
@@ -1614,7 +1795,8 @@ class OmpRoleTests(unittest.TestCase):
         self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
         engine.telegram.send_alert.assert_called_once()
 
-    def test_tailscale_role_endpoint_is_actively_probed(self):
+    def test_localhost_role_endpoint_is_actively_probed_with_key(self):
+        """本地代理只绑 127.0.0.1：OMP 角色端点只探 localhost，不探 Tailscale"""
         agent_dir = Path.home() / ".omp" / "agent"
         agent_dir.mkdir(parents=True, exist_ok=True)
         (agent_dir / "config.yml").write_text(
@@ -1622,18 +1804,21 @@ class OmpRoleTests(unittest.TestCase):
             encoding="utf-8",
         )
         (agent_dir / "models.yml").write_text(
-            "providers:\n  agentrouter:\n    baseUrl: http://100.83.32.95:8788/v1\n",
+            "providers:\n  agentrouter:\n    baseUrl: http://127.0.0.1:8788/v1\n",
             encoding="utf-8",
         )
         engine = make_engine()
         engine._omp_check_count = guardian.OMP_ROLE_CHECK_INTERVAL - 1
-        engine._probe_endpoint = Mock(return_value=False)
         engine.telegram.send_alert = Mock()
 
-        engine.check_omp_roles_health()
+        with patch.object(
+            guardian.AutoFixEngine, "_probe_endpoint", return_value=False
+        ) as probe:
+            engine.check_omp_roles_health()
 
-        engine._probe_endpoint.assert_called_once_with("http://100.83.32.95:8788/v1")
+        probe.assert_called_once_with("http://127.0.0.1:8788/v1")
         engine.telegram.send_alert.assert_called_once()
+
 
     def test_probe_endpoint_treats_500_as_down(self):
         """HTTPError 500 是服务端故障，不算端点存活"""
@@ -1660,6 +1845,31 @@ class OmpRoleTests(unittest.TestCase):
             self.assertTrue(
                 guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:8788/v1")
             )
+
+    def test_probe_endpoint_sends_correct_bearer_key_by_port(self):
+        """按端口选择 Bearer key：agentrouter 8788 → AGENTROUTER_PROXY_KEY，
+        codebuddy 8787 → CODEBUDDY_API_KEY，atomcode 9457 → ATOMCODE_PROXY_KEY"""
+        with patch.object(
+            guardian.urllib.request,
+            "urlopen",
+            return_value=Mock(status=200),
+        ), patch.object(
+            guardian.urllib.request,
+            "Request",
+            wraps=guardian.urllib.request.Request,
+        ) as mk_req:
+            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:8788/v1")
+            auth = mk_req.call_args.kwargs["headers"]["Authorization"]
+            self.assertEqual(auth, f"Bearer {guardian.AGENTROUTER_PROXY_KEY}")
+            self.assertIn("127.0.0.1:8788", mk_req.call_args.args[0])
+
+            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:8787/v1")
+            auth = mk_req.call_args.kwargs["headers"]["Authorization"]
+            self.assertEqual(auth, f"Bearer {guardian.CODEBUDDY_API_KEY}")
+
+            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:9457/v1")
+            auth = mk_req.call_args.kwargs["headers"]["Authorization"]
+            self.assertEqual(auth, f"Bearer {guardian.ATOMCODE_PROXY_KEY}")
 
 
 class DailyReportTests(unittest.TestCase):
