@@ -9,14 +9,14 @@
 
 ## OMP 模型配置观测快照（modelRoles，截至 2026-08-03）
 
-| 角色                        | 模型                              | 说明                                                                                                                                       |
-| --------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| slow / plan / vision        | `agentrouter/claude-opus-5:xhigh` | 强推理，走本地 agentrouter                                                                                                                 |
-| commit / tiny / smol / task | `zg-newapi/deepseek-v4-flash`     | 快模型，走 NewAPI 聚合池（task 于 2026-08-03 18:38 降配）                                                                                  |
-| designer                    | `zg-newapi/gpt-5.6-sol:high`      | 设计任务（403 已修）                                                                                                                       |
-| default                     | `zg-newapi/gpt-5.6-sol`           | 2026-08-03 实际观测值（config.yml:10）；OMP 启动会自动重选，Guardian 恢复路径在 ch44 重新包含 gpt-5.6-sol 时也会改写（见踩坑 6），非固定值 |
+| 角色                        | 模型                              | 说明                                                                                                                 |
+| --------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| slow / plan / vision        | `agentrouter/claude-opus-5:xhigh` | 强推理，走本地 agentrouter                                                                                           |
+| commit / tiny / smol / task | `zg-newapi/opencode-go:max`       | DeepSeek V4 Flash（opencode-go 独立渠道），思维强度 max（task 于 18:38 降配、18:55 改 opencode-go:max）              |
+| designer                    | `zg-newapi/gpt-5.6-sol:high`      | 设计任务（403 已修）                                                                                                 |
+| default                     | `atomcode/deepseek-v4-flash:max`  | 本地 atomcode 端点；OMP 启动自动重选，Guardian 恢复路径在 ch44 重新包含 gpt-5.6-sol 时也会改写（见踩坑 6），非固定值 |
 
-> 上表是 2026-08-03 对 `~/.omp/agent/config.yml` 的观测快照，不是永久最终态。`default` 一行尤其易变：OMP 启动自动重选会覆盖手工配置；Guardian 恢复写回是**条件性**的第二写入源（见踩坑 2/6），当前 ch44 已移除 gpt-5.6-sol，该路径当前不写 `default`，仅在模型重新加入 ch44 后恢复竞争。手配的 `atomcode/deepseek-v4-flash:max` 当日已不生效。其余 8 项当日与手工配置一致。
+> 上表是 2026-08-03 对 `~/.omp/agent/config.yml` 的观测快照，不是永久最终态。`default` 一行尤其易变：OMP 启动自动重选会覆盖手工配置；Guardian 恢复写回是**条件性**的第二写入源（见踩坑 2/6），当前 ch44 已移除 gpt-5.6-sol，该路径当前不写 `default`，仅在模型重新加入 ch44 后恢复竞争。`zg-newapi/deepseek-v4-flash` 聚合池渠道不支持 `reasoning_effort=max`（商汤渠道仅到 high，见踩坑 7），故 flash 角色统一走支持 max 的 `opencode-go` 独立渠道。
 
 **修复链**：
 
@@ -58,6 +58,7 @@
 4. **equivalence 块已 inert**（16.2.12 起），补映射无意义
 5. **subagent 模型配置**：scout/librarian/sonic 走 @smol，reviewer 走 @slow；派发时指定不存在的 agent 名会回退通用 task
 6. **Guardian 写回契约与写入竞争**（`scripts/ops/guardian.py:1214-1364`，触发点 :1036）：仅当此前被禁用的本地代理渠道恢复（≥2/3 复测通过 + 自动入池成功 + base_url host 匹配 100.83.32.95 且端口正确、无 userinfo + 本地代理存活）时才触发。**并且**写回按角色逐条受 `channel_models` 门控（:1290 从渠道实时 `models` 字段构造，:1314 目标模型不在其中即 `continue` 跳过该角色）。codebuddy 恢复 → 契约是把 `default` 写成 `codebuddy/gpt-5.6-sol:max`，即修复链 6 中因 403 移除的模型；但修复链 6 已把 gpt-5.6-sol 从 ch44 移除，门控不再放行，**当前恢复路径不会写 `default`**，与本文档 modelRoles 快照当前不构成写入竞争。门控读的是恢复时刻的渠道实时 models，一旦 gpt-5.6-sol 重新加入 ch44，写回与竞争即自动恢复——Guardian 仍是 `default` 的潜在第二写入源。agentrouter 恢复 → 只回写 `slow`/`vision` 为 `agentrouter/claude-opus-5:xhigh`，**不含 plan/task**。写回为块级正则定位 modelRoles + 原子替换，静默生效
+7. **聚合池 `deepseek-v4-flash` 不支持 `reasoning_effort=max`**（2026-08-03 实测：`max` 返回 404 退役渠道 / 402 无余额 / `invalid, should be one of: low, medium, high, xhigh, none`）。商汤日日新 SenseNova 渠道（转售 DeepSeek）的 `reasoning_effort` 仅支持 `none/low/medium/high`（见 github.com/liliMozi/openhanako#1998），官方 DeepSeek 才是 `low/medium/high/max`。聚合池内 `deepseek-v4-flash` 最高可用 `high`；**`opencode-go` 独立渠道实测支持 `max`**（HTTP 200 + reasoning_content），故 flash 类角色（task/commit/tiny/smol）统一走 `zg-newapi/opencode-go:max`。`atomcode` 本地端点（9457）亦支持 `max`（default 使用）
 
 ## 当前状态（2026-08-03 观测，非永久结论）
 
