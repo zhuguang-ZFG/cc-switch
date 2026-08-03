@@ -684,29 +684,28 @@ class ProxyRestartTests(unittest.TestCase):
 
         self.assertIs(engine.health, health)
 
-    def test_restarts_anyrouter_from_its_own_script(self):
+    def test_anyrouter_removed_from_local_proxies(self):
+        """上游 key 失效的 anyrouter 不再受 Guardian 重启管理"""
+        self.assertNotIn("anyrouter", guardian.LOCAL_PROXIES)
         engine = make_engine({"restart_counts": {}, "restarted_proxies": {}})
-        engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok")
 
         with (
-            patch.object(guardian.subprocess, "run"),
+            patch.object(guardian.subprocess, "run") as run,
             patch.object(guardian.subprocess, "Popen") as popen,
             patch.object(guardian.time, "sleep"),
         ):
             restarted = engine.restart_local_proxy("anyrouter", 8789)
 
-        self.assertTrue(restarted)
-        command = popen.call_args.args[0]
-        self.assertTrue(command[1].endswith("anyrouter-proxy.py"))
-        self.assertTrue(popen.call_args.kwargs["cwd"].endswith("anyrouter-proxy"))
+        self.assertFalse(restarted)
+        run.assert_not_called()
+        popen.assert_not_called()
 
     def test_newapi_restart_requires_three_consecutive_failures(self):
         """单次/两次瞬态失败不得触发破坏性重启；连续 3 次才重启"""
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.return_value = (False, "down")
-        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -731,7 +730,7 @@ class ProxyRestartTests(unittest.TestCase):
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.side_effect = [(False, "down"), (False, "down"), (True, "ok")]
-        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -748,13 +747,14 @@ class ProxyRestartTests(unittest.TestCase):
             g._check_cycle()
 
         self.assertEqual(g.autofix.restart_newapi_container.call_count, 0)
+        self.assertEqual(g.autofix.state.get("newapi_fail_streak"), 0)
 
     def test_local_proxy_restart_not_blocked_by_alert_cooldown(self):
         """代理故障时自愈重启不受告警冷却限制；冷却只控通知"""
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.return_value = (True, "ok")
-        g.health.check_local_proxy.return_value = (False, "down")
+        g.health.check_local_proxy.return_value = (False, "down", False)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -769,8 +769,8 @@ class ProxyRestartTests(unittest.TestCase):
 
         g._check_cycle()
 
-        # 4 个本地代理全部失败时，重启必须全部执行
-        self.assertEqual(g.autofix.restart_local_proxy.call_count, 4)
+        # 当前只管理 agentrouter/codebuddy/atomcode 三个本地代理
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
         g.telegram.send_alert.assert_not_called()
 
     def test_newapi_restart_success_enters_long_cooldown(self):
@@ -926,7 +926,7 @@ class ProxyRestartTests(unittest.TestCase):
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.return_value = (False, "down")
-        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -955,7 +955,7 @@ class ProxyRestartTests(unittest.TestCase):
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.return_value = (False, "down")
-        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -1034,10 +1034,11 @@ class ProxyRestartTests(unittest.TestCase):
                 "http://100.83.32.95:8788/v1/models", 401, "Unauthorized", None, None
             ),
         ):
-            ok, msg = health.check_local_proxy(8788, "agentrouter")
+            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
 
         self.assertTrue(ok)
         self.assertIn("鉴权失败", msg)
+        self.assertTrue(alive)
 
     def test_local_proxy_403_treated_as_alive(self):
         """403 同 401：服务存活，不得触发重启"""
@@ -1050,10 +1051,11 @@ class ProxyRestartTests(unittest.TestCase):
                 "http://100.83.32.95:8788/v1/models", 403, "Forbidden", None, None
             ),
         ):
-            ok, msg = health.check_local_proxy(8788, "agentrouter")
+            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
 
         self.assertTrue(ok)
         self.assertIn("鉴权失败", msg)
+        self.assertTrue(alive)
 
     def test_circuit_breaker_alert_sent_once(self):
         """断路器打开后重复调用只发一次告警，不刷屏"""
@@ -1073,7 +1075,7 @@ class ProxyRestartTests(unittest.TestCase):
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.return_value = (True, "ok")
-        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -1112,7 +1114,7 @@ class ProxyRestartTests(unittest.TestCase):
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.return_value = (True, "ok")
-        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -1150,7 +1152,7 @@ class ProxyRestartTests(unittest.TestCase):
             "base_url": "http://user:pass@100.83.32.95:8787",
         }
         engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok")
+        engine.health.check_local_proxy.return_value = (True, "ok", True)
         engine.telegram.send_alert = Mock()
 
         engine._update_omp_roles(7, "codebuddy")
@@ -1163,7 +1165,7 @@ class ProxyRestartTests(unittest.TestCase):
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.return_value = (True, "ok")
-        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -1206,7 +1208,7 @@ class ProxyRestartTests(unittest.TestCase):
         g = guardian.Guardian.__new__(guardian.Guardian)
         g.health = Mock()
         g.health.check_newapi.return_value = (True, "ok")
-        g.health.check_local_proxy.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, -1, -1)
         g.newapi = Mock()
@@ -1505,7 +1507,7 @@ class OmpRoleTests(unittest.TestCase):
             "base_url": "http://100.83.32.95:8787",
         }
         engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok")
+        engine.health.check_local_proxy.return_value = (True, "ok", True)
 
         engine._update_omp_roles(7, "codebuddy")
 
@@ -1529,7 +1531,7 @@ class OmpRoleTests(unittest.TestCase):
             "base_url": "https://other.example.com:9999",
         }
         engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok")
+        engine.health.check_local_proxy.return_value = (True, "ok", True)
         engine.telegram.send_alert = Mock()
 
         engine._update_omp_roles(7, "codebuddy")
@@ -1553,7 +1555,7 @@ class OmpRoleTests(unittest.TestCase):
             "base_url": "https://unrelated.example.com:8787",
         }
         engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok")
+        engine.health.check_local_proxy.return_value = (True, "ok", True)
         engine.telegram.send_alert = Mock()
 
         engine._update_omp_roles(7, "codebuddy")
@@ -1579,7 +1581,7 @@ class OmpRoleTests(unittest.TestCase):
                     "base_url": bad_url,
                 }
                 engine.health = Mock()
-                engine.health.check_local_proxy.return_value = (True, "ok")
+                engine.health.check_local_proxy.return_value = (True, "ok", True)
                 engine.telegram.send_alert = Mock()
 
                 engine._update_omp_roles(7, "codebuddy")
@@ -1603,7 +1605,7 @@ class OmpRoleTests(unittest.TestCase):
             "base_url": "http://100.83.32.95:8787",
         }
         engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (False, "down")
+        engine.health.check_local_proxy.return_value = (False, "down", False)
         engine.telegram.send_alert = Mock()
 
         engine._update_omp_roles(7, "codebuddy")

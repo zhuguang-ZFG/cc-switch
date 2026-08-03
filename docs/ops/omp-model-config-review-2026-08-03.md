@@ -135,14 +135,13 @@
 
 ### Guardian 探活加固（guardian.py）
 
-`check_local_proxy` 返回 `(healthy, msg, alive)` 三元组（原二元组）：
+`check_local_proxy` 返回 `(healthy, msg, alive)` 三元组：
 
-- **alive=False**（进程无响应）→ 照旧重启
-- **alive=True 但推理探针失败**（anyrouter 类「进程活着但凭据/上游死了」）→ **只告警不重启**，避免重启风暴
-- anyrouter 增加真实 `/v1/messages` 最小推理探针（`max_tokens:1`，30s 超时）——`/health` 200 但推理 5/5 502 的盲区就此封死（踩坑 10 落地）
-- agentrouter/codebuddy/atomcode 保持 `/v1/models`/`/v1/usage` 浅探针（无推理探针需求）
+- **alive=False**（进程无响应）→ 重启；**alive=True 且 healthy=False**（上游/凭据异常）→ 只告警不重启，避免无效重启风暴
+- anyrouter 曾用 `/health` + `/v1/messages` 探针确认「进程活着但上游死 key」；确认后已从 OMP `disabledProviders` 和 Guardian `LOCAL_PROXIES` 移除，当前 Guardian 不再周期探测它
+- agentrouter/codebuddy/atomcode 保持 `/v1/models`/`/v1/usage` 浅探针
 
-同步更新：主监控循环（2055 起）、重启后验证（:1752）、OMP 角色写回探活（:1315）；测试 35/35 通过（含新三元组契约 + 修复一个预存 Telegram 测试消息缺 `from` 字段的缺陷）。
+同步更新：主监控循环、重启后验证、OMP 角色写回探活；仓库 Guardian 测试当前 `74 passed, 2 subtests passed`。
 
 ## 当前状态（2026-08-03 观测，非永久结论）
 
@@ -153,11 +152,12 @@
 - **gorouter 欠费定位**：用户报告 403 `insufficient_user_quota`（$0.047/$0.2），NewAPI 日志无记录（预扣失败在计费中间件拦截，不写 type=5）；OMP 会话 `retryRecovery` 元数据确认错误来自 `zg-newapi-anthropic/claude-opus-5`；逐渠道实测 `test_channel?model=claude-opus-5` 精确复现：**ch27 gorouter-claude-2 + ch57 gorouter** 上游 key 余额 ¥0.047 → 禁用 status=2，池剩 ch26/ch28（实测 OK）；修复后慢链 bench 2/2 OK
 - **fengwind gpt-5.6-sol 接入**：新 key @ `api.fengwind.com`，实测 gpt-5.6-sol/luna/terra 全可用（含 reasoning_content + 流式 + 长输出 831 tokens/26.5s）；复用 ch20（原 fengwind-grok 禁用渠道）改造，gpt-5.6-sol 池增独立源（6 渠道：ch20/45/62/63/64/65）
 - 渠道侧：38 渠道全量复核，禁用 ch9/27/30/36/50/55/56/57（死渠道 + 余额不足 + gorouter 欠费），ch62-65 摘 gpt-5.5，ch20 接入 fengwind，claude-opus-5 池重排（ch3 降层、ch45 提权、gorouter 池清欠费），`ChannelDisableThreshold` 3→50
-- Guardian 探活加固已落地（三元组 + 推理探针），35/35 测试通过；已从 `LOCAL_PROXIES` 移除死掉的代理，避免对已禁用代理的周期性告警噪音
+- Guardian 探活加固已落地（三元组 + 存活/推理故障分流），仓库测试 `74 passed, 2 subtests passed`；anyrouter 已从 `LOCAL_PROXIES` 移除，相关告警停止
+- **代码 review 修复闭环**：仓库测试旧二元契约已同步；anyrouter 残留配置/重启分支删除；重启验证重复不可达分支删除；NewAPI 失败 streak 在恢复和重启后归零
 - 已知未修（可接受）：`zg-newapi/mercury-2`、`zg-newapi/grok-4.5` 零引用但实测存活（200），保留作手动切换候选
 - 长输出压测暴露**上游侧**限制，非配置问题：`agentrouter` 与 `zg-newapi-anthropic` 在 16K 输出的非流式请求上 >200s 无响应；改流式后正常出流。**长任务应依赖 OMP 默认的流式路径**
 - 本轮备份：`config.yml.20260803-211748.bak`、`config.yml.20260803-203411.bak`、`models.yml.20260803-203411.bak`
-- Guardian（自愈）+ watchdog 当日在运行；`default` 角色取值当前主要由 OMP 启动重选决定（Guardian codebuddy 写回被 ch44 的 channel_models 门控挡住，见踩坑 6），任何时点以 `~/.omp/agent/config.yml` 实际内容为准
+- Guardian（自愈）+ watchdog 当日在运行；`default` 角色取值当前主要由 OMP 启动重选决定，任何时点以 `~/.omp/agent/config.yml` 实际内容为准
 
 ## 相关文件
 

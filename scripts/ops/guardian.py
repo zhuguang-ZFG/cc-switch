@@ -564,72 +564,27 @@ class HealthChecker:
         return True, "正常", response_time
 
     def check_local_proxy(self, port: int, name: str) -> Tuple[bool, str, bool]:
-        """本地代理健康检查，返回 (healthy, msg, alive)
-
-        alive=False: 进程级存活检查失败（端口无响应）— 调用方应重启。
-        alive=True, healthy=False: 进程活着但真实推理失败（上游故障/死键）—
-        重启解决不了，调用方应只告警，避免重启风暴。
-
-        浅探活（/v1/models、/health）有盲区：anyrouter 曾 /health 200 但
-        /v1/messages 5/5 全 502。故进程活着时补一次最小推理探针。
-        """
+        """返回 (healthy, message, alive)；alive=False 才应触发进程重启。"""
         proxy_config = {
             "agentrouter": {"key": "any", "endpoint": "/v1/models"},
             "codebuddy": {"key": CODEBUDDY_API_KEY, "endpoint": "/v1/models"},
-            "anyrouter": {"key": "any", "endpoint": "/health", "infer": {
-                "path": "/v1/messages", "model": "claude-opus-5",
-                "body": {
-                    "model": "claude-opus-5",
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "ping"}],
-                },
-            }},
             "atomcode": {"key": "any", "endpoint": "/v1/usage"},
         }
         config = proxy_config.get(name, {"key": "any", "endpoint": "/v1/models"})
 
-        alive = False
         for host in ["100.83.32.95", "127.0.0.1"]:
             try:
                 url = f"http://{host}:{port}{config['endpoint']}"
                 req = urllib.request.Request(url, headers={"Authorization": f"Bearer {config['key']}"})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    alive = True
-                    break
+                with urllib.request.urlopen(req, timeout=5):
+                    return True, f"{name} 正常 ({host})", True
             except urllib.error.HTTPError as e:
                 if e.code in (401, 403):
                     # 服务存活但鉴权失败——重启解决不了，视为存活并记录
                     return True, f"{name} 存活但鉴权失败 ({host}, HTTP {e.code})", True
-                continue  # 5xx 试下一个 host
             except Exception:
                 continue
-        if not alive:
-            return False, f"{name} 无响应（Tailscale 和 localhost 都失败）", False
-
-        # 深度探针：进程活着 -> 一次真实最小推理，验证上游真正可用
-        infer = config.get("infer")
-        if infer is None:
-            return True, f"{name} 正常", True
-        try:
-            url = f"http://{host}:{port}{infer['path']}"
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(infer["body"]).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {config['key']}",
-                    "x-api-key": config["key"],
-                    "anthropic-version": "2023-06-01",
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return True, f"{name} 正常（推理探针通过）", True
-        except urllib.error.HTTPError as e:
-            # 5xx/4xx = 上游或路由故障。进程活着，重启解决不了 -> 告警不重启
-            return False, f"{name} 推理探针失败 (HTTP {e.code})", True
-        except Exception as e:
-            return False, f"{name} 推理探针异常: {str(e)[:80]}", True
+        return False, f"{name} 无响应（Tailscale 和 localhost 都失败）", False
 
     def check_error_rate(self) -> Tuple[bool, float, int, int]:
         """检查错误率
@@ -1672,6 +1627,11 @@ class AutoFixEngine:
         }
 
     def restart_local_proxy(self, name: str, port: int) -> bool:
+        info = LOCAL_PROXIES.get(name)
+        if not info:
+            logger.error(f"Unknown proxy: {name}")
+            return False
+
         restart_count = self.state["restart_counts"].get(name, 0)
         if restart_count >= 3:
             # 断路器打开：告警只发一次，避免每 15s 周期重复刷屏
@@ -1700,10 +1660,6 @@ class AutoFixEngine:
 
             time.sleep(2)
 
-            info = LOCAL_PROXIES.get(name)
-            if not info:
-                logger.error(f"Unknown proxy: {name}")
-                return False
 
             script_path = Path(info["dir"]) / info["script"]
             if not script_path.exists():
@@ -1725,13 +1681,6 @@ class AutoFixEngine:
                     "--host", "0.0.0.0",
                     "--api-key", CODEBUDDY_API_KEY,
                     "--log", "converter.log"
-                ]
-            elif name == "anyrouter":
-                cmd = [
-                    "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
-                    str(script_path),
-                    "--port", str(port),
-                    "--log", "proxy.log"
                 ]
             elif name == "atomcode":
                 cmd = ["node", str(script_path)]
@@ -1757,9 +1706,6 @@ class AutoFixEngine:
                 if alive:
                     # 进程活着但推理失败——重启已让进程回来，上游故障等 Guardian
                     # 渠道层处理即可，不再空转等待
-                    break
-                if ok:
-                    verified = True
                     break
 
             self.state["restart_counts"][name] = restart_count + 1
@@ -2059,40 +2005,40 @@ class Guardian:
         # 单轮预算：故障时避免无限拉长周期。高优先级（1/2/6 代理重启）必须做，
         # 其余步骤超预算则跳过并记日志，下轮再补
         self._cycle_deadline = time.monotonic() + CYCLE_BUDGET_SEC
-        # 1. NewAPI 健康：连续 NEWAPI_FAIL_THRESHOLD 次失败才触发破坏性重启，
-        # 避免单次网络抖动/超时误重启生产容器
+
+        # 1. NewAPI 健康：连续 NEWAPI_FAIL_THRESHOLD 次失败才触发破坏性重启。
         newapi_ok, newapi_msg = self.health.check_newapi()
-        if not newapi_ok:
-            # 失败计数持久化在 state：每次递增都保存，Guardian 崩溃/重启后计数保留，
-            # 避免故障期间每次重启都重新累计 3 次门槛
+        if newapi_ok:
+            if self.autofix.state.get("newapi_fail_streak", 0):
+                self.autofix.state["newapi_fail_streak"] = 0
+                self.autofix._save_state()
+        else:
             streak = self.autofix.state.get("newapi_fail_streak", 0) + 1
             self.autofix.state["newapi_fail_streak"] = streak
             self.autofix._save_state()
             if streak >= NEWAPI_FAIL_THRESHOLD:
                 self.autofix.restart_newapi_container()
+                self.autofix.state["newapi_fail_streak"] = 0
+                self.autofix._save_state()
+
+        # 2. 本地代理健康：只有端口无响应才重启；进程存活但上游异常只告警。
         for name, info in LOCAL_PROXIES.items():
             ok, msg, alive = self.health.check_local_proxy(info["port"], name)
             if ok:
-                # 代理健康 → 重置断路器（否则满 3 次后永久放弃自愈），
-                # 同步清理 restart_alerted，避免残留标记抑制下一次故障告警
                 if self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
                     self.autofix.state["restart_counts"][name] = 0
                     self.autofix.state.setdefault("restart_alerted", {}).pop(name, None)
                     self.autofix._save_state()
             elif alive:
-                # 进程活着但推理失败（上游/死键）— 重启解决不了，只告警不重启，
-                # 避免无效重启风暴（anyrouter 曾 /health 200 但推理 5/5 502）
                 if self.alerts.should_alert(f"proxy_{name}", "error"):
                     self.telegram.send_alert("本地代理推理异常", msg, "error")
                 else:
                     logger.warning(f"代理 {name} 推理异常（告警冷却期）: {msg}")
             else:
-                # 自愈动作（重启）不受告警冷却限制，始终执行；冷却只控通知。
                 self.autofix.restart_local_proxy(name, info["port"])
                 if self.alerts.should_alert(f"proxy_{name}", "error"):
                     self.telegram.send_alert("本地代理故障", msg, "error")
                 else:
-                    # 告警冷却期内不重复通知，但失败原因不丢弃，降级为日志
                     logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
         if self._budget_left("error scan"):
