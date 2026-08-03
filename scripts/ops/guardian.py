@@ -2104,11 +2104,12 @@ class Guardian:
                 else:
                     logger.warning(f"代理 {name} 推理异常（告警冷却期）: {msg}")
             else:
-                self.autofix.restart_local_proxy(name, info["port"])
-                if self.alerts.should_alert(f"proxy_{name}", "error"):
-                    self.telegram.send_alert("本地代理故障", _html_escape(msg), "error")
-                else:
-                    logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
+                restarted = self.autofix.restart_local_proxy(name, info["port"])
+                if not restarted:
+                    if self.alerts.should_alert(f"proxy_{name}", "error"):
+                        self.telegram.send_alert("本地代理故障", _html_escape(msg), "error")
+                    else:
+                        logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
         if self._budget_left("error scan"):
             self.autofix.scan_error_channels()

@@ -936,6 +936,56 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
         g.telegram.send_alert.assert_not_called()
 
+    def test_successful_local_proxy_restart_does_not_send_stale_failure_alert(self):
+        """重启函数已验证成功并自行通知后，不得再用重启前的失败结果告警"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (False, "down", False)
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.restart_local_proxy.return_value = True
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = True
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
+        g.telegram.send_alert.assert_not_called()
+
+    def test_failed_local_proxy_restart_sends_failure_alert(self):
+        """重启未验证时仍发送故障告警"""
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (False, "down", False)
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.restart_local_proxy.return_value = False
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = True
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+
+        self.assertEqual(g.telegram.send_alert.call_count, 3)
+        self.assertTrue(
+            all(call.args[0] == "本地代理故障" for call in g.telegram.send_alert.call_args_list)
+        )
+
     def test_newapi_restart_success_enters_long_cooldown(self):
         """重启成功写 newapi_restart_time（长冷却）；失败只写 fail_time（短退避）"""
         engine = make_engine({

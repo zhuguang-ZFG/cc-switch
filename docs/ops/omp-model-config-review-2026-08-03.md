@@ -242,3 +242,7 @@
 - 用户覆盖 `~/.omp/agent/agents/librarian.md` 将证据优先级明确为：官方文档/发布源码/合并代码 → issues/PR/discussions → 社区报告。GitHub 结果必须区分 released、merged-unreleased、open、proposal、stale；社区内容只可标为 signal，不得作为证明。
 - 默认继续走 `@smol`；需要跨仓深度源码追踪时返回现有证据并建议该具体调查升级 `@slow`，不允许猜测。
 - 烟测以 InternLM/Claude Code 兼容性为题完成：返回官方文档、官方仓库、GitHub issue 状态和社区信号，结构化来源契约生效，全程只读。
+
+### Guardian 本地代理矛盾告警修复（2026-08-04）
+
+atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无响应”。根因不是代理再次掉线，而是 `_check_cycle` 在 `restart_local_proxy()` 成功后仍无条件使用重启前的失败 `msg` 发送故障告警。调用方现仅在重启返回 `False` 时发送“本地代理故障”；成功通知继续由重启函数发送。新增成功/失败两条行为测试，Guardian 完整测试 85/85 通过，运行时已重启加载修复。
