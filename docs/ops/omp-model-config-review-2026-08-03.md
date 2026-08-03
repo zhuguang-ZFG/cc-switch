@@ -188,3 +188,20 @@
 2. **ch9 linxi-k40 auto_ban=0**（防翻转循环）：与 ch3 同策略——公益源抖动不该 auto-ban。之前一天内多次 禁用→自动恢复→再禁用。
 
 验证：abilities 重建 38/0；opencode-go 池 2 渠道；OMP task 主模型端到端 OK。
+
+### bigctx 大上下文角色（2026-08-04 凌晨）
+
+新增 `bigctx` 角色 → `longcat/LongCat-2.0`（官方 api.longcat.chat，**1M 上下文 / 131K 输出**，比 claude-opus-5 的 200K 大 5 倍），适合超大 repo 分析 / 长文档理解。
+
+- **bigctx 链**：`longcat/LongCat-2.0` → `zg-newapi/gpt-5.6-sol` → `codebuddy/kimi-k3` → `zg-newapi-anthropic/claude-opus-5`
+- 备份：`config.yml.20260803-235519.bak`
+- 验证：OMP 端到端 OK（9.3s）；官方端点 200（2.2s/11 chunks）
+
+**工程项目角色闭环**：10 角色 + 13 链 0 断裂，全可解析：
+
+- slow/plan/vision → claude-opus-5:high（强推理）
+- task/commit/tiny → opencode-go:max（双渠道 ch48+ch53）
+- smol → glm-5.2（轻量 agent）
+- designer → gpt-5.6-sol:high
+- **bigctx → LongCat-2.0（1M 上下文，新增）**
+- default → deepseek-v4-flash:max
