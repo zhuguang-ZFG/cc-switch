@@ -9,12 +9,12 @@
 
 ## OMP 模型配置观测快照（modelRoles，截至 2026-08-03）
 
-| 角色                        | 模型                                   | 说明                                                                                                                                       |
-| --------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| slow / plan / vision / task | `agentrouter/claude-opus-5:xhigh/high` | 强推理，走本地 agentrouter                                                                                                                 |
-| commit / tiny / smol        | `zg-newapi/deepseek-v4-flash`          | 快模型，走 NewAPI 聚合池                                                                                                                   |
-| designer                    | `zg-newapi/gpt-5.6-sol:high`           | 设计任务（403 已修）                                                                                                                       |
-| default                     | `zg-newapi/gpt-5.6-sol`                | 2026-08-03 实际观测值（config.yml:10）；OMP 启动会自动重选，Guardian 恢复路径在 ch44 重新包含 gpt-5.6-sol 时也会改写（见踩坑 6），非固定值 |
+| 角色                        | 模型                              | 说明                                                                                                                                       |
+| --------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| slow / plan / vision        | `agentrouter/claude-opus-5:xhigh` | 强推理，走本地 agentrouter                                                                                                                 |
+| commit / tiny / smol / task | `zg-newapi/deepseek-v4-flash`     | 快模型，走 NewAPI 聚合池（task 于 2026-08-03 18:38 降配）                                                                                  |
+| designer                    | `zg-newapi/gpt-5.6-sol:high`      | 设计任务（403 已修）                                                                                                                       |
+| default                     | `zg-newapi/gpt-5.6-sol`           | 2026-08-03 实际观测值（config.yml:10）；OMP 启动会自动重选，Guardian 恢复路径在 ch44 重新包含 gpt-5.6-sol 时也会改写（见踩坑 6），非固定值 |
 
 > 上表是 2026-08-03 对 `~/.omp/agent/config.yml` 的观测快照，不是永久最终态。`default` 一行尤其易变：OMP 启动自动重选会覆盖手工配置；Guardian 恢复写回是**条件性**的第二写入源（见踩坑 2/6），当前 ch44 已移除 gpt-5.6-sol，该路径当前不写 `default`，仅在模型重新加入 ch44 后恢复竞争。手配的 `atomcode/deepseek-v4-flash:max` 当日已不生效。其余 8 项当日与手工配置一致。
 
@@ -24,9 +24,9 @@
 2. **plan/commit 消除嵌套别名**（resolver 只展开一跳，@smol/@slow 链会解析失败）→ 直接写具体值
 3. **删除 `agentrouter/*` 与 `anyrouter/*` 通配键**（曾吞掉 slow/plan/vision/task 四条角色链 24 条目）
 4. **opencode-go 补进 default/tiny/smol/commit 链首**（V4FLASH 用 opencode-go）
-5. **清理 6 类失效模型**（qwen3.8-max-preview、cline-free/glm-5.2、stepfun/step-3.7-flash、deepseek/deepseek-v4-flash、poolside/laguna-s-2.1:free 在 config.yml/models.yml 已 0 残留；deepseek-v4-flash-0731 仅从全部 fallbackChains 移除，models.yml 条目 zg-newapi:17 / p0-systems:182 与 equivalence 映射 :205/:207 仍然保留，未做删除决定）
+5. **清理 6 类失效模型**（qwen3.8-max-preview、cline-free/glm-5.2、stepfun/step-3.7-flash、deepseek/deepseek-v4-flash、poolside/laguna-s-2.1:free 在 config.yml/models.yml 已 0 残留；deepseek-v4-flash-0731 已从全部 fallbackChains 移除，models.yml 残留条目与 p0-systems provider 于 2026-08-03 18:39 一并删除，equivalence 对应映射同步清理）
 6. **移除 codebuddy/gpt-5.6-sol**（WorkBuddy 客户端专属硬 403，5 条链死项 + models.yml 条目）
-7. **删除 nihaox-k3 provider**（3 模型全死：glm-4.7-flash 403/503、deepseek-v4-flash-0731 503、mimo-v2.5 400 未定价）
+7. **删除 nihaox-k3 provider**（3 模型全死：glm-4.7-flash 403/503、deepseek-v4-flash-0731 503、mimo-v2.5 400 未定价；2026-08-03 18:39 连同 models.yml 中残留的 p0-systems provider 块一并清理）
 8. **gpt-5.6-sol 补 contextWindow 1048576**（gpt-5.5→gpt-5.6-sol promotion 触发条件）
 
 ## Inception Labs mercury-2 接入
@@ -61,7 +61,7 @@
 
 ## 当前状态（2026-08-03 观测，非永久结论）
 
-- OMP 配置当日核验全有效（9 角色 + 12 链引用 100% 可解析，逐条对照 config.yml/models.yml）
+- OMP 配置当日核验全有效（9 角色 + 12 链引用 100% 可解析，逐条对照 config.yml/models.yml；task 于 18:38 降配为 zg-newapi/deepseek-v4-flash，链同步改为 flash 系）
 - gpt-5.6-sol 池 6 渠道当日 8/8 测试通过（403 消除）；服务端健康非持续保证，复核需重新探测
 - mercury-2 计费已配价（2.0 倍率）
 - Guardian（自愈）+ watchdog 当日在运行；`default` 角色取值当前主要由 OMP 启动重选决定（Guardian codebuddy 写回被 ch44 的 channel_models 门控挡住，见踩坑 6），任何时点以 `~/.omp/agent/config.yml` 实际内容为准
