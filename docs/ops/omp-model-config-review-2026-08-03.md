@@ -246,3 +246,13 @@
 ### Guardian 本地代理矛盾告警修复（2026-08-04）
 
 atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无响应”。根因不是代理再次掉线，而是 `_check_cycle` 在 `restart_local_proxy()` 成功后仍无条件使用重启前的失败 `msg` 发送故障告警。调用方现仅在重启返回 `False` 时发送“本地代理故障”；成功通知继续由重启函数发送。新增成功/失败两条行为测试，Guardian 完整测试 85/85 通过，运行时已重启加载修复。
+
+### 多模型独立审查完成门（2026-08-04）
+
+多模型并发不能保证“自动发现所有问题”；相同任务切片、相同提示和相同测试会产生相关盲区。后续行为变更使用三道相互独立的完成门：
+
+1. `@task` 实现并运行针对 observable contract 的机械测试。
+2. `@slow` reviewer 不接受实现摘要，必须读取 diff、所有 caller/consumer，并输出每条行为路径的 trigger、顺序状态转换、外部副作用、terminal outcome 和源码证据。
+3. 主线程只接受 `review_status=completed` 且 `overall_correctness=correct`；reviewer 超时、中断、取消、缺 final payload、`blocked` 或存在未解决 finding 均为未完成，测试通过不得替代。
+
+用户级 `~/.omp/agent/agents/reviewer.md` 已编码上述契约。重点强制检查返回值是否被 caller 消费、调用后是否继续使用旧状态、成功/失败通知是否互斥、重复写入/告警、retry/rollback/timeout/cancellation/cleanup，以及测试是否真正断言副作用顺序。实现 worker 常规走 `@task`（opencode-go），reviewer 固定走独立模型族 `@slow`（Claude Opus），降低同模型自审的相关盲区。
