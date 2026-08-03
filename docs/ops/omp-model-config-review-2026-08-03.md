@@ -205,3 +205,13 @@
 - designer → gpt-5.6-sol:high
 - **bigctx → LongCat-2.0（1M 上下文，新增）**
 - default → deepseek-v4-flash:max
+
+### smol 角色提速（2026-08-04 凌晨）
+
+`smol` 主模型 `codebuddy/glm-5.2` → **`zg-newapi/sensenova-6.7-flash-lite`**（商汤 ch15，实测 0.35-0.5s，比 glm-5.2 快 ~5 倍）。
+
+- **权衡**：sensenova 文档实测不返回 `reasoning_content`（思考混在正文），scout/librarian/sonic 的 frontmatter medium/minimal thinking 会静默失效——smol 是轻量只读侦察/摘要任务，速度优先于思考深度，可接受
+- **链**：sensenova → glm-5.2（保 thinking）→ opencode-go → …（6 项），glm-5.2 降为 thinking 兜底
+- models.yml 加声明：`zg-newapi/sensenova-6.7-flash-lite`（131K ctx/32K out，无 reasoning 标记）
+- 备份：`config.yml.20260804-001017.bak`、`models.yml.20260804-001017.bak`
+- 验证：OMP 端到端 OK（5.6s 含启动，纯推理 0.5s）；10 角色 13 链 0 断裂
