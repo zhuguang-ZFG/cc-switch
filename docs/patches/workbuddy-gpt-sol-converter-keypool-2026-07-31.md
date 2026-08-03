@@ -84,3 +84,10 @@ key#4 fe_oa_2502... 200 13.5s / 流式 2.5s
 **验证**：转换器 8787 端到端 sol 流式 200（7.7s，4 chunks + DONE）；3 个活 key 直连 freemodel 流式全 OK。
 
 **注意**：WorkBuddy 主程序启动时缓存 models.json，需重启桌面应用才生效（当前进程受保护无法从外部杀掉，需托盘退出或任务管理器结束）。
+
+**重启后核对（2026-08-03 23:30）**：
+
+- WorkBuddy 已重启（新 PID + 新日志），模型列表含 `custom-local:gpt-...`（sol）
+- **OMP models.yml 的 codebuddy 块缺 `gpt-5.6-sol`**（文档第 34 行说加了，实际漏了）——已补：`contextWindow 262144 / maxTokens 32768 / reasoning / images`（对齐 workbuddy-sol-context-fix 的 262K 实测工作区）；`omp models` 已确认注册（262K/33K/thinking/images）
+- 转换器 8787 sol 非流式 → `OK`；Kimi CLI `kimi -m codebuddy/gpt-5.6-sol` → `OK`；NewAPI 6 渠道 test → 全 OK（3.3-6.3s）
+- OMP 重启后 `codebuddy/gpt-5.6-sol` 已解析
