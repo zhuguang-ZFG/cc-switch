@@ -101,21 +101,22 @@
 
 ### NewAPI 渠道修复（本轮）
 
-| 渠道                        | 处置                                                                                                                                                                                           |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ch3 baibei-100xlabs         | `auto_ban=0`（根因见下）+ prio 57→50、w 40→20（打散公益池独占顶层）                                                                                                                            |
-| ch9 linxi-k40               | 显式禁用 status=2（自禁 status=3 + 实测超时，防 AutomaticEnable 反复拉起）                                                                                                                     |
-| ch18 linxi-k40-opus5-backup | 降层 prio 54→40、w 10→2（同源 502）                                                                                                                                                            |
-| ch36 stepfun-step-plan      | 禁用 status=2（无 StepPlan 订阅 400）                                                                                                                                                          |
-| ch50/55 inferx-deepseek     | 禁用 status=2（429/慢）                                                                                                                                                                        |
-| ch56 hf-deepseek-0731       | 禁用 status=2（端点退役 404）                                                                                                                                                                  |
-| ch30 fastaitoken-gpt        | 禁用 status=2（INSUFFICIENT_BALANCE 403）                                                                                                                                                      |
-| ch62/63/64/65 centos-gpt    | models 摘掉 `gpt-5.5`（上游 codex测试 组无该模型，503）→ 只留 gpt-5.6-sol；实测 4/4 OK（1.9-3.8s）                                                                                             |
-| ch26/27/28/57 gorouter 池   | 提权 w 5/3/4/4 → 8/6/6/6（实测 2.4-2.6s 健康）；**后查 ch27/ch57 上游 key 余额 ¥0.047，claude-opus-5 预扣 ¥0.2 失败（403 insufficient_user_quota）→ 禁用 status=2**，池剩 ch26/ch28（实测 OK） |
-| ch53 atomcode-bridge        | w 0→5（实测 1.8s 健康）                                                                                                                                                                        |
-| ch46/47 bazaarlink          | 降权 w 3→2（实测 5-7s 慢）                                                                                                                                                                     |
-| ch49/54 inferx-glm52        | prio 30→50（实测 1.5-1.8s 比 codebuddy 快）                                                                                                                                                    |
-| ch45 agentrouter            | 提权 w 15→20 同层分流（本地代理稳定）                                                                                                                                                          |
+| 渠道                        | 处置                                                                                                                                                                                                                                                  |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ch3 baibei-100xlabs         | `auto_ban=0`（根因见下）+ prio 57→50、w 40→20（打散公益池独占顶层）                                                                                                                                                                                   |
+| ch9 linxi-k40               | 显式禁用 status=2（自禁 status=3 + 实测超时，防 AutomaticEnable 反复拉起）                                                                                                                                                                            |
+| ch18 linxi-k40-opus5-backup | 降层 prio 54→40、w 10→2（同源 502）                                                                                                                                                                                                                   |
+| ch36 stepfun-step-plan      | 禁用 status=2（无 StepPlan 订阅 400）                                                                                                                                                                                                                 |
+| ch50/55 inferx-deepseek     | 禁用 status=2（429/慢）                                                                                                                                                                                                                               |
+| ch56 hf-deepseek-0731       | 禁用 status=2（端点退役 404）                                                                                                                                                                                                                         |
+| ch30 fastaitoken-gpt        | 禁用 status=2（INSUFFICIENT_BALANCE 403）                                                                                                                                                                                                             |
+| ch62/63/64/65 centos-gpt    | models 摘掉 `gpt-5.5`（上游 codex测试 组无该模型，503）→ 只留 gpt-5.6-sol；实测 4/4 OK（1.9-3.8s）                                                                                                                                                    |
+| ch26/27/28/57 gorouter 池   | 提权 w 5/3/4/4 → 8/6/6/6（实测 2.4-2.6s 健康）；**后查 ch27/ch57 上游 key 余额 ¥0.047，claude-opus-5 预扣 ¥0.2 失败（403 insufficient_user_quota）→ 禁用 status=2**，池剩 ch26/ch28（实测 OK）                                                        |
+| ch53 atomcode-bridge        | w 0→5（实测 1.8s 健康）                                                                                                                                                                                                                               |
+| ch46/47 bazaarlink          | 降权 w 3→2（实测 5-7s 慢）                                                                                                                                                                                                                            |
+| ch49/54 inferx-glm52        | prio 30→50（实测 1.5-1.8s 比 codebuddy 快）                                                                                                                                                                                                           |
+| ch45 agentrouter            | 提权 w 15→20 同层分流（本地代理稳定）                                                                                                                                                                                                                 |
+| ch20 fengwind-gpt56sol      | 复用原 `fengwind-grok`（禁用渠道，同 base_url）改造为 gpt-5.6-sol 独立源：新 key、models 改 `gpt-5.6-sol`、w=15、prio=50、`auto_ban=0`、启用；实测 OK 4.4s，为 gpt-5.6-sol 池新增独立上游（与 centos/agentrouter 不同源，分散 default/designer 风险） |
 
 **全局选项**：`ChannelDisableThreshold` 3→50（恢复 newapi-audit-2026-07-29 记录值；公益池抖动不该 3 连击即封）。
 
@@ -149,8 +150,10 @@
 - **复杂多 agent 工程烟测（第二轮）**：5 角色并发（scout/task/designer/reviewer/security-reviewer）全部完成零失败；raw JSONL 确认模型解析：scout→`codebuddy/glm-5.2`（thinkingLevel=**medium**，frontmatter 生效）、task→`opencode-go:max`、designer→`gpt-5.6-sol:high`、reviewer/security→`zg-newapi-anthropic/claude-opus-5:max`（@slow 覆盖生效）
 - **重启持久性**：config.yml 自 21:47 写入后 8 分钟未被 OMP 改写（default 保持 claude-opus-5:high）；OMP 运行中不持续覆盖配置
 - **failover 验证**：新慢链主模型 `zg-newapi-anthropic/claude-opus-5:max` bench 2/2 OK（TTFT 2.6s）；agentrouter fallback 对真实 subagent 会话可用（reviewer 探针 2m27s 成功），仅短流式 bench 请求被上游敏感词误杀（踩坑 12）
-- 渠道侧：38 渠道全量复核，禁用 ch9/30/36/50/55/56（死渠道 + 余额不足），ch62-65 摘 gpt-5.5，claude-opus-5 池重排（ch3 降层、ch45 提权、gorouter 池提权），`ChannelDisableThreshold` 3→50
-- Guardian 探活加固已落地（三元组 + anyrouter 推理探针），35/35 测试通过
+- **gorouter 欠费定位**：用户报告 403 `insufficient_user_quota`（$0.047/$0.2），NewAPI 日志无记录（预扣失败在计费中间件拦截，不写 type=5）；OMP 会话 `retryRecovery` 元数据确认错误来自 `zg-newapi-anthropic/claude-opus-5`；逐渠道实测 `test_channel?model=claude-opus-5` 精确复现：**ch27 gorouter-claude-2 + ch57 gorouter** 上游 key 余额 ¥0.047 → 禁用 status=2，池剩 ch26/ch28（实测 OK）；修复后慢链 bench 2/2 OK
+- **fengwind gpt-5.6-sol 接入**：新 key @ `api.fengwind.com`，实测 gpt-5.6-sol/luna/terra 全可用（含 reasoning_content + 流式 + 长输出 831 tokens/26.5s）；复用 ch20（原 fengwind-grok 禁用渠道）改造，gpt-5.6-sol 池增独立源（6 渠道：ch20/45/62/63/64/65）
+- 渠道侧：38 渠道全量复核，禁用 ch9/27/30/36/50/55/56/57（死渠道 + 余额不足 + gorouter 欠费），ch62-65 摘 gpt-5.5，ch20 接入 fengwind，claude-opus-5 池重排（ch3 降层、ch45 提权、gorouter 池清欠费），`ChannelDisableThreshold` 3→50
+- Guardian 探活加固已落地（三元组 + 推理探针），35/35 测试通过；已从 `LOCAL_PROXIES` 移除死掉的代理，避免对已禁用代理的周期性告警噪音
 - 已知未修（可接受）：`zg-newapi/mercury-2`、`zg-newapi/grok-4.5` 零引用但实测存活（200），保留作手动切换候选
 - 长输出压测暴露**上游侧**限制，非配置问题：`agentrouter` 与 `zg-newapi-anthropic` 在 16K 输出的非流式请求上 >200s 无响应；改流式后正常出流。**长任务应依赖 OMP 默认的流式路径**
 - 本轮备份：`config.yml.20260803-211748.bak`、`config.yml.20260803-203411.bak`、`models.yml.20260803-203411.bak`
