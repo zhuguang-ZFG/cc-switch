@@ -562,29 +562,73 @@ class HealthChecker:
         self.channel_slow[channel_id] = 0
         return True, "正常", response_time
 
-    def check_local_proxy(self, port: int, name: str) -> Tuple[bool, str]:
+    def check_local_proxy(self, port: int, name: str) -> Tuple[bool, str, bool]:
+        """本地代理健康检查，返回 (healthy, msg, alive)
+
+        alive=False: 进程级存活检查失败（端口无响应）— 调用方应重启。
+        alive=True, healthy=False: 进程活着但真实推理失败（上游故障/死键）—
+        重启解决不了，调用方应只告警，避免重启风暴。
+
+        浅探活（/v1/models、/health）有盲区：anyrouter 曾 /health 200 但
+        /v1/messages 5/5 全 502。故进程活着时补一次最小推理探针。
+        """
         proxy_config = {
             "agentrouter": {"key": "any", "endpoint": "/v1/models"},
             "codebuddy": {"key": CODEBUDDY_API_KEY, "endpoint": "/v1/models"},
-            "anyrouter": {"key": "any", "endpoint": "/health"},
+            "anyrouter": {"key": "any", "endpoint": "/health", "infer": {
+                "path": "/v1/messages", "model": "claude-opus-5",
+                "body": {
+                    "model": "claude-opus-5",
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+            }},
             "atomcode": {"key": "any", "endpoint": "/v1/usage"},
         }
         config = proxy_config.get(name, {"key": "any", "endpoint": "/v1/models"})
 
+        alive = False
         for host in ["100.83.32.95", "127.0.0.1"]:
             try:
                 url = f"http://{host}:{port}{config['endpoint']}"
                 req = urllib.request.Request(url, headers={"Authorization": f"Bearer {config['key']}"})
                 with urllib.request.urlopen(req, timeout=5) as resp:
-                    return True, f"{name} 正常 ({host})"
+                    alive = True
+                    break
             except urllib.error.HTTPError as e:
                 if e.code in (401, 403):
                     # 服务存活但鉴权失败——重启解决不了，视为存活并记录
-                    return True, f"{name} 存活但鉴权失败 ({host}, HTTP {e.code})"
+                    return True, f"{name} 存活但鉴权失败 ({host}, HTTP {e.code})", True
                 continue  # 5xx 试下一个 host
             except Exception:
                 continue
-        return False, f"{name} 无响应（Tailscale 和 localhost 都失败）"
+        if not alive:
+            return False, f"{name} 无响应（Tailscale 和 localhost 都失败）", False
+
+        # 深度探针：进程活着 -> 一次真实最小推理，验证上游真正可用
+        infer = config.get("infer")
+        if infer is None:
+            return True, f"{name} 正常", True
+        try:
+            url = f"http://{host}:{port}{infer['path']}"
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(infer["body"]).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {config['key']}",
+                    "x-api-key": config["key"],
+                    "anthropic-version": "2023-06-01",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return True, f"{name} 正常（推理探针通过）", True
+        except urllib.error.HTTPError as e:
+            # 5xx/4xx = 上游或路由故障。进程活着，重启解决不了 -> 告警不重启
+            return False, f"{name} 推理探针失败 (HTTP {e.code})", True
+        except Exception as e:
+            return False, f"{name} 推理探针异常: {str(e)[:80]}", True
 
     def check_error_rate(self) -> Tuple[bool, float, int, int]:
         """检查错误率
@@ -1268,7 +1312,7 @@ class AutoFixEngine:
             local_ok = True
             if self.health:
                 try:
-                    local_ok, _ = self.health.check_local_proxy(
+                    local_ok, _, _ = self.health.check_local_proxy(
                         contract["port"], contract["proxy"]
                     )
                 except Exception as e:
@@ -1705,8 +1749,14 @@ class AutoFixEngine:
             # 重启后验证：等待进程启动并探测端口（最多 10s）
             verified = False
             for _ in range(5):
-                time.sleep(2)
-                ok, _ = self.health.check_local_proxy(port, name)
+                ok, _, alive = self.health.check_local_proxy(port, name)
+                if ok:
+                    verified = True
+                    break
+                if alive:
+                    # 进程活着但推理失败——重启已让进程回来，上游故障等 Guardian
+                    # 渠道层处理即可，不再空转等待
+                    break
                 if ok:
                     verified = True
                     break
@@ -2019,26 +2069,30 @@ class Guardian:
             self.autofix._save_state()
             if streak >= NEWAPI_FAIL_THRESHOLD:
                 self.autofix.restart_newapi_container()
-                self.autofix.state["newapi_fail_streak"] = 0
-                self.autofix._save_state()
-            if self.alerts.should_alert("newapi_down", "error"):
-                self.telegram.send_alert("NewAPI 宕机", newapi_msg, "error")
-        else:
-            if self.autofix.state.get("newapi_fail_streak", 0):
-                self.autofix.state["newapi_fail_streak"] = 0
-                self.autofix._save_state()
-
-        # 2. 渠道健康（P1: 先降权再禁用）
-        channels = self.newapi.get_channels()
-        for channel in channels:
-            healthy, msg, rt = self.health.check_channel(channel)
-            # P1: 只记录新的 NewAPI 测试结果，避免每 15 秒重复消费同一 test_time
-            if channel.get("status") == 1:
-                self.autofix._record_channel_perf(channel, healthy)
-            if not healthy:
-                # P1: 先尝试降权，降权后仍慢则禁用。
-                # 自愈动作不依赖告警冷却（冷却只控通知），降权自身有冷却节流。
-                self.autofix.degrade_channel_weight(channel, msg)
+        for name, info in LOCAL_PROXIES.items():
+            ok, msg, alive = self.health.check_local_proxy(info["port"], name)
+            if ok:
+                # 代理健康 → 重置断路器（否则满 3 次后永久放弃自愈），
+                # 同步清理 restart_alerted，避免残留标记抑制下一次故障告警
+                if self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
+                    self.autofix.state["restart_counts"][name] = 0
+                    self.autofix.state.setdefault("restart_alerted", {}).pop(name, None)
+                    self.autofix._save_state()
+            elif alive:
+                # 进程活着但推理失败（上游/死键）— 重启解决不了，只告警不重启，
+                # 避免无效重启风暴（anyrouter 曾 /health 200 但推理 5/5 502）
+                if self.alerts.should_alert(f"proxy_{name}", "error"):
+                    self.telegram.send_alert("本地代理推理异常", msg, "error")
+                else:
+                    logger.warning(f"代理 {name} 推理异常（告警冷却期）: {msg}")
+            else:
+                # 自愈动作（重启）不受告警冷却限制，始终执行；冷却只控通知。
+                self.autofix.restart_local_proxy(name, info["port"])
+                if self.alerts.should_alert(f"proxy_{name}", "error"):
+                    self.telegram.send_alert("本地代理故障", msg, "error")
+                else:
+                    # 告警冷却期内不重复通知，但失败原因不丢弃，降级为日志
+                    logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
         if self._budget_left("error scan"):
             self.autofix.scan_error_channels()
@@ -2062,24 +2116,6 @@ class Guardian:
             self.autofix.check_omp_roles_health()
 
 
-        # 6. 本地代理健康
-        for name, info in LOCAL_PROXIES.items():
-            ok, msg = self.health.check_local_proxy(info["port"], name)
-            if ok:
-                # 代理健康 → 重置断路器（否则满 3 次后永久放弃自愈），
-                # 同步清理 restart_alerted，避免残留标记抑制下一次故障告警
-                if self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
-                    self.autofix.state["restart_counts"][name] = 0
-                    self.autofix.state.setdefault("restart_alerted", {}).pop(name, None)
-                    self.autofix._save_state()
-            else:
-                # 自愈动作（重启）不受告警冷却限制，始终执行；冷却只控通知。
-                self.autofix.restart_local_proxy(name, info["port"])
-                if self.alerts.should_alert(f"proxy_{name}", "error"):
-                    self.telegram.send_alert("本地代理故障", msg, "error")
-                else:
-                    # 告警冷却期内不重复通知，但失败原因不丢弃，降级为日志
-                    logger.warning(f"代理 {name} 故障（告警冷却期）: {msg}")
 
 
         # 7. 错误率（get_logs 网络调用，超预算跳过并给默认值）
