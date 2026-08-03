@@ -256,3 +256,38 @@ atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无�
 3. 主线程只接受 `review_status=completed` 且 `overall_correctness=correct`；reviewer 超时、中断、取消、缺 final payload、`blocked` 或存在未解决 finding 均为未完成，测试通过不得替代。
 
 用户级 `~/.omp/agent/agents/reviewer.md` 已编码上述契约。重点强制检查返回值是否被 caller 消费、调用后是否继续使用旧状态、成功/失败通知是否互斥、重复写入/告警、retry/rollback/timeout/cancellation/cleanup，以及测试是否真正断言副作用顺序。实现 worker 常规走 `@task`（opencode-go），reviewer 固定走独立模型族 `@slow`（Claude Opus），降低同模型自审的相关盲区。
+
+### OMP 故障路由现场复审（2026-08-04 02:25）
+
+当前 `~/.omp/agent/config.yml` 使用 `retry.maxRetries=2`、`baseDelayMs=3000`、`maxDelayMs=60000`、`modelFallback=true`、`fallbackRevertPolicy=cooldown-expiry`。模型注册完整，`omp models` 可解析 6 个 provider、22 个模型；问题不在 selector 断裂，而在故障判定和链路独立性。
+
+#### 现场探针
+
+同一提示 `Return exactly ROUTE_OK.`，每模型 1 run、48 max tokens、并发 2：
+
+| 路由                                     | 结果 |       TTFT / 总耗时 | 结论                                                         |
+| ---------------------------------------- | ---- | ------------------: | ------------------------------------------------------------ |
+| `zg-newapi-anthropic/claude-opus-5:high` | 200  | **188.2s / 188.2s** | 请求最终成功，因此 OMP 不触发 fallback；用户先承受三分钟空等 |
+| `agentrouter/claude-opus-5:high`         | 500  |            立即失败 | `sensitive_words_detected`，已知上游短流式误杀仍存在         |
+| `zg-newapi/opencode-go:max`              | 200  |       2.10s / 2.54s | 快速、独立模型，可作有效降级                                 |
+| `codebuddy/glm-5.2:medium`               | 200  |       1.47s / 2.75s | 本地独立入口，可作有效降级                                   |
+
+#### 当前高风险
+
+1. **没有首字节故障门。** OMP 的 provider fallback 由错误驱动；上游只要保持连接并最终返回 200，188 秒 TTFT 也不会切换。`retry.maxDelayMs` 是重试退避上限，不是请求或首字节超时。
+2. **Claude 第一备用是已知坏路由。** `slow` / `plan` / `vision` 的首个 fallback 均为 `agentrouter/claude-opus-5`；短流式探针持续被敏感词过滤，先消耗一次失败才能进入下一候选。
+3. **备用并不真正独立。** `zg-newapi-anthropic/claude-opus-5` 进入 NewAPI Claude 池；该池也包含 channel 45 `agentrouter`。随后再切本机 `agentrouter/*` 可能命中同一上游故障域，不是可靠冗余。
+4. **同源/同模型重复过多。** `slow` 链同时含 NewAPI Opus 5、NewAPI Opus 4.8、本机 AgentRouter Opus 5/4.8。鉴权、内容过滤、Tailscale、本地代理或 AgentRouter 上游故障时会连续失败；模型名不同不等于故障域不同。
+5. **重试放大。** OMP 每候选最多重试 2 次；NewAPI 自身还有渠道重试和池内切换。慢连接或 429/5xx 下，总等待是多层重试乘积，不是简单的 2 次。
+6. **`default` 链语义过宽。** 主模型若没有 exact/provider/role 专用链，会落到 `default`；其中先经过 opencode-go、两个 AgentRouter Claude，再到 Kimi/LongCat/NewAPI Claude。能力、图像支持、上下文长度和工具协议并不等价，降级后可能成功返回但质量或能力静默变化。
+7. **`cooldown-expiry` 只解决恢复，不解决误切。** 它能让会话冷却后回主模型，但无法识别“极慢的成功”、相关故障域或候选能力不匹配。
+
+#### 当前操作判据
+
+- `fallback applied` 只证明 OMP 收到了可切换错误，不证明首字节卡顿会自愈。
+- 对 Claude 慢请求，先看 NewAPI 日志的 channel id / `use_time`；不能仅看最终 HTTP 200。
+- AgentRouter 在短流式请求修复前，不应作为 Claude 链首备用；保留为人工直连诊断入口比自动首跳更安全。
+- 自动链应优先跨故障域：NewAPI Claude → `zg-newapi/opencode-go` → `codebuddy/glm-5.2` → LongCat/Kimi；同源 Claude 变体放末尾或移除。
+- 不建议仅缩短 retry delay；真正缺失的是有取消能力的请求/首字节 deadline。OMP 当前配置未暴露该 deadline，不能用 `maxDelayMs` 冒充。
+
+本节是审计结论，未直接改写运行时 fallback 顺序：移动候选会改变 slow/plan/vision 的质量、图像能力与供应商边界，应在独立 smoke 中验证后再切。
