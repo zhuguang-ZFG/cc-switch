@@ -8,9 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - **Guardian 自愈修复 + Telegram 告警治理**: ① 本地代理探针禁用（`check_local_proxy` 直接返回，不再发 `/v1/models` 请求）；② 推理超时告警按 episode 去重（同一代理连续失败只发一次，恢复后清除）；③ 渠道测试超时放宽 5→15 秒（吸收常见 6-15s 上游）。详见 `docs/patches/guardian-self-heal-agnes-relay-telegram-2026-08-04.md`。
-- **agnes-relay 360 弹窗修复**: 命令从 `powershell.exe -WindowStyle Hidden` 改为 `python.exe`，移除 `TimeTrigger PT1M`（仅保留 LogonTrigger），避免每分钟触发。详见同上。
+- **agnes-relay 360 弹窗修复**: 命令从 `powershell.exe -WindowStyle Hidden` 改为 `pythonw.exe`（无窗口版），`subprocess.Popen` 加 `CREATE_NO_WINDOW`，移除 `TimeTrigger PT1M`（仅保留 LogonTrigger），避免触发 360 "隐藏执行 PowerShell" 弹窗及 cmd 闪窗。详见同上。
 - **CatPaw Bridge 完整移除**: 实测有效上下文 ≈13k tokens 且无思维链控制，用户选择当日移除。Bridge 目录、ch71、models.yml 6 条目、secrets.json key、tmp/应用数据/注册表全部清理。详见 `docs/ops/omp-model-config-review-2026-08-03.md` §CatPaw。
 - **OMP 故障路由禁用**: `config.yml` `retry.modelFallback: true → false`，失败时不再自动路由到 fallback 链。详见同上。
+- **NewAPI 地址切换 Tailscale 内网**: `zg-newapi`/`zg-newapi-anthropic` baseUrl 从 `https://aliyun.donglicao.com` 改为 `http://100.103.82.78:3000`，省去 DNS 1.1s + SSL 0.8s 开销；`secrets.json` 同步加 `newapi_base`。deepseek-v4-flash 响应从 8.3s→2.3s，deepseek-official 从 4.9s→1.0s。
+- **DeepSeek 聚合渠道删除**: 删除 ch46/47/50/55/56/58 六个纯 deepseek 聚合渠道，ch15 去掉 `deepseek-v4-flash` 模型。仅保留 ch42 官方直连。
+- **`smol` 角色模型切换**: `codebuddy/glm-5.2` → `zg-newapi/deepseek-official-v4-flash`（1.0s 最快）。
 - **死渠道删除**: NewAPI ch26/ch28/ch38/ch49/ch54 已删除（"record not found" 确认）。
 
 - **nihaox-k3 + p0-systems DeepSeek V4 Flash 0731 接入聚合池（ch59/ch60）**: 新增两个 0731 版本渠道。**nihaox-k3**（`https://k3.nihaox.cc.cd/v1`，weight=5→0）：免费配额已用完（`free_quota_exhausted`，cap 5000000, used 5107979），降权至 0 禁用，配额恢复后可重新启用。**p0-systems**（`https://api.p0.systems/api/agents`，weight=5）：可用，返回 `deepseek/deepseek-v4-flash`。**关键修复**：① POST 创建渠道需要 `{"mode":"single","channel":{...}}` 包装层（之前平铺致 `AddChannelRequest.Channel` nil pointer panic）；② PUT 更新不能含 `status` 字段（`UpdateChannel` 明确禁止 `requestData["status"]`）；③ p0 `base_url` 初设带 `/v1` 致 NewAPI 拼 `/v1/v1/chat/completions` 404，去 `/v1` 后修复。聚合池快照已同步更新（`docs/patches/newapi-aggregation-pools-2026-08-01.md`）。

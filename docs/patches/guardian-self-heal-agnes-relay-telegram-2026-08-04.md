@@ -35,8 +35,9 @@
 - 任务命令从 `powershell.exe ...` 改为 `python.exe run-agnes-relay.py`
 - 重建任务 XML，移除 `TimeTrigger PT1M`，仅保留 `LogonTrigger`
 - `MultipleInstancesPolicy: IgnoreNew`，`RestartOnFailure` 保留（999 次/1 分钟间隔）
+- **弹窗根因修复**：`python.exe` 是控制台程序，即使 `Hidden: true` 仍闪窗。改为 `pythonw.exe`（无窗口版）；`subprocess.Popen` 加 `creationflags=subprocess.CREATE_NO_WINDOW`。两层禁窗。
 
-**验证**：勾子监听 `100.83.32.95:9460 -> apihub.agnes-ai.com`，任务模式"正在运行"，计划类型"登陆时"，重复 N/A。
+**验证**：勾子监听 `100.83.32.95:9460 -> apihub.agnes-ai.com`，任务模式"正在运行"，计划类型"登陆时"，重复 N/A。无 cmd 弹窗。
 
 ### 5. CatPaw Bridge 完整移除
 
