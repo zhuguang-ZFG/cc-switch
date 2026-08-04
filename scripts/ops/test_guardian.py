@@ -1332,7 +1332,7 @@ class ProxyRestartTests(unittest.TestCase):
         ):
             ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
 
-        self.assertTrue(ok)
+        self.assertFalse(ok)
         self.assertIn("鉴权失败", msg)
         self.assertTrue(alive)
         # 断言只探 127.0.0.1 且携带对应 Bearer key
@@ -1358,7 +1358,7 @@ class ProxyRestartTests(unittest.TestCase):
         ):
             ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
 
-        self.assertTrue(ok)
+        self.assertFalse(ok)
         self.assertIn("鉴权失败", msg)
         self.assertTrue(alive)
         # 断言只探 127.0.0.1 且携带对应 Bearer key
@@ -1403,6 +1403,29 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(alive)
         self.assertIn("推理失败", msg)
+
+    def test_restart_treats_live_process_with_inference_failure_as_recovered(self):
+        engine = make_engine({"restart_counts": {}, "restarted_proxies": {}})
+        engine.health = Mock()
+        engine.health.check_local_proxy.return_value = (False, "upstream", True)
+        engine.telegram = Mock()
+
+        with patch.object(guardian.subprocess, "run"), patch.object(
+            guardian.subprocess, "Popen"
+        ), patch.object(guardian.time, "sleep"):
+            recovered = engine.restart_local_proxy("agentrouter", 8788)
+
+        self.assertTrue(recovered)
+        self.assertEqual(engine.state["restart_counts"]["agentrouter"], 0)
+        self.assertIn("推理仍异常", engine.telegram.send_alert.call_args.args[1])
+
+    def test_local_proxy_unexpected_exception_propagates(self):
+        health = guardian.HealthChecker(Mock())
+        with patch.object(
+            guardian.urllib.request, "urlopen", side_effect=ValueError("programming error")
+        ):
+            with self.assertRaisesRegex(ValueError, "programming error"):
+                health.check_local_proxy(8788, "agentrouter")
 
     def test_local_proxy_timeout_with_open_port_is_alive_but_unhealthy(self):
         health = guardian.HealthChecker(Mock())

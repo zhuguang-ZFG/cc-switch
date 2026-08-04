@@ -334,7 +334,7 @@ class TelegramBot:
         if not roster:
             self.send("没有近期 subagent 会话")
             return
-        lines = ["🤖 <b>Subagent 实时状态</b>\n"]
+        lines = ["🤖 <b>Subagent 近期会话状态</b>\n"]
         for item in roster:
             lines.append(
                 f"{_html_escape(item['status'])} {_html_escape(item['name'])} "
@@ -638,12 +638,13 @@ class HealthChecker:
                 return False, f"{name} 推理失败 (HTTP {response.status})", True
         except urllib.error.HTTPError as error:
             if error.code in (401, 403):
-                return True, f"{name} 存活但鉴权失败 (HTTP {error.code})", True
+                return False, f"{name} 存活但鉴权失败 (HTTP {error.code})", True
             return False, f"{name} 推理失败 (HTTP {error.code})", True
-        except Exception:
+        except (TimeoutError, urllib.error.URLError, OSError) as error:
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=1):
-                    return False, f"{name} 存活但推理超时", True
+                    detail = "推理超时" if isinstance(error, TimeoutError) else "推理请求失败"
+                    return False, f"{name} 存活但{detail}: {error}", True
             except OSError:
                 return False, f"{name} 无响应（127.0.0.1 端口不可达）", False
 
@@ -1804,39 +1805,52 @@ class AutoFixEngine:
 
             # 重启后验证：等待进程启动并探测端口（最多 10s）
             verified = False
+            process_alive = False
             for attempt in range(5):
                 ok, _, alive = self.health.check_local_proxy(port, name)
                 if ok:
                     verified = True
+                    process_alive = True
                     break
                 if alive:
-                    # 进程活着但推理失败——重启已让进程回来，上游故障等 Guardian
-                    # 渠道层处理即可，不再空转等待
+                    process_alive = True
                     break
                 if attempt + 1 < 5:
                     time.sleep(2)
 
+            if process_alive:
+                self.state["restart_counts"][name] = 0
+                self.state["restarted_proxies"][name] = datetime.now().isoformat()
+                self.state.setdefault("restart_alerted", {}).pop(name, None)
+                self._save_state()
+                if verified:
+                    self.telegram.send_alert(
+                        "本地代理重启",
+                        f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已重启并验证推理正常\n"
+                        f"次数: {restart_count + 1}\n"
+                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                        "restart",
+                    )
+                else:
+                    self.telegram.send_alert(
+                        "本地代理推理异常",
+                        f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已重启，进程存活但推理仍异常\n"
+                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                        "warning",
+                    )
+                return True
+
             self.state["restart_counts"][name] = restart_count + 1
             self.state["restarted_proxies"][name] = datetime.now().isoformat()
             self._save_state()
-
-            if verified:
-                self.telegram.send_alert(
-                    "本地代理重启",
-                    f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已重启并验证存活\n"
-                    f"次数: {restart_count + 1}\n"
-                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                    "restart"
-                )
-            else:
-                self.telegram.send_alert(
-                    "本地代理重启未验证",
-                    f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已启动但端口未响应\n"
-                    f"次数: {restart_count + 1}，可能启动失败\n"
-                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                    "warning"
-                )
-            return verified
+            self.telegram.send_alert(
+                "本地代理重启未验证",
+                f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 启动后端口仍未响应\n"
+                f"次数: {restart_count + 1}，可能启动失败\n"
+                f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                "warning",
+            )
+            return False
         except Exception as e:
             logger.error(f"Restart {name} failed: {e}")
             return False

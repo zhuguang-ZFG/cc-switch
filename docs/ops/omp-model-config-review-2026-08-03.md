@@ -315,3 +315,11 @@ atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无�
 - 并发 subagent smoke：coding 使用 `zg-newapi/opencode-go` 完成；research 使用 `zg-newapi/sensenova-6.7-flash-lite` 完成；JSONL 状态投影能在运行中显示实际模型，并在 `yield` 后切到 completed。Reviewer 的 Opus 路由卡住，GPT-5.6 重试未产出有效审查结果，因此未将其误报为成功；角色已切至响应稳定的 GPT-5.6。
 - 关键路由独立烟测：`zg-newapi/opencode-go:high` 2.44s 成功，`codebuddy/gpt-5.6-sol:high` 3.16s 成功；三路并发烟测因 Opus 超过 300s 被整体超时，证明 Opus 仍只适合作为长任务能力路由，不应承担快速审查门。
 - Guardian 重启后 PID/心跳更新；自动恢复后 `restart_counts` 与 `proxy_fail_streaks` 均归零，AgentRouter、CodeBuddy、AtomCode 监听端口和真实推理全部验证成功。
+
+### Guardian 独立审查修复（2026-08-04）
+
+- `401/403` 现分类为“进程存活但鉴权异常”：触发推理异常告警、不会清除故障状态，也不会无效重启进程。
+- 重启验证分别记录进程存活与推理健康。端口恢复但推理仍异常时，进程重启记为成功并单独告警；只有端口始终不可达才累计重启失败和打开断路器。
+- 推理探针只捕获预期的传输异常；意外程序异常继续抛给主循环边界记录 traceback，避免伪装成网络故障。
+- Telegram `/agents` 标题改为“Subagent 近期会话状态”，与 JSONL 外部观测投影的实际语义一致。
+- 验证：`py_compile` 通过；Guardian 回归套件 95/95 通过，包含鉴权异常、重启后进程存活但推理失败、意外异常传播三类新增/更新契约。
