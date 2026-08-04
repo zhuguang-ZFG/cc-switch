@@ -18,11 +18,13 @@
 
 **修复**：`_check_cycle` 中增加 `self.inference_alerted` 事件去重字典（keyed by proxy name），同一代理连续失败只发一次告警，恢复后清除。对应 `restart_alerted` 断路器模式。新增回归测试 `test_inference_alert_sent_once_per_episode`（98/98 通过）。
 
+**注**：当前探针已禁用（`check_local_proxy` 恒返回健康），`inference_alerted` 去重逻辑处于休眠状态。去重代码作为防御性储备保留，当探针重新启用时自动生效。
+
 ### 3. Guardian 渠道测试超时放宽（P1）
 
 **症状**：`TEST_CHANNEL_TIMEOUT = 5` 秒，但上游（ch45 agentrouter avg 30s+, ch55 inferx avg 46.8s）远超此值，导致"渠道测试超时"误报。
 
-**修复**：`TEST_CHANNEL_TIMEOUT: 5 → 15`，与本地代理探针超时（8→15）一致。
+**修复**：`TEST_CHANNEL_TIMEOUT: 5 → 15`，与本地代理探针超时（8→15）一致。15s 是折衷值：覆盖常见 6-15s 上游带宽，减少误报；30s+ 的慢渠道（如 ch45 agentrouter avg 30s+）仍会超时，符合预期——这些渠道应独立排查。
 
 ### 4. agnes-relay 360 弹窗修复（P0）
 
@@ -44,9 +46,9 @@
 - Bridge 目录删除、watchdog 进程停止（PID 18920 + 11228/27444，二次清除）
 - Startup 启动行移除（`ai-proxy-resilience.cmd` 删 `CatPaw Bridge Watchdog` 行）
 - NewAPI ch71 删除（`DELETE /api/channel/71`，200 "record not found" 确认）
-- OMP models.yml 6 个 catpaw 条目删除（sed 58,87d，验证零 catpaw 引用）
+- OMP models.yml 6 个 catpaw 条目删除（sed 58,87d，models.yml 中零 catpaw 引用）
 - `secrets.json` 中 `catpaw_bridge_api_key` 删除（8 keys 剩余）
-- 所有 catpaw 备份文件、tmp 引用、应用数据（`~/.meituan-catpaw`、`AppData\Roaming\catpaw-moon`、`AppData\Local\CatPaw`）全部清理
+- 含 catpaw 引用的备份文件（`models.yml.20260804-catpaw-removal.bak`）删除，其他备份保留；tmp 引用、应用数据（`~/.meituan-catpaw`、`AppData\Roaming\catpaw-moon`、`AppData\Local\CatPaw`）全部清理
 - 注册表、计划任务、启动项零 catpaw 引用
 
 ### 6. 死渠道删除
@@ -73,7 +75,7 @@
 - **agnes-relay**：`C:/Users/zhugu/.omp/proxies/agnes-relay/run-agnes-relay.py` + `agnes-relay.xml`（仅 LogonTrigger）
 - **OMP**：`C:/Users/zhugu/.omp/agent/config.yml`（modelFallback: false）
 - **NewAPI**：ch26/28/38/49/54/71 已删除
-- **CatPaw**：所有痕迹清除
+- **CatPaw**：操作痕迹已清除（bridge 目录、进程、models.yml 条目、secrets.json key、tmp 文件、应用数据、注册表）。文档记录保留供追溯（本文件、CHANGELOG、ops-review）。
 
 ## 验证
 
