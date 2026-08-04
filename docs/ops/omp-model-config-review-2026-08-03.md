@@ -343,9 +343,9 @@ VPS（阿里云国内）直连 `apihub.agnes-ai.com` 60s 超时，但本机可�
 
 - 本机运行固定上游透传代理 `C:/Users/zhugu/.omp/proxies/agnes-relay/agnes-relay.js`：默认仅绑定 Tailscale `100.83.32.95:9460`（不再监听 `0.0.0.0`），`/v1/*` 原样转发 `https://apihub.agnes-ai.com/v1/*`，Authorization 由 NewAPI 注入；`GET /healthz` 返回带 `service/port/version/upstream` 的稳定身份供幂等探测
 - 稳定性加固（2026-08-04）：无效 URL 与 HTTP parser 错误均返回 400、不再崩溃；健康探测要求 200、3.5s wall deadline、4KiB body 上限和精确身份；上游 response error/abort 与下游断开均清理双向流；异服务占用或 listen 竞态非零退出；隔离回归 5/5 通过
-- **当前上线自启模式（免提权）**：Windows 计划任务 `agnes-relay`，当前用户 `zhugu`、`AtLogOn`、`RunLevel=Limited`、`StartWhenAvailable`、`IgnoreNew`；动作调用 `run-agnes-relay.ps1` 常驻监督循环，Node 无论何种退出均在 60s 后重试，stdout/stderr 追加到 `agnes-relay.log`
-- 安装器可重复运行：先停止并注销旧同名任务、清理精确匹配的旧 supervisor/Node 进程树，再注册新任务，避免旧 Ctrl+C 信号、孤儿 Node 或 `IgnoreNew` 让新 action 失效；旧 `shell:startup` VBS 与 canonical VBS 已删除
-- 监督恢复最终实测：Task Scheduler 已真正持有进程树（`Node → PowerShell supervisor → cmd`）；强杀 Node pid 44140 后任务保持 Running，60s 后拉起 pid 36008，`100.83.32.95:9460/healthz` 恢复 version=1 的 200
+- **当前上线自启模式（免提权）**：Windows 计划任务 `agnes-relay`，当前用户 `zhugu`、`AtLogOn`、`RunLevel=Limited`、`StartWhenAvailable`、`IgnoreNew`；action 直接调用 `powershell.exe -NonInteractive -WindowStyle Hidden`，不再经过可见 `cmd.exe`；`run-agnes-relay.ps1` 常驻监督 Node，stdout/stderr 追加到 `agnes-relay.log`
+- 同一计划任务包含 AtLogOn trigger 与每分钟 watchdog trigger；正常运行时由 `IgnoreNew` 拒绝重复实例，异常停止时下一周期恢复，始终只有 Task Scheduler 一个 runtime owner。安装器先停止并注销旧任务、清理精确匹配的旧 supervisor/Node，再注册新定义
+- 监督恢复实测：Task Scheduler 真正持有 `Node → hidden PowerShell task` 进程树；hub 中旧 `agnes-relay` 已失败且 restart=no，不再拥有端口；relay 当前 `100.83.32.95:9460/healthz` 返回 version=1 的 200
 - **严格系统启动模式尚未安装**：`install-autostart.ps1` 已准备 SYSTEM + `AtStartup` + Highest 版本，但当前非提权终端无法操作 UAC secure desktop，两次安装均未注册任务；该版本会先复制脚本到 `%ProgramData%\agnes-relay` 并递归锁定为 SYSTEM/Administrators-only ACL，避免 SYSTEM 执行用户可写代码。管理员执行即可原地升级；当前 AtLogOn 模式必须在用户登录后才运行
 - ch68 `base_url=http://100.83.32.95:9460`；最终计划任务所有权切换后 NewAPI 真实测试 `agnes-2.0-flash` 6.659s success=true（此前原生/映射双模型也均成功）
 - **依赖本机在线且已登录**：本机离线/未登录时 ch68 失败；Haiku 请求按 pri DESC 先打 ch69（直连），ch68 仅兜底，风险可接受
@@ -358,3 +358,13 @@ VPS（阿里云国内）直连 `apihub.agnes-ai.com` 60s 超时，但本机可�
 - ch70 暴露并实测通过的 6 个模型：`codex-auto-review`、`gpt-5.4`、`gpt-5.5`、`gpt-5.6`、`gpt-5.6-sol`、`gpt-5.6-terra`；专属 `/api/channel/test/70` 六项均 `success=true`，耗时 2.291–2.731s
 - `POST /api/channel/fix` 返回 `43 success / 0 fails`；聚合入口实推 `gpt-5.6-terra` 返回 HTTP 200、2.288s，NewAPI 日志 `35033`/`35032` 均显示 `channel=70`、`type=2`、`use_time=2`
 - 计费配置已覆盖上述 6 个模型（input 0.5 / completion 2）；余额恢复且通过独立测试后，才考虑扩展当前排除模型
+
+### 多 subagent 协同与 Windows 弹窗约束（2026-08-04）
+
+- **单一 runtime owner**：同一服务/端口只允许 Task Scheduler、hub detached、Startup 或其他 supervisor 中的一个负责生产实例；临时 hub 进程必须在计划任务切换前退出，验收需核对 listener 数量和父进程链
+- **单写者**：同一批次每个共享运行时文件仅分配一个 writer；scout/librarian 只读调查，writer 只实现，verifier 只运行定向场景，reviewer/security-reviewer 只读审查，Main 唯一执行生产切换与 push
+- **完成语义**：subagent 的 `completed` 只表示任务返回，不代表验收；必须由 Main 观察真实运行路径，再由独立 reviewer 检查；reviewer 输出 schema 保持最小，失败时允许普通文本降级，禁止因 schema 复杂度丢失审查结论
+- **Windows 后台任务**：Interactive 计划任务必须同时使用 `Settings.Hidden=true`、`-NonInteractive`、`-WindowStyle Hidden`，不得以 `cmd.exe` 作为长期 action；启动目录不得放置可执行 `.bat/.cmd`，使用 `wscript.exe`/VBS 隐藏入口
+- 本轮全量修复：`agnes-relay`、`JoyClaw-Daily-PC-Maintenance`、`newapi-backup-pull`、`WeChatACPDailyReport` 均补齐 PowerShell 隐藏参数并设 Hidden；已有隐藏参数但 `Settings.Hidden=false` 的 `KimiCodeAutoUpgrade`、`UserFastClean-Caches` 也已设 Hidden。原定义备份到 `C:/Users/zhugu/.omp/backups/popup-tasks-20260804-132000/`
+- Startup 的可见 `cline-glm-proxy.bat` 已改名 `.disabled`，由 `cline-glm-proxy-hidden.vbs` 取代；VBS `/check` 语法验证通过，Startup 中不再存在启用的 `.bat/.cmd`
+- 实测停止 `agnes-relay` 后，每分钟隐藏 trigger 自动恢复：任务 Running、单 Node/单 supervisor、`/healthz` 200；跨 trigger 桌面复核仅发现用户当前 Windows Terminal。最终全量扫描启用的用户级 console tasks：`POPUP_RISK=0`
