@@ -327,8 +327,8 @@ atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无�
 ### Agnes AI 双端点 fallback 接入（2026-08-04）
 
 - 新增两个 OpenAI 类型（type=1）Haiku-tier fallback 渠道，仅覆盖已配价模型，未触碰任何现有渠道：
-  - **ch68 `agnes-com-haiku`**：`https://apihub.agnes-ai.com`，pri40/w20，status=**2（禁用）**——VPS（阿里云国内）到该全球端点真实推理 60s 超时不可达；配置保留，网络可达后再启用
-  - **ch69 `agnes-cn-haiku`**：`https://api.agnes-ai.cn`，pri39/w10，status=1（启用）——实测 `claude-haiku-4-5` 映射推理 2.456s、`agnes-2.0-flash` 原生 0.192s 全部 200
+  - **ch68 `agnes-com-haiku`**：pri38/w20，status=1（启用），base_url=`http://100.83.32.95:9460`（**本机 Tailscale 中转**，见下）——实测 `claude-haiku-4-5` 映射推理 21.554s、`agnes-2.0-flash` 原生 6.172s 全部 200；慢速兜底位
+  - **ch69 `agnes-cn-haiku`**：`https://api.agnes-ai.cn`，pri39/w10，status=1（启用）——实测 `claude-haiku-4-5` 映射推理 2.456s、`agnes-2.0-flash` 原生 0.192s 全部 200；快渠优先（fork 按 `channels.priority DESC` 选渠）
 - models：`agnes-2.0-flash,agnes-2.5-pro-alpha,LongCat-2.0,claude-haiku-4-5,claude-haiku-4-5-20251001,claude-haiku-4-5[1M],claude-haiku-4-5[1m]`（`agnes-2.5-flash`/`agnes-2.5-pro` 未配价故不暴露）
 - model_mapping：`LongCat-2.0` / `claude-haiku-4-5*` → `agnes-2.0-flash`（复刻已删除的 #122 模式）
 - 创建契约复踩：POST `/api/channel/` 的 `channel.model_mapping` 必须是 **JSON 字符串**，传对象报 `cannot unmarshal object into Go struct field Channel.channel.model_mapping of type string`
@@ -336,3 +336,13 @@ atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无�
 - 渠道全量快照 diff：现有 38 渠道字段零变化，主路由优先级未受影响
 - 计费：ModelRatio/CompletionRatio 已含 `agnes-2.0-flash`（0.5/2）与 `agnes-2.5-pro-alpha`，无需新增
 - 安全：两枚 Agnes key 曾在聊天明文出现，建议在 Agnes 控制台轮换后 `PUT /api/channel/68|69`（body 含 `key`、不含 `status`）更新
+
+#### ch68 本机中转架构（2026-08-04）
+
+VPS（阿里云国内）直连 `apihub.agnes-ai.com` 60s 超时，但本机可达，且 VPS↔本机经 Tailscale（`100.83.32.95`）互通：
+
+- 本机运行透传代理 `C:/Users/zhugu/.omp/proxies/agnes-relay/agnes-relay.js`（Node，监听 `0.0.0.0:9460`，`/v1/*` 原样转发 `https://apihub.agnes-ai.com/v1/*`，透传 method/headers/body，响应流式透传；Authorization 由 NewAPI 注入）
+- 以 hub 服务 `agnes-relay` 启动：`detached + persist`（跨会话存活），pid 见 `hub ps`；重启本机后需 `hub start agnes-relay` 拉起
+- ch68 `base_url=http://100.83.32.95:9460`，NewAPI 自动追加 `/v1/chat/completions`
+- **依赖本机在线**：本机离线时 ch68 失败；Haiku 请求按 pri DESC 先打 ch69（直连），ch68 仅兜底，风险可接受
+- 优先级倒挂教训：fork 按 `channels.priority DESC` 选渠，慢渠若 pri 更高会抢快渠流量；ch68 初始 pri40 > ch69 pri39 即倒挂，已降为 pri38
