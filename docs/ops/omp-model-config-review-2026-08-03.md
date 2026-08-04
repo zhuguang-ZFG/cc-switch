@@ -368,3 +368,9 @@ VPS（阿里云国内）直连 `apihub.agnes-ai.com` 60s 超时，但本机可�
 - 本轮全量修复：`agnes-relay`、`JoyClaw-Daily-PC-Maintenance`、`newapi-backup-pull`、`WeChatACPDailyReport` 均补齐 PowerShell 隐藏参数并设 Hidden；已有隐藏参数但 `Settings.Hidden=false` 的 `KimiCodeAutoUpgrade`、`UserFastClean-Caches` 也已设 Hidden。原定义备份到 `C:/Users/zhugu/.omp/backups/popup-tasks-20260804-132000/`
 - Startup 的可见 `cline-glm-proxy.bat` 已改名 `.disabled`，由 `cline-glm-proxy-hidden.vbs` 取代；VBS `/check` 语法验证通过，Startup 中不再存在启用的 `.bat/.cmd`
 - 实测停止 `agnes-relay` 后，每分钟隐藏 trigger 自动恢复：任务 Running、单 Node/单 supervisor、`/healthz` 200；跨 trigger 桌面复核仅发现用户当前 Windows Terminal。最终全量扫描启用的用户级 console tasks：`POPUP_RISK=0`
+
+### CatPaw Bridge 接入（2026-08-04，当日移除）
+
+- 曾接入：Windows CatPaw 实时会话凭据 + 本机 Tailscale `100.83.32.95:4567` Bridge + NewAPI ch71 `catpaw-bridge` + OMP 6 个 `catpaw-*` 模型（`contextWindow=8000`/`maxTokens=4096`）。
+- **2026-08-04 移除**：实测 CatPaw REST 端点（`/api/gpt/chat/completions`）有效上下文 ≈13k tokens（单条超限返回 `code 9999 内容长度异常`；多轮超 ~13k 被服务端压缩到 ~10k），且无思维链强度参数（thinking/reasoning_effort/chain_of_thought 等全部静默忽略，推理内嵌 content）。无法支撑正经编码任务，整体下线。
+- 移除动作：Bridge 目录删除、watchdog 进程停止、Startup 启动行移除、NewAPI ch71 删除（`DELETE /api/channel/71`）、OMP models.yml 6 个 catpaw 条目删除、`secrets.json` 中 `catpaw_bridge_api_key` 删除。

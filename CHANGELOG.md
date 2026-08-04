@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Guardian 自愈修复 + Telegram 告警治理**: ① 本地代理探针禁用（`check_local_proxy` 直接返回，不再发 `/v1/models` 请求）；② 推理超时告警按 episode 去重（同一代理连续失败只发一次，恢复后清除）；③ 渠道测试超时放宽 5→15 秒（吸收常见 6-15s 上游）。详见 `docs/patches/guardian-self-heal-agnes-relay-telegram-2026-08-04.md`。
+- **agnes-relay 360 弹窗修复**: 命令从 `powershell.exe -WindowStyle Hidden` 改为 `python.exe`，移除 `TimeTrigger PT1M`（仅保留 LogonTrigger），避免每分钟触发。详见同上。
+- **CatPaw Bridge 完整移除**: 实测有效上下文 ≈13k tokens 且无思维链控制，用户选择当日移除。Bridge 目录、ch71、models.yml 6 条目、secrets.json key、tmp/应用数据/注册表全部清理。详见 `docs/ops/omp-model-config-review-2026-08-03.md` §CatPaw。
+- **OMP 故障路由禁用**: `config.yml` `retry.modelFallback: true → false`，失败时不再自动路由到 fallback 链。详见同上。
+- **死渠道删除**: NewAPI ch26/ch28/ch38/ch49/ch54 已删除（"record not found" 确认）。
+
 - **nihaox-k3 + p0-systems DeepSeek V4 Flash 0731 接入聚合池（ch59/ch60）**: 新增两个 0731 版本渠道。**nihaox-k3**（`https://k3.nihaox.cc.cd/v1`，weight=5→0）：免费配额已用完（`free_quota_exhausted`，cap 5000000, used 5107979），降权至 0 禁用，配额恢复后可重新启用。**p0-systems**（`https://api.p0.systems/api/agents`，weight=5）：可用，返回 `deepseek/deepseek-v4-flash`。**关键修复**：① POST 创建渠道需要 `{"mode":"single","channel":{...}}` 包装层（之前平铺致 `AddChannelRequest.Channel` nil pointer panic）；② PUT 更新不能含 `status` 字段（`UpdateChannel` 明确禁止 `requestData["status"]`）；③ p0 `base_url` 初设带 `/v1` 致 NewAPI 拼 `/v1/v1/chat/completions` 404，去 `/v1` 后修复。聚合池快照已同步更新（`docs/patches/newapi-aggregation-pools-2026-08-01.md`）。
 
 - **OMP 故障路由调优（保守化）**: 用户反馈"一有点风吹草动就故障路由"。根因：`retry.maxRetries: 5` 时每次失败都尝试 `#tryRetryModelFallback`，前 5 次失败都可能切换模型。调整：`maxRetries: 5→2`（重试次数减 60%）、`baseDelayMs: 1000→3000`（首次重试等 3 秒给网络恢复时间）、`maxDelayMs: 300000→60000`（最大等待 5 分钟→1 分钟）。效果：fallback 触发减少 60%，首次重试延迟 3 秒，总最坏等待 31 秒→9 秒。`modelFallback: true` 保留（fallback 仍工作但更保守），`fallbackRevertPolicy: cooldown-expiry` 不变。
