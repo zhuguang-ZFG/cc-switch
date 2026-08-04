@@ -342,7 +342,8 @@ atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无�
 VPS（阿里云国内）直连 `apihub.agnes-ai.com` 60s 超时，但本机可达，且 VPS↔本机经 Tailscale（`100.83.32.95`）互通：
 
 - 本机运行透传代理 `C:/Users/zhugu/.omp/proxies/agnes-relay/agnes-relay.js`（Node，监听 `0.0.0.0:9460`，`/v1/*` 原样转发 `https://apihub.agnes-ai.com/v1/*`，透传 method/headers/body，响应流式透传；Authorization 由 NewAPI 注入）
-- 以 hub 服务 `agnes-relay` 启动：`detached + persist`（跨会话存活），pid 见 `hub ps`；重启本机后需 `hub start agnes-relay` 拉起
+- 以 hub 服务 `agnes-relay` 启动：`detached + persist`（跨会话存活），pid 见 `hub ps`
+- **开机自启（2026-08-04）**：`start-agnes-relay.vbs`（隐藏窗口启动器）已放入 `shell:startup`（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`），登录时自动拉起；脚本含幂等端口守卫——9460 已被监听（hub 已起）时打印 `already running` 并退出，双启动无害；schtasks ONLOGON 方案因当前 shell 无提权被拒，未采用
 - ch68 `base_url=http://100.83.32.95:9460`，NewAPI 自动追加 `/v1/chat/completions`
 - **依赖本机在线**：本机离线时 ch68 失败；Haiku 请求按 pri DESC 先打 ch69（直连），ch68 仅兜底，风险可接受
 - 优先级倒挂教训：fork 按 `channels.priority DESC` 选渠，慢渠若 pri 更高会抢快渠流量；ch68 初始 pri40 > ch69 pri39 即倒挂，已降为 pri38
