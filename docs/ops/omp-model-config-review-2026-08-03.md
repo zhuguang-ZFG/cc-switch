@@ -341,9 +341,20 @@ atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无�
 
 VPS（阿里云国内）直连 `apihub.agnes-ai.com` 60s 超时，但本机可达，且 VPS↔本机经 Tailscale（`100.83.32.95`）互通：
 
-- 本机运行透传代理 `C:/Users/zhugu/.omp/proxies/agnes-relay/agnes-relay.js`（Node，监听 `0.0.0.0:9460`，`/v1/*` 原样转发 `https://apihub.agnes-ai.com/v1/*`，透传 method/headers/body，响应流式透传；Authorization 由 NewAPI 注入）
-- 以 hub 服务 `agnes-relay` 启动：`detached + persist`（跨会话存活），pid 见 `hub ps`
-- **开机自启（2026-08-04）**：`start-agnes-relay.vbs`（隐藏窗口启动器）已放入 `shell:startup`（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`），登录时自动拉起；脚本含幂等端口守卫——9460 已被监听（hub 已起）时打印 `already running` 并退出，双启动无害；schtasks ONLOGON 方案因当前 shell 无提权被拒，未采用
-- ch68 `base_url=http://100.83.32.95:9460`，NewAPI 自动追加 `/v1/chat/completions`
-- **依赖本机在线**：本机离线时 ch68 失败；Haiku 请求按 pri DESC 先打 ch69（直连），ch68 仅兜底，风险可接受
+- 本机运行固定上游透传代理 `C:/Users/zhugu/.omp/proxies/agnes-relay/agnes-relay.js`：默认仅绑定 Tailscale `100.83.32.95:9460`（不再监听 `0.0.0.0`），`/v1/*` 原样转发 `https://apihub.agnes-ai.com/v1/*`，Authorization 由 NewAPI 注入；`GET /healthz` 返回带 `service/port/version/upstream` 的稳定身份供幂等探测
+- 稳定性加固（2026-08-04）：无效 URL 与 HTTP parser 错误均返回 400、不再崩溃；健康探测要求 200、3.5s wall deadline、4KiB body 上限和精确身份；上游 response error/abort 与下游断开均清理双向流；异服务占用或 listen 竞态非零退出；隔离回归 5/5 通过
+- **当前上线自启模式（免提权）**：Windows 计划任务 `agnes-relay`，当前用户 `zhugu`、`AtLogOn`、`RunLevel=Limited`、`StartWhenAvailable`、`IgnoreNew`；动作调用 `run-agnes-relay.ps1` 常驻监督循环，Node 无论何种退出均在 60s 后重试，stdout/stderr 追加到 `agnes-relay.log`
+- 安装器可重复运行：先停止并注销旧同名任务、清理精确匹配的旧 supervisor/Node 进程树，再注册新任务，避免旧 Ctrl+C 信号、孤儿 Node 或 `IgnoreNew` 让新 action 失效；旧 `shell:startup` VBS 与 canonical VBS 已删除
+- 监督恢复最终实测：Task Scheduler 已真正持有进程树（`Node → PowerShell supervisor → cmd`）；强杀 Node pid 44140 后任务保持 Running，60s 后拉起 pid 36008，`100.83.32.95:9460/healthz` 恢复 version=1 的 200
+- **严格系统启动模式尚未安装**：`install-autostart.ps1` 已准备 SYSTEM + `AtStartup` + Highest 版本，但当前非提权终端无法操作 UAC secure desktop，两次安装均未注册任务；该版本会先复制脚本到 `%ProgramData%\agnes-relay` 并递归锁定为 SYSTEM/Administrators-only ACL，避免 SYSTEM 执行用户可写代码。管理员执行即可原地升级；当前 AtLogOn 模式必须在用户登录后才运行
+- ch68 `base_url=http://100.83.32.95:9460`；最终计划任务所有权切换后 NewAPI 真实测试 `agnes-2.0-flash` 6.659s success=true（此前原生/映射双模型也均成功）
+- **依赖本机在线且已登录**：本机离线/未登录时 ch68 失败；Haiku 请求按 pri DESC 先打 ch69（直连），ch68 仅兜底，风险可接受
 - 优先级倒挂教训：fork 按 `channels.priority DESC` 选渠，慢渠若 pri 更高会抢快渠流量；ch68 初始 pri40 > ch69 pri39 即倒挂，已降为 pri38
+
+### vip.j3gb.com GPT 聚合（2026-08-04）
+
+- 新建 **ch70 `vip-j3gb-gpt`**（type=1，status=1，group=`default`，pri50/w10，`auto_ban=1`，base_url=`https://vip.j3gb.com`）；密钥未写入仓库或文档
+- 上游 `/v1/models` 返回 12 个模型；其中 5 个当前推理返回 403 `Insufficient account balance`（`gpt-5.2`、`gpt-5.4-mini`、`gpt-5.4-openai-compact`、`gpt-5.5-openai-compact`、`gpt-5.6-luna`），1 个无现有计费配置（`gpt-5.3-codex-spark`），均未加入渠道
+- ch70 暴露并实测通过的 6 个模型：`codex-auto-review`、`gpt-5.4`、`gpt-5.5`、`gpt-5.6`、`gpt-5.6-sol`、`gpt-5.6-terra`；专属 `/api/channel/test/70` 六项均 `success=true`，耗时 2.291–2.731s
+- `POST /api/channel/fix` 返回 `43 success / 0 fails`；聚合入口实推 `gpt-5.6-terra` 返回 HTTP 200、2.288s，NewAPI 日志 `35033`/`35032` 均显示 `channel=70`、`type=2`、`use_time=2`
+- 计费配置已覆盖上述 6 个模型（input 0.5 / completion 2）；余额恢复且通过独立测试后，才考虑扩展当前排除模型
