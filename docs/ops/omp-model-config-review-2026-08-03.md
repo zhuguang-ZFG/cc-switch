@@ -323,3 +323,16 @@ atomcode 在 01:22:44 报“已重启并验证存活”，01:22:45 紧接“无�
 - 推理探针只捕获预期的传输异常；意外程序异常继续抛给主循环边界记录 traceback，避免伪装成网络故障。
 - Telegram `/agents` 标题改为“Subagent 近期会话状态”，与 JSONL 外部观测投影的实际语义一致。
 - 验证：`py_compile` 通过；Guardian 回归套件 95/95 通过，包含鉴权异常、重启后进程存活但推理失败、意外异常传播三类新增/更新契约。
+
+### Agnes AI 双端点 fallback 接入（2026-08-04）
+
+- 新增两个 OpenAI 类型（type=1）Haiku-tier fallback 渠道，仅覆盖已配价模型，未触碰任何现有渠道：
+  - **ch68 `agnes-com-haiku`**：`https://apihub.agnes-ai.com`，pri40/w20，status=**2（禁用）**——VPS（阿里云国内）到该全球端点真实推理 60s 超时不可达；配置保留，网络可达后再启用
+  - **ch69 `agnes-cn-haiku`**：`https://api.agnes-ai.cn`，pri39/w10，status=1（启用）——实测 `claude-haiku-4-5` 映射推理 2.456s、`agnes-2.0-flash` 原生 0.192s 全部 200
+- models：`agnes-2.0-flash,agnes-2.5-pro-alpha,LongCat-2.0,claude-haiku-4-5,claude-haiku-4-5-20251001,claude-haiku-4-5[1M],claude-haiku-4-5[1m]`（`agnes-2.5-flash`/`agnes-2.5-pro` 未配价故不暴露）
+- model_mapping：`LongCat-2.0` / `claude-haiku-4-5*` → `agnes-2.0-flash`（复刻已删除的 #122 模式）
+- 创建契约复踩：POST `/api/channel/` 的 `channel.model_mapping` 必须是 **JSON 字符串**，传对象报 `cannot unmarshal object into Go struct field Channel.channel.model_mapping of type string`
+- `POST /api/channel/fix` 重建 abilities：42 success / 0 fails
+- 渠道全量快照 diff：现有 38 渠道字段零变化，主路由优先级未受影响
+- 计费：ModelRatio/CompletionRatio 已含 `agnes-2.0-flash`（0.5/2）与 `agnes-2.5-pro-alpha`，无需新增
+- 安全：两枚 Agnes key 曾在聊天明文出现，建议在 Agnes 控制台轮换后 `PUT /api/channel/68|69`（body 含 `key`、不含 `status`）更新
