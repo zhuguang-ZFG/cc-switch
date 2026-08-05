@@ -429,3 +429,15 @@ agent 的入口）。
 - gorouter ch57：禁用中，无流量 ✅
 - 已知风险：Guardian 恢复逻辑可能把 ch45 优先级回写 50（无历史
   记录时的默认值），发现 sol 流量异常打 ch45 时复查。
+
+## 2026-08-05 深夜：agentrouter 成为 opus-5 最终兜底（用户决策）
+
+- `claude-opus-5` 加回 ch45（agentrouter，prio 40）——早晨因敏感词误杀
+  摘除，现作为**最后一层**回归：免费层全挂时有个机会总比没有强，
+  误杀是间歇性的。
+- `RetryTimes` 1→2：opus-5 三层结构（52 林夕 / 50 百倍+林夕备 /
+  40 agentrouter）需要 3 次尝试才能触底，原来 1 只允许 2 跳、
+  agentrouter 永远轮不到。全局影响：所有模型的失败请求多一跳
+  重试，仅在失败时发生，可接受。
+- 最终 opus-5 路由：ch9 linxi(52,免费) → ch3 baibei(50,免费) /
+  ch18 linxi-backup(50,免费) → ch45 agentrouter(40,限量兜底)。
