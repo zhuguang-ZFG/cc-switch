@@ -31,7 +31,8 @@
 - `guardian.py` secrets 加载改为 `utf-8-sig`（BOM/无 BOM 均兼容），并加了注释说明坑源。
 - 删除 `restart_newapi_container()` 中不可达的 SSH 旧代码块（远端 VPS NewAPI 已永久删除；含 `lima` 主机别名，上传 GitHub 前清掉）。
 - 手动重启 agentrouter-proxy（pid 存活，`/health` 带 key 200 / 无 key 401）。
-- 计划任务 `NewAPI Guardian` 的动作改为 `wscript.exe //B //nologo "~/.omp/guardian/start-hidden.vbs"`（新增 3 行 VBS 包装器），cmd 窗口不再弹出。注意：wscript 拉起后台进程后立即退出，任务状态显示 `Ready` 属正常；Guardian 存活以 `heartbeat.json` 和 `guardian.log` 为准。
+- 计划任务 `NewAPI Guardian` 的动作最终改为 `conhost.exe --headless "C:\Users\zhugu\.omp\guardian\start.bat"`，cmd 窗口不再弹出，任务状态保持 `Running`（conhost 作为任务动作持有整个进程树）。Guardian 存活以 `heartbeat.json` 和 `guardian.log` 为准。
+  - 中间方案 `wscript.exe //B //nologo start-hidden.vbs` 被放弃，两个原因：① `Run(..., waitOnReturn=False)` 让 wscript 立即退出，任务结束后 Task Scheduler 把 start.bat + python 整棵树回收，Guardian 约 90 秒后死亡；② 自建的 `start-hidden.vbs` 在创建约 20 分钟后从磁盘消失（疑似安全软件查杀隐藏启动类 VBS）。若日后再用 VBS 方案，`waitOnReturn` 必须为 `True`。
 - watchdog.ps1 一并拉起（mutex 防重复）。
 
 验证：Guardian 心跳持续刷新；无误杀（`disabled_channels` 仍只有 gorouter 27/57，`restart_counts` 全 0）；`scripts/ops` 镜像已同步 live 并更新测试，89 个 unittest 全过。
@@ -41,4 +42,4 @@
 - **BOM 坑**：PowerShell 5.1 `Out-File -Encoding utf8` / 部分编辑器写 JSON 会加 BOM；Python 侧读第三方维护的 JSON 一律用 `utf-8-sig`。Guardian 的 `_SECRETS` 加载把解析错误静默成空 dict，故障表现（"配置缺失"）与真实原因（"文件没读到"）隔了一层，排查时先 `od -c` 看文件头。
 - **计划任务 RunLevel=Highest**：修改任务定义（`Set-ScheduledTask` / `schtasks /change`）需提权令牌；`schtasks /change` 还会交互式要密码。可用 `Start-Process powershell -Verb RunAs` 走 UAC。
 - **Git Bash 路径转换**：`schtasks /change` 的 `/change` 会被 MSYS 转成 `C:/Program Files/Git/change`，需 `MSYS2_ARG_CONV_EXCL='*'`。
-- **隐藏启动常驻 bat**：`wscript.exe //B //nologo wrapper.vbs` + `WScript.Shell.Run cmd, 0, False`，与本机 `run-hidden-*.vbs` 系列一致。
+- **隐藏启动常驻 bat**：首选 `conhost.exe --headless <script>`（Windows 11 内置，无脚本文件、任务状态保持 `Running`）。若用 VBS 包装器（`wscript.exe //B //nologo`），`WScript.Shell.Run` 的 `waitOnReturn` 必须为 `True`——否则 wscript 退出即任务结束，Task Scheduler 会回收整个进程树。
