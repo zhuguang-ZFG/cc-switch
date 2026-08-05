@@ -41,6 +41,24 @@ def _fallback_chain_entries(text: str) -> dict[str, list[str]]:
             result[active_chain].append(stripped[2:].strip())
     return result
 
+def _top_level_mapping_block(text: str, key: str) -> str:
+    """提取 YAML 顶层 mapping 的单个二级块，不依赖后续 key 顺序。"""
+    marker = f"  {key}:"
+    lines = text.splitlines()
+    start = next(
+        (index for index, line in enumerate(lines) if line.rstrip() == marker),
+        None,
+    )
+    if start is None:
+        raise AssertionError(f"missing provider block: {key}")
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line.startswith("  ") and not line.startswith("    ") and line.strip():
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
 def _model_role_entries(text: str) -> dict[str, str]:
     """从 config.yml 提取 modelRoles；保持依赖为标准库。"""
     result: dict[str, str] = {}
@@ -106,9 +124,10 @@ class OmpRouteGateTests(unittest.TestCase):
                 )
     def test_anthropic_provider_uses_semantic_ttft_gateway(self):
         text = (REAL_USER_HOME / ".omp" / "agent" / "models.yml").read_text(encoding="utf-8")
-        block = text.split("  zg-newapi-anthropic:\n", 1)[1].split("\n  codebuddy:\n", 1)[0]
+        block = _top_level_mapping_block(text, "zg-newapi-anthropic")
         self.assertIn("baseUrl: http://127.0.0.1:3003", block)
-        self.assertIn("apiKey: sk-", block)
+        self.assertIn("api: anthropic-messages", block)
+        self.assertNotIn("apiKey: PROXY_MANAGED", block)
 
 
 

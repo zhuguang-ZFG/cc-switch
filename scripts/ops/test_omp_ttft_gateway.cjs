@@ -60,6 +60,12 @@ async function main() {
     ),
     true,
   );
+  assert.equal(
+    isSemanticEvent(
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reasoning"}}',
+    ),
+    false,
+  );
 
   await withPair(
     (_req, res) => {
@@ -98,6 +104,35 @@ async function main() {
 
   await withPair(
     (_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(
+        `event: content_block_delta\ndata: ${JSON.stringify({
+          type: "content_block_delta",
+          delta: { type: "thinking_delta", thinking: "x".repeat(5000) },
+        })}\n\n`,
+      );
+      setTimeout(() => {}, 200);
+    },
+    { maxBufferBytes: 100 },
+    async (port) => {
+      const result = await request(port);
+      assert.equal(result.status, 504);
+      assert.match(result.body, /No semantic model output/);
+    },
+  );
+
+  await withPair(
+    (_req, _res) => {},
+    { upstreamHeaderTimeoutMs: 40 },
+    async (port) => {
+      const result = await request(port);
+      assert.equal(result.status, 504);
+      assert.match(result.body, /Upstream response timeout/);
+    },
+  );
+
+  await withPair(
+    (_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end('{"ok":true}');
     },
@@ -108,7 +143,7 @@ async function main() {
     },
   );
 
-  console.log("OMP TTFT gateway tests: 3 passed");
+  console.log("OMP TTFT gateway tests: 5 passed");
 }
 
 main().catch((error) => {

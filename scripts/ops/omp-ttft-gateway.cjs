@@ -1,6 +1,7 @@
 "use strict";
 
 const http = require("http");
+const { StringDecoder } = require("string_decoder");
 
 const DEFAULTS = Object.freeze({
   listenHost: "127.0.0.1",
@@ -8,6 +9,7 @@ const DEFAULTS = Object.freeze({
   upstreamHost: "127.0.0.1",
   upstreamPort: 3002,
   semanticTimeoutMs: 60000,
+  upstreamHeaderTimeoutMs: 60000,
   maxBufferBytes: 1024 * 1024,
 });
 
@@ -34,16 +36,10 @@ function isSemanticEvent(frame) {
   }
 }
 
-function writeGatewayTimeout(res, semanticTimeoutMs) {
+function writeGatewayError(res, status, type, message) {
   if (res.headersSent || res.writableEnded) return;
-  const body = JSON.stringify({
-    type: "error",
-    error: {
-      type: "overloaded_error",
-      message: `No semantic model output within ${semanticTimeoutMs}ms`,
-    },
-  });
-  res.writeHead(504, {
+  const body = JSON.stringify({ type: "error", error: { type, message } });
+  res.writeHead(status, {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(body),
     connection: "close",
@@ -54,6 +50,24 @@ function writeGatewayTimeout(res, semanticTimeoutMs) {
 function createGatewayServer(options = {}) {
   const config = { ...DEFAULTS, ...options };
   const server = http.createServer((req, res) => {
+    let terminal = false;
+    let upstreamRes = null;
+    let semanticTimer = null;
+    let headerTimer = null;
+
+    const destroyUpstream = () => {
+      upstreamReq.destroy();
+      upstreamRes?.destroy();
+    };
+    const fail = (status, type, message) => {
+      if (terminal || res.writableEnded) return;
+      terminal = true;
+      clearTimeout(headerTimer);
+      clearTimeout(semanticTimer);
+      writeGatewayError(res, status, type, message);
+      destroyUpstream();
+    };
+
     const upstreamReq = http.request({
       hostname: config.upstreamHost,
       port: config.upstreamPort,
@@ -65,11 +79,25 @@ function createGatewayServer(options = {}) {
       },
     });
 
-    req.on("aborted", () => upstreamReq.destroy());
-    req.on("error", () => upstreamReq.destroy());
+    headerTimer = setTimeout(() => {
+      fail(
+        504,
+        "overloaded_error",
+        `Upstream response timeout after ${config.upstreamHeaderTimeoutMs}ms`,
+      );
+    }, config.upstreamHeaderTimeoutMs);
+
+    req.on("aborted", destroyUpstream);
+    req.on("error", destroyUpstream);
     req.pipe(upstreamReq);
 
-    upstreamReq.on("response", (upstreamRes) => {
+    upstreamReq.on("response", (response) => {
+      if (terminal) {
+        response.destroy();
+        return;
+      }
+      clearTimeout(headerTimer);
+      upstreamRes = response;
       const contentType = String(upstreamRes.headers["content-type"] || "");
       const isSse = contentType.includes("text/event-stream");
       if (
@@ -77,6 +105,7 @@ function createGatewayServer(options = {}) {
         upstreamRes.statusCode < 200 ||
         upstreamRes.statusCode >= 300
       ) {
+        terminal = true;
         res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
         upstreamRes.pipe(res);
         return;
@@ -85,73 +114,67 @@ function createGatewayServer(options = {}) {
       let committed = false;
       let buffered = Buffer.alloc(0);
       let text = "";
-      const timer = setTimeout(() => {
-        if (committed) return;
-        upstreamReq.destroy();
-        upstreamRes.destroy();
-        writeGatewayTimeout(res, config.semanticTimeoutMs);
+      const decoder = new StringDecoder("utf8");
+      semanticTimer = setTimeout(() => {
+        fail(
+          504,
+          "overloaded_error",
+          `No semantic model output within ${config.semanticTimeoutMs}ms`,
+        );
       }, config.semanticTimeoutMs);
 
+      const writeChunk = (chunk) => {
+        if (res.write(chunk)) return;
+        upstreamRes.pause();
+        res.once("drain", () => upstreamRes.resume());
+      };
       const commit = () => {
-        if (committed || res.writableEnded) return;
+        if (terminal || committed || res.writableEnded) return;
         committed = true;
-        clearTimeout(timer);
+        clearTimeout(semanticTimer);
         res.writeHead(upstreamRes.statusCode || 200, upstreamRes.headers);
-        res.write(buffered);
+        writeChunk(buffered);
         buffered = Buffer.alloc(0);
       };
 
       upstreamRes.on("data", (chunk) => {
+        if (terminal) return;
         if (committed) {
-          res.write(chunk);
+          writeChunk(chunk);
           return;
         }
         buffered = Buffer.concat([buffered, chunk]);
         if (buffered.length > config.maxBufferBytes) {
-          upstreamReq.destroy();
-          upstreamRes.destroy();
-          clearTimeout(timer);
-          writeGatewayTimeout(res, config.semanticTimeoutMs);
+          fail(
+            504,
+            "overloaded_error",
+            `No semantic model output within ${config.semanticTimeoutMs}ms`,
+          );
           return;
         }
-        text += chunk.toString("utf8");
+        text += decoder.write(chunk);
         const frames = text.split(/\r?\n\r?\n/);
         text = frames.pop() || "";
         if (frames.some(isSemanticEvent)) commit();
       });
       upstreamRes.on("end", () => {
-        clearTimeout(timer);
+        clearTimeout(semanticTimer);
+        if (terminal) return;
+        text += decoder.end();
         if (!committed && !res.writableEnded) commit();
         if (!res.writableEnded) res.end();
       });
       upstreamRes.on("error", (error) => {
-        clearTimeout(timer);
-        if (!res.headersSent) {
-          res.writeHead(502, {
-            "content-type": "text/plain",
-            connection: "close",
-          });
-        }
-        if (!res.writableEnded)
-          res.end(`upstream stream error: ${error.message}`);
+        fail(502, "upstream_error", error.message);
       });
       res.on("close", () => {
-        clearTimeout(timer);
-        if (!upstreamRes.complete) upstreamRes.destroy();
+        clearTimeout(semanticTimer);
+        if (!upstreamRes.complete) destroyUpstream();
       });
     });
 
     upstreamReq.on("error", (error) => {
-      if (res.headersSent || res.writableEnded) return;
-      res.writeHead(502, {
-        "content-type": "application/json",
-        connection: "close",
-      });
-      res.end(
-        JSON.stringify({
-          error: { type: "upstream_error", message: error.message },
-        }),
-      );
+      fail(502, "upstream_error", error.message);
     });
   });
 
@@ -171,6 +194,10 @@ if (require.main === module) {
     ),
     semanticTimeoutMs: Number(
       process.env.OMP_TTFT_TIMEOUT_MS || DEFAULTS.semanticTimeoutMs,
+    ),
+    upstreamHeaderTimeoutMs: Number(
+      process.env.OMP_TTFT_HEADER_TIMEOUT_MS ||
+        DEFAULTS.upstreamHeaderTimeoutMs,
     ),
     maxBufferBytes: Number(
       process.env.OMP_TTFT_MAX_BUFFER_BYTES || DEFAULTS.maxBufferBytes,

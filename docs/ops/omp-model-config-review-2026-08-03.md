@@ -442,7 +442,7 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 
 #### TTFT 网关运行与验收
 
-- 项目实现：`scripts/ops/omp-ttft-gateway.cjs`；协议回归：`scripts/ops/test_omp_ttft_gateway.cjs`。默认监听 `127.0.0.1:3003`，上游为 `127.0.0.1:3002`，首个可见 text/tool 输出门限为 60 秒，预提交 SSE 缓冲上限为 1 MiB。
+- 项目实现：`scripts/ops/omp-ttft-gateway.cjs`；协议回归：`scripts/ops/test_omp_ttft_gateway.cjs`。默认监听 `127.0.0.1:3003`，上游为 `127.0.0.1:3002`；响应头和首个可见 text/tool 输出门限均为 60 秒，预提交 SSE 缓冲上限为 1 MiB，超限返回 504。
 - 生产副本由 `~/.omp/guardian/proxies-supervisor.py` 管理。supervisor 使用 Windows named mutex `Local\\OMPProxiesSupervisor` 保证单 owner，并通过 HKCU `Run\\OMPProxiesSupervisor` 在用户登录时启动，不依赖管理员权限；旧的 Disabled 计划任务不再作为唯一启动保障。
 - 变更后的验证命令：`node scripts/ops/test_omp_ttft_gateway.cjs`、`py -m unittest scripts.ops.test_omp_routes`。现场验收还应确认 `127.0.0.1:3003` 监听、`GET /api/status` 返回 200，并观察一次主路由成功或 OMP fallback 成功。
 - API token、Telegram token、proxy key 只存在用户级 `~/.omp/guardian/secrets.json` 或本地 `models.yml`，不得提交到仓库；文档只记录路由和验证契约。
