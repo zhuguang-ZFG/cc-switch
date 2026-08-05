@@ -506,3 +506,13 @@ agent 的入口）。
   `~/.cc-switch/backups/cc-switch-before-local-newapi-sol-*.db`。
 - 链路：Claude Code → 3002(anthropic→openai) → ch44 → 8787(openai→WB v2)
   → WorkBuddy。两层本地转换；8787 无鉴权暴露问题因只绑 tailnet IP。
+
+## 2026-08-05：暂不增加 8787 的 Anthropic 直连适配层
+
+- 评估过为 8787 converter 增加 `/v1/messages`（含流式和 `tool_use`）适配，
+  但当前 NewAPI 路径已经验证可用，额外转换层会增加维护面和故障点。
+- 本次不修改 `~/.kimi-code/proxies/codebuddy2openai/converter.py`；Claude
+  继续使用 `local-newapi-sol`，由 NewAPI 完成 Anthropic → OpenAI 转换，
+  再经过 sol 聚合组和 codebuddy 8787 渠道。
+- 如需 NewAPI 完全停止时仍能让 Claude 直连 WorkBuddy，再单独实现并测试
+  8787 的 `/v1/messages`、流式事件和工具调用转换，不把未验证的适配层投入现网。
