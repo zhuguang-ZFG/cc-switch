@@ -365,3 +365,29 @@ Guardian 恢复该渠道时被抹掉。当前 ch3(50) 仍独占顶层，分层�
   images=yes），路由门禁 5/5 通过（本机需 PYTHONUTF8=1 跑 pytest，
   否则 GBK 解码 omp 表格输出报错）。
 - 注意：OMP 运行中进程下次重启才加载新 vision 角色。
+
+## 2026-08-05 深夜：本地桥看门狗覆盖盘点 + converter 补丁 code review
+
+**看门狗覆盖（全部有狗，无缺口）**：
+
+| 桥 | 进程 | 守护 | 状态 |
+|---|---|---|---|
+| NewAPI :3002 | new-api.exe | LocalNewAPI-Watchdog（1min 探测，AtLogOn+周期双触发） | ✅ 实测杀进程 25s 复活 |
+| codebuddy converter :8787 | pythonw converter.py | proxies-supervisor（logon，conhost --headless） | ✅ 今日 21:18 实测自动重启 |
+| agentrouter :8788 | python agentrouter-proxy.py | 同上 supervisor | ✅ |
+| atomcode bridge :9457 | node proxy.js | 同上 supervisor | ✅（另有 atomcode-bridge-watchdog 任务但已禁用，属被取代的历史遗留） |
+| cc-switch proxy :15721 | cc-switch 应用内 | 应用自身 + Guardian restart_local_proxy | ✅ |
+
+- supervisor 仅 1 实例运行（conhost→cmd→python 三层，19:13 启动）；schtasks
+  列表里同名任务出现两行是**每触发器一行**，非重复任务。
+- 遗留杂项（不影响运行，提权后可清理）：atomcode-bridge-watchdog（禁用）、
+  LocalAIProxies-Supervisor（禁用，被 -Logon 版取代）、CodebuddyHy3Converter
+  （缺 --host 的旧 logon 任务，现由启动文件夹 vbs + supervisor 双保险覆盖）。
+- agnes-relay 有独立 logon 任务但无崩溃自愈——属最低优先，暂不管。
+
+**converter 流内重试补丁 review 结论**：无 P0/P1。重试仅发生在首字节前
+（POST 幂等安全）；`yielded_any` 防重复输出；网络错误不冷却 key、可重试
+HTTP 状态才冷却，语义正确；全 key 冷却时降级 502 交 OMP fallback 链，
+符合分层设计。P3 可选（不建议现在做）：共享 keep-alive client 进一步
+降低 connect 抽签率、重试间隔加 jitter。无单元测试（converter 在仓库外），
+以 6/6 实测 + 日志内部重试救回记录作为验证。
