@@ -422,3 +422,11 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 - 新增 `scripts/ops/test_omp_routes.py`：门禁 `modelFallback=true`、`cooldown-expiry`、关键链无已知坏候选、`omp models` 可解析关键 provider。
 - 已知上游缺口：OMP 17.2.9 没有可配置首字节 deadline；极慢但最终 200 的请求仍不会触发 fallback，不能用 `retry.maxDelayMs` 冒充请求超时。
 - 验证：`omp models` 解析 6 个 provider / 22 个模型；完整 ops 测试 98/98 通过。
+
+### K3 fallback 统一为官方路由（2026-08-05 晚）
+
+- OMP 生效配置中的 `default`、`slow`、`plan`、`bigctx` 四条链已将 `codebuddy/kimi-k3` 替换为官方聚合路由 `zg-newapi/k3`。
+- 官方 K3 注册能力：1M 上下文、128K 输出、reasoning、图像；CodeBuddy K3 已从 OMP 模型注册删除。
+- CodeBuddy provider 最终只允许 `hy3-preview-agent` 和 `gpt-5.6-sol`；`deepseek-v4-flash` 同样从模型注册及所有 fallback 链删除。Flash 自动链使用 `zg-newapi/opencode-go`、`atomcode/deepseek-v4-flash`、`zg-newapi/deepseek-official-v4-flash`。
+- `hy3` 链继续使用 CodeBuddy Hy3，并以官方 `zg-newapi/k3` 兜底；designer 链保留 CodeBuddy Sol。
+- 路由门禁覆盖全部 fallback chain 和 CodeBuddy 模型注册，防 K3/DeepSeek 回流 CodeBuddy。

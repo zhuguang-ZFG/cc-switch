@@ -96,12 +96,12 @@ Channel 3 只禁用了 `claude-opus-5` ability，其他模型能力未修改。
 
 | 命令 | 实际路径 | 版本 | 默认配置 |
 |---|---|---:|---|
-| `kimi` | `C:\Users\zhugu\.kimi-code\bin\kimi.exe` | Kimi Code 0.29.1 | `C:\Users\zhugu\.kimi-code\config.toml` |
+| `kimi` | `C:\Users\zhugu\.kimi-code\bin\kimi.exe` | Kimi Code 0.32.0 | `C:\Users\zhugu\.kimi-code\config.toml` |
 | `kimi-cli` | `C:\Users\zhugu\.local\bin\kimi-cli.exe` | Python kimi-cli 1.48.0 | `C:\Users\zhugu\.kimi\config.toml` |
 
 现代 Kimi Code 官方使用 `KIMI_CODE_HOME` 覆盖数据目录；旧 Python 1.48 使用 `KIMI_SHARE_DIR`。不要让两者共用同一 `config.toml`，也不要把两者的 provider type 混写。
 
-用户日常执行的是 `kimi`，因此以下现网配置以 Kimi Code 0.29.1 schema 为准。
+用户日常执行的是 `kimi`，因此以下现网配置以 Kimi Code 0.32.0 schema 为准。
 
 ### Provider 分流
 
@@ -134,6 +134,24 @@ key = "oauth/zg-newapi"
 NewAPI Token 已从 TOML 外移到 Kimi credential storage。凭据文件和旧配置备份均属于敏感文件，不得提交。
 
 现代 Kimi Code 接受 `type = "openai"`，不接受旧 Python 1.48 的 `openai_legacy`；旧 Python 1.48 恰好相反。现代模型 schema 支持 `provider`、`model`、`max_context_size`、`capabilities`、`display_name`，并可选用 `max_output_size`、`reasoning_key`、`adaptive_thinking` 等现代字段。不要把两代 CLI 的字段约束混用。
+
+### Kimi Code 子代理模型（2026-08-05）
+
+Kimi Code 0.32.0 已启用 `secondary-model` 实验特性。主会话保持 `kimi-code/k3-256k`；新生成的子代理通过以下配置使用本地 NewAPI 的 DeepSeek V4 Flash：
+
+```toml
+[models."newapi/deepseek-v4-flash"]
+provider = "local-newapi"
+model = "deepseek-v4-flash"
+max_context_size = 1048576
+
+[secondary_model]
+model = "newapi/deepseek-v4-flash"
+```
+
+该配置已由 `kimi doctor` 校验，Python TOML 解析确认 secondary alias、provider 和 `http://127.0.0.1:3002/v1` 入口一致；NewAPI 最小调用返回 `FLASH_OK`，Kimi CLI 最小调用返回 `KIMI_FLASH_OK`。这是子代理默认绑定，不会改动主会话模型；已恢复的子代理会继续使用其原绑定模型。
+
+WorkBuddy 直连 `gpt-5.6-sol` 的长会话异常不要直接判定为上下文超限：2026-08-05 日志显示主要是网络错误与可重试 502，未出现上游 context-length 错误；OMP 的 `contextWindow = 1048576` 只是客户端预算声明，不能替代上游实测合同。
 
 ### Thinking 与上下文
 
