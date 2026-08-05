@@ -468,7 +468,7 @@ class HtmlEscapeTests(unittest.TestCase):
 
 class PowerShellInvocationTests(unittest.TestCase):
     def test_proxy_kill_uses_argv_without_shell(self):
-        """杀进程用 argv + shell=False，白名单渠道名仍嵌入过滤条件"""
+        """杀进程用 argv + shell=False，并按实际脚本名识别 node 进程。"""
         engine = make_engine({
             "restart_counts": {},
             "restarted_proxies": {},
@@ -489,7 +489,50 @@ class PowerShellInvocationTests(unittest.TestCase):
         self.assertIn("-Command", args)
         self.assertIn("shell", run.call_args.kwargs)
         self.assertIs(run.call_args.kwargs["shell"], False)
-        self.assertIn("atomcode", args[-1])
+        self.assertIn(r"proxy\.js", args[-1])
+
+    def test_proxy_start_uses_env_keys_and_shared_bind_host(self):
+        cases = (
+            ("agentrouter", 8788, "AGENTROUTER_PROXY_KEY", "agent-secret"),
+            ("codebuddy", 8787, "CODEBUDDY2OPENAI_KEY", "codebuddy-secret"),
+            ("atomcode", 9457, "LOCAL_API_KEY", "atom-secret"),
+        )
+
+        with patch.multiple(
+            guardian,
+            LOCAL_PROXY_BIND_HOST="0.0.0.0",
+            AGENTROUTER_PROXY_KEY="agent-secret",
+            CODEBUDDY_API_KEY="codebuddy-secret",
+            ATOMCODE_PROXY_KEY="atom-secret",
+        ):
+            for name, port, env_name, secret in cases:
+                with self.subTest(name=name):
+                    engine = make_engine({
+                        "restart_counts": {},
+                        "restarted_proxies": {},
+                    })
+                    engine.health = Mock()
+                    engine.health.check_local_proxy.return_value = (True, "ok", True)
+
+                    with (
+                        patch.object(guardian.subprocess, "run"),
+                        patch.object(guardian.subprocess, "Popen") as popen,
+                        patch.object(guardian.time, "sleep"),
+                        patch.object(guardian.Path, "exists", return_value=True),
+                    ):
+                        engine.restart_local_proxy(name, port)
+
+                    cmd = popen.call_args.args[0]
+                    env = popen.call_args.kwargs["env"]
+                    self.assertNotIn("--api-key", cmd)
+                    self.assertNotIn(secret, cmd)
+                    self.assertEqual(env[env_name], secret)
+                    if name == "atomcode":
+                        self.assertEqual(env["HOST"], "0.0.0.0")
+                    else:
+                        self.assertTrue(cmd[0].endswith("/python.exe"))
+                        self.assertIn("--host", cmd)
+                        self.assertEqual(cmd[cmd.index("--host") + 1], "0.0.0.0")
 
 class RetryPolicyTests(unittest.TestCase):
     def make_client(self, value):
@@ -1042,62 +1085,26 @@ class ProxyRestartTests(unittest.TestCase):
         g.telegram.send_alert.assert_not_called()
 
 
-    def test_newapi_restart_success_enters_long_cooldown(self):
-        """重启成功写 newapi_restart_time（长冷却）；失败只写 fail_time（短退避）"""
+    def test_newapi_restart_disabled_returns_false_and_alerts(self):
+        """自动重启已禁用：直接返回 False 并发送告警，不执行任何重启动作"""
         engine = make_engine({
-            "newapi_restart_time": None,
-            "newapi_restart_fail_time": None,
-            "restart_counts": {},
-            "restarted_proxies": {},
-        })
-        engine._save_state = Mock()
-        engine.newapi.get_status = Mock(return_value=True)
-        engine.telegram = Mock()
-
-        with (
-            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)),
-            patch.object(guardian.time, "sleep"),
-        ):
-            ok = engine.restart_newapi_container()
-
-        self.assertTrue(ok)
-        self.assertIsNotNone(engine.state.get("newapi_restart_time"))
-        self.assertNotIn("newapi_restart_fail_time", engine.state)
-        engine._save_state.assert_called()
-
-    def test_newapi_restart_failure_sets_short_backoff(self):
-        """重启失败只写 fail_time 短退避，不写成功冷却"""
-        engine = make_engine({
-            "newapi_restart_time": None,
-            "newapi_restart_fail_time": None,
             "restart_counts": {},
             "restarted_proxies": {},
         })
         engine._save_state = Mock()
         engine.telegram = Mock()
 
-        with (
-            patch.object(
-                guardian.subprocess,
-                "run",
-                return_value=guardian.subprocess.CompletedProcess(
-                    ["ssh"], 1, stdout=b"", stderr=b"connection refused"
-                ),
-            ),
-            patch.object(guardian.time, "sleep"),
-        ):
-            ok = engine.restart_newapi_container()
+        ok = engine.restart_newapi_container()
 
         self.assertFalse(ok)
-        self.assertIsNone(engine.state.get("newapi_restart_time"))
-        self.assertIsNotNone(engine.state.get("newapi_restart_fail_time"))
-        engine._save_state.assert_called()
+        engine.telegram.send_alert.assert_called_once()
+        self.assertEqual(
+            engine.telegram.send_alert.call_args.args[0], "NewAPI 健康检查失败"
+        )
 
-    def test_newapi_restart_timeout_sets_short_backoff(self):
-        """SSH 超时（命令未执行）只写 fail_time 短退避"""
+    def test_newapi_restart_disabled_never_calls_subprocess(self):
+        """禁用桩不得调用 subprocess：远端 VPS 已删除，不存在 SSH 重启路径"""
         engine = make_engine({
-            "newapi_restart_time": None,
-            "newapi_restart_fail_time": None,
             "restart_counts": {},
             "restarted_proxies": {},
         })
@@ -1105,43 +1112,27 @@ class ProxyRestartTests(unittest.TestCase):
         engine.telegram = Mock()
 
         with (
-            patch.object(
-                guardian.subprocess,
-                "run",
-                side_effect=guardian.subprocess.TimeoutExpired("ssh", 30),
-            ),
-            patch.object(guardian.time, "sleep"),
-        ):
-            ok = engine.restart_newapi_container()
-
-        self.assertFalse(ok)
-        self.assertIsNone(engine.state.get("newapi_restart_time"))
-        self.assertIsNotNone(engine.state.get("newapi_restart_fail_time"))
-        engine._save_state.assert_called()
-
-    def test_newapi_restart_uses_argv_ssh_without_local_fallback(self):
-        """SSH 用 argv 调用、不含 StrictHostKeyChecking=no、无本地 podman fallback"""
-        engine = make_engine({
-            "newapi_restart_time": None,
-            "newapi_restart_fail_time": None,
-            "restart_counts": {},
-            "restarted_proxies": {},
-        })
-        engine._save_state = Mock()
-        engine.telegram = Mock()
-        engine.newapi.get_status = Mock(return_value=True)
-
-        with (
-            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)) as run,
-            patch.object(guardian.time, "sleep"),
+            patch.object(guardian.subprocess, "run") as run,
+            patch.object(guardian.subprocess, "Popen") as popen,
         ):
             engine.restart_newapi_container()
 
-        args = run.call_args.args[0]
-        self.assertEqual(args[0], "ssh")  # 顶层命令是 ssh，不是本地 podman fallback
-        self.assertNotIn("StrictHostKeyChecking=no", args)
-        self.assertEqual(run.call_args.kwargs.get("shell", False), False)
-        self.assertEqual(run.call_count, 1)
+        run.assert_not_called()
+        popen.assert_not_called()
+
+    def test_newapi_restart_disabled_does_not_write_restart_state(self):
+        """禁用桩不写 newapi_restart_time / newapi_restart_fail_time 冷却状态"""
+        engine = make_engine({
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+
+        engine.restart_newapi_container()
+
+        self.assertNotIn("newapi_restart_time", engine.state)
+        self.assertNotIn("newapi_restart_fail_time", engine.state)
 
     def test_newapi_restart_respects_failure_backoff(self):
         """重启失败进入 60s 退避：冷却期内再次调用被挡住，不执行 SSH"""
@@ -1267,32 +1258,6 @@ class ProxyRestartTests(unittest.TestCase):
         g.health.check_error_rate.assert_not_called()
         g.health.check_balance.assert_not_called()
 
-    def test_newapi_restart_verification_timeout_enters_long_cooldown(self):
-        """SSH 命令已执行（rc=0）但 API 未恢复：进入长冷却，不得短退避反复重启"""
-        engine = make_engine({
-            "newapi_restart_time": None,
-            "newapi_restart_fail_time": None,
-            "restart_counts": {},
-            "restarted_proxies": {},
-        })
-        engine._save_state = Mock()
-        engine.telegram = Mock()
-        engine.newapi.get_status = Mock(return_value=False)  # 验证超时
-
-        with (
-            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)),
-            patch.object(guardian.time, "sleep"),
-        ):
-            ok = engine.restart_newapi_container()
-
-        self.assertFalse(ok)
-        # 命令已执行 → 进入长冷却（restart_time），而不是只写 60s fail_time
-        self.assertIsNotNone(engine.state.get("newapi_restart_time"))
-        self.assertNotIn("newapi_restart_fail_time", engine.state)
-        self.assertIs(engine.state.get("newapi_restart_verified"), False)
-        engine._save_state.assert_called()
-        engine.telegram.send_alert.assert_called_once()
-
     def test_newapi_restart_verification_timeout_blocks_second_call(self):
         """验证超时进入 30min 长冷却：冷却期内二次调用被挡住，不执行 SSH"""
         engine = make_engine({
@@ -1315,94 +1280,29 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertFalse(ok)
         run.assert_not_called()
 
-    def test_local_proxy_401_treated_as_alive(self):
-        """401/403 是鉴权问题，服务存活；不得触发重启"""
+    def test_local_proxy_probe_disabled_returns_healthy(self):
+        """本地代理探针已禁用：统一返回健康三元组，避免误报告警"""
         health = guardian.HealthChecker(Mock())
 
-        with patch.object(
-            guardian.urllib.request,
-            "Request",
-            wraps=guardian.urllib.request.Request,
-        ) as mk_req, patch.object(
-            guardian.urllib.request,
-            "urlopen",
-            side_effect=guardian.urllib.error.HTTPError(
-                "http://127.0.0.1:8788/v1/models", 401, "Unauthorized", None, None
-            ),
-        ):
-            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
+        ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
 
-        self.assertFalse(ok)
-        self.assertIn("鉴权失败", msg)
-        self.assertTrue(alive)
-        # 断言只探 127.0.0.1 且携带对应 Bearer key
-        called_req = mk_req.call_args.args[0]
-        self.assertIn("127.0.0.1:8788", called_req)
-        auth = mk_req.call_args.kwargs["headers"]["Authorization"]
-        self.assertEqual(auth, f"Bearer {guardian.AGENTROUTER_PROXY_KEY}")
-
-    def test_local_proxy_403_treated_as_alive(self):
-        """403 同 401：服务存活，不得触发重启"""
-        health = guardian.HealthChecker(Mock())
-
-        with patch.object(
-            guardian.urllib.request,
-            "Request",
-            wraps=guardian.urllib.request.Request,
-        ) as mk_req, patch.object(
-            guardian.urllib.request,
-            "urlopen",
-            side_effect=guardian.urllib.error.HTTPError(
-                "http://127.0.0.1:8788/v1/models", 403, "Forbidden", None, None
-            ),
-        ):
-            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
-
-        self.assertFalse(ok)
-        self.assertIn("鉴权失败", msg)
-        self.assertTrue(alive)
-        # 断言只探 127.0.0.1 且携带对应 Bearer key
-        called_req = mk_req.call_args.args[0]
-        self.assertIn("127.0.0.1:8788", called_req)
-        auth = mk_req.call_args.kwargs["headers"]["Authorization"]
-        self.assertEqual(auth, f"Bearer {guardian.AGENTROUTER_PROXY_KEY}")
-
-    def test_local_proxy_uses_inference_probe_not_models_listing(self):
-        """存活探针必须真正完成一次推理，不能把 /models 200 当可用。"""
-        health = guardian.HealthChecker(Mock())
-        response = Mock(status=200)
-        response.__enter__ = Mock(return_value=response)
-        response.__exit__ = Mock(return_value=False)
-        response.read.return_value = b'{"choices":[{"message":{"content":"pong"}}]}'
-
-        with patch.object(guardian.urllib.request, "urlopen", return_value=response), patch.object(
-            guardian.urllib.request, "Request", wraps=guardian.urllib.request.Request
-        ) as mk_req:
-            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
-
-        request_call = mk_req.call_args_list[0]
-        self.assertEqual(request_call.args[0], "http://127.0.0.1:8788/v1/chat/completions")
-        self.assertEqual(request_call.kwargs["method"], "POST")
-        self.assertIn(b'"model": "claude-opus-5"', request_call.kwargs["data"])
         self.assertTrue(ok)
         self.assertTrue(alive)
-        self.assertIn("推理正常", msg)
+        self.assertIn("探针已禁用", msg)
+        self.assertIn("agentrouter", msg)
 
-    def test_local_proxy_upstream_502_is_alive_but_unhealthy(self):
-        """代理返回 5xx 说明进程存活、上游不可用；重启代理不能解决。"""
+    def test_local_proxy_probe_disabled_makes_no_network_io(self):
+        """探针禁用后不得发起任何网络 I/O（urllib/socket 均不被调用）"""
         health = guardian.HealthChecker(Mock())
-        with patch.object(
-            guardian.urllib.request,
-            "urlopen",
-            side_effect=guardian.urllib.error.HTTPError(
-                "http://127.0.0.1:8788/v1/chat/completions", 502, "Bad Gateway", None, None
-            ),
-        ):
-            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
 
-        self.assertFalse(ok)
-        self.assertTrue(alive)
-        self.assertIn("推理失败", msg)
+        with (
+            patch.object(guardian.urllib.request, "urlopen") as urlopen,
+            patch.object(guardian.socket, "create_connection") as create_conn,
+        ):
+            health.check_local_proxy(8788, "agentrouter")
+
+        urlopen.assert_not_called()
+        create_conn.assert_not_called()
 
     def test_restart_treats_live_process_with_inference_failure_as_recovered(self):
         engine = make_engine({"restart_counts": {}, "restarted_proxies": {}})
@@ -1418,42 +1318,6 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertTrue(recovered)
         self.assertEqual(engine.state["restart_counts"]["agentrouter"], 0)
         self.assertIn("推理仍异常", engine.telegram.send_alert.call_args.args[1])
-
-    def test_local_proxy_unexpected_exception_propagates(self):
-        health = guardian.HealthChecker(Mock())
-        with patch.object(
-            guardian.urllib.request, "urlopen", side_effect=ValueError("programming error")
-        ):
-            with self.assertRaisesRegex(ValueError, "programming error"):
-                health.check_local_proxy(8788, "agentrouter")
-
-    def test_local_proxy_timeout_with_open_port_is_alive_but_unhealthy(self):
-        health = guardian.HealthChecker(Mock())
-        connection = Mock()
-        connection.__enter__ = Mock(return_value=connection)
-        connection.__exit__ = Mock(return_value=False)
-
-        with patch.object(
-            guardian.urllib.request, "urlopen", side_effect=TimeoutError("timed out")
-        ), patch.object(guardian.socket, "create_connection", return_value=connection):
-            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
-
-        self.assertFalse(ok)
-        self.assertTrue(alive)
-        self.assertIn("推理超时", msg)
-
-    def test_local_proxy_connection_failure_is_not_alive(self):
-        health = guardian.HealthChecker(Mock())
-        with patch.object(
-            guardian.urllib.request, "urlopen", side_effect=OSError("connection refused")
-        ), patch.object(
-            guardian.socket, "create_connection", side_effect=OSError("connection refused")
-        ):
-            ok, msg, alive = health.check_local_proxy(8788, "agentrouter")
-
-        self.assertFalse(ok)
-        self.assertFalse(alive)
-        self.assertIn("无响应", msg)
 
     def test_circuit_breaker_alert_sent_once(self):
         """断路器打开后重复调用只发一次告警，不刷屏"""
