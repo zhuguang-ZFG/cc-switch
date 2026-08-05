@@ -462,3 +462,18 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 3. 分块文本解析使用 `StringDecoder`，不能逐 chunk `toString("utf8")`；提交后的转发必须尊重 `res.write()` 背压。
 4. 仓库实现与 `~/.omp/guardian/` 生产副本是两个交付面。修改后必须同步副本、重启精确匹配的 gateway 进程，并现场确认 3003、`/api/status` 与 supervisor 单 owner。
 5. 文档中的测试数量是时间点证据，新增测试后必须同步更新；优先写“当前 N/N + 命令”，禁止保留与现状冲突的旧数字。
+
+
+### OMP × NewAPI 全链路最终收敛（2026-08-06）
+
+本节覆盖并修正前文“`hy3` 链有效”和“ch45 作为 NewAPI Claude/Sol 最终兜底”的历史结论；历史段落保留用于时间线，不代表当前运行态。
+
+- 删除 `fallbackChains.hy3` 与 `fallbackChains.longcat`：两者既不是 `modelRoles`，也不是精确 `provider/model` 键，OMP 不会解析，属于死配置。
+- Claude 模型定义删除全部跨模型 `contextPromotionTarget`；Claude 上下文压力走压缩，API 故障走显式 fallback，不再静默切 DeepSeek。
+- ch44 `codebuddy` 从 NewAPI 模型列表移除 `gpt-5.6-sol` / `zg-wb-gpt-5.6-sol`，保留 Hy3；WorkBuddy Sol 仅走 OMP 直连 8787，避免 NewAPI 转换路径 `unsupported_client`。
+- ch45 `agentrouter` 从 NewAPI Claude 池移除全部 Claude 别名，并固定为手动禁用 `status=2`；AgentRouter Claude/GPT 仅作为 OMP 直连 provider 使用。原因：NewAPI 聚合账号曾出现 429 饱和和负余额，导致 `45->45->45` 重试并拖慢/污染 Claude 路由。
+- ch18 短暂 502 后复测通过，已恢复启用；ch2 无可用 gpt-5.5 上游，ch62–65 反复预扣余额不足，继续保持禁用。
+- `newapi-local-smoke.py` 新增模型隔离与“人工禁用不得重新入池”门禁；已知禁用渠道必须在生产形态余额/请求验证后才能移出 allowlist。
+- Guardian 恢复阶段新增 probe-incompatible 保护：全部探针仅因 agentic-only 不兼容时，不启用、不禁用、不增加失败计数。
+
+验证证据（2026-08-06）：Guardian/smoke/OMP route **114 tests passed**；TTFT gateway **5 passed**；NewAPI live smoke `ALL OK`；3002/3003 HTTP 200；Claude `CLAUDE_CHAIN_OK` 保持 `zg-newapi-anthropic/claude-opus-5`；CodeBuddy `CODEBUDDY_CHAIN_OK` 保持 `codebuddy/gpt-5.6-sol`；default `DEFAULT_CHAIN_OK` 保持 CodeBuddy Sol；AgentRouter 直连 Claude/GPT 均成功；ch45 手动禁用观察 45 秒未重新入池。

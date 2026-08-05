@@ -28,11 +28,52 @@ PROBE_HOST = "100.83.32.95"  # local proxies bind the Tailscale IP (secrets.json
 PROXY_PORTS = {"converter": 8787, "agentrouter": 8788, "atomcode": 9457}
 SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 
-# Channels whose auto-disabled state is currently the CORRECT state (upstream
-# confirmed broken), so their presence in status=3 must not fail the smoke.
-# Remove an entry once the upstream recovers and the channel is re-enabled.
-# (ch63 centos-fr-gpt recovered 2026-08-05 ~16:44 and was removed the same day.)
-KNOWN_BROKEN_CHANNELS: set[int] = set()
+# Channels whose auto-disabled state is currently intentional. Channel 2 has
+# no upstream model; channels 62-65 fail production-shaped pre-consumption;
+# channel 45 is isolated from NewAPI because its aggregate account is negative
+# while OMP's authenticated direct AgentRouter provider remains healthy.
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 45, 62, 63, 64, 65}
+
+# These local proxy channels remain available only through explicit model
+# aliases. Keeping their base models in aggregate pools silently re-enters
+# known failure domains before OMP can apply its cross-provider fallback.
+CHANNEL_MODEL_EXCLUSIONS: dict[int, set[str]] = {
+    44: {"gpt-5.6-sol", "zg-wb-gpt-5.6-sol"},
+    45: {
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "zg-claude-opus-5",
+        "zg-agent-claude-opus-5",
+        "zg-agent-claude-opus-4-8",
+    },
+}
+
+
+def channel_policy_violations(channels: list[dict]) -> list[str]:
+    """Return aggregate-pool model assignments that violate isolation policy."""
+    violations: list[str] = []
+    for channel in channels:
+        forbidden = CHANNEL_MODEL_EXCLUSIONS.get(channel.get("id"))
+        if not forbidden:
+            continue
+        models = {
+            model.strip()
+            for model in str(channel.get("models") or "").split(",")
+            if model.strip()
+        }
+        leaked = sorted(models & forbidden)
+        if leaked:
+            violations.append(f"{channel['id']}:{channel.get('name', '')}={','.join(leaked)}")
+    return violations
+
+
+def expected_disabled_violations(channels: list[dict]) -> list[str]:
+    """Return intentional isolation channels that have re-entered service."""
+    return [
+        f"{channel['id']}:{channel.get('name', '')}"
+        for channel in channels
+        if channel.get("id") in KNOWN_BROKEN_CHANNELS and channel.get("status") == 1
+    ]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOG_FILE = REPO_ROOT / ".tmp-newapi-dx-ops.log"
@@ -159,6 +200,18 @@ def main() -> int:
             check("channels", not unexpected,
                   f"total={len(items)} enabled={enabled} auto_disabled={unexpected or 'none'}"
                   + (f" known_broken={known}" if known else ""))
+            policy_violations = channel_policy_violations(items)
+            check(
+                "channel model isolation",
+                not policy_violations,
+                f"violations={policy_violations or 'none'}",
+            )
+            disable_violations = expected_disabled_violations(items)
+            check(
+                "intentional channel disables",
+                not disable_violations,
+                f"violations={disable_violations or 'none'}",
+            )
     except Exception as e:  # noqa: BLE001
         check("channels", False, f"admin api error: {e}")
 

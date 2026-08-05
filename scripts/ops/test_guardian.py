@@ -808,6 +808,64 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(engine.newapi.enable_calls, [])
         self.assertIn(record, engine.state["disabled_channels"])
 
+    def test_auto_enabled_agentic_only_channel_is_left_unchanged(self):
+        """探针全部不相容时无健康结论，不得改变已自动启用渠道的状态。"""
+        record = {
+            "id": 57,
+            "name": "agentic-only",
+            "time": (datetime.now() - timedelta(minutes=10)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[57] = {"id": 57, "name": "agentic-only", "status": 1}
+        engine.newapi.test_results.extend(
+            [(False, "403 non_agentic_blocked: relay only serves agentic clients")] * 3
+        )
+
+        with patch.object(guardian.time, "sleep"):
+            engine.check_and_enable_recovered_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertEqual(engine.newapi.enable_calls, [])
+        self.assertNotIn("recovery_failures", record)
+        self.assertIn(record, engine.state["disabled_channels"])
+
+    def test_real_recovery_failure_is_not_hidden_by_probe_incompatibility(self):
+        """只要存在真实失败，已自动启用但未稳定的渠道仍须重新禁用。"""
+        record = {
+            "id": 57,
+            "name": "mixed-failure",
+            "time": (datetime.now() - timedelta(minutes=10)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[57] = {"id": 57, "name": "mixed-failure", "status": 1}
+        engine.newapi.test_results.extend(
+            [
+                (False, "403 non_agentic_blocked: only serves agentic clients"),
+                (False, "quota exceeded"),
+                (False, "403 non_agentic_blocked: only serves agentic clients"),
+            ]
+        )
+
+        with patch.object(guardian.time, "sleep"):
+            engine.check_and_enable_recovered_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [57])
+        self.assertEqual(record["recovery_failures"], 1)
+
     def test_recovery_preserves_current_manual_priority(self):
         """恢复可还原历史 weight，但 priority 必须保留当前人工策略值。"""
         engine = make_engine(

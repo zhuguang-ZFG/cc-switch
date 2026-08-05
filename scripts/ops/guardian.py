@@ -1114,13 +1114,22 @@ class AutoFixEngine:
             already_enabled = bool(current and current.get("status") == 1)
 
             stable_count = 0
+            probe_incompatible_count = 0
             test_msg = "无响应"
             for attempt in range(RECOVERY_TEST_COUNT):
                 test_ok, test_msg = self.newapi.test_channel(channel_id)
                 stable_count += int(test_ok)
+                probe_incompatible_count += int(not test_ok and _is_probe_incompatible(test_msg))
                 if attempt + 1 < RECOVERY_TEST_COUNT:
                     time.sleep(1)
 
+            if probe_incompatible_count == RECOVERY_TEST_COUNT:
+                self._save_state()
+                logger.info(
+                    f"Channel {channel_id} ({name}) recovery probes all incompatible; "
+                    "status left unchanged"
+                )
+                continue
             if stable_count >= RECOVERY_TEST_PASS_MIN:
                 enabled = already_enabled or self.newapi.enable_channel(channel_id)
                 if enabled and self._auto_join_pool(channel_id, name):

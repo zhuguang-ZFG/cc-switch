@@ -107,6 +107,18 @@ class OmpRouteGateTests(unittest.TestCase):
                     f"{role} contains known-sensitive-word AgentRouter Claude route: {candidates}",
                 )
 
+    def test_fallback_chain_keys_are_resolvable(self):
+        """链键必须是已配置角色、default 或精确 provider/model；禁止无消费者死配置。"""
+        text = CONFIG_FILE.read_text(encoding="utf-8")
+        roles = _model_role_entries(text)
+        chains = _fallback_chain_entries(text)
+        orphaned = sorted(
+            key
+            for key in chains
+            if key != "default" and key not in roles and "/" not in key
+        )
+        self.assertEqual(orphaned, [], f"unresolvable fallback chain keys: {orphaned}")
+
     def test_role_fallbacks_do_not_repeat_their_primary_model(self):
         text = CONFIG_FILE.read_text(encoding="utf-8")
         roles = _model_role_entries(text)
@@ -128,6 +140,18 @@ class OmpRouteGateTests(unittest.TestCase):
         self.assertIn("baseUrl: http://127.0.0.1:3003", block)
         self.assertIn("api: anthropic-messages", block)
         self.assertNotIn("apiKey: PROXY_MANAGED", block)
+
+    def test_claude_models_do_not_promote_to_non_claude_models(self):
+        """选择 Claude 后不得因上下文提升静默切换为 DeepSeek 等其他模型。"""
+        models_file = REAL_USER_HOME / ".omp" / "agent" / "models.yml"
+        text = models_file.read_text(encoding="utf-8")
+        for provider in ("zg-newapi-anthropic", "agentrouter"):
+            block = _top_level_mapping_block(text, provider)
+            with self.subTest(provider=provider):
+                self.assertFalse(
+                    "contextPromotionTarget:" in block,
+                    f"{provider} Claude models must stay Claude during context recovery",
+                )
 
 
 

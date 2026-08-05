@@ -164,6 +164,59 @@ class AdminAuthTests(unittest.TestCase):
 
         self.assertEqual((token, user_id), ("new-tok", "9"))
 
+    def test_channel_policy_rejects_agentrouter_claude_aggregate_models(self):
+        channels = [
+            {
+                "id": 45,
+                "name": "agentrouter",
+                "models": "claude-opus-5,gpt-5.6-sol",
+            }
+        ]
+
+        self.assertEqual(
+            smoke.channel_policy_violations(channels),
+            ["45:agentrouter=claude-opus-5"],
+        )
+
+    def test_channel_policy_rejects_codebuddy_sol_but_allows_hy3(self):
+        channels = [
+            {
+                "id": 44,
+                "name": "codebuddy",
+                "models": "hy3-preview-agent,zg-hy3-preview-agent,gpt-5.6-sol,zg-wb-gpt-5.6-sol",
+            }
+        ]
+
+        self.assertEqual(
+            smoke.channel_policy_violations(channels),
+            ["44:codebuddy=gpt-5.6-sol,zg-wb-gpt-5.6-sol"],
+        )
+
+    def test_channel_policy_rejects_explicit_agentrouter_claude_aliases(self):
+        channels = [
+            {
+                "id": 45,
+                "name": "agentrouter",
+                "models": "zg-agent-claude-opus-5,zg-agent-claude-opus-4-8,zg-agent-gpt-5.6-sol",
+            }
+        ]
+
+        self.assertEqual(
+            smoke.channel_policy_violations(channels),
+            ["45:agentrouter=zg-agent-claude-opus-4-8,zg-agent-claude-opus-5"],
+        )
+
+    def test_expected_disabled_channel_cannot_reenter_pool(self):
+        channels = [
+            {"id": 45, "name": "agentrouter", "status": 1},
+            {"id": 62, "name": "centos-eo-gpt", "status": 3},
+        ]
+
+        self.assertEqual(
+            smoke.expected_disabled_violations(channels),
+            ["45:agentrouter"],
+        )
+
     def test_main_fails_on_invalid_channels_response(self):
         """主流程：渠道接口 HTTP 500 或非法 items 时必须返回失败。"""
         self.addCleanup(smoke.failures.clear)

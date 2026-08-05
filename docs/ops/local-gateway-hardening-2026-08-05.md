@@ -545,3 +545,15 @@ agent 的入口）。
 验证：Guardian 完整回归 90/90；Guardian 源/生产副本和 TTFT gateway 源/生产副本 SHA-256 分别一致；Guardian 新 PID 11844 心跳更新；supervisor 仅 1 个 owner；3002/3003 均 HTTP 200；8787/8788/9457 均返回预期的未授权 401，证明进程存活且鉴权边界仍在。channel 57 现场 test 2.14 秒成功，未因历史余额错误手工禁用。
 
 **剩余人工项**：旧 `CodebuddyHy3Converter` 登录计划任务仍启用，且 action 以命令行参数保存 API key；当前 8787 已由 supervisor 环境变量方式管理，旧任务多余。普通用户执行 `schtasks /Change ... /Disable` 被拒，需要管理员终端禁用/删除该任务，并轮换已暴露在任务定义中的 CodeBuddy key。
+
+## OMP/NewAPI 故障域最终隔离（2026-08-06 02:50）
+
+本节覆盖前文 ch45 作为 NewAPI Claude/Sol 最终兜底的历史方案。生产日志确认 ch45 聚合路径出现 429 饱和、负余额 403 和 `45->45->45` 自重试；ch44 的 Sol 聚合路径出现 `unsupported_client`。最终状态：
+
+- ch44 启用但仅保留 Hy3；CodeBuddy Sol 仅走 OMP 直连 8787。
+- ch45 从 NewAPI 移除全部 Claude 模型/别名，并手动禁用 `status=2`；AgentRouter Claude/GPT 仅走 OMP 直连 8788。
+- Guardian state 将 ch45 标为 `manual=true`，禁止小探针将其重新加入聚合池。
+- ch18 瞬态 502 后复测恢复；ch2、ch62–65 因无上游或生产形态余额不足继续禁用。
+- live smoke 现在同时检查模型隔离和预期禁用状态；违反任一策略即退出非零。
+
+验证：仓库 Guardian/smoke/OMP route 114 项、TTFT gateway 5 项通过；NewAPI live smoke `ALL OK`；OMP Claude、CodeBuddy Sol、default 和 AgentRouter 直连路径均完成真实请求；ch45 观察 45 秒未重新入池。
