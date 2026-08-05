@@ -488,3 +488,21 @@ agent 的入口）。
   `/model codebuddy/gpt-5.6-sol` 直接兜底，不经过聚合层。
 - 实测：`POST 8787/v1/chat/completions` 带 Bearer 返回 200 "pong"。
   tomllib 校验通过；default_model 保持官方 k3-256k 不动。
+
+## 2026-08-05 深夜：cc-switch Claude 供应商接入 sol
+
+- 背景：`codebuddy/gpt-5.6-sol` 的 8787 converter
+  （`~/.kimi-code/proxies/codebuddy2openai/converter.py`）只暴露 OpenAI
+  协议（`/v1/chat/completions`、`/v1/models`），无 `/v1/messages`——
+  Claude Code 只吃 Anthropic 协议，**不能直连 8787**。
+- 可行路径：经 NewAPI 做协议转换。ch44 `codebuddy`（8787 直连）已在
+  `gpt-5.6-sol` 聚合组内（priority 50 weight 10，与 fengwind/vip-j3gb
+  并列，agentrouter p40 兜底）。
+- 冒烟：`POST 127.0.0.1:3002/v1/messages` model=gpt-5.6-sol
+  （cc-switch 令牌）200，3.7s 出 pong，anthropic 路径通。
+- 新增 cc-switch Claude 供应商 `local-newapi-sol`（"NewAPI 本地聚合-Sol"）：
+  克隆 `local-newapi` 结构，全部模型槽位 = `gpt-5.6-sol`，is_current=0、
+  in_failover_queue=1、category=custom。写入前 sqlite backup 至
+  `~/.cc-switch/backups/cc-switch-before-local-newapi-sol-*.db`。
+- 链路：Claude Code → 3002(anthropic→openai) → ch44 → 8787(openai→WB v2)
+  → WorkBuddy。两层本地转换；8787 无鉴权暴露问题因只绑 tailnet IP。
