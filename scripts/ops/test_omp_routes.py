@@ -41,6 +41,31 @@ def _fallback_chain_entries(text: str) -> dict[str, list[str]]:
             result[active_chain].append(stripped[2:].strip())
     return result
 
+def _model_role_entries(text: str) -> dict[str, str]:
+    """从 config.yml 提取 modelRoles；保持依赖为标准库。"""
+    result: dict[str, str] = {}
+    in_roles = False
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if stripped == "modelRoles:":
+            in_roles = True
+            continue
+        if in_roles and indent == 0 and stripped:
+            break
+        if in_roles and indent == 2 and ":" in stripped:
+            role, selector = stripped.split(":", 1)
+            result[role] = selector.strip()
+    return result
+
+
+def _base_selector(selector: str) -> str:
+    """去掉 OMP thinking 后缀，保留 provider/model。"""
+    base, separator, suffix = selector.rpartition(":")
+    if separator and suffix in {"minimal", "low", "medium", "high", "xhigh", "max", "auto"}:
+        return base
+    return selector
+
 
 class OmpRouteGateTests(unittest.TestCase):
     @classmethod
@@ -63,6 +88,29 @@ class OmpRouteGateTests(unittest.TestCase):
                     FORBIDDEN_CRITICAL_CANDIDATES.isdisjoint(candidates),
                     f"{role} contains known-sensitive-word AgentRouter Claude route: {candidates}",
                 )
+
+    def test_role_fallbacks_do_not_repeat_their_primary_model(self):
+        text = CONFIG_FILE.read_text(encoding="utf-8")
+        roles = _model_role_entries(text)
+        chains = _fallback_chain_entries(text)
+        for role, candidates in chains.items():
+            if role not in roles:
+                continue
+            primary = _base_selector(roles[role])
+            fallback_models = {_base_selector(candidate) for candidate in candidates}
+            with self.subTest(role=role):
+                self.assertNotIn(
+                    primary,
+                    fallback_models,
+                    f"{role} fallback repeats primary model {primary}: {candidates}",
+                )
+    def test_anthropic_provider_uses_semantic_ttft_gateway(self):
+        text = (REAL_USER_HOME / ".omp" / "agent" / "models.yml").read_text(encoding="utf-8")
+        block = text.split("  zg-newapi-anthropic:\n", 1)[1].split("\n  codebuddy:\n", 1)[0]
+        self.assertIn("baseUrl: http://127.0.0.1:3003", block)
+        self.assertIn("apiKey: sk-", block)
+
+
 
     def test_codebuddy_fallbacks_use_only_hy3_and_sol(self):
         chains = _fallback_chain_entries(CONFIG_FILE.read_text(encoding="utf-8"))

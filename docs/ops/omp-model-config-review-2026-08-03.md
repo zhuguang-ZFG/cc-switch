@@ -430,3 +430,19 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 - CodeBuddy provider 最终只允许 `hy3-preview-agent` 和 `gpt-5.6-sol`；`deepseek-v4-flash` 同样从模型注册及所有 fallback 链删除。Flash 自动链使用 `zg-newapi/opencode-go`、`atomcode/deepseek-v4-flash`、`zg-newapi/deepseek-official-v4-flash`。
 - `hy3` 链继续使用 CodeBuddy Hy3，并以官方 `zg-newapi/k3` 兜底；designer 链保留 CodeBuddy Sol。
 - 路由门禁覆盖全部 fallback chain 和 CodeBuddy 模型注册，防 K3/DeepSeek 回流 CodeBuddy。
+
+### OMP fallback 主模型去重与跨域优先（2026-08-05 深夜）
+
+- OMP 17.2.9 的 fallback 去重按完整 selector 字符串执行；角色主模型 `provider/model:high` 与链内无后缀的 `provider/model` 不相等，会把同一模型当成第一备用，既白耗切换又可能改变 thinking 档位。
+- 已从 `smol`、`slow`、`vision`、`tiny`、`designer`、`plan`、`bigctx` 链删除各自主模型；`task`/`commit` 原配置未重复。
+- `slow` / `plan` 主模型保持 NewAPI Opus 5；自动备用优先改为 CodeBuddy Sol → LongCat 2.0，再回到 NewAPI Opus 4.8 / GPT-5.6 Sol / K3。NewAPI 整体入口故障时，第一跳即可跨 provider，而不是在同一 NewAPI 故障域内连续换模型。
+- `vision` 主模型保持 AtomCode Qwen3-VL；备用链只保留其他具备图像能力的 Claude/GPT 路由。`designer` 主模型保持 NewAPI Sol，第一备用为 AgentRouter Sol，第二备用为 CodeBuddy Sol。
+- `scripts/ops/test_omp_routes.py` 新增门禁：按 provider/model 归一化 thinking 后缀，禁止任一角色 fallback 重复其主模型。本次 RED 在旧配置发现 7 条重复链；修复后 6/6 tests 通过，`omp models` 仍解析 6 个 provider。
+- 原生 OMP watchdog 不足以约束可见 token：NewAPI Anthropic 流会先发送 `ping`/`message_start`，即使后续长期无文本也不会触发首事件 watchdog。现改由 loopback `scripts/ops/omp-ttft-gateway.cjs`（生产副本 `~/.omp/guardian/omp-ttft-gateway.cjs`）缓存 SSE，只有收到 text/tool 内容才提交 200；60 秒无可见内容返回 504，交给 OMP fallback。supervisor 以唯一 owner 维护 `127.0.0.1:3003 → 127.0.0.1:3002`。
+
+#### TTFT 网关运行与验收
+
+- 项目实现：`scripts/ops/omp-ttft-gateway.cjs`；协议回归：`scripts/ops/test_omp_ttft_gateway.cjs`。默认监听 `127.0.0.1:3003`，上游为 `127.0.0.1:3002`，首个可见 text/tool 输出门限为 60 秒，预提交 SSE 缓冲上限为 1 MiB。
+- 生产副本由 `~/.omp/guardian/proxies-supervisor.py` 管理。supervisor 使用 Windows named mutex `Local\\OMPProxiesSupervisor` 保证单 owner，并通过 HKCU `Run\\OMPProxiesSupervisor` 在用户登录时启动，不依赖管理员权限；旧的 Disabled 计划任务不再作为唯一启动保障。
+- 变更后的验证命令：`node scripts/ops/test_omp_ttft_gateway.cjs`、`py -m unittest scripts.ops.test_omp_routes`。现场验收还应确认 `127.0.0.1:3003` 监听、`GET /api/status` 返回 200，并观察一次主路由成功或 OMP fallback 成功。
+- API token、Telegram token、proxy key 只存在用户级 `~/.omp/guardian/secrets.json` 或本地 `models.yml`，不得提交到仓库；文档只记录路由和验证契约。
