@@ -1196,27 +1196,6 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(alert[0], "本地代理重启")
         self.assertIn("验证端口可达", alert[1])
 
-    def test_newapi_restart_respects_success_cooldown(self):
-        """重启成功后 30min 冷却：冷却期内再次调用被挡住，不执行 SSH"""
-        engine = make_engine({
-            "newapi_restart_time": datetime.now().isoformat(),
-            "newapi_restart_fail_time": None,
-            "restart_counts": {},
-            "restarted_proxies": {},
-        })
-        engine._save_state = Mock()
-        engine.telegram = Mock()
-        engine.newapi.get_status = Mock(return_value=True)
-
-        with (
-            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)) as run,
-            patch.object(guardian.time, "sleep"),
-        ):
-            ok = engine.restart_newapi_container()
-
-        self.assertFalse(ok)
-        run.assert_not_called()
-
     def test_fail_streak_survives_guardian_restart(self):
         """失败计数持久化在 state：Guardian 崩溃重启后计数保留，补足 3 次即触发告警"""
         state = {

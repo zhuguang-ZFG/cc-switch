@@ -10,7 +10,6 @@ from pathlib import Path
 
 REAL_USER_HOME = Path(os.environ.get("OMP_REAL_HOME", "C:/Users/zhugu"))
 CONFIG_FILE = REAL_USER_HOME / ".omp" / "agent" / "config.yml"
-CRITICAL_ROLES = ("slow", "plan", "vision")
 FORBIDDEN_CRITICAL_CANDIDATES = {
     "agentrouter/claude-opus-5",
     "agentrouter/claude-opus-4-8",

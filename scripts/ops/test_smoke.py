@@ -58,9 +58,9 @@ class AdminAuthTests(unittest.TestCase):
         """确定性鉴权失败 401 → 重新登录并返回新 token"""
         self._assert_relogin_on(401)
 
-    def test_403_triggers_relogin(self):
-        """确定性鉴权失败 403 → 重新登录并返回新 token"""
-        self._assert_relogin_on(403)
+    def test_403_keeps_cache_and_fails_run(self):
+        """403 权限问题（重登无用）→ 本次检查失败，但保留缓存、不重新登录"""
+        self._assert_cache_kept_on(403)
 
     def _assert_relogin_on(self, check_status):
         calls = []

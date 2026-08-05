@@ -621,9 +621,9 @@ class HealthChecker:
     def check_local_endpoint(self, port: int, name: str) -> Tuple[bool, str]:
         """轻量存活检查：仅 TCP 连接探测端口，不发推理请求、不花上游费用。
 
-        周期性推理探针（check_local_proxy）为省上游费用保持禁用，但重启验证和
-        OMP 角色健康守卫不能复用该恒真桩——否则新进程秒退、端口未绑定也会
-        误报"验证正常"。端口可连即说明进程已绑定监听，足够做存活判定。
+        周期性推理探针（check_local_proxy）为省上游费用保持禁用，但重启验证
+        不能复用该恒真桩——否则新进程秒退、端口未绑定也会误报"验证正常"。
+        端口可连即说明进程已绑定监听，足够做存活判定。
         """
         try:
             with socket.create_connection((LOCAL_PROXY_PROBE_HOST, port), timeout=3):

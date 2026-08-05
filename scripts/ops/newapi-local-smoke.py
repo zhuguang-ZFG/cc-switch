@@ -104,9 +104,10 @@ def admin_auth() -> tuple[str, str]:
         )
         if status == 200:
             return token, user_id
-        if status not in (401, 403):
-            # 非确定性鉴权失败：保留缓存，本次检查交给调用方判 FAIL，
-            # 否则每次限流/抖动都会新建持久化 session，打满 AUTH_SESSION_LIMIT
+        if status != 401:
+            # 只对确定性鉴权失效(401)重新登录。403 是权限问题（重登无用），
+            # 429/5xx/抖动保留缓存——否则每次限流都会新建持久化 session，
+            # 打满 AUTH_SESSION_LIMIT。实测本 fork token 过期返回 401。
             raise RuntimeError(f"cached token check returned HTTP {status}; cache kept")
     creds = read_json(DEPLOY_DIR / "admin-credentials.json")
     _, login = http_json(
