@@ -76,3 +76,7 @@
 - **new-api.db 每日备份**：`proxies-supervisor.py` 每天 03:00 后用 SQLite
   在线 backup API 备份到 `~/.new-api-local/backups/`，保留 7 份；
   首份已生成（31.7MB）。
+- **new-api.exe 自启**：已有 HKCU Run 键 `Local NewAPI`（start.ps1，
+  端口已监听则直接退出，幂等），无需新增任务。VPS 时代的
+  `newapi-backup-pull` 任务（每天 04:30 从已退役 VPS 拉备份）已禁用，
+  其职能由本地每日备份接替。
