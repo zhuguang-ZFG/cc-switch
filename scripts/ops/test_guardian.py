@@ -1989,6 +1989,51 @@ class ProxyRestartTests(unittest.TestCase):
         # 序号 2-6 保留（2/3/4/5/6 共 5 份，其中新生成约占了最新，保留逻辑保序号大者）
         self.assertIn(f"state.json.corrupt-{fixed_ts}-1-6", names)
 
+    def test_state_backup_retention_never_deletes_newest_on_coarse_mtime(self):
+        """粗粒度 FS(mtime 全同) + 名字槽回收：最新取证必须留存(回归:曾被误删)"""
+        state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        for old in state_file.parent.glob("state.json.corrupt-*"):
+            old.unlink()
+
+        engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+        fake_now = datetime.fromisoformat("2026-07-22T00:00:00.000000")
+        real_stat = Path.stat
+
+        class _CoarseStat:
+            """模拟低精度文件系统：所有 corrupt 备份 mtime_ns 相同。"""
+
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, item):
+                return getattr(self._inner, item)
+
+            @property
+            def st_mtime_ns(self):
+                return 1754188800_000000000
+
+        def coarse_stat(self, *args, **kwargs):
+            st = real_stat(self, *args, **kwargs)
+            if self.name.startswith("state.json.corrupt-"):
+                return _CoarseStat(st)
+            return st
+
+        with patch.object(guardian.logger, "error"):
+            with patch.object(guardian, "datetime", wraps=guardian.datetime) as dt:
+                dt.now.return_value = fake_now
+                with patch.object(Path, "stat", coarse_stat):
+                    for i in range(7):
+                        state_file.write_text(f"{{ bad {i}", encoding="utf-8")
+                        engine._load_state()
+
+        remaining = {
+            p.read_bytes() for p in state_file.parent.glob("state.json.corrupt-*")
+        }
+        self.assertEqual(len(remaining), 5)
+        # 最新取证（第 7 次损坏）必须在
+        self.assertIn(b"{ bad 6", remaining)
+
 class OmpRoleTests(unittest.TestCase):
     def test_localhost_role_endpoint_is_actively_probed_with_key(self):
         """本地代理只绑 127.0.0.1：OMP 角色端点只探 localhost，不探 Tailscale"""

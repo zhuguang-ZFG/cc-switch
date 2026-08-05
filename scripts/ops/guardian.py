@@ -722,6 +722,7 @@ class AutoFixEngine:
             except (json.JSONDecodeError, ValueError) as e:
                 # 仅内容损坏（解析/类型错误）才备份留证——OSError 是 I/O 问题，不搬文件
                 # 独占创建（xb）防同名覆盖：ns+pid 撞名时用计数器后缀重试
+                backup = None
                 try:
                     raw = STATE_FILE.read_bytes()
                     base = f"state.json.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S%f')}-{os.getpid()}"
@@ -738,14 +739,20 @@ class AutoFixEngine:
                     logger.error(f"state.json corrupted, backed up to {backup}: {e}")
                 except OSError as be:
                     logger.error(f"state.json corrupted AND backup failed: {e}; backup error: {be}")
-                # 保留最近 5 个备份：按创建时间排序（mtime_ns 高精度）+ 文件名 tie-break。
-                # 仅 mtime 不够——快速连续损坏/粗粒度 FS 会撞相同 mtime_ns，
-                # 此时以文件名序号作确定性次序，避免误删最新取证
-                backups = sorted(
-                    STATE_FILE.parent.glob("state.json.corrupt-*"),
+                # 保留上限 5 份取证。刚写出的这份是定义上的最新一份，先摘出来不参与
+                # 裁剪：名字槽会被回收（旧的无后缀名被删后，下次损坏又拿到同名），
+                # 粗粒度 FS 下 mtime 全同时，纯排序会把最新一份排到最前而误删。
+                created = backup if backup is not None and backup.exists() else None
+                history = sorted(
+                    (
+                        p
+                        for p in STATE_FILE.parent.glob("state.json.corrupt-*")
+                        if p != created
+                    ),
                     key=lambda p: (p.stat().st_mtime_ns, p.name),
                 )
-                for old in backups[:-5]:
+                keep = 5 - (1 if created is not None else 0)
+                for old in history[:-keep]:
                     try:
                         old.unlink()
                     except OSError:

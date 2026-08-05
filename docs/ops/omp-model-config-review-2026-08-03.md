@@ -477,3 +477,12 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 - Guardian 恢复阶段新增 probe-incompatible 保护：全部探针仅因 agentic-only 不兼容时，不启用、不禁用、不增加失败计数。
 
 验证证据（2026-08-06）：Guardian/smoke/OMP route **114 tests passed**；TTFT gateway **5 passed**；NewAPI live smoke `ALL OK`；3002/3003 HTTP 200；Claude `CLAUDE_CHAIN_OK` 保持 `zg-newapi-anthropic/claude-opus-5`；CodeBuddy `CODEBUDDY_CHAIN_OK` 保持 `codebuddy/gpt-5.6-sol`；default `DEFAULT_CHAIN_OK` 保持 CodeBuddy Sol；AgentRouter 直连 Claude/GPT 均成功；ch45 手动禁用观察 45 秒未重新入池。
+
+### aliyun-qwen38 接入 OMP（2026-08-06）
+
+- NewAPI ch31 `aliyun-qwen38` 已启用，公开模型 ID 为 `qwen3.8-max`，OpenAI-compatible 聚合路径为 `zg-newapi/qwen3.8-max`。
+- 按阿里云官方模型页注册能力：1,000,000 context、131,072 max output、reasoning、text+image 输入；官方同时声明 Function Calling 支持。
+- 现场 NewAPI 非流式请求返回 `reasoning_content` 和 `QWEN38_PROBE_OK`；OMP `:high` 路由返回 `QWEN38_OMP_OK`，TTFT 2.26 秒。
+- OMP 工具调用烟测真实调用 `read package.json:1-3`，第二轮返回 `QWEN38_TOOL_OK`，证明 NewAPI → OMP Function Calling 链路可用。
+- 本次仅注册为可手动选择模型，不改 `default`、角色分配或 fallback 顺序；`~/.omp/agent/models.yml` 现存备份为 `models.yml.20260805-bak`（本次未新增独立备份）。
+- `scripts/ops/test_omp_routes.py` 增加规格门禁，防止模型 ID、上下文、输出上限、reasoning 或图像能力漂移。

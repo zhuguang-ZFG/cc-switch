@@ -180,6 +180,25 @@ class OmpRouteGateTests(unittest.TestCase):
         }
         self.assertEqual(registered, ALLOWED_CODEBUDDY_MODELS)
 
+    def test_qwen38_max_registration_matches_channel_contract(self):
+        """aliyun-qwen38 必须按官方 1M/128K reasoning+vision 能力注册。"""
+        models_file = REAL_USER_HOME / ".omp" / "agent" / "models.yml"
+        block = _top_level_mapping_block(models_file.read_text(encoding="utf-8"), "zg-newapi")
+        expected = (
+            "    - id: qwen3.8-max\n"
+            "      name: Qwen 3.8 Max (Aliyun Token Plan ch31)\n"
+            "      reasoning: true\n"
+            "      input:\n"
+            "      - text\n"
+            "      - image\n"
+            "      contextWindow: 1000000\n"
+            "      maxTokens: 131072"
+        )
+        self.assertTrue(
+            expected in block,
+            "zg-newapi/qwen3.8-max registration is missing or has incorrect capabilities",
+        )
+
     def test_omp_can_resolve_registered_models(self):
         env = os.environ.copy()
         env.update({"HOME": str(REAL_USER_HOME), "USERPROFILE": str(REAL_USER_HOME)})
