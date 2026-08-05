@@ -544,7 +544,7 @@ agent 的入口）。
 
 验证：Guardian 完整回归 90/90；Guardian 源/生产副本和 TTFT gateway 源/生产副本 SHA-256 分别一致；Guardian 新 PID 11844 心跳更新；supervisor 仅 1 个 owner；3002/3003 均 HTTP 200；8787/8788/9457 均返回预期的未授权 401，证明进程存活且鉴权边界仍在。channel 57 现场 test 2.14 秒成功，未因历史余额错误手工禁用。
 
-**剩余人工项**：旧 `CodebuddyHy3Converter` 登录计划任务仍启用，且 action 以命令行参数保存 API key；当前 8787 已由 supervisor 环境变量方式管理，旧任务多余。普通用户执行 `schtasks /Change ... /Disable` 被拒，需要管理员终端禁用/删除该任务，并轮换已暴露在任务定义中的 CodeBuddy key。
+**人工项已完成（2026-08-06 03:03）**：旧 `CodebuddyHy3Converter` 登录计划任务已先导出 XML 到 `~/.omp/guardian/task-backups/CodebuddyHy3Converter.xml`，随后经 UAC 管理员权限删除；`schtasks /Query` 已返回“系统找不到指定的文件”。当前 8787 继续由 `proxies-supervisor.py` 管理，converter 与 supervisor 进程均存活，`/v1/models` 返回预期的未授权 401。按用户决定，本次不轮换 CodeBuddy key，也未修改 `secrets.json` 或代理配置。
 
 ## OMP/NewAPI 故障域最终隔离（2026-08-06 02:50）
 
