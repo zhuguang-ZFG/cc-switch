@@ -228,3 +228,29 @@ Guardian 全量扫描（1h × 4 轮转）、真实请求 auto_ban/自动恢复�
   严重虚高。已补 2.0/2.0（对齐 k3 档位）。注：这只影响本地配额记账，
   不影响上游真实扣费；早前"$2.8/天"的测活成本估算含此虚高成分。
 - smoke 全绿：31 渠道 24 启用、无 auto-disabled。
+
+## 2026-08-05 晚：flash 聚合 + 渠道亲和 + new-api 进程级 watchdog + 角色降本
+
+- **ch17 删除**（401 死 key 确认）；grok-4.5 池剩 ch39 单源。
+- **deepseek-v4-flash 五路聚合**：ch48(w20) + ch15(w10) + ch44(w10) +
+  ch42(w5) + ch53(w5)，实测 0.6-2.9s 全过。ch48/ch42 无需 model_mapping——
+  它们的上游原名就是 `deepseek-v4-flash`（既有 `opencode-go→deepseek-v4-flash`
+  映射是暴露名→上游名方向），反向加映射会被 fork 校验
+  `model_mapping_contains_cycle` 拒绝。ch44 原生支持；ch15 映射到
+  sensenova-6.7-flash-lite。付费官方源（ch42）压到最低权。
+- **渠道亲和一个开启**：`channel_affinity_setting.enabled=true`
+  （keep_on_channel_disabled 保持 false）。会话粘住健康渠道，
+  减少跨渠道抖动和重复故障尝试。
+- **LocalNewAPI-Watchdog 计划任务**：每分钟探测 3002，不可达则调
+  start.ps1（幂等）；AtLogOn + 每分钟双触发、IgnoreNew、conhost
+  --headless。**实测**：杀 new-api.exe 后 ~25s 自动复活（含启动 8s）。
+  脚本 `~/.new-api-local/watchdog.ps1`。
+- **OMP 角色降本/抗故障**（备份 `config.yml.20260805-195435-subagent.bak`，
+  下次启动生效）：task/commit/tiny 主模型 atomcode 单点 →
+  `zg-newapi/deepseek-v4-flash:high`（新五路聚合池；`:high` 而非 `:max`
+  因为 ch15 sensenova 只支持到 high）；smol 主模型
+  deepseek-official（付费官方）→ sensenova-6.7-flash-lite（0.5s、
+  最低价，08-04 的既定选择，后被不明漂移覆盖）。librarian 继续 @smol、
+  reviewer/security-reviewer 继续钉 sol:high（池今日已加强）。
+- claude-sonnet-5 残留确认为零（渠道/能力/OMP 三处均无）。
+- smoke 全绿：30 渠道 23 启用、无 auto-disabled。
