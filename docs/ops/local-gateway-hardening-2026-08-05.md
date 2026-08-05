@@ -441,3 +441,19 @@ agent 的入口）。
   重试，仅在失败时发生，可接受。
 - 最终 opus-5 路由：ch9 linxi(52,免费) → ch3 baibei(50,免费) /
   ch18 linxi-backup(50,免费) → ch45 agentrouter(40,限量兜底)。
+
+## 2026-08-05 深夜：cc-switch Claude 接入本地 NewAPI 聚合
+
+- 新增 Claude 供应商 `local-newapi`（"NewAPI 本地聚合"，is_current=0、
+  在 failover 队列）：`ANTHROPIC_BASE_URL=http://127.0.0.1:3002`，
+  全部模型槽位（SONNET/OPUS/FABLE/HAIKU/SUBAGENT）= `claude-opus-5`，
+  吃三层免费路由 + agentrouter 兜底 + RetryTimes=2。
+- 令牌用专用 `cc-switch`（tokens id=3）——注意 NewAPI DB 存的 key
+  **不带 sk- 前缀**，客户端用时需拼接。`local-windows-clients`（id=6）
+  remain_quota 已为负（-465 万），不宜再扩散使用。
+- 接入前实测：`POST /v1/messages` model=claude-opus-5 返回 pong
+  （首调用 37.7s 含冷启动+思考，anthropic 原生路径通）。
+- 写入前用 sqlite backup API 备份 DB 至
+  `~/.cc-switch/backups/cc-switch-before-local-newapi-*.db`。
+- 注意：cc-switch 运行中外部插入不会触发其 React Query 失效——
+  **重开窗口**才能在列表看到；切换前不影响当前供应商（林夕镜像站）。
