@@ -80,3 +80,32 @@
   端口已监听则直接退出，幂等），无需新增任务。VPS 时代的
   `newapi-backup-pull` 任务（每天 04:30 从已退役 VPS 拉备份）已禁用，
   其职能由本地每日备份接替。
+
+## 2026-08-05 晚：林夕 ch9 双 key polling 化
+
+ch9 `linxi-k40` 从单 key 改为双 key polling（对齐百倍 ch3 的 6-key
+模式），ch18 备份渠道保持独立单 key 不动。最终状态：
+
+- `key` 字段两行（旧 `…a5f6` + 新 `…7feb`），`channel_info` 为
+  `{"is_multi_key":true,"multi_key_size":2,"multi_key_status_list":{},"multi_key_polling_index":0,"multi_key_mode":"polling"}`。
+- 渠道测试 200。首次测试曾命中上游账户级 429
+  （Concurrency limit exceeded），重试即过——这是上游限制，非配置问题。
+
+### 坑：is_multi_key 无法经管理 API 翻转
+
+源码（上游 QuantumNous/new-api `controller/channel.go`）确认：
+
+- `PUT /api/channel/` 服务端强制 `channel.ChannelInfo = origin.ChannelInfo`，
+  body 里带 `channel_info` 一律被忽略；唯一例外是顶层 `multi_key_mode`
+  字段可覆写轮询模式。
+- `is_multi_key` 只在**建渠道时**（`mode:"multi_to_single"`）能置 true；
+  已存在的单 key 渠道没有任何 API 路径可转多 key。
+- body 含 `status` 键直接 400 Invalid parameters；GET 响应里 `key`
+  被脱敏为空串，从 GET 构造 PUT 必须重新显式塞真实 key，否则会清掉。
+
+可行路径（本次采用）：直接写 DB
+`UPDATE channels SET channel_info=? WHERE id=9`（BLOB 存 JSON 文本），
+再对同渠道发一次无害 PUT 触发 `InitChannelCache()` 刷新内存缓存。
+只写 DB 不刷缓存，路由层仍按旧单 key 处理，渠道测试会报
+`do request failed: upstream error`（NewAPI 把整串 "k1\nk2" 当单 key
+发上游）。
