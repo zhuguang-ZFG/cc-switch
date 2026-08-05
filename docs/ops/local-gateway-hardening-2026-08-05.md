@@ -1,6 +1,6 @@
 # 本地网关加固与 sol 通道修复（2026-08-05）
 
- VPS NewAPI 退役后本地栈（new-api.exe + 三代理 + Guardian）的第一轮加固记录。
+VPS NewAPI 退役后本地栈（new-api.exe + 三代理 + Guardian）的第一轮加固记录。
 
 ## Guardian 误报根因（"NewAPI 无响应"刷屏）
 
@@ -42,7 +42,7 @@
   （`ELECTRON_RUN_AS_NODE=1 WorkBuddy.exe`，内嵌 Node v22.21.1）。
 - 结论：**门禁只查请求体**——messages 须含 WorkBuddy 系统前言
   `This conversation is powered by <model>...<user_query> tag.`。
-  与请求头、X-IDE-*、acp-connection-id、TLS/JA3 指纹均无关
+  与请求头、X-IDE-\*、acp-connection-id、TLS/JA3 指纹均无关
   （最小头 + 前言即 200；全头 + 原生运行时但无前言仍 403）。
 - 处置：converter（codebuddy2openai）对 url 含 `freemodel` 的请求自动注入
   前言（`WB_SOL_PREAMBLE`，已有则不动）；ch44 接回
@@ -361,7 +361,7 @@ Guardian 恢复该渠道时被抹掉。当前 ch3(50) 仍独占顶层，分层�
   热态 4.2s——首次看图慢是正常现象。
 - models.yml 注册（input: text+image, 131K ctx, 8K out）；config.yml
   vision 角色及 fallback 链首候选改指 atomcode/Qwen3-VL，claude/gpt 留作
-  后备（备份 *-qwenvl.bak）。`omp models` 解析正常（atomcode 2 模型，
+  后备（备份 \*-qwenvl.bak）。`omp models` 解析正常（atomcode 2 模型，
   images=yes），路由门禁 5/5 通过（本机需 PYTHONUTF8=1 跑 pytest，
   否则 GBK 解码 omp 表格输出报错）。
 - 注意：OMP 运行中进程下次重启才加载新 vision 角色。
@@ -370,13 +370,13 @@ Guardian 恢复该渠道时被抹掉。当前 ch3(50) 仍独占顶层，分层�
 
 **看门狗覆盖（全部有狗，无缺口）**：
 
-| 桥 | 进程 | 守护 | 状态 |
-|---|---|---|---|
-| NewAPI :3002 | new-api.exe | LocalNewAPI-Watchdog（1min 探测，AtLogOn+周期双触发） | ✅ 实测杀进程 25s 复活 |
-| codebuddy converter :8787 | pythonw converter.py | proxies-supervisor（logon，conhost --headless） | ✅ 今日 21:18 实测自动重启 |
-| agentrouter :8788 | python agentrouter-proxy.py | 同上 supervisor | ✅ |
-| atomcode bridge :9457 | node proxy.js | 同上 supervisor | ✅（另有 atomcode-bridge-watchdog 任务但已禁用，属被取代的历史遗留） |
-| cc-switch proxy :15721 | cc-switch 应用内 | 应用自身 + Guardian restart_local_proxy | ✅ |
+| 桥                        | 进程                        | 守护                                                  | 状态                                                                 |
+| ------------------------- | --------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------- |
+| NewAPI :3002              | new-api.exe                 | LocalNewAPI-Watchdog（1min 探测，AtLogOn+周期双触发） | ✅ 实测杀进程 25s 复活                                               |
+| codebuddy converter :8787 | pythonw converter.py        | proxies-supervisor（logon，conhost --headless）       | ✅ 今日 21:18 实测自动重启                                           |
+| agentrouter :8788         | python agentrouter-proxy.py | 同上 supervisor                                       | ✅                                                                   |
+| atomcode bridge :9457     | node proxy.js               | 同上 supervisor                                       | ✅（另有 atomcode-bridge-watchdog 任务但已禁用，属被取代的历史遗留） |
+| cc-switch proxy :15721    | cc-switch 应用内            | 应用自身 + Guardian restart_local_proxy               | ✅                                                                   |
 
 - supervisor 仅 1 实例运行（conhost→cmd→python 三层，19:13 启动）；schtasks
   列表里同名任务出现两行是**每触发器一行**，非重复任务。
@@ -419,7 +419,7 @@ gpt-5.6-sol（1M ctx）而非 flash，改 promotion target 即可，暂未改。
 
 **处置**：ch45 agentrouter priority 50→40——此前它与 5 个免费 sol
 渠道同层混跑（w5/总48，~10% sol 流量白烧 agent 额度），降层后仅在
-免费层全挂时兜底。zg-agent-* 显式别名不受影响（那是用户主动指定
+免费层全挂时兜底。zg-agent-\* 显式别名不受影响（那是用户主动指定
 agent 的入口）。
 
 **当前配额暴露面**（已收敛到最小）：
@@ -516,3 +516,20 @@ agent 的入口）。
   再经过 sol 聚合组和 codebuddy 8787 渠道。
 - 如需 NewAPI 完全停止时仍能让 Claude 直连 WorkBuddy，再单独实现并测试
   8787 的 `/v1/messages`、流式事件和工具调用转换，不把未验证的适配层投入现网。
+
+## Guardian NewAPI 告警风暴修复（2026-08-06）
+
+**现场症状**：NewAPI 短时不可达后，Telegram 每约 75 秒重复发送“NewAPI 健康检查失败 / 自动重启已禁用”。00:35:32–00:48:14 持续重发；同一时间 `newapi_fail_streak` 累积到 149。
+
+**根因**：代码注释和测试把 `AlertManager` 的 error 冷却当作“故障期去重”，但该冷却只有 1 分钟；Guardian 实际故障周期约 75 秒，每轮都已越过冷却，因此必然放行。原测试在无时间流逝的连续调用中执行，只证明相邻瞬间调用被挡住，没有覆盖跨冷却但仍属同一故障段的场景。
+
+**修复契约**：
+
+- NewAPI 连续失败达到阈值时写入持久化 `newapi_outage_alerted=true`，同一故障段只告警一次；
+- 标记先落盘再调用 Telegram，Guardian 重启或通用冷却到期都不会重复发送；
+- NewAPI 健康恢复时同时清零 `newapi_fail_streak` 并删除 `newapi_outage_alerted`，下一次独立故障可以重新告警；
+- `AlertManager` 冷却保留为附加防抖，但不再承担故障段状态语义。
+
+**测试与现场证据**：新增跨过 2 分钟冷却仍只调用一次、恢复后重新武装两项回归；Guardian 完整回归 87/87 通过。同步生产副本并恢复 `start.bat` 持久 owner 后，NewAPI `/api/status` HTTP 200，心跳 PID 27668 更新，state 为 `newapi_fail_streak=0` 且无 outage 标记；00:49 后日志无新的 `NewAPI health failure`。
+
+**经验**：时间冷却只能表达频率，不能表达故障生命周期。需要“每段一次”的通知必须有显式、可持久化的 outage state，并测试“时间已跨过冷却但故障尚未恢复”的路径。

@@ -1251,6 +1251,62 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(g.autofix.restart_newapi_container.call_count, 1)
         self.assertEqual(state["newapi_fail_streak"], 4)
 
+    def test_newapi_outage_alerts_once_even_after_cooldown(self):
+        """持续故障跨过通用 1 分钟冷却后仍只告警一次，直到恢复。"""
+        state = {"restart_counts": {}, "newapi_fail_streak": 2}
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (False, "down")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = state
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = guardian.AlertManager(Mock())
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+        g.alerts.last_alerts["newapi_health"] -= timedelta(minutes=2)
+        g._check_cycle()
+
+        self.assertEqual(g.autofix.restart_newapi_container.call_count, 1)
+        self.assertTrue(state["newapi_outage_alerted"])
+
+    def test_newapi_recovery_rearms_outage_alert(self):
+        """恢复会清除故障段标记，下一次新故障可再次告警。"""
+        state = {
+            "restart_counts": {},
+            "newapi_fail_streak": 9,
+            "newapi_outage_alerted": True,
+        }
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.side_effect = [(True, "ok"), (False, "down")]
+        g.health.check_local_proxy.return_value = (True, "ok", True)
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = state
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = guardian.AlertManager(Mock())
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        g._check_cycle()
+        self.assertEqual(state["newapi_fail_streak"], 0)
+        self.assertNotIn("newapi_outage_alerted", state)
+
+        state["newapi_fail_streak"] = guardian.NEWAPI_FAIL_THRESHOLD - 1
+        g._check_cycle()
+        self.assertEqual(g.autofix.restart_newapi_container.call_count, 1)
+        self.assertTrue(state["newapi_outage_alerted"])
+
 
     def test_fail_streak_persisted_on_every_failure(self):
         """streak 每次递增都必须 _save_state，Guardian 崩溃后计数保留"""

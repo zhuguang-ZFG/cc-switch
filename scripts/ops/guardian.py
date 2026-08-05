@@ -1926,18 +1926,27 @@ class Guardian:
         # 1. NewAPI 健康：连续 NEWAPI_FAIL_THRESHOLD 次失败才触发破坏性重启。
         newapi_ok, newapi_msg = self.health.check_newapi()
         if newapi_ok:
+            state_changed = False
             if self.autofix.state.get("newapi_fail_streak", 0):
                 self.autofix.state["newapi_fail_streak"] = 0
+                state_changed = True
+            if self.autofix.state.pop("newapi_outage_alerted", None) is not None:
+                state_changed = True
+            if state_changed:
                 self.autofix._save_state()
         else:
             streak = self.autofix.state.get("newapi_fail_streak", 0) + 1
             self.autofix.state["newapi_fail_streak"] = streak
             self.autofix._save_state()
-            if streak >= NEWAPI_FAIL_THRESHOLD:
-                # 自动重启已禁用，此处只剩告警职责：streak 保留不逐轮清零，
-                # 告警走 AlertManager 冷却——否则故障期内每 ~45s 重发同一条告警
-                if self.alerts.should_alert("newapi_health", "error"):
-                    self.autofix.restart_newapi_container()
+            if (
+                streak >= NEWAPI_FAIL_THRESHOLD
+                and not self.autofix.state.get("newapi_outage_alerted")
+                and self.alerts.should_alert("newapi_health", "error")
+            ):
+                # 按故障段只告警一次；标记持久化，Guardian 重启或通用冷却到期也不重发。
+                self.autofix.state["newapi_outage_alerted"] = True
+                self.autofix._save_state()
+                self.autofix.restart_newapi_container()
 
         # 2. 本地代理健康：只有端口无响应才重启；进程存活但上游异常只告警。
         for name, info in LOCAL_PROXIES.items():
