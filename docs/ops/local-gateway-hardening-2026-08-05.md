@@ -254,3 +254,26 @@ Guardian 全量扫描（1h × 4 轮转）、真实请求 auto_ban/自动恢复�
   reviewer/security-reviewer 继续钉 sol:high（池今日已加强）。
 - claude-sonnet-5 残留确认为零（渠道/能力/OMP 三处均无）。
 - smoke 全绿：30 渠道 23 启用、无 auto-disabled。
+
+## 2026-08-05 晚：日志巡检 — claude-opus-5 路由死区修复
+
+**现象**（stdout.log 19:58-20:00）：同一客户端（local-windows-clients）
+的 claude-opus-5 请求每 ~20s 失败一次：ch3 502（百倍 Cloudflare 过载）
+→ ch45 500（agentrouter 敏感词）→ relay error。**prio40 的林夕层
+永远轮不到**——`RetryTimes=1` 只允许 2 跳，而两个顶层同时坏。
+
+**处置**：
+
+1. **ch45 摘除 `claude-opus-5`**（保留 zg-claude-opus-5 等其余模型）：
+   agentrouter 敏感词过滤对短流式请求的误杀是已知问题，让它当中间层
+   只会吃掉重试。摘除后路由：ch3(50) → 林夕 ch9/ch18(40)，1 次重试
+   恰好够到可靠层。ch3 健康时仍免费优先。
+2. **ch57 再次禁用**：活 key 额度又耗尽（$0.109 < $0.2 预扣线，
+   19:58 自动测活 403）。该 key 看来只有极小额月度额度，下期重置后
+   是否再接回待观察。
+
+**发现（非本次改动）**：ch3 优先级 57 → 50 是 **Guardian 写的**——
+`guardian.py:1151-1174` 的渠道恢复逻辑按历史记录恢复 weight/priority，
+无历史记录时默认 50。手工在 Guardian 体系外调的优先级会在下次
+Guardian 恢复该渠道时被抹掉。当前 ch3(50) 仍独占顶层，分层意图
+不受影响，接受现状；以后要调优先级需知会 Guardian 路径。
