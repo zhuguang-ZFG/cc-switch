@@ -457,3 +457,20 @@ agent 的入口）。
   `~/.cc-switch/backups/cc-switch-before-local-newapi-*.db`。
 - 注意：cc-switch 运行中外部插入不会触发其 React Query 失效——
   **重开窗口**才能在列表看到；切换前不影响当前供应商（林夕镜像站）。
+
+## 2026-08-05 深夜：Kimi Code CLI 接入本地 NewAPI 模型
+
+`~/.kimi-code/config.toml`（备份 `config.toml.20260805-224800.bak`）：
+
+- `local-newapi`（openai 型，3002/v1）令牌由 `local-windows-clients`
+  （额度已为负）换成专用 `cc-switch` 令牌（tokens id=3）。
+- 新增 anthropic 型 provider `local-newapi-claude`（3002，SDK 自拼
+  /v1/messages）——Kimi Code 原生支持 `type="anthropic"`，官方文档
+  providers.html 确认。
+- 模型注册：`newapi/gpt-5.6-sol`（1M，thinking+image+tool）、
+  `newapi/k3`（1M，efforts low/high/max）、
+  `newapi/claude-opus-5`（200K，anthropic 路径，capabilities 显式声明
+  ——自定义名不会自动识别能力）；`newapi/deepseek-v4-flash` 原有保留。
+- 实测：sol 走 openai 路径用 cc-switch 令牌 2.2s 出 pong；opus-5 的
+  anthropic 路径下午已验证。`default_model` 保持官方 k3-256k 不动，
+  切换用 `/model`；secondary_model 已是 flash。tomllib 校验通过。
