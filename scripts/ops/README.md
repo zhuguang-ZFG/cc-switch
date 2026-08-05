@@ -62,6 +62,10 @@
 - 余额不足 / INSUFFICIENT_BALANCE / credit balance / quota
 - 402 / 401 / invalid
 
+## NewAPI smoke 管理会话
+
+`newapi-local-smoke.py` 复用 `.admin-token-cache.json` 中的管理令牌，避免定时任务反复创建持久化 session 并触发 `AUTH_SESSION_LIMIT`。缓存校验仅在 HTTP 401 时重新登录；HTTP 403 表示权限问题，429/5xx/网络错误表示瞬态故障，这些响应均保留缓存并使本轮 smoke 失败。
+
 ## NewAPI 侧配置
 
 Guardian 依赖以下 NewAPI 设置（已通过 API 配置）：

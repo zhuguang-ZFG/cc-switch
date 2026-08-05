@@ -88,9 +88,9 @@ def admin_auth() -> tuple[str, str]:
     Every /api/user/login creates a server-side session, and this fork caps
     concurrent sessions (HTTP 409 AUTH_SESSION_LIMIT) — the smoke runs on a
     schedule, so an uncached login per run exhausts the limit within a day.
-    Reuse the cached token until the server rejects it with a definitive auth
-    failure (401/403); any other non-200 (429/5xx/network error) fails this
-    run but keeps the cache, so a transient blip doesn't burn a new session.
+    Reuse the cached token until the server rejects it with HTTP 401. Any
+    other non-200 response (403/429/5xx/network error) fails this run but keeps
+    the cache, so a permission issue or transient blip doesn't burn a session.
     """
     try:
         cached = read_json(TOKEN_CACHE)
