@@ -59,3 +59,20 @@
 - `scripts/ops/newapi-local-smoke.py`：NewAPI 状态 / 三代理端口 / 渠道
   自动封禁汇总（含 known-broken 白名单）/ 两条真实补全采样。
 - 16:36 运行 `ALL OK`（exit 0），日志 `.tmp-newapi-dx-ops.log`。
+
+## 第二轮（同日晚）：会话上限、阈值、备份
+
+- **管理会话上限**：本 fork 会话持久化在 `user_sessions` 表，上限 50；
+  打满后登录返回 `409 AUTH_SESSION_LIMIT`（重启 new-api.exe 不清，DB 持久）。
+  处置：清空 `user_sessions`（50→0）恢复登录；smoke 脚本改为缓存复用
+  管理令牌（`.admin-token-cache.json`，401 才重新登录）——此前每次运行
+  都新建会话，是打满的主因。注意 Guardian 用的是 users.access_token
+  （长效 API token），不受会话表影响。
+- **自动封禁阈值**：`ChannelDisableThreshold` 50s → **90s**。sol 实测
+  37–87s，贴 50s 阈值导致 centos 系渠道 flap（ch63/ch65 当天各被封一次，
+  后由自动启用恢复）；90s 覆盖 sol 长尾，Guardian 慢渠道检测不受影响。
+- **ch63 恢复**：frapi.centos.hk 约 16:44 恢复，渠道被自动启用，已移出
+  smoke 白名单（白名单现为空）。
+- **new-api.db 每日备份**：`proxies-supervisor.py` 每天 03:00 后用 SQLite
+  在线 backup API 备份到 `~/.new-api-local/backups/`，保留 7 份；
+  首份已生成（31.7MB）。

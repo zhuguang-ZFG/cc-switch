@@ -31,8 +31,8 @@ SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 # Channels whose auto-disabled state is currently the CORRECT state (upstream
 # confirmed broken), so their presence in status=3 must not fail the smoke.
 # Remove an entry once the upstream recovers and the channel is re-enabled.
-#   63 centos-fr-gpt — frapi.centos.hk returns 504 after ~62s (verified 2026-08-05)
-KNOWN_BROKEN_CHANNELS = {63}
+# (ch63 centos-fr-gpt recovered 2026-08-05 ~16:44 and was removed the same day.)
+KNOWN_BROKEN_CHANNELS: set[int] = set()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOG_FILE = REPO_ROOT / ".tmp-newapi-dx-ops.log"
@@ -79,6 +79,44 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         failures.append(name)
 
 
+TOKEN_CACHE = DEPLOY_DIR / ".admin-token-cache.json"
+
+
+def admin_auth() -> tuple[str, str]:
+    """Admin API auth with token reuse.
+
+    Every /api/user/login creates a server-side session, and this fork caps
+    concurrent sessions (HTTP 409 AUTH_SESSION_LIMIT) — the smoke runs on a
+    schedule, so an uncached login per run exhausts the limit within a day.
+    Reuse the cached token until the server rejects it, only then re-login.
+    """
+    try:
+        cached = read_json(TOKEN_CACHE)
+        token, user_id = cached["token"], str(cached.get("user_id") or "1")
+        status, _ = http_json(
+            f"{NEWAPI_BASE}/api/channel/?p=0&page_size=1",
+            headers={"Authorization": f"Bearer {token}", "New-Api-User": user_id},
+        )
+        if status == 200:
+            return token, user_id
+    except (OSError, ValueError, KeyError):
+        pass
+    creds = read_json(DEPLOY_DIR / "admin-credentials.json")
+    _, login = http_json(
+        f"{NEWAPI_BASE}/api/user/login", method="POST",
+        body={"username": creds["username"], "password": creds["password"]},
+    )
+    if not (login.get("data") or {}).get("access_token"):
+        raise RuntimeError(f"login failed: {str(login)[:160]}")
+    token = login["data"]["access_token"]
+    user_id = str((login.get("data") or {}).get("id") or "1")  # fork may omit id
+    try:
+        TOKEN_CACHE.write_text(json.dumps({"token": token, "user_id": user_id}))
+    except OSError:
+        pass
+    return token, user_id
+
+
 def main() -> int:
     # 1. NewAPI status
     status, _ = http_json(f"{NEWAPI_BASE}/api/status", timeout=8)
@@ -94,13 +132,7 @@ def main() -> int:
 
     # 3. channel summary via admin API
     try:
-        creds = read_json(DEPLOY_DIR / "admin-credentials.json")
-        _, login = http_json(
-            f"{NEWAPI_BASE}/api/user/login", method="POST",
-            body={"username": creds["username"], "password": creds["password"]},
-        )
-        token = login["data"]["access_token"]
-        user_id = (login.get("data") or {}).get("id") or "1"  # fork may omit id
+        token, user_id = admin_auth()
         _, ch = http_json(
             f"{NEWAPI_BASE}/api/channel/?p=0&page_size=200",
             headers={"Authorization": f"Bearer {token}", "New-Api-User": str(user_id)},
