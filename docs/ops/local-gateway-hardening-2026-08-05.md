@@ -474,3 +474,17 @@ agent 的入口）。
 - 实测：sol 走 openai 路径用 cc-switch 令牌 2.2s 出 pong；opus-5 的
   anthropic 路径下午已验证。`default_model` 保持官方 k3-256k 不动，
   切换用 `/model`；secondary_model 已是 flash。tomllib 校验通过。
+
+## 2026-08-05 深夜：Kimi Code CLI 接入 WorkBuddy 直连 sol
+
+`~/.kimi-code/config.toml`（备份 `config.toml.20260805-225323.bak`）：
+
+- 新增 provider `codebuddy-direct`（openai 型，
+  `http://100.83.32.95:8787/v1`）——8787 converter 只绑 tailnet IP；
+  api_key 已写入，与开机脚本 start-converter.ps1 的 --api-key 向前兼容。
+- 新增模型 alias `codebuddy/gpt-5.6-sol`（1M 上下文，thinking +
+  image_in + tool_use，display_name "GPT 5.6 Sol (WorkBuddy 直连)"），
+  与走 NewAPI 的 `newapi/gpt-5.6-sol` 区分：NewAPI 挂掉时可用
+  `/model codebuddy/gpt-5.6-sol` 直接兜底，不经过聚合层。
+- 实测：`POST 8787/v1/chat/completions` 带 Bearer 返回 200 "pong"。
+  tomllib 校验通过；default_model 保持官方 k3-256k 不动。
