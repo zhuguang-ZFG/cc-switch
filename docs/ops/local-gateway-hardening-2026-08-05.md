@@ -391,3 +391,21 @@ HTTP 状态才冷却，语义正确；全 key 冷却时降级 502 交 OMP fallba
 符合分层设计。P3 可选（不建议现在做）：共享 keep-alive client 进一步
 降低 connect 抽签率、重试间隔加 jitter。无单元测试（converter 在仓库外），
 以 6/6 实测 + 日志内部重试救回记录作为验证。
+
+## 2026-08-05 深夜：所谓"又路由了"= 上下文推广（非故障）+ models.yml 乱码修复
+
+**真相**：OMP 日志 22:06:10 记录 `Context promotion switched model on
+overflow: zg-newapi-anthropic/claude-opus-5 → zg-newapi/deepseek-v4-flash`，
+同秒 `contextTokens=214760 > contextWindow=200000`——会话超出 opus-5 的
+200K 窗口，OMP **主动**升级到 1M 窗口的 flash 以避免压缩。这是
+models.yml `contextPromotionTarget` 的设计行为，UI 模型徽章从
+Claude Opus 5 变成 DeepSeek V4 Flash 不是故障改道。
+（注：promotion 后按用户分层观 claude≈gpt，若想让长会话升到同级
+gpt-5.6-sol（1M ctx）而非 flash，改 promotion target 即可，暂未改。）
+
+**顺手修复**：models.yml 四个显示名是 GBK 二次编码乱码（"聚合池/商汤/
+官方/独立"，其中一个还夹了 U+E102 私有区字符导致普通字符串替换匹配
+不上），且池子清单过期（ch15/35/37/38/42/43/44 → 现 ch42/48/53）。
+已全部改为正确 UTF-8 中文并更新清单。路由门禁 5/5 通过。
+教训：写 models.yml 的脚本必须显式 UTF-8，Windows GBK 默认编码会
+产生这种"看起来像中文但字节不对"的乱码。
