@@ -337,3 +337,31 @@ Guardian 恢复该渠道时被抹掉。当前 ch3(50) 仍独占顶层，分层�
 付费渠道偶尔被扫到（ch42 一次）。当前 ~39 次/h。若需再降，可将
 `ERROR_SCAN_INTERVAL` 20→40（10min）或排除付费渠道，需重启 Guardian 生效
 ——暂未改动，保留观察。
+
+## 2026-08-05 深夜：flash 池"李鬼"清理 + vision 角色换 Qwen3-VL
+
+**假 flash 路由摘除**（用户发现消耗日志异常，逐层查实）：
+
+- **ch44 codebuddy**：models 列表残留 `deepseek-v4-flash`，OMP 侧虽已清理
+  codebuddy/flash，但 zg-newapi 聚合池仍把 150K+ pt 的大请求打进
+  codebuddy 上游。已从 ch44 models 摘除（池剩 5 路不受影响）。
+- **ch15 sensenova-token**：`model_mapping` 把 `deepseek-v4-flash` 映射成
+  `sensenova-6.7-flash-lite`——商汤小模型冒充 DeepSeek V4 Flash。
+  已摘除模型+映射（sensenova-6.7-flash-lite 本体保留，smol 角色不受影响）。
+- 清理后 flash 池三路全真：ch48 opencode-go(w20 主力) + ch42 deepseek-official
+  (w5 付费) + ch53 atomcode-bridge(w5)。
+- **教训**：渠道 PUT 更新必须用 adjust_weights.py 模式——GET 后 pop status、
+  key 从 DB 取（GET 掩码，空 key 会清空渠道密钥）；直接 PUT GET 原样对象
+  报 "Invalid parameters"。
+
+**vision 角色换 atomcode Qwen3-VL**（用户提议"让 atom 的另一个模型看图"）：
+
+- atomcode 网关（9457）`/v1/models` 发现第二模型 `Qwen/Qwen3-VL-8B-Instruct`。
+- 实测图像理解：纯红 PNG → "Red" 正确；**冷启动 110s**（模型装载），
+  热态 4.2s——首次看图慢是正常现象。
+- models.yml 注册（input: text+image, 131K ctx, 8K out）；config.yml
+  vision 角色及 fallback 链首候选改指 atomcode/Qwen3-VL，claude/gpt 留作
+  后备（备份 *-qwenvl.bak）。`omp models` 解析正常（atomcode 2 模型，
+  images=yes），路由门禁 5/5 通过（本机需 PYTHONUTF8=1 跑 pytest，
+  否则 GBK 解码 omp 表格输出报错）。
+- 注意：OMP 运行中进程下次重启才加载新 vision 角色。
