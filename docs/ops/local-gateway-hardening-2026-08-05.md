@@ -215,3 +215,16 @@ Guardian 日志明确 `automatic restart is disabled for the local service`，
 Guardian 全量扫描（1h × 4 轮转）、真实请求 auto_ban/自动恢复、
 `ChannelDisableThreshold=90` 均不受影响。Guardian 自身
 `FULL_SCAN_INTERVAL=240`（1h）保持不变。
+
+## 2026-08-05 晚：全系统调优扫描收尾（ch2 复活 + intern-s2 配价）
+
+- **ch2 `ai.centos.hk-gpt` 复活**：禁用渠道实测存活，gpt-5.6-sol 3/3
+  （2.2-3.0s）。已启用，prio54/w10 位于 sol 聚合池顶层（池现为
+  ch2(54) → 5×w10(prio50) → 3×w5(prio50)）。abilities 已重建。
+- **ch17 `openoneapi-grok` 确认死透**：401 无效令牌，保持禁用
+  （grok 池仅剩 ch39 单源，可接受）。
+- **intern-s2-preview 配价**：此前 ModelRatio/CompletionRatio 均无该模型，
+  按 37.5× 兜底倍率计费（3366 tok 测试扣 187k 配额），本地成本统计
+  严重虚高。已补 2.0/2.0（对齐 k3 档位）。注：这只影响本地配额记账，
+  不影响上游真实扣费；早前"$2.8/天"的测活成本估算含此虚高成分。
+- smoke 全绿：31 渠道 24 启用、无 auto-disabled。
