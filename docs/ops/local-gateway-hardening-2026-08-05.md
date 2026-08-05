@@ -109,3 +109,11 @@ ch9 `linxi-k40` 从单 key 改为双 key polling（对齐百倍 ch3 的 6-key
 只写 DB 不刷缓存，路由层仍按旧单 key 处理，渠道测试会报
 `do request failed: upstream error`（NewAPI 把整串 "k1\nk2" 当单 key
 发上游）。
+
+### 运维脚本两个凭证坑（本次实测踩中）
+
+- `admin-credentials.json` 带 UTF-8 BOM，`json.load` 裸读直接
+  JSONDecodeError——所有读该文件的脚本一律 `encoding="utf-8-sig"`
+  （smoke 脚本 `read_json` 已如此）。
+- 登录响应里令牌字段是 `data.access_token`（不是 `data.token`）；
+  用户 id 字段可能缺省，默认按 `1` 处理。
