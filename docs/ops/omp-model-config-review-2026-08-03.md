@@ -374,3 +374,23 @@ VPS（阿里云国内）直连 `apihub.agnes-ai.com` 60s 超时，但本机可�
 - 曾接入：Windows CatPaw 实时会话凭据 + 本机 Tailscale `100.83.32.95:4567` Bridge + NewAPI ch71 `catpaw-bridge` + OMP 6 个 `catpaw-*` 模型（`contextWindow=8000`/`maxTokens=4096`）。
 - **2026-08-04 移除**：实测 CatPaw REST 端点（`/api/gpt/chat/completions`）有效上下文 ≈13k tokens（单条超限返回 `code 9999 内容长度异常`；多轮超 ~13k 被服务端压缩到 ~10k），且无思维链强度参数（thinking/reasoning_effort/chain_of_thought 等全部静默忽略，推理内嵌 content）。无法支撑正经编码任务，整体下线。
 - 移除动作：Bridge 目录删除、watchdog 进程停止、Startup 启动行移除、NewAPI ch71 删除（`DELETE /api/channel/71`）、OMP models.yml 6 个 catpaw 条目删除、`secrets.json` 中 `catpaw_bridge_api_key` 删除。
+
+### 上游对照与 modelFallback 回归修复（2026-08-05 傍晚）
+
+**版本**：本地 17.2.9 = npm/GitHub 最新（2026-08-05 凌晨发布），无需升级。17.2.9 恰好修复了 subagent 显式 `model: "default"` 被路由到父会话模型的问题（issue #6438）——官方建议 task 调用省略 `model` 字段让 agent frontmatter 生效。
+
+**本轮发现并修复**：
+
+1. **`retry.modelFallback` 回归 false → 已改回 true**。08-04 02:25 现场复审记录为 `true`，当前文件却是 `false`（今天的两个备份里已是 false，翻转时点/原因无记录，疑似自动改写或某次手工未留痕）。官方默认就是 `true`；为 `false` 时 13 条 fallbackChains 全部失效，故障时只重试不切模型——此前投入的跨故障域链设计（agentrouter 沉底、opencode-go/codebuddy 独立域）等于没生效。恢复后 `cooldown-expiry` 仍保证冷却后自动回主模型。
+2. **models.yml 删除 `equivalence` 块**（16.2.12 起 inert，踩坑 4 早有记录，块一直留着）。
+3. **models.yml 删除 anyrouter provider 块**（上游 key 已失效，08-03 踩坑 10 确认"进程活着但凭据死了"；provider 本就在 `disabledProviders`，定义留着只会被误恢复）。`disabledProviders` 条目保留，防 provider discovery 重新拾取。
+
+**验证**：YAML 双文件 parse OK；10 角色 + 13 链全部引用可解析，0 断裂（脚本交叉校验）。备份 `config.yml.20260805-184358-modelfallback.bak`、`models.yml.20260805-184358-cleanup.bak`。**OMP ConfigFile 进程内缓存，改动需下次启动 OMP 生效**（官方设计，无热重载）。
+
+**社区/官方新认知（未改动，备查）**：
+
+- 官方维护者（#4317）：稀缺旗舰模型放 `plan` 杠杆最高；**不要放 `advisor`**（每个主 turn 吃一次全量增量 transcript，线性增长）；`default` 放主力干活模型。本地角色分布与此一致。
+- `fallbackChains` 只在可重试错误时触发，不会主动降级省配额；触发阈值不可配（#6764 open，单次可重试错误即可能切换——若观察到误切，这是上游行为而非本地配置）。
+- 项目层 `.omp/config.yml` 的数组键（`disabledProviders` 等）是**整体替换**而非合并全局层——最常见的配置意外，写项目级覆盖时数组要给全量。
+- `omp config reset` 是把 schema 默认值写进文件，不是删键。
+- `providers.autoThinkingMaxEffort`（17.2.0 新增，默认 `xhigh`）控制 `defaultThinkingLevel: auto` 可解析的上限；本地 `auto` + 显式 `:high` 后缀的角色不受影响，未改。
