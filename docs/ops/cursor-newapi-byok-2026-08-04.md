@@ -61,3 +61,41 @@
 ## 验证（追加）
 
 - Cursor UI 实测：`zg-hy3-preview-agent` → `HY3_OK`；`zg-deepseek-v4-flash` → `ATOM_FLASH_OK`；`zg-k3` 用户会话实测 Worked。
+
+## 追加（2026-08-05）：agentrouter / WorkBuddy sol 别名
+
+Cursor 现共 13 个 `zg-*` 模型，新增：
+
+| 模型 | 源 | 状态 |
+|------|----|----|
+| `zg-agent-claude-opus-5` | ch45 agentrouter | 配置就位；**上游待恢复**（见下） |
+| `zg-agent-claude-opus-4-8` | ch45 agentrouter | 同上 |
+| `zg-agent-gpt-5.6-sol` | ch45 agentrouter | 同上 |
+| `zg-wb-gpt-5.6-sol` | ch44 WorkBuddy | 配置就位；**上游 403**（见下） |
+
+NewAPI 备份：`one-api.before-cursor-models4-20260805-013232.db`；Cursor `state.vscdb.bak-newapi-models4-*`。
+
+### converter.py 误删恢复（2026-08-05）
+
+`~/.kimi-code/` 整目录被误清空（converter、agentrouter-proxy、config.toml、mcp.json 全丢）。已恢复：
+
+- `converter.py`：从 `github.com/HanHan666666/codebuddy2openai` 拉原版（`converter.py.orig` 留档），按 `docs/patches/workbuddy-gpt-sol-converter-keypool-2026-07-31.md` 规格重建修改版：custom 模型路由（`~/.workbuddy/models.json`）、key 池冷却（`custom_keys.json`，`CUSTOM_KEY_COOLDOWN_S=180`，req_epoch 防竞态）、WorkBuddy Electron UA/Referer/Origin 头（`WB_UA`/`WB_REFERER`/`WB_ORIGIN` 环境变量可覆盖）、错误分类（仅 502/503/504/unavailable 重试+冷却）、日志脱敏、URL 校验、`/health` 脱敏+鉴权、`/v1/models` 合并 custom。
+- 监听 `100.83.32.95:8787`（Tailscale 私密接口，供 NewAPI ch44），经 NewAPI 验证 `zg-hy3-preview-agent` 200 恢复。
+- `custom_keys.json`：用 `models.json` 的 key#4 重建（单 key；原 4-key 池其余 key 随被删文件丢失）。
+
+### 两个上游阻塞（需用户侧解决）
+
+1. **WorkBuddy `gpt-5.6-sol` 403**（`unsupported_client`）：freemodel.dev 按请求头校验 WorkBuddy 客户端。converter 改造已就位，但 WB_UA/Referer/Origin 真实值随被删修改版丢失；猜测组合均 403。恢复途径：重启 WorkBuddy 带 `--remote-debugging-port` 抓真实请求头，或用户提供。当前 `zg-wb-gpt-5.6-sol` 经网关 403。
+2. **agentrouter 上游 key 丢失**：`agentrouter-proxy.py`（含 4 个上游 key）随 `.kimi-code` 删除，GitHub 无来源；`secrets.json`/`models.yml`/daemon spec 中仅剩本地鉴权 key（三者相同，非上游 key）。恢复途径：agentrouter.org 控制台重新生成 key 后重建代理（逻辑简单：转发 `agentrouter.org`/`ps.air-outer.com` + `claude-cli/1.0.0 (external, cli)` UA + key 池）。当前 `zg-agent-*` 经网关超时（8788 未监听）。
+
+## 追加（2026-08-05 深夜）：OMP 本地代理全量恢复
+
+用户提供 agentrouter.org 上游 keys（3 个有效，去重自 4 个）+ 备用域名 `ps.air-outer.com`（大陆直连可用，无需 7897 代理；`agentrouter.org` 需经 `127.0.0.1:7897`）。
+
+- **重建 `agentrouter-proxy.py`**（`~/.kimi-code/proxies/agentrouter-proxy/`，keys 独立存 `keys.json`）：双上游（air-outer 直连 → agentrouter 走 env proxy）、`claude-cli/1.0.0 (external, cli)` UA、key 池轮询+冷却、本地鉴权（`05Otq…`，ch45 渠道 key 已从占位 `any` 修正为同值）。验证：`claude-opus-5`/`claude-opus-4-8`/`gpt-5.6-sol` 经网关 200。
+- **三个本地代理统一监听 `0.0.0.0`**（converter 8787 / agentrouter 8788 / atomcode 9457）：OMP 走 `127.0.0.1`、NewAPI ch44/45/53 走 Tailscale `100.83.32.95`，双路径都要通；均有鉴权（converter 无 key 校验、其余带本地 key）。
+  - **更正（2026-08-05 下午）**：实际生效的绑定由 `~/.omp/guardian/secrets.json` 的 `local_proxy_bind_host` 决定，当前值为 `100.83.32.95`——三个代理只绑 Tailscale 接口，`127.0.0.1` 不可达。OMP `models.yml` 中 agentrouter baseUrl 亦为 `http://100.83.32.95:8788/v1`，两个消费方都走 Tailscale IP，功能自洽；若将来要恢复 127.0.0.1 路径，把该配置改为 `0.0.0.0` 并重启代理即可。
+- **OMP 配置**（备份 `models.yml.20260805-bak` / `config.yml.20260805-bak`）：codebuddy 移除死项 `gpt-5.6-sol`（WorkBuddy 403 未解）；agentrouter 新增 `gpt-5.6-sol`（262k/32k/reasoning/images）；`config.yml` vision/designer 链的 `codebuddy/gpt-5.6-sol` → `agentrouter/gpt-5.6-sol`；`codebuddy/kimi-k3` 保留（converter 透传 CodeBuddy 后端实测 200）。
+- **OMP 全链路实测**：codebuddy glm-5.2/hy3/kimi-k3/deepseek-v4-flash 200；agentrouter claude-opus-5/4-8/gpt-5.6-sol 200；atomcode deepseek-v4-flash 200。
+
+OMP 改动需重启 OMP（或 reload）生效。Cursor 侧 13 个 `zg-*` 模型维持 8-05 早前状态（agent 三个别名现已可用，`zg-wb-gpt-5.6-sol` 仍 403）。

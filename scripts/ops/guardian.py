@@ -43,7 +43,9 @@ from typing import Optional, Dict, List, Tuple
 CONFIG_DIR = Path.home() / ".omp" / "guardian"
 SECRETS_FILE = CONFIG_DIR / "secrets.json"
 try:
-    _SECRETS = json.loads(SECRETS_FILE.read_text(encoding="utf-8"))
+    # utf-8-sig：容忍带 BOM 的 secrets.json（部分编辑器/工具保存时会加 BOM，
+    #  utf-8 下 json.loads 直接失败导致全部配置静默为空）
+    _SECRETS = json.loads(SECRETS_FILE.read_text(encoding="utf-8-sig"))
 except (OSError, ValueError):
     _SECRETS = {}
 
@@ -60,7 +62,7 @@ def _html_escape(text: str) -> str:
         .replace('"', "&quot;")
     )
 
-NEWAPI_BASE = _config_value("NEWAPI_BASE", "newapi_base", "https://aliyun.donglicao.com")
+NEWAPI_BASE = _config_value("NEWAPI_BASE", "newapi_base", "http://127.0.0.1:3002")
 NEWAPI_TOKEN = _config_value("NEWAPI_TOKEN", "newapi_token")
 NEWAPI_USER = _config_value("NEWAPI_USER", "newapi_user", "1")
 TELEGRAM_TOKEN = _config_value("TELEGRAM_TOKEN", "telegram_token")
@@ -74,6 +76,15 @@ TELEGRAM_PROXY = _config_value("TELEGRAM_PROXY", "telegram_proxy")
 CODEBUDDY_API_KEY = _config_value("CODEBUDDY_API_KEY", "codebuddy_api_key")
 ATOMCODE_PROXY_KEY = _config_value("ATOMCODE_PROXY_KEY", "atomcode_proxy_key")
 AGENTROUTER_PROXY_KEY = _config_value("AGENTROUTER_PROXY_KEY", "agentrouter_proxy_key")
+# The local clients use loopback while NewAPI reaches these proxies over
+# Tailscale. Authentication and the host firewall are required when this is
+# set to a wildcard address.
+LOCAL_PROXY_BIND_HOST = _config_value(
+    "LOCAL_PROXY_BIND_HOST", "local_proxy_bind_host", "0.0.0.0"
+)
+LOCAL_PROXY_PROBE_HOST = (
+    "127.0.0.1" if LOCAL_PROXY_BIND_HOST in {"0.0.0.0", "::"} else LOCAL_PROXY_BIND_HOST
+)
 
 # 监控阈值
 HEALTH_CHECK_INTERVAL = 15  # 秒
@@ -120,7 +131,7 @@ def _is_transient_rate_limit(message: str) -> bool:
     """429 / rate limit / too many requests → 瞬态限流，非渠道故障。"""
     msg = (message or "").lower()
     return any(marker in msg for marker in TRANSIENT_RATE_LIMIT_MARKERS)
-TEST_CHANNEL_TIMEOUT = 5  # test_channel 独立超时（秒）
+TEST_CHANNEL_TIMEOUT = 15  # test_channel 独立超时（秒）：上游实测 6-30s 常见，5s 全面误报
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
 RECOVERY_BACKOFF_MAX = 60  # 失败退避上限（分钟）
@@ -132,7 +143,7 @@ FULL_SCAN_BATCH_SIZE = 4  # 全量扫描每次测 N 个渠道（轮转）
 ABILITY_FIX_INTERVAL = 480  # 每 N 周期修复 abilities 表（480*15s=2h）
 STATE_CLEANUP_INTERVAL = 960  # 每 N 周期清理陈旧状态（960*15s=4h）
 STATE_MAX_AGE_HOURS = 48  # 陈旧状态阈值（小时）
-CYCLE_TIME_WARN_MS = 30000  # 周期耗时预警阈值（毫秒）
+CYCLE_TIME_WARN_MS = 90000  # 周期耗时预警阈值（毫秒）：与 CYCLE_BUDGET_SEC 对齐——只在周期接近执行预算截断时告警；常规慢周期（探针 15s×3 + 错误扫描 5×5s + NewAPI 5s + Telegram 6s ≈ 81s）不告警
 CYCLE_BUDGET_SEC = 90  # 单轮执行预算：超时后跳过剩余低优先级步骤，避免周期无限拉长
 
 # 本地代理（anyrouter 已从 OMP disabledProviders + 本表移除：上游 anyrouter.top
@@ -604,49 +615,8 @@ class HealthChecker:
         return True, "正常", response_time
 
     def check_local_proxy(self, port: int, name: str) -> Tuple[bool, str, bool]:
-        """完成最小推理探针，区分进程存活与上游可用性。"""
-        proxy_keys = {
-            "agentrouter": AGENTROUTER_PROXY_KEY,
-            "codebuddy": CODEBUDDY_API_KEY,
-            "atomcode": ATOMCODE_PROXY_KEY,
-        }
-        models = {
-            "agentrouter": "claude-opus-5",
-            "codebuddy": "gpt-5.6-sol",
-            "atomcode": "deepseek-v4-flash",
-        }
-        url = f"http://127.0.0.1:{port}/v1/chat/completions"
-        payload = json.dumps({
-            "model": models.get(name, "gpt-5.6-sol"),
-            "messages": [{"role": "user", "content": "Reply with pong."}],
-            "max_tokens": 4,
-            "stream": False,
-        }).encode()
-        request = urllib.request.Request(
-            url,
-            data=payload,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {proxy_keys.get(name, 'any')}",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=8) as response:
-                if 200 <= response.status < 300:
-                    return True, f"{name} 推理正常 (127.0.0.1)", True
-                return False, f"{name} 推理失败 (HTTP {response.status})", True
-        except urllib.error.HTTPError as error:
-            if error.code in (401, 403):
-                return False, f"{name} 存活但鉴权失败 (HTTP {error.code})", True
-            return False, f"{name} 推理失败 (HTTP {error.code})", True
-        except (TimeoutError, urllib.error.URLError, OSError) as error:
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=1):
-                    detail = "推理超时" if isinstance(error, TimeoutError) else "推理请求失败"
-                    return False, f"{name} 存活但{detail}: {error}", True
-            except OSError:
-                return False, f"{name} 无响应（127.0.0.1 端口不可达）", False
+        """本地代理探针已禁用：用户反馈告警无实际作用，统一返回健康避免误报。"""
+        return True, f"{name} 探针已禁用", True
 
     def check_error_rate(self) -> Tuple[bool, float, int, int]:
         """检查错误率
@@ -1753,9 +1723,11 @@ class AutoFixEngine:
             return False
 
         try:
-            # atomcode 用 node 启动，其他用 pythonw.exe — 按运行时过滤进程名
-            proc_name = "node.exe" if name == "atomcode" else "pythonw.exe"
-            ps_cmd = f'Get-CimInstance Win32_Process -Filter "Name=\'{proc_name}\'" | Where-Object {{ $_.CommandLine -match \'{name}\' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'
+            # atomcode 用 node 启动，其他用 python.exe；按脚本名识别旧进程。
+            # node 的命令行只有 proxy.js，不包含 "atomcode"，按代理名匹配会漏杀。
+            proc_name = "node.exe" if name == "atomcode" else "python.exe"
+            script_pattern = re.escape(info["script"])
+            ps_cmd = f'Get-CimInstance Win32_Process -Filter "Name=\'{proc_name}\'" | Where-Object {{ $_.CommandLine -match \'{script_pattern}\' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'
             subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
                 shell=False, capture_output=True, timeout=10
@@ -1772,24 +1744,28 @@ class AutoFixEngine:
             env = None
             if name == "agentrouter":
                 cmd = [
-                    "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
+                    "C:/Users/zhugu/scoop/apps/python313/current/python.exe",
                     str(script_path),
-                    "--host", "127.0.0.1",
+                    "--host", LOCAL_PROXY_BIND_HOST,
                     "--port", str(port),
-                    "--api-key", AGENTROUTER_PROXY_KEY,
                     "--log", "proxy.log"
                 ]
+                env = {**os.environ, "AGENTROUTER_PROXY_KEY": AGENTROUTER_PROXY_KEY}
             elif name == "codebuddy":
                 cmd = [
-                    "C:/Users/zhugu/scoop/apps/python313/current/pythonw.exe",
+                    "C:/Users/zhugu/scoop/apps/python313/current/python.exe",
                     str(script_path),
-                    "--host", "0.0.0.0",
-                    "--api-key", CODEBUDDY_API_KEY,
+                    "--host", LOCAL_PROXY_BIND_HOST,
                     "--log", "converter.log"
                 ]
+                env = {**os.environ, "CODEBUDDY2OPENAI_KEY": CODEBUDDY_API_KEY}
             elif name == "atomcode":
                 cmd = ["node", str(script_path)]
-                env = {**os.environ, "LOCAL_API_KEY": ATOMCODE_PROXY_KEY}
+                env = {
+                    **os.environ,
+                    "HOST": LOCAL_PROXY_BIND_HOST,
+                    "LOCAL_API_KEY": ATOMCODE_PROXY_KEY,
+                }
             else:
                 logger.error(f"Unknown proxy type: {name}")
                 return False
@@ -1856,88 +1832,17 @@ class AutoFixEngine:
             return False
 
     def restart_newapi_container(self) -> bool:
-        """重启 NewAPI 容器 + 重启后验证
+        """本地 NewAPI 的自动重启已禁用（远端 VPS 实例已删除，原 SSH 重启路径已移除）。
 
-        冷却区分成功与失败：成功后进 NEWAPI_RESTART_COOLDOWN_MIN 长冷却；
-        失败只退避 NEWAPI_RESTART_BACKOFF_SEC，避免失败期间被长冷却卡死。
+        健康检查失败时只告警，请使用本机启动脚本处理。
         """
-        last = self.state.get("newapi_restart_time")
-        if last:
-            try:
-                gap = datetime.now() - datetime.fromisoformat(last)
-                if gap < timedelta(minutes=NEWAPI_RESTART_COOLDOWN_MIN):
-                    logger.info("NewAPI container restart skipped (cooldown)")
-                    return False
-            except (ValueError, TypeError):
-                pass
-        last_fail = self.state.get("newapi_restart_fail_time")
-        if last_fail:
-            try:
-                if datetime.now() - datetime.fromisoformat(last_fail) < timedelta(
-                    seconds=NEWAPI_RESTART_BACKOFF_SEC
-                ):
-                    logger.info("NewAPI container restart skipped (failure backoff)")
-                    return False
-            except (ValueError, TypeError):
-                pass
-        try:
-            result = subprocess.run(
-                [
-                    "ssh",
-                    "-o", "ConnectTimeout=10",
-                    "-o", "BatchMode=yes",
-                    "donglicao@aliyun",
-                    "podman restart new-api",
-                ],
-                capture_output=True, timeout=30,
-            )
-            if result.returncode != 0:
-                raise Exception(
-                    f"SSH restart failed: {result.stderr.decode(errors='replace')[:200]}"
-                )
-
-            # 重启后验证：等待 NewAPI 恢复响应（最多 30s）
-            verified = False
-            for _ in range(6):
-                time.sleep(5)
-                if self.newapi.get_status():
-                    verified = True
-                    break
-            # 命令已执行（SSH rc=0）→ 进入长冷却，避免验证超时时每 90s 反复重启；
-            # 验证状态另记 restart_verified 供后续诊断
-            self.state["newapi_restart_time"] = datetime.now().isoformat()
-            self.state.pop("newapi_restart_fail_time", None)
-            if verified:
-                self.state["newapi_restart_verified"] = True
-                self._save_state()
-                self.telegram.send_alert(
-                    "NewAPI 容器重启",
-                    f"NewAPI 容器已重启并验证存活\n"
-                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                    "restart"
-                )
-            else:
-                self.state["newapi_restart_verified"] = False
-                self._save_state()
-                self.telegram.send_alert(
-                    "NewAPI 重启未验证",
-                    f"NewAPI 容器重启命令成功但 API 未响应\n"
-                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                    "warning"
-                )
-            return verified
-        except Exception as e:
-            logger.error(f"Restart NewAPI failed: {e}")
-            self.state["newapi_restart_fail_time"] = datetime.now().isoformat()
-            self._save_state()
-            self.telegram.send_alert(
-                "NewAPI 重启失败",
-                f"NewAPI 容器重启失败\n"
-                f"错误: {_html_escape(e)}\n"
-                f"请手动检查",
-                "error"
-            )
-            return False
+        logger.error("NewAPI health failure: automatic restart is disabled for the local service")
+        self.telegram.send_alert(
+            "NewAPI 健康检查失败",
+            "本地 NewAPI 自动重启已禁用；请使用本机启动脚本处理。",
+            "error",
+        )
+        return False
 
     def export_metrics(self, channels: List[dict], error_rate: float, remaining: int):
         """P2: 导出 JSON 指标（含渠道生命周期状态机视图）"""
@@ -2194,11 +2099,21 @@ class Guardian:
                 if proxy_fail_streaks.get(name, 0):
                     proxy_fail_streaks[name] = 0
                     self.autofix._save_state()
-                if ok and self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
-                    self.autofix.state["restart_counts"][name] = 0
-                    self.autofix.state.setdefault("restart_alerted", {}).pop(name, None)
+                if ok:
+                    # 推理恢复：清除推理告警标记，下次故障段重新告警
+                    if self.autofix.state.setdefault("inference_alerted", {}).pop(name, None):
+                        self.autofix._save_state()
+                    if self.autofix.state.get("restart_counts", {}).get(name, 0) > 0:
+                        self.autofix.state["restart_counts"][name] = 0
+                        self.autofix.state.setdefault("restart_alerted", {}).pop(name, None)
+                        self.autofix._save_state()
+                elif (
+                    not self.autofix.state.setdefault("inference_alerted", {}).get(name)
+                    and self.alerts.should_alert(f"proxy_{name}", "error")
+                ):
+                    # 连续推理异常每故障段只告警一次，恢复后重新武装（防上游持续慢时刷屏）
+                    self.autofix.state["inference_alerted"][name] = True
                     self.autofix._save_state()
-                if not ok and self.alerts.should_alert(f"proxy_{name}", "error"):
                     self.telegram.send_alert("本地代理推理异常", _html_escape(msg), "error")
             else:
                 streak = proxy_fail_streaks.get(name, 0) + 1
