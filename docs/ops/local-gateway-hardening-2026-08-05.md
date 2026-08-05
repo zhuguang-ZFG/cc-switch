@@ -49,6 +49,8 @@
   `gpt-5.6-sol` + `zg-wb-gpt-5.6-sol`（mapping→`gpt-5.6-sol`）。
 - 验证：8787 直出 200（17.8s）→ ch44 渠道测试 200 → 网关 e2e
   `zg-wb-gpt-5.6-sol` 200（133s，sol 本身慢）。
+- key 池：`custom_keys.json` 的 `gpt-5.6-sol` 已满编 4 个 `fe_oa_` key，
+  当晚逐一实测全部 200（10–21s），converter 单 key 失败冷却 180s 自动切换。
 - 注意：echo 抓包脚本曾把 body 截断到 4000B，排查 body 门禁时需要全量 body
   的话记得改 `tmp/wb-echo-server.mjs` 的 slice。
 
