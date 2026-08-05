@@ -394,3 +394,18 @@ VPS（阿里云国内）直连 `apihub.agnes-ai.com` 60s 超时，但本机可�
 - 项目层 `.omp/config.yml` 的数组键（`disabledProviders` 等）是**整体替换**而非合并全局层——最常见的配置意外，写项目级覆盖时数组要给全量。
 - `omp config reset` 是把 schema 默认值写进文件，不是删键。
 - `providers.autoThinkingMaxEffort`（17.2.0 新增，默认 `xhigh`）控制 `defaultThinkingLevel: auto` 可解析的上限；本地 `auto` + 显式 `:high` 后缀的角色不受影响，未改。
+
+### codebuddy/gpt-5.6-sol 回归 OMP（2026-08-05 晚）
+
+08-03 因 WorkBuddy 硬 403 移除（修复链 6）的 `codebuddy/gpt-5.6-sol`，在
+converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后重新接入：
+
+- **直连实测**：`POST 100.83.32.95:8787/v1/chat/completions` model=
+  `gpt-5.6-sol` → 200（9.6s），prompt 489 tok 证实前言注入生效
+- **models.yml**：codebuddy provider 补回 `gpt-5.6-sol`（reasoning: true、
+  contextWindow 1048576、maxTokens 128000，与 zg-newapi 同名条目对齐）
+- **config.yml**：designer 链插入第 3 位（zg-newapi → **codebuddy 直连** →
+  claude-opus-5）——直连 converter 绕开 NewAPI，是独立故障域，配合今日
+  恢复的 `modelFallback: true` 真正可用
+- 备份 `*.20260805-191731-wbsol.bak`；YAML + 10 角色 13 链交叉校验 0 断裂；
+  `omp models` 显示 codebuddy (4)。改动需下次 OMP 启动生效
