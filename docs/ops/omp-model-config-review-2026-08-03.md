@@ -437,7 +437,7 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 - 已从 `smol`、`slow`、`vision`、`tiny`、`designer`、`plan`、`bigctx` 链删除各自主模型；`task`/`commit` 原配置未重复。
 - `slow` / `plan` 主模型保持 NewAPI Opus 5；自动备用优先改为 CodeBuddy Sol → LongCat 2.0，再回到 NewAPI Opus 4.8 / GPT-5.6 Sol / K3。NewAPI 整体入口故障时，第一跳即可跨 provider，而不是在同一 NewAPI 故障域内连续换模型。
 - `vision` 主模型保持 AtomCode Qwen3-VL；备用链只保留其他具备图像能力的 Claude/GPT 路由。`designer` 主模型保持 NewAPI Sol，第一备用为 AgentRouter Sol，第二备用为 CodeBuddy Sol。
-- `scripts/ops/test_omp_routes.py` 新增门禁：按 provider/model 归一化 thinking 后缀，禁止任一角色 fallback 重复其主模型。本次 RED 在旧配置发现 7 条重复链；修复后 6/6 tests 通过，`omp models` 仍解析 6 个 provider。
+- `scripts/ops/test_omp_routes.py` 新增门禁：按 provider/model 归一化 thinking 后缀，禁止任一角色 fallback 重复其主模型；同时验证 Anthropic provider 固定走 `127.0.0.1:3003`、API 为 `anthropic-messages` 且不得回退到 `PROXY_MANAGED`。本次 RED 在旧配置发现 7 条重复链；当前路由门禁 7/7 通过，`omp models` 仍解析 6 个 provider。
 - 原生 OMP watchdog 不足以约束可见 token：NewAPI Anthropic 流会先发送 `ping`/`message_start`，即使后续长期无文本也不会触发首事件 watchdog。现改由 loopback `scripts/ops/omp-ttft-gateway.cjs`（生产副本 `~/.omp/guardian/omp-ttft-gateway.cjs`）缓存 SSE，只有收到 text/tool 内容才提交 200；60 秒无可见内容返回 504，交给 OMP fallback。supervisor 以唯一 owner 维护 `127.0.0.1:3003 → 127.0.0.1:3002`。
 
 #### TTFT 网关运行与验收
@@ -445,4 +445,20 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 - 项目实现：`scripts/ops/omp-ttft-gateway.cjs`；协议回归：`scripts/ops/test_omp_ttft_gateway.cjs`。默认监听 `127.0.0.1:3003`，上游为 `127.0.0.1:3002`；响应头和首个可见 text/tool 输出门限均为 60 秒，预提交 SSE 缓冲上限为 1 MiB，超限返回 504。
 - 生产副本由 `~/.omp/guardian/proxies-supervisor.py` 管理。supervisor 使用 Windows named mutex `Local\\OMPProxiesSupervisor` 保证单 owner，并通过 HKCU `Run\\OMPProxiesSupervisor` 在用户登录时启动，不依赖管理员权限；旧的 Disabled 计划任务不再作为唯一启动保障。
 - 变更后的验证命令：`node scripts/ops/test_omp_ttft_gateway.cjs`、`py -m unittest scripts.ops.test_omp_routes`。现场验收还应确认 `127.0.0.1:3003` 监听、`GET /api/status` 返回 200，并观察一次主路由成功或 OMP fallback 成功。
-- API token、Telegram token、proxy key 只存在用户级 `~/.omp/guardian/secrets.json` 或本地 `models.yml`，不得提交到仓库；文档只记录路由和验证契约。
+- 详细故障复盘、防复发状态机规则与必测矩阵见 `docs/ops/omp-ttft-gateway-lessons-2026-08-06.md`。
+
+#### 竞态缺陷复盘与防复发经验（2026-08-06）
+
+**根因分类**：D（测试覆盖缺口）+ E（隐式状态假设）+ C（运行时副本传播）。初版只验证 keepalive 超时、文本成功和非 SSE 透传，未验证缓冲溢出与上游响应头阶段；实现还假设 `upstreamRes.destroy()` 后不会再触发能提交 200 的结束路径。
+
+**已复现的失败链**：thinking-only SSE 的首个 Node chunk 可直接超过 `maxBufferBytes`；旧代码先销毁上游并尝试返回 504，但没有设置统一终态，随后 `end` 路径仍调用 `commit()`，客户端最终收到截断 thinking 流和 HTTP 200。这个结果证明“调用 `res.end()`”不能替代显式状态机，也不能假设 destroy 后没有后续事件。
+
+**另一个边界缺口**：语义计时器只在收到上游响应头后创建；若上游接受连接但不返回响应头，请求不受 60 秒可见输出门限约束。现在请求创建即启动独立 header timer，收到 `response` 后清除，再启动 semantic timer。
+
+**防复发规则**：
+
+1. timeout、buffer overflow、upstream error、client abort、upstream end 必须共享单一 terminal state；任何失败先设置终态，再销毁流，所有后续 handler 首先检查终态。
+2. SSE 网关测试必须分别覆盖 header timeout、semantic timeout、thinking 非语义、buffer overflow、正常 text/tool commit 和非 SSE 透传。不能用“happy path + 一个 timeout”代表完整状态机。
+3. 分块文本解析使用 `StringDecoder`，不能逐 chunk `toString("utf8")`；提交后的转发必须尊重 `res.write()` 背压。
+4. 仓库实现与 `~/.omp/guardian/` 生产副本是两个交付面。修改后必须同步副本、重启精确匹配的 gateway 进程，并现场确认 3003、`/api/status` 与 supervisor 单 owner。
+5. 文档中的测试数量是时间点证据，新增测试后必须同步更新；优先写“当前 N/N + 命令”，禁止保留与现状冲突的旧数字。
