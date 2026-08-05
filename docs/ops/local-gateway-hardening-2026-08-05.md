@@ -177,3 +177,28 @@ models=`claude-opus-5,claude-opus-4-8,zg-claude-opus-5`、prio40/w6/
 auto_ban=0，渠道测试 4/4 通过（~2s）。两枚欠费 key 仍存于每日备份
 （7 天保留期），下月额度重置后如需可经 PUT 补回。claude-opus-5
 启用池：ch3(prio57) → ch45(prio50) → ch9/ch18/ch57(prio40)。
+
+## 2026-08-05 晚：自愈体系活体核验 + supervisor 自启修复
+
+**核验证据**（19:10 前后）：
+
+- Guardian（pid 33460，心跳 <1min，计划任务 Running）真实工作：全量扫描、
+  软失败防抖（`soft failure 1/3`）、周期 abilities 修复、周期备份均在执行；
+  19:04 人工重启 new-api 时正确识别不可用窗口并跳过依赖工作（无误报）。
+- proxies-supervisor 今日有**真实自愈动作**：17:05 探测 codebuddy 8787
+  不可达 → 自动重启成功。17:47 完成每日备份（31.7MB）。
+- 三代理绑定 `100.83.32.95`（Tailscale），探测须打该地址；127.0.0.1
+  拒连是绑定地址差异，不是故障。
+
+**修复的漏洞**：`LocalAIProxies-Supervisor` 计划任务处于 **Disabled**
+（当日运行实例是手动拉起的，重启机器后 supervisor 不会回来）。该任务
+注册时为提权上下文，非提权 shell 无法 Enable（0x80070005）——改为新建
+`LocalAIProxies-Supervisor-Logon`：当前用户、AtLogOn + 每分钟 watchdog
+双触发、`IgnoreNew`、conhost --headless。手动实例已清理，Task Scheduler
+为 supervisor 唯一 runtime owner（实测 Start-ScheduledTask 拉起成功，
+kill 后回归单实例）。旧 Disabled 任务留待提权窗口删除，无功能影响。
+
+**已知残余（设计决策，未改）**：new-api.exe 本身无进程级自动重启——
+Guardian 日志明确 `automatic restart is disabled for the local service`，
+自启只有 HKCU Run 键（登录时生效）。若运行中崩溃且无人工介入，
+需等下次登录。如需进程级看护，可给 new-api 加同款 watchdog 任务。
