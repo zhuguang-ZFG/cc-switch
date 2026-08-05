@@ -202,3 +202,16 @@ kill 后回归单实例）。旧 Disabled 任务留待提权窗口删除，无�
 Guardian 日志明确 `automatic restart is disabled for the local service`，
 自启只有 HKCU Run 键（登录时生效）。若运行中崩溃且无人工介入，
 需等下次登录。如需进程级看护，可给 new-api 加同款 watchdog 任务。
+
+## 2026-08-05 晚：渠道自动测活降频（30min → 180min）
+
+**成本实测**（近 36h `logs` 表 `content='模型测试'`）：2010 次测试、
+330 万 prompt token、折合约 $4.2（≈$2.8/天）。主因是 NewAPI 内置
+`monitor_setting.auto_test_channel_minutes=30`（每渠道每 30min 一次）；
+单次测试 prompt 不小（sol ~4800 tok、opus ~6800 tok，converter 前言也计费）。
+
+**处置**：`auto_test_channel_minutes` 30 → **180**（PUT /api/option/ 生效，
+已回读验证）。预计砍掉约 5/6 的测活开销。故障发现兜底不变：
+Guardian 全量扫描（1h × 4 轮转）、真实请求 auto_ban/自动恢复、
+`ChannelDisableThreshold=90` 均不受影响。Guardian 自身
+`FULL_SCAN_INTERVAL=240`（1h）保持不变。
