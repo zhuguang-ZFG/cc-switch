@@ -88,19 +88,26 @@ def admin_auth() -> tuple[str, str]:
     Every /api/user/login creates a server-side session, and this fork caps
     concurrent sessions (HTTP 409 AUTH_SESSION_LIMIT) — the smoke runs on a
     schedule, so an uncached login per run exhausts the limit within a day.
-    Reuse the cached token until the server rejects it, only then re-login.
+    Reuse the cached token until the server rejects it with a definitive auth
+    failure (401/403); any other non-200 (429/5xx/network error) fails this
+    run but keeps the cache, so a transient blip doesn't burn a new session.
     """
     try:
         cached = read_json(TOKEN_CACHE)
         token, user_id = cached["token"], str(cached.get("user_id") or "1")
+    except (OSError, ValueError, KeyError):
+        token = ""
+    if token:
         status, _ = http_json(
             f"{NEWAPI_BASE}/api/channel/?p=0&page_size=1",
             headers={"Authorization": f"Bearer {token}", "New-Api-User": user_id},
         )
         if status == 200:
             return token, user_id
-    except (OSError, ValueError, KeyError):
-        pass
+        if status not in (401, 403):
+            # 非确定性鉴权失败：保留缓存，本次检查交给调用方判 FAIL，
+            # 否则每次限流/抖动都会新建持久化 session，打满 AUTH_SESSION_LIMIT
+            raise RuntimeError(f"cached token check returned HTTP {status}; cache kept")
     creds = read_json(DEPLOY_DIR / "admin-credentials.json")
     _, login = http_json(
         f"{NEWAPI_BASE}/api/user/login", method="POST",
@@ -133,18 +140,24 @@ def main() -> int:
     # 3. channel summary via admin API
     try:
         token, user_id = admin_auth()
-        _, ch = http_json(
+        status, ch = http_json(
             f"{NEWAPI_BASE}/api/channel/?p=0&page_size=200",
             headers={"Authorization": f"Bearer {token}", "New-Api-User": str(user_id)},
         )
-        items = (ch.get("data") or {}).get("items") or ch.get("data") or []
-        auto_disabled = [f"{c['id']}:{c['name']}" for c in items if c.get("status") == 3]
-        unexpected = [c for c in auto_disabled if int(c.split(":")[0]) not in KNOWN_BROKEN_CHANNELS]
-        known = [c for c in auto_disabled if int(c.split(":")[0]) in KNOWN_BROKEN_CHANNELS]
-        enabled = sum(1 for c in items if c.get("status") == 1)
-        check("channels", not unexpected,
-              f"total={len(items)} enabled={enabled} auto_disabled={unexpected or 'none'}"
-              + (f" known_broken={known}" if known else ""))
+        items = (ch.get("data") or {}).get("items")
+        if items is None:
+            items = ch.get("data")
+        # 渠道接口异常（500 + 空 body 等）不得误报健康：先校验状态码和 items 结构
+        if status != 200 or not isinstance(items, list):
+            check("channels", False, f"bad response: HTTP {status}, items={str(items)[:80]!r}")
+        else:
+            auto_disabled = [f"{c['id']}:{c['name']}" for c in items if c.get("status") == 3]
+            unexpected = [c for c in auto_disabled if int(c.split(":")[0]) not in KNOWN_BROKEN_CHANNELS]
+            known = [c for c in auto_disabled if int(c.split(":")[0]) in KNOWN_BROKEN_CHANNELS]
+            enabled = sum(1 for c in items if c.get("status") == 1)
+            check("channels", not unexpected,
+                  f"total={len(items)} enabled={enabled} auto_disabled={unexpected or 'none'}"
+                  + (f" known_broken={known}" if known else ""))
     except Exception as e:  # noqa: BLE001
         check("channels", False, f"admin api error: {e}")
 

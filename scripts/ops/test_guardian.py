@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import socket
 import tempfile
 import logging
 import unittest
@@ -83,6 +84,13 @@ def add_samples(engine, channel_id, count, *, healthy=True, response_time=1000):
                 "healthy": healthy,
             }
         )
+
+
+def unused_port():
+    """取一个本机当前未监听的端口（绑定后立即释放，供真实 TCP 探测判 down）。"""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 class ChannelHealthTests(unittest.TestCase):
@@ -474,7 +482,7 @@ class PowerShellInvocationTests(unittest.TestCase):
             "restarted_proxies": {},
         })
         engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok", True)
+        engine.health.check_local_endpoint.return_value = (True, "端口可达")
 
         with (
             patch.object(guardian.subprocess, "run") as run,
@@ -512,7 +520,7 @@ class PowerShellInvocationTests(unittest.TestCase):
                         "restarted_proxies": {},
                     })
                     engine.health = Mock()
-                    engine.health.check_local_proxy.return_value = (True, "ok", True)
+                    engine.health.check_local_endpoint.return_value = (True, "端口可达")
 
                     with (
                         patch.object(guardian.subprocess, "run"),
@@ -947,7 +955,7 @@ class ProxyRestartTests(unittest.TestCase):
         g.autofix.state = {"restart_counts": {}}
         g.autofix.get_balance_trend.return_value = None
         g.alerts = Mock()
-        g.alerts.should_alert.return_value = False
+        g.alerts.should_alert.return_value = True
         g.telegram = Mock()
         g._maybe_daily_report = Mock()
 
@@ -1134,26 +1142,38 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertNotIn("newapi_restart_time", engine.state)
         self.assertNotIn("newapi_restart_fail_time", engine.state)
 
-    def test_newapi_restart_respects_failure_backoff(self):
-        """重启失败进入 60s 退避：冷却期内再次调用被挡住，不执行 SSH"""
-        engine = make_engine({
-            "newapi_restart_time": None,
-            "newapi_restart_fail_time": datetime.now().isoformat(),
-            "restart_counts": {},
-            "restarted_proxies": {},
-        })
-        engine._save_state = Mock()
-        engine.telegram = Mock()
-        engine.newapi.get_status = Mock(return_value=True)
+    def test_restart_verified_with_real_listening_port(self):
+        """真实路径：真实监听 socket + 真实 check_local_endpoint → 报成功并清零计数"""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        try:
+            engine = make_engine({
+                "restart_counts": {"agentrouter": 1},
+                "restarted_proxies": {},
+            })
+            engine.health = guardian.HealthChecker(Mock())
+            engine.telegram = Mock()
 
-        with (
-            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)) as run,
-            patch.object(guardian.time, "sleep"),
-        ):
-            ok = engine.restart_newapi_container()
+            with (
+                patch.object(guardian, "LOCAL_PROXY_PROBE_HOST", "127.0.0.1"),
+                patch.object(guardian.subprocess, "run"),
+                patch.object(guardian.subprocess, "Popen"),
+                patch.object(guardian.time, "sleep"),
+                patch.object(guardian.Path, "exists", return_value=True),
+            ):
+                ok = engine.restart_local_proxy("agentrouter", port)
+        finally:
+            listener.close()
 
-        self.assertFalse(ok)
-        run.assert_not_called()
+        self.assertTrue(ok)
+        self.assertEqual(engine.state["restart_counts"]["agentrouter"], 0)
+        self.assertIn("agentrouter", engine.state["restarted_proxies"])
+        self.assertNotIn("agentrouter", engine.state.get("restart_alerted", {}))
+        alert = engine.telegram.send_alert.call_args.args
+        self.assertEqual(alert[0], "本地代理重启")
+        self.assertIn("验证端口可达", alert[1])
 
     def test_newapi_restart_respects_success_cooldown(self):
         """重启成功后 30min 冷却：冷却期内再次调用被挡住，不执行 SSH"""
@@ -1177,7 +1197,7 @@ class ProxyRestartTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_fail_streak_survives_guardian_restart(self):
-        """失败计数持久化在 state：Guardian 崩溃重启后计数保留，补足 3 次即触发重启"""
+        """失败计数持久化在 state：Guardian 崩溃重启后计数保留，补足 3 次即触发告警"""
         state = {
             "restart_counts": {},
             "newapi_fail_streak": 2,
@@ -1195,15 +1215,41 @@ class ProxyRestartTests(unittest.TestCase):
         g.autofix.state = state
         g.autofix.get_balance_trend.return_value = None
         g.alerts = Mock()
-        g.alerts.should_alert.return_value = False
+        g.alerts.should_alert.return_value = True
         g.telegram = Mock()
         g._maybe_daily_report = Mock()
 
         g._check_cycle()
 
-        # state 里已有 2 次计数 → 本次失败即达 3 次门槛，触发重启并清零
+        # state 里已有 2 次计数 → 本次失败即达 3 次门槛，触发告警；
+        # streak 保留不清零（告警频率由 AlertManager 冷却控制）
         self.assertEqual(g.autofix.restart_newapi_container.call_count, 1)
-        self.assertEqual(state["newapi_fail_streak"], 0)
+        self.assertEqual(state["newapi_fail_streak"], 3)
+
+    def test_newapi_outage_alert_cooled_down_across_cycles(self):
+        """NewAPI 持续故障：告警走真实 AlertManager 冷却，故障期内不逐轮重发"""
+        state = {"restart_counts": {}}
+
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (False, "down")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = state
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = guardian.AlertManager(Mock())  # error 级冷却 1 分钟
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+
+        for _ in range(4):  # streak 1,2,3,4：仅首次越门槛告警，其余被冷却挡住
+            g._check_cycle()
+
+        self.assertEqual(g.autofix.restart_newapi_container.call_count, 1)
+        self.assertEqual(state["newapi_fail_streak"], 4)
 
 
     def test_fail_streak_persisted_on_every_failure(self):
@@ -1258,27 +1304,30 @@ class ProxyRestartTests(unittest.TestCase):
         g.health.check_error_rate.assert_not_called()
         g.health.check_balance.assert_not_called()
 
-    def test_newapi_restart_verification_timeout_blocks_second_call(self):
-        """验证超时进入 30min 长冷却：冷却期内二次调用被挡住，不执行 SSH"""
+    def test_restart_unverified_when_port_never_binds(self):
+        """真实路径：启动后端口不可达 → 不报成功、不清零计数、返回 False"""
         engine = make_engine({
-            "newapi_restart_time": datetime.now().isoformat(),
-            "newapi_restart_fail_time": None,
-            "newapi_restart_verified": False,
             "restart_counts": {},
             "restarted_proxies": {},
         })
-        engine._save_state = Mock()
+        engine.health = guardian.HealthChecker(Mock())
         engine.telegram = Mock()
-        engine.newapi.get_status = Mock(return_value=False)
 
         with (
-            patch.object(guardian.subprocess, "run", return_value=Mock(returncode=0)) as run,
+            patch.object(guardian, "LOCAL_PROXY_PROBE_HOST", "127.0.0.1"),
+            patch.object(guardian.subprocess, "run"),
+            patch.object(guardian.subprocess, "Popen"),
             patch.object(guardian.time, "sleep"),
+            patch.object(guardian.Path, "exists", return_value=True),
         ):
-            ok = engine.restart_newapi_container()
+            ok = engine.restart_local_proxy("agentrouter", unused_port())
 
         self.assertFalse(ok)
-        run.assert_not_called()
+        # 未验证 → 计数递增而非清零，restart_alerted 不得被误清
+        self.assertEqual(engine.state["restart_counts"]["agentrouter"], 1)
+        self.assertNotIn("agentrouter", engine.state.get("restart_alerted", {}))
+        alert = engine.telegram.send_alert.call_args.args
+        self.assertEqual(alert[0], "本地代理重启未验证")
 
     def test_local_proxy_probe_disabled_returns_healthy(self):
         """本地代理探针已禁用：统一返回健康三元组，避免误报告警"""
@@ -1304,10 +1353,29 @@ class ProxyRestartTests(unittest.TestCase):
         urlopen.assert_not_called()
         create_conn.assert_not_called()
 
-    def test_restart_treats_live_process_with_inference_failure_as_recovered(self):
+    def test_check_local_endpoint_real_socket(self):
+        """轻量存活检查：真实 TCP 探测——监听中端口可达，未监听端口不可达"""
+        health = guardian.HealthChecker(Mock())
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        try:
+            with patch.object(guardian, "LOCAL_PROXY_PROBE_HOST", "127.0.0.1"):
+                ok, msg = health.check_local_endpoint(port, "agentrouter")
+                self.assertTrue(ok)
+                self.assertIn("可达", msg)
+                ok, msg = health.check_local_endpoint(unused_port(), "agentrouter")
+                self.assertFalse(ok)
+                self.assertIn("不可达", msg)
+        finally:
+            listener.close()
+
+    def test_restart_success_reports_port_verified(self):
+        """重启验证改用独立 TCP 探测：端口可达即成功，清零计数并报告端口可达"""
         engine = make_engine({"restart_counts": {}, "restarted_proxies": {}})
         engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (False, "upstream", True)
+        engine.health.check_local_endpoint.return_value = (True, "端口可达")
         engine.telegram = Mock()
 
         with patch.object(guardian.subprocess, "run"), patch.object(
@@ -1317,7 +1385,9 @@ class ProxyRestartTests(unittest.TestCase):
 
         self.assertTrue(recovered)
         self.assertEqual(engine.state["restart_counts"]["agentrouter"], 0)
-        self.assertIn("推理仍异常", engine.telegram.send_alert.call_args.args[1])
+        alert = engine.telegram.send_alert.call_args.args
+        self.assertEqual(alert[0], "本地代理重启")
+        self.assertIn("验证端口可达", alert[1])
 
     def test_circuit_breaker_alert_sent_once(self):
         """断路器打开后重复调用只发一次告警，不刷屏"""
@@ -1769,7 +1839,7 @@ class OmpRoleTests(unittest.TestCase):
             "base_url": "http://127.0.0.1:8787",
         }
         engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok", True)
+        engine.health.check_local_endpoint.return_value = (True, "端口可达")
 
         engine._update_omp_roles(7, "codebuddy")
 
@@ -1852,7 +1922,7 @@ class OmpRoleTests(unittest.TestCase):
                 self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
 
     def test_recovered_channel_skips_omp_update_when_local_proxy_down(self):
-        """渠道恢复但本地代理挂时，不切角色，发 warning"""
+        """渠道恢复但代理端口 down（真实 TCP 探测被拒）→ 不写 OMP 角色，发 warning"""
         config_path = Path.home() / ".omp" / "agent" / "config.yml"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
@@ -1866,15 +1936,20 @@ class OmpRoleTests(unittest.TestCase):
             "models": "gpt-5.6-sol",
             "base_url": "http://127.0.0.1:8787",
         }
-        engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (False, "down", False)
+        engine.health = guardian.HealthChecker(Mock())  # 真实 check_local_endpoint
         engine.telegram.send_alert = Mock()
 
-        engine._update_omp_roles(7, "codebuddy")
+        with patch.object(
+            guardian.socket, "create_connection", side_effect=OSError("refused")
+        ):
+            engine._update_omp_roles(7, "codebuddy")
 
         updated = config_path.read_text(encoding="utf-8")
         self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
         engine.telegram.send_alert.assert_called_once()
+        self.assertEqual(
+            engine.telegram.send_alert.call_args.args[0], "OMP 角色未切换"
+        )
 
     def test_localhost_role_endpoint_is_actively_probed_with_key(self):
         """本地代理只绑 127.0.0.1：OMP 角色端点只探 localhost，不探 Tailscale"""

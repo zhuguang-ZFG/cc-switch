@@ -618,6 +618,19 @@ class HealthChecker:
         """本地代理探针已禁用：用户反馈告警无实际作用，统一返回健康避免误报。"""
         return True, f"{name} 探针已禁用", True
 
+    def check_local_endpoint(self, port: int, name: str) -> Tuple[bool, str]:
+        """轻量存活检查：仅 TCP 连接探测端口，不发推理请求、不花上游费用。
+
+        周期性推理探针（check_local_proxy）为省上游费用保持禁用，但重启验证和
+        OMP 角色健康守卫不能复用该恒真桩——否则新进程秒退、端口未绑定也会
+        误报"验证正常"。端口可连即说明进程已绑定监听，足够做存活判定。
+        """
+        try:
+            with socket.create_connection((LOCAL_PROXY_PROBE_HOST, port), timeout=3):
+                return True, f"{name} 端口 {port} 可达"
+        except OSError as e:
+            return False, f"{name} 端口 {port} 不可达: {e}"
+
     def check_error_rate(self) -> Tuple[bool, float, int, int]:
         """检查错误率
 
@@ -1331,11 +1344,12 @@ class AutoFixEngine:
                 )
                 return
 
-            # 校验 2: 本地端点存活（渠道恢复 ≠ 本地代理健康）
+            # 校验 2: 本地端点存活（渠道恢复 ≠ 本地代理健康）。
+            # 用独立 TCP 探测而非 check_local_proxy 恒真桩，否则代理已死也会切角色
             local_ok = True
             if self.health:
                 try:
-                    local_ok, _, _ = self.health.check_local_proxy(
+                    local_ok, _ = self.health.check_local_endpoint(
                         contract["port"], contract["proxy"]
                     )
                 except Exception as e:
@@ -1779,41 +1793,30 @@ class AutoFixEngine:
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             )
 
-            # 重启后验证：等待进程启动并探测端口（最多 10s）
+            # 重启后验证：等待进程启动并探测端口（最多 10s）。
+            # 用独立 TCP 探测而非 check_local_proxy 恒真桩——否则新进程秒退、
+            # 端口未绑定也会误报"已重启并验证正常"、错误清零计数
             verified = False
-            process_alive = False
             for attempt in range(5):
-                ok, _, alive = self.health.check_local_proxy(port, name)
-                if ok:
+                reachable, _ = self.health.check_local_endpoint(port, name)
+                if reachable:
                     verified = True
-                    process_alive = True
-                    break
-                if alive:
-                    process_alive = True
                     break
                 if attempt + 1 < 5:
                     time.sleep(2)
 
-            if process_alive:
+            if verified:
                 self.state["restart_counts"][name] = 0
                 self.state["restarted_proxies"][name] = datetime.now().isoformat()
                 self.state.setdefault("restart_alerted", {}).pop(name, None)
                 self._save_state()
-                if verified:
-                    self.telegram.send_alert(
-                        "本地代理重启",
-                        f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已重启并验证推理正常\n"
-                        f"次数: {restart_count + 1}\n"
-                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                        "restart",
-                    )
-                else:
-                    self.telegram.send_alert(
-                        "本地代理推理异常",
-                        f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已重启，进程存活但推理仍异常\n"
-                        f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                        "warning",
-                    )
+                self.telegram.send_alert(
+                    "本地代理重启",
+                    f"代理 <b>{_html_escape(name)}</b> (端口 {port}) 已重启并验证端口可达\n"
+                    f"次数: {restart_count + 1}\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
+                    "restart",
+                )
                 return True
 
             self.state["restart_counts"][name] = restart_count + 1
@@ -2087,9 +2090,10 @@ class Guardian:
             self.autofix.state["newapi_fail_streak"] = streak
             self.autofix._save_state()
             if streak >= NEWAPI_FAIL_THRESHOLD:
-                self.autofix.restart_newapi_container()
-                self.autofix.state["newapi_fail_streak"] = 0
-                self.autofix._save_state()
+                # 自动重启已禁用，此处只剩告警职责：streak 保留不逐轮清零，
+                # 告警走 AlertManager 冷却——否则故障期内每 ~45s 重发同一条告警
+                if self.alerts.should_alert("newapi_health", "error"):
+                    self.autofix.restart_newapi_container()
 
         # 2. 本地代理健康：只有端口无响应才重启；进程存活但上游异常只告警。
         for name, info in LOCAL_PROXIES.items():
