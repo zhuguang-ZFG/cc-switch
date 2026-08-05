@@ -277,3 +277,41 @@ Guardian 全量扫描（1h × 4 轮转）、真实请求 auto_ban/自动恢复�
 无历史记录时默认 50。手工在 Guardian 体系外调的优先级会在下次
 Guardian 恢复该渠道时被抹掉。当前 ch3(50) 仍独占顶层，分层意图
 不受影响，接受现状；以后要调优先级需知会 Guardian 路径。
+
+## 2026-08-05 深夜：sol 直连 "empty stop" 修复（converter 流内重试）
+
+**现象**：OMP 默认模型 `codebuddy/gpt-5.6-sol`（WorkBuddy 直连 8787）频繁报
+`Assistant returned empty stop after retry cap`（OMP 重试 5 次仍空响应）。
+
+**根因链**（逐层实测定位）：
+
+1. converter.log 显示 sol 请求 ~50% 以 "✗ 网络错误"（空消息）告终；
+2. 直连上游 `work.freemodel.dev` 复测：异常为 connect 期
+   `ConnectError ← BrokenResourceError ← ConnectionResetError [WinError 64]`
+   及偶发 TLS 握手超时——**TCP/TLS 建连阶段被间歇 RST**；
+3. DNS 指向 `198.18.0.124`（本机代理 fake-ip），RST 来自代理链路/出口节点，
+   与 key 无关（单次成功率 ~50%）；
+4. converter 流式路径（`_stream_custom`）此前**无重试**：首个字节前一旦
+   connect 失败，直接给客户端吐一条 SSE error chunk 后结束——HTTP 状态已
+   提交 200，OMP 将其视为"空 stop"，重试 5 次 ×单次 50% 失败率 ≈ 3% 的
+   请求最终用户可见失败（实际体感更高）。
+
+**修复**（`~/.kimi-code/proxies/codebuddy2openai/converter.py`，备份
+`tmp/converter.py.before-stream-retry-20260805.bak`）：
+
+- `_stream_custom` 重写为**首字节前换 key 重试循环**（最多 4 次 = key 池
+  大小，间隔 0.4s）：connect 期网络错误只轮换**不冷却** key（与 key 无关）；
+  仅上游明确 502/503/504 文案才冷却 key。已出内容后的尾部断流维持原逻辑
+  （静默收尾，不重复输出）。非流式路径同步：网络错误不再误冷却 key。
+- 异常日志带类型名（`ConnectError: ...`），不再空消息。
+- **验证**：修复前 6 次实测 3 败（50%）；修复后 6/6 全过，日志可见
+  attempt=1 ConnectError → 内部重试成功。理论用户可见失败率降至 ~0.1% 以下
+  （内部 4 次 × OMP 5 次）。
+
+**附带修复——开机自启隐患**：计划任务 `CodebuddyHy3Converter`（提权创建，
+本会话无权改）的命令行**缺 `--host 100.83.32.95`**，重启后 converter 会绑到
+127.0.0.1，OMP（指向 tailnet IP）直连 sol 会断。已建启动文件夹项
+`Startup\codebuddy-converter.vbs` → `start-converter.ps1`（等 Tailscale IP
+出现最长 5min 再绑 100.83.32.95:8787，带 --api-key，窗口隐藏）。重启后新旧
+两个 converter 会并存（127.0.0.1 + 100.83.32.95 不同地址不冲突）；
+旧任务建议提权后删除或对齐。
