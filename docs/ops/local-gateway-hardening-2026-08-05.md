@@ -142,3 +142,38 @@ ch65 1.6s < ch70 1.8s < ch63 2.4s < ch64 2.5s < ch62 2.8s < ch20 2.9s < ch44 7.9
 **注意**：`logs.use_time` 是整请求时长，受任务大小混杂影响，跨渠道比较
 只能以同提示词实测为准（ch9 36h avg 44s 是 slow/plan 重任务集中所致，
 并非渠道慢）。失败请求不落 type=2 日志，错误率无法从日志反推。
+
+## 2026-08-05 晚：gorouter 渠道合并收尾（ch27 删除、ch57 单 key 复活）
+
+**背景**：gorouter 历史上是 ch26/ch27 双渠道（同网关双 key，multi-key 功能
+出现前的轮询 workaround）。后续 ch57 `gorouter` 收编了 3 枚 key
+（含 ch27 的 key）并开启 multi_key polling——**合并其实早已发生**，ch27
+只是忘删的重复渠道。08-03 因上游预扣余额不足（$0.047 < $0.2）ch27/ch57
+双双禁用。
+
+**本轮发现与处置**：
+
+1. **额度已月度重置**：ch57 实测 claude-opus-5 200（1.5-2.4s）。但 3 枚
+   key 中只有 1 枚有额度（其余 $0.099 / $0.008，低于 $0.2 预扣线）。
+2. **claude-sonnet-5 已从 ch57 models 摘除**：gorouter 网关对该模型稳定
+   403（openresty WAF 秒拒，3 次复测一致）；opus-5/opus-4-8 正常。
+   sonnet-5 在 NewAPI 侧自此无可用渠道。
+3. **ch27 删除**（DELETE /api/channel/27）：key 与 ch57 重复、渠道禁用，
+   零价值。abilities 已重建。
+4. **坑：multi_key_status_list 的禁用（status=2）在本构建不生效**。
+   DB 直写、`/api/channel/multi_key/manage` 的 `disable_key`、
+   甚至重启 new-api.exe 之后，轮询器照样把请求发给已"禁用"的 key
+   （status_list={0:2,1:1,2:2} 下 5/5 命中死 key）。唯一可靠路径是
+   `manage` API 的 `delete_key`（有效动作仅 `disable_key`/`enable_key`/
+   `delete_key`，字段名是 `channel_id` 不是 `id`）。
+5. **删错 key 的恢复**：按"余额排序"猜活 key 不可靠——实测周期错位一次
+   就会误删活 key。本次误删后从每日备份
+   `backups/new-api-2026-08-05.db` 提取原 3 行 key 恢复。
+   教训：删 key 前先逐 key 实测（固定 polling_index 或逐 key 直连），
+   别按请求顺序推断 key↔余额映射。
+
+**终态**：ch57 单活 key（hash 291d7fd7）、is_multi_key=false、
+models=`claude-opus-5,claude-opus-4-8,zg-claude-opus-5`、prio40/w6/
+auto_ban=0，渠道测试 4/4 通过（~2s）。两枚欠费 key 仍存于每日备份
+（7 天保留期），下月额度重置后如需可经 PUT 补回。claude-opus-5
+启用池：ch3(prio57) → ch45(prio50) → ch9/ch18/ch57(prio40)。
