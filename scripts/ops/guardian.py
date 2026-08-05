@@ -131,6 +131,18 @@ def _is_transient_rate_limit(message: str) -> bool:
     """429 / rate limit / too many requests → 瞬态限流，非渠道故障。"""
     msg = (message or "").lower()
     return any(marker in msg for marker in TRANSIENT_RATE_LIMIT_MARKERS)
+
+PROBE_INCOMPATIBLE_MARKERS = (
+    "non_agentic_blocked",
+    "only serves agentic",
+    "agentic (tool-calling) clients",
+)
+
+
+def _is_probe_incompatible(message: str) -> bool:
+    """探针形态被拒绝：无健康结论，不得据此降权或禁用渠道。"""
+    msg = (message or "").lower()
+    return any(marker in msg for marker in PROBE_INCOMPATIBLE_MARKERS)
 TEST_CHANNEL_TIMEOUT = 15  # test_channel 独立超时（秒）：上游实测 6-30s 常见，5s 全面误报
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
@@ -844,6 +856,11 @@ class AutoFixEngine:
                     f"Channel {channel_id} ({name}) error scan rate-limited, skipped: {test_msg[:100]}"
                 )
                 continue
+            if _is_probe_incompatible(test_msg):
+                logger.info(
+                    f"Channel {channel_id} ({name}) error scan probe-incompatible, skipped: {test_msg[:100]}"
+                )
+                continue
 
             # 检查错误消息是否匹配禁用关键词
             msg_lower = test_msg.lower()
@@ -1217,50 +1234,39 @@ class AutoFixEngine:
             return new_weight
 
     def _check_joined_channels_stability(self):
-        """P0: 回滚机制 — 定期检查 joined_channels 稳定性，不稳定时自动回滚
-
-        每 JOIN_STABILITY_CHECK_INTERVAL 个检查周期检查一次（约 45 秒）。
-        加入后 JOIN_STABILITY_WINDOW_MIN 分钟内监控，不稳定则回滚 weight=0。
-        """
+        """P0: 回滚机制 — 定期检查 joined_channels 稳定性，不稳定时自动回滚."""
         if "joined_channels" not in self.state or not self.state["joined_channels"]:
             return
-
         self._stability_count += 1
         if self._stability_count % JOIN_STABILITY_CHECK_INTERVAL != 0:
             return
-
         for channel_id_str, join_info in list(self.state["joined_channels"].items()):
             channel_id = int(channel_id_str)
             try:
                 join_time = datetime.fromisoformat(join_info["time"])
             except (ValueError, TypeError, KeyError):
-                # 时间戳损坏，清理该记录
                 del self.state["joined_channels"][channel_id_str]
                 self._save_state()
                 continue
-
-            # 加入后 JOIN_STABILITY_WINDOW_MIN 分钟内检查
             if datetime.now() - join_time > timedelta(minutes=JOIN_STABILITY_WINDOW_MIN):
-                # 超过监控窗口，稳定则清理记录
-                if join_info.get("stability_fails", 0) == 0:
-                    logger.info(f"Channel {channel_id} stable after {JOIN_STABILITY_WINDOW_MIN}min, removing from joined_channels")
                 del self.state["joined_channels"][channel_id_str]
                 self._save_state()
                 continue
 
-            # 测试渠道是否仍然稳定
             join_info["stability_checks"] = join_info.get("stability_checks", 0) + 1
             test_ok, test_msg = self.newapi.test_channel(channel_id)
+            if not test_ok and _is_probe_incompatible(test_msg):
+                logger.info(
+                    f"Channel {channel_id} stability probe-incompatible, skipped: {test_msg[:100]}"
+                )
+                self._save_state()
+                continue
             if not test_ok:
                 join_info["stability_fails"] = join_info.get("stability_fails", 0) + 1
                 logger.warning(f"Channel {channel_id} stability check failed: {test_msg}")
-
-                # 连续 2 次失败 → 回滚：真正禁用（status=2）并记录，给恢复路径
-                # 不能只设 weight=0 留 status=1，否则成僵尸渠道（无流量且无追踪、永不恢复）
                 if join_info["stability_fails"] >= 2:
                     channel = self.newapi.get_channel(channel_id)
                     if channel and self.newapi.disable_channel(channel_id):
-                        logger.warning(f"Channel {channel_id} unstable after join, disabled (status=2)")
                         self._append_disabled({
                             "id": channel_id,
                             "name": channel.get("name", str(channel_id)),
@@ -1275,16 +1281,13 @@ class AutoFixEngine:
                             f"原因: {_html_escape(test_msg)}\n"
                             f"恢复后将自动重新启用\n"
                             f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                            "warning"
+                            "warning",
                         )
                         del self.state["joined_channels"][channel_id_str]
-                        self._save_state()
             else:
-                # 测试通过，重置失败计数
                 if join_info.get("stability_fails", 0) > 0:
                     join_info["stability_fails"] = 0
                     logger.info(f"Channel {channel_id} stability check passed, fails reset")
-
             self._save_state()
 
 
@@ -1420,13 +1423,17 @@ class AutoFixEngine:
             if test_ok:
                 self._full_scan_failures.pop(channel_id, None)
                 continue
-            # 瞬态限流（429/rate limit）：不触发禁用、不累计永久失败计数
+            # 限流与探针形态不相容都不提供渠道健康结论，不累计破坏性失败。
             if _is_transient_rate_limit(test_msg):
                 logger.info(
                     f"Full scan: channel {channel_id} rate-limited, skipped (transient): {test_msg[:100]}"
                 )
                 continue
-
+            if _is_probe_incompatible(test_msg):
+                logger.info(
+                    f"Full scan: channel {channel_id} probe-incompatible, skipped: {test_msg[:100]}"
+                )
+                continue
             msg_lower = test_msg.lower()
             # 硬错误（402/401）直接禁用
             if any(kw.lower() in msg_lower for kw in ERROR_DISABLE_KEYWORDS):

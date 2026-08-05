@@ -533,3 +533,15 @@ agent 的入口）。
 **测试与现场证据**：新增跨过 2 分钟冷却仍只调用一次、恢复后重新武装两项回归；Guardian 完整回归 87/87 通过。同步生产副本并恢复 `start.bat` 持久 owner 后，NewAPI `/api/status` HTTP 200，心跳 PID 27668 更新，state 为 `newapi_fail_streak=0` 且无 outage 标记；00:49 后日志无新的 `NewAPI health failure`。
 
 **经验**：时间冷却只能表达频率，不能表达故障生命周期。需要“每段一次”的通知必须有显式、可持久化的 outage state，并测试“时间已跨过冷却但故障尚未恢复”的路径。
+
+## 告警修复后生产审计（2026-08-06 01:00）
+
+审计发现并处理三项残余风险：
+
+1. **proxy supervisor 双 owner**：旧计划任务进程（`python.exe`，父 `start-proxies-supervisor.bat`）与新 HKCU `pythonw.exe` supervisor 同时存活。旧进程在 named mutex 加固前启动，不受新互斥逻辑约束；两者可能同时杀/拉代理。已精确终止旧 supervisor 和 bat 父进程，保留 HKCU owner。
+2. **重复启动任务**：`LocalAIProxies-Supervisor-Logon` 除登录触发外还每 1 分钟启动一次 supervisor。即使新 mutex 会让重复实例退出，这仍会持续制造无效进程并可能复活旧代码。已禁用该任务；保留 HKCU `OMPProxiesSupervisor` 为唯一持久入口。`LocalNewAPI-Watchdog` 每分钟运行的是短进程端口探测，语义不同，保留。
+3. **agentic-only 渠道误判**：channel 57 的上游只接受 tool-calling 客户端，NewAPI 通用 `/api/channel/test` 会间歇返回 `403 non_agentic_blocked`。旧 Guardian 会把它计入全量扫描和恢复后稳定性失败，连续两次可能禁用真实可用渠道。现统一分类为 probe-incompatible：错误扫描、全量扫描和稳定性回滚均跳过且不累计；恢复阶段仍不把它算成功，避免无证据自动启用。
+
+验证：Guardian 完整回归 90/90；Guardian 源/生产副本和 TTFT gateway 源/生产副本 SHA-256 分别一致；Guardian 新 PID 11844 心跳更新；supervisor 仅 1 个 owner；3002/3003 均 HTTP 200；8787/8788/9457 均返回预期的未授权 401，证明进程存活且鉴权边界仍在。channel 57 现场 test 2.14 秒成功，未因历史余额错误手工禁用。
+
+**剩余人工项**：旧 `CodebuddyHy3Converter` 登录计划任务仍启用，且 action 以命令行参数保存 API key；当前 8787 已由 supervisor 环境变量方式管理，旧任务多余。普通用户执行 `schtasks /Change ... /Disable` 被拒，需要管理员终端禁用/删除该任务，并轮换已暴露在任务定义中的 CodeBuddy key。

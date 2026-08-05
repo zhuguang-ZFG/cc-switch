@@ -335,6 +335,29 @@ class FullHealthScanTests(unittest.TestCase):
 
         self.assertEqual(engine.newapi.updates[0]["weight"], 7)
 
+
+    def test_full_scan_agentic_only_rejection_does_not_accumulate_failures(self):
+        """非 agentic 探针被拒是探针不相容，不得降权或禁用可用渠道。"""
+        engine = make_engine()
+        engine._full_scan_offset = 0
+        engine.newapi.channels[57] = {
+            "id": 57,
+            "name": "agentic-only",
+            "status": 1,
+            "weight": 6,
+            "priority": 40,
+            "models": "claude-opus-5",
+        }
+        engine.newapi.test_results.append(
+            (False, "HTTP 403 non_agentic_blocked: This relay only serves agentic clients")
+        )
+
+        engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
+        engine.full_health_scan()
+
+        self.assertNotIn(57, engine._full_scan_failures)
+        self.assertEqual(engine.newapi.updates, [])
+        self.assertEqual(engine.newapi.disable_calls, [])
 class TransientRateLimitTests(unittest.TestCase):
     def test_error_scan_rate_limit_does_not_disable(self):
         """429/rate limit 是瞬态：错误扫描不得禁用渠道、不写 weight_history"""
@@ -759,6 +782,32 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(joined, [(7, "recovered")])
         engine._update_omp_roles.assert_not_called()
 
+    def test_agentic_only_rejection_does_not_count_as_recovery_success(self):
+        """探针不相容不能证明恢复，禁止因此自动启用渠道。"""
+        record = {
+            "id": 57,
+            "name": "agentic-only",
+            "time": (datetime.now() - timedelta(minutes=10)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[57] = {"id": 57, "name": "agentic-only", "status": 2}
+        engine.newapi.test_results.extend(
+            [(False, "403 non_agentic_blocked: relay only serves agentic clients")] * 3
+        )
+
+        with patch.object(guardian.time, "sleep"):
+            engine.check_and_enable_recovered_channels()
+
+        self.assertEqual(engine.newapi.enable_calls, [])
+        self.assertIn(record, engine.state["disabled_channels"])
+
     def test_recovery_preserves_current_manual_priority(self):
         """恢复可还原历史 weight，但 priority 必须保留当前人工策略值。"""
         engine = make_engine(
@@ -912,6 +961,35 @@ class PoolJoinTests(unittest.TestCase):
 
         self.assertIn("7", engine.state["joined_channels"])
         self.assertEqual(engine.newapi.updates, [])
+
+    def test_stability_agentic_only_rejection_does_not_count_as_failure(self):
+        """稳定性窗口中的 non_agentic_blocked 不累计回滚失败。"""
+        engine = make_engine(
+            {
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {
+                    "57": {
+                        "time": datetime.now().isoformat(),
+                        "models": ["claude-opus-5"],
+                        "weight": 6,
+                        "priority": 40,
+                        "stability_checks": 0,
+                        "stability_fails": 1,
+                    }
+                },
+            }
+        )
+        engine.newapi.test_results.append(
+            (False, "403 non_agentic_blocked: relay only serves agentic clients")
+        )
+        engine._stability_count = guardian.JOIN_STABILITY_CHECK_INTERVAL - 1
+
+        engine._check_joined_channels_stability()
+
+        self.assertEqual(engine.state["joined_channels"]["57"]["stability_fails"], 1)
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertEqual(engine.state.get("disabled_channels", []), [])
 
     def test_re_disables_channel_when_pool_join_fails(self):
         record = {
