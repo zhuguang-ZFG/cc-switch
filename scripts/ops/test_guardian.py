@@ -723,7 +723,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(record["recovery_failures"], 1)
         self.assertIn(record, engine.state["disabled_channels"])
 
-    def test_joins_only_after_two_of_three_checks_pass(self):
+    def test_recovery_does_not_rewrite_omp_roles(self):
+        """渠道恢复只维护 NewAPI 健康状态，不得改写人工维护的 OMP 路由策略。"""
         record = {
             "id": 7,
             "name": "recovered",
@@ -732,7 +733,6 @@ class RecoveryTests(unittest.TestCase):
         engine = make_engine(
             {
                 "disabled_channels": [record],
-
                 "weight_history": {},
                 "degraded_channels": {},
                 "joined_channels": {},
@@ -747,9 +747,8 @@ class RecoveryTests(unittest.TestCase):
             [(True, "ok"), (False, "transient"), (True, "ok")]
         )
         joined = []
-        roles = []
         engine._auto_join_pool = lambda channel_id, name: not joined.append((channel_id, name))
-        engine._update_omp_roles = lambda channel_id, name: roles.append((channel_id, name))
+        engine._update_omp_roles = Mock()
 
         with patch.object(guardian.time, "sleep"):
             engine.check_and_enable_recovered_channels()
@@ -758,7 +757,32 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(engine.newapi.disable_calls, [])
         self.assertEqual(engine.state["disabled_channels"], [])
         self.assertEqual(joined, [(7, "recovered")])
-        self.assertEqual(roles, [(7, "recovered")])
+        engine._update_omp_roles.assert_not_called()
+
+    def test_recovery_preserves_current_manual_priority(self):
+        """恢复可还原历史 weight，但 priority 必须保留当前人工策略值。"""
+        engine = make_engine(
+            {
+                "weight_history": {"7": {"weight": 10, "priority": 50}},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[7] = {
+            "id": 7,
+            "name": "recovered",
+            "status": 1,
+            "models": "claude-opus-5",
+            "weight": 1,
+            "priority": 57,
+        }
+        engine._balance_pool_weights = lambda _models, _channel_id, weight: weight
+
+        self.assertTrue(engine._auto_join_pool(7, "recovered"))
+
+        self.assertEqual(engine.newapi.updates[0]["weight"], 10)
+        self.assertEqual(engine.newapi.updates[0]["priority"], 57)
+        self.assertEqual(engine.state["joined_channels"]["7"]["priority"], 57)
 
     def test_joins_pool_with_channel_declared_models_not_api_models(self):
         """opencode-go 等 model_mapping 左侧别名不在 /api/models 中，仍须加入聚合池"""
@@ -906,15 +930,12 @@ class PoolJoinTests(unittest.TestCase):
         engine.newapi.channels[7] = {"id": 7, "name": "recovered", "status": 1}
         engine.newapi.test_results.extend([(True, "ok")] * 3)
         engine._auto_join_pool = lambda *_args: False
-        role_updates = []
-        engine._update_omp_roles = lambda *_args: role_updates.append(True)
 
         with patch.object(guardian.time, "sleep"):
             engine.check_and_enable_recovered_channels()
 
         self.assertEqual(engine.newapi.disable_calls, [7])
         self.assertIn(record, engine.state["disabled_channels"])
-        self.assertEqual(role_updates, [])
 
 
 class ProxyRestartTests(unittest.TestCase):
@@ -1468,29 +1489,6 @@ class ProxyRestartTests(unittest.TestCase):
         engine.restart_local_proxy("agentrouter", 8788)
         self.assertEqual(engine.telegram.send_alert.call_count, 1)
 
-    def test_url_with_userinfo_skips_omp_role_update(self):
-        """带 userinfo 的 base_url（user@host）不符合纯 endpoint 契约，不得篡改 OMP 角色"""
-        config_path = Path.home() / ".omp" / "agent" / "config.yml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            "modelRoles:\n  default: agentrouter/claude-opus-4-8:xhigh\nsymbolPreset: ascii\n",
-            encoding="utf-8",
-        )
-        engine = make_engine()
-        engine.newapi.channels[7] = {
-            "id": 7,
-            "name": "codebuddy",
-            "models": "gpt-5.6-sol",
-            "base_url": "http://user:pass@100.83.32.95:8787",
-        }
-        engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok", True)
-        engine.telegram.send_alert = Mock()
-
-        engine._update_omp_roles(7, "codebuddy")
-
-        updated = config_path.read_text(encoding="utf-8")
-        self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
 
     def test_budget_exceeded_skips_low_priority_steps(self):
         """预算耗尽：高优先级步骤仍执行，低优先级步骤跳过"""
@@ -1821,136 +1819,6 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertIn(f"state.json.corrupt-{fixed_ts}-1-6", names)
 
 class OmpRoleTests(unittest.TestCase):
-    def test_codebuddy_recovery_restores_default_role_without_touching_task(self):
-        config_path = Path.home() / ".omp" / "agent" / "config.yml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            "modelRoles:\n"
-            "  default: agentrouter/claude-opus-4-8:xhigh\n"
-            "  task: zg-newapi/gpt-5.6-sol:high\n"
-            "symbolPreset: ascii\n",
-            encoding="utf-8",
-        )
-        engine = make_engine()
-        engine.newapi.channels[7] = {
-            "id": 7,
-            "name": "codebuddy",
-            "models": "gpt-5.6-sol",
-            "base_url": "http://127.0.0.1:8787",
-        }
-        engine.health = Mock()
-        engine.health.check_local_endpoint.return_value = (True, "端口可达")
-
-        engine._update_omp_roles(7, "codebuddy")
-
-        updated = config_path.read_text(encoding="utf-8")
-        self.assertIn("  default: codebuddy/gpt-5.6-sol:max\n", updated)
-        self.assertIn("  task: zg-newapi/gpt-5.6-sol:high\n", updated)
-
-    def test_same_name_channel_with_wrong_port_skips_omp_role_update(self):
-        """同名但 base_url 端口不匹配的渠道不得篡改 OMP 角色"""
-        config_path = Path.home() / ".omp" / "agent" / "config.yml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            "modelRoles:\n  default: agentrouter/claude-opus-4-8:xhigh\nsymbolPreset: ascii\n",
-            encoding="utf-8",
-        )
-        engine = make_engine()
-        engine.newapi.channels[7] = {
-            "id": 7,
-            "name": "codebuddy",
-            "models": "gpt-5.6-sol",
-            "base_url": "https://other.example.com:9999",
-        }
-        engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok", True)
-        engine.telegram.send_alert = Mock()
-
-        engine._update_omp_roles(7, "codebuddy")
-
-        updated = config_path.read_text(encoding="utf-8")
-        self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
-
-    def test_same_port_wrong_host_skips_omp_role_update(self):
-        """同端口但非本地 host 的渠道不得篡改 OMP 角色（严格 URL 校验）"""
-        config_path = Path.home() / ".omp" / "agent" / "config.yml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            "modelRoles:\n  default: agentrouter/claude-opus-4-8:xhigh\nsymbolPreset: ascii\n",
-            encoding="utf-8",
-        )
-        engine = make_engine()
-        engine.newapi.channels[7] = {
-            "id": 7,
-            "name": "codebuddy",
-            "models": "gpt-5.6-sol",
-            "base_url": "https://unrelated.example.com:8787",
-        }
-        engine.health = Mock()
-        engine.health.check_local_proxy.return_value = (True, "ok", True)
-        engine.telegram.send_alert = Mock()
-
-        engine._update_omp_roles(7, "codebuddy")
-
-        updated = config_path.read_text(encoding="utf-8")
-        self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
-
-    def test_host_matching_but_wrong_scheme_skips_omp_role_update(self):
-        """host/port 匹配但 scheme 非 http(s)（如 ftp、缺省协议）不得篡改 OMP 角色"""
-        config_path = Path.home() / ".omp" / "agent" / "config.yml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            "modelRoles:\n  default: agentrouter/claude-opus-4-8:xhigh\nsymbolPreset: ascii\n",
-            encoding="utf-8",
-        )
-        for bad_url in ("ftp://100.83.32.95:8787", "//100.83.32.95:8787"):
-            with self.subTest(base_url=bad_url):
-                engine = make_engine()
-                engine.newapi.channels[7] = {
-                    "id": 7,
-                    "name": "codebuddy",
-                    "models": "gpt-5.6-sol",
-                    "base_url": bad_url,
-                }
-                engine.health = Mock()
-                engine.health.check_local_proxy.return_value = (True, "ok", True)
-                engine.telegram.send_alert = Mock()
-
-                engine._update_omp_roles(7, "codebuddy")
-
-                updated = config_path.read_text(encoding="utf-8")
-                self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
-
-    def test_recovered_channel_skips_omp_update_when_local_proxy_down(self):
-        """渠道恢复但代理端口 down（真实 TCP 探测被拒）→ 不写 OMP 角色，发 warning"""
-        config_path = Path.home() / ".omp" / "agent" / "config.yml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            "modelRoles:\n  default: agentrouter/claude-opus-4-8:xhigh\nsymbolPreset: ascii\n",
-            encoding="utf-8",
-        )
-        engine = make_engine()
-        engine.newapi.channels[7] = {
-            "id": 7,
-            "name": "codebuddy",
-            "models": "gpt-5.6-sol",
-            "base_url": "http://127.0.0.1:8787",
-        }
-        engine.health = guardian.HealthChecker(Mock())  # 真实 check_local_endpoint
-        engine.telegram.send_alert = Mock()
-
-        with patch.object(
-            guardian.socket, "create_connection", side_effect=OSError("refused")
-        ):
-            engine._update_omp_roles(7, "codebuddy")
-
-        updated = config_path.read_text(encoding="utf-8")
-        self.assertIn("  default: agentrouter/claude-opus-4-8:xhigh\n", updated)
-        engine.telegram.send_alert.assert_called_once()
-        self.assertEqual(
-            engine.telegram.send_alert.call_args.args[0], "OMP 角色未切换"
-        )
-
     def test_localhost_role_endpoint_is_actively_probed_with_key(self):
         """本地代理只绑 127.0.0.1：OMP 角色端点只探 localhost，不探 Tailscale"""
         agent_dir = Path.home() / ".omp" / "agent"

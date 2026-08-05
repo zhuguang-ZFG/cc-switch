@@ -43,3 +43,11 @@
 - **计划任务 RunLevel=Highest**：修改任务定义（`Set-ScheduledTask` / `schtasks /change`）需提权令牌；`schtasks /change` 还会交互式要密码。可用 `Start-Process powershell -Verb RunAs` 走 UAC。
 - **Git Bash 路径转换**：`schtasks /change` 的 `/change` 会被 MSYS 转成 `C:/Program Files/Git/change`，需 `MSYS2_ARG_CONV_EXCL='*'`。
 - **隐藏启动常驻 bat**：首选 `conhost.exe --headless <script>`（Windows 11 内置，无脚本文件、任务状态保持 `Running`）。若用 VBS 包装器（`wscript.exe //B //nologo`），`WScript.Shell.Run` 的 `waitOnReturn` 必须为 `True`——否则 wscript 退出即任务结束，Task Scheduler 会回收整个进程树。
+
+
+## 2026-08-05 晚：Guardian/OMP 策略边界加固
+
+- Guardian 恢复渠道时只恢复 `weight`；保留当前 `priority`，不再从 `weight_history` 回写人工路由优先级。
+- 渠道恢复不再自动修改 OMP `config.yml` 的 `modelRoles`。OMP 角色只做端点观测和告警，路由策略由人工维护，避免恢复事件覆盖 `slow/plan/vision/default`。
+- 生产运行镜像 `C:/Users/zhugu/.omp/guardian/guardian.py` 已与仓库 `scripts/ops/guardian.py` 同步，并重启 `NewAPI Guardian` 计划任务。
+- 验证：Guardian + smoke 测试 98/98 通过；`py_compile` 通过；心跳 `heartbeat.json` 持续刷新。

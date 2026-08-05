@@ -409,3 +409,16 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
   恢复的 `modelFallback: true` 真正可用
 - 备份 `*.20260805-191731-wbsol.bak`；YAML + 10 角色 13 链交叉校验 0 断裂；
   `omp models` 显示 codebuddy (4)。改动需下次 OMP 启动生效
+
+### 大工程路由门禁与 Guardian 单写者收敛（2026-08-05 晚）
+
+本节覆盖此前关于 Guardian 自动写回 `modelRoles` 的历史描述；旧段保留用于事故时间线，不再代表当前行为。
+
+- 从 `slow`、`plan`、`vision` fallback 链删除 `agentrouter/claude-opus-5` / `agentrouter/claude-opus-4-8`。该上游存在已确认的短流式敏感词 500，不能消耗关键链候选。
+- `slow` 当前跨域顺序：NewAPI Opus 5 → Opus 4.8 → NewAPI GPT-5.6 Sol → CodeBuddy Kimi K3 → LongCat 2.0。
+- `plan` 当前顺序：NewAPI Opus 5 → Opus 4.8 → NewAPI GPT-5.6 Sol → CodeBuddy Kimi K3。
+- `vision` 保留支持图像的 `agentrouter/gpt-5.6-sol`，但不再包含 AgentRouter Claude。
+- Guardian 删除 `_update_omp_roles` 写入口；渠道恢复只维护 NewAPI 健康状态和 weight，不得覆盖 OMP 角色或人工 priority。
+- 新增 `scripts/ops/test_omp_routes.py`：门禁 `modelFallback=true`、`cooldown-expiry`、关键链无已知坏候选、`omp models` 可解析关键 provider。
+- 已知上游缺口：OMP 17.2.9 没有可配置首字节 deadline；极慢但最终 200 的请求仍不会触发 fallback，不能用 `retry.maxDelayMs` 冒充请求超时。
+- 验证：`omp models` 解析 6 个 provider / 22 个模型；完整 ops 测试 98/98 通过。

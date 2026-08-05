@@ -1113,7 +1113,6 @@ class AutoFixEngine:
                         f"Channel {channel_id} ({name}) recovered "
                         f"({stable_count}/{RECOVERY_TEST_COUNT} checks passed)"
                     )
-                    self._update_omp_roles(channel_id, name)
                     continue
                 test_msg = "聚合池加入失败" if enabled else "渠道启用失败"
                 if enabled and self.newapi.disable_channel(channel_id):
@@ -1132,7 +1131,10 @@ class AutoFixEngine:
             )
 
     def _auto_join_pool(self, channel_id: int, name: str) -> bool:
-        """恢复渠道权重并登记稳定性监控；PUT 会同步 NewAPI abilities。"""
+        """恢复渠道权重并登记稳定性监控；PUT 会同步 NewAPI abilities。
+
+        priority 是人工路由策略，不属于健康状态；恢复时只调整 weight。
+        """
         try:
             channel = self.newapi.get_channel(channel_id)
             if not channel:
@@ -1148,20 +1150,16 @@ class AutoFixEngine:
             history = self.state.setdefault("weight_history", {}).get(str(channel_id))
             if history and history.get("weight", 0) > 0:
                 desired_weight = history["weight"]
-                desired_priority = history.get("priority", 50)
                 logger.info(f"Channel {channel_id} restoring weight from history: {desired_weight}")
             else:
                 desired_weight = 5
-                desired_priority = 50
 
             desired_weight = self._balance_pool_weights(pool_models, channel_id, desired_weight)
             current_weight = channel.get("weight", 0)
             current_priority = channel.get("priority", 50)
-            needs_update = current_weight != desired_weight or current_priority != desired_priority
-            if needs_update:
+            if current_weight != desired_weight:
                 updated = channel.copy()
                 updated["weight"] = desired_weight
-                updated["priority"] = desired_priority
                 if not self.newapi.update_channel(updated):
                     logger.error(f"Channel {channel_id} update_channel failed during auto_join_pool")
                     return False
@@ -1171,20 +1169,20 @@ class AutoFixEngine:
                 "time": datetime.now().isoformat(),
                 "models": pool_models,
                 "weight": desired_weight,
-                "priority": desired_priority,
+                "priority": current_priority,
                 "stability_checks": 0,
                 "stability_fails": 0,
             }
             self._save_state()
             logger.info(
                 f"Channel {channel_id} ({name}) joined pool: weight={desired_weight}, "
-                f"priority={desired_priority}, models={pool_models}"
+                f"priority={current_priority}, models={pool_models}"
             )
             self.telegram.send_alert(
                 "渠道加入聚合池",
                 f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已恢复并加入聚合池\n"
                 f"模型: {_html_escape(', '.join(pool_models))}\n"
-                f"权重: {desired_weight}, 优先级: {desired_priority}\n"
+                f"权重: {desired_weight}, 优先级: {current_priority}\n"
                 f"时间: {datetime.now().strftime('%H:%M:%S')}",
                 "success",
             )
@@ -1289,160 +1287,6 @@ class AutoFixEngine:
 
             self._save_state()
 
-    # ── P0: OMP config.yml 真正读写 ──────────────────────────────────────
-
-    def _update_omp_roles(self, channel_id: int, name: str):
-        """P0: 更新 OMP modelRoles — 真正读取、修改、写回 config.yml
-
-        仅当渠道确认为本地代理的上游镜像（base_url 端口匹配）且本地端点存活时
-        才切换角色，避免同名渠道误触发。渠道恢复 ≠ 本地代理健康，双重校验。
-        """
-        try:
-            channel = self.newapi.get_channel(channel_id)
-            if not channel:
-                return
-
-            channel_name = name.lower()
-            # 渠道名 → 本地 provider 契约：base_url 必须指向本地代理端点
-            provider_roles = {
-                "agentrouter": {
-                    "hosts": {"127.0.0.1"},
-                    "port": 8788,
-                    "proxy": "agentrouter",
-                    "roles": {
-                        "slow": ("agentrouter/claude-opus-5", "xhigh"),
-                        "vision": ("agentrouter/claude-opus-5", "xhigh"),
-                    },
-                },
-                "codebuddy": {
-                    "hosts": {"127.0.0.1"},
-                    "port": 8787,
-                    "proxy": "codebuddy",
-                    "roles": {
-                        "default": ("codebuddy/gpt-5.6-sol", "max"),
-                    },
-                },
-            }
-            contract = provider_roles.get(channel_name)
-            if not contract:
-                return
-            base_url = str(channel.get("base_url") or "")
-            try:
-                parsed = urlparse(base_url)
-                scheme_ok = parsed.scheme in {"http", "https"}
-                host_ok = parsed.hostname in contract["hosts"]
-                port_ok = parsed.port == contract["port"]
-                # 契约是纯本地 endpoint，不允许 userinfo（user:pass@host 视为可疑）
-                userinfo_ok = parsed.username is None and parsed.password is None
-            except (ValueError, AttributeError):
-                scheme_ok = host_ok = port_ok = userinfo_ok = False
-            if not (scheme_ok and host_ok and port_ok and userinfo_ok):
-                logger.warning(
-                    f"Channel {channel_id} ({name}) base_url {base_url} does not match "
-                    f"local proxy endpoint (host in {sorted(contract['hosts'])}, "
-                    f"port {contract['port']}), skipping OMP role update"
-                )
-                return
-
-            # 校验 2: 本地端点存活（渠道恢复 ≠ 本地代理健康）。
-            # 用独立 TCP 探测而非 check_local_proxy 恒真桩，否则代理已死也会切角色
-            local_ok = True
-            if self.health:
-                try:
-                    local_ok, _ = self.health.check_local_endpoint(
-                        contract["port"], contract["proxy"]
-                    )
-                except Exception as e:
-                    logger.error(f"OMP role local proxy probe failed for {name}: {e}")
-                    local_ok = False
-            if not local_ok:
-                logger.warning(
-                    f"Channel {channel_id} ({name}) recovered but local proxy "
-                    f"{contract['proxy']} is down, skipping OMP role update"
-                )
-                self.telegram.send_alert(
-                    "OMP 角色未切换",
-                    f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已恢复，但本地代理 "
-                    f"<b>{_html_escape(contract['proxy'])}</b> 无响应，OMP 角色保持原样",
-                    "warning",
-                )
-                return
-
-            channel_models = set(m.strip() for m in channel.get("models", "").split(",") if m.strip())
-            omp_role_models = contract["roles"]
-
-            config_path = Path.home() / ".omp" / "agent" / "config.yml"
-            if not config_path.exists():
-                logger.error(f"OMP config not found: {config_path}")
-                return
-
-            config_text = config_path.read_text(encoding="utf-8")
-            original_text = config_text
-            updated_roles = []
-
-            # 提取 modelRoles 块（从 modelRoles: 到下一个顶级键之前），只在块内操作
-            # 避免误改 theme/retry 等其他块里的同名键
-            block_match = re.search(r'^(modelRoles:\s*\n)((?:[ \t]+\S.*\n?)*)', config_text, re.MULTILINE)
-            if not block_match:
-                logger.error("modelRoles block not found in config.yml")
-                return
-            block_header = block_match.group(1)
-            block_body = block_match.group(2)
-            block_start, block_end = block_match.span()
-
-            for role, (provider_model, thinking_level) in omp_role_models.items():
-                model = provider_model.split("/", 1)[1]
-                if model not in channel_models:
-                    continue
-
-                target_value = f"{provider_model}:{thinking_level}" if thinking_level else provider_model
-                pattern = rf'^(  {re.escape(role)}:\s*)(.+)$'
-                match = re.search(pattern, block_body, re.MULTILINE)
-                if match:
-                    current_value = match.group(2).strip()
-                    if current_value != target_value:
-                        block_body = re.sub(
-                            pattern,
-                            rf'\g<1>{target_value}',
-                            block_body,
-                            count=1,
-                            flags=re.MULTILINE,
-                        )
-                        updated_roles.append(f"{role}: {current_value} → {target_value}")
-                        logger.info(f"OMP role '{role}' switched: {current_value} → {target_value}")
-                else:
-                    if block_body and not block_body.endswith("\n"):
-                        block_body += "\n"
-                    block_body += f"  {role}: {target_value}\n"
-                    updated_roles.append(f"{role}: (new) {target_value}")
-                    logger.info(f"OMP role '{role}' added: {target_value}")
-
-            # 拼回：只替换 modelRoles 块，其他内容不动
-            config_text = config_text[:block_start] + block_header + block_body + config_text[block_end:]
-
-            # 真正写回 config.yml（原子写，防中途崩溃损坏）
-            if config_text != original_text:
-                tmp = config_path.with_suffix(".tmp")
-                tmp.write_text(config_text, encoding="utf-8")
-                os.replace(tmp, config_path)
-                logger.info(f"OMP config.yml written for channel {channel_id} ({name})")
-                self.telegram.send_alert(
-                    "OMP 角色模型更新",
-                    f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已恢复\n"
-                    f"OMP config.yml 已更新:\n  " + "\n  ".join(_html_escape(r) for r in updated_roles) + "\n"
-                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                    "info"
-                )
-            elif updated_roles:
-                self.telegram.send_alert(
-                    "OMP 角色模型可用",
-                    f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已恢复\n"
-                    f"角色已配置正确，无需修改\n"
-                    f"时间: {datetime.now().strftime('%H:%M:%S')}",
-                    "info"
-                )
-        except Exception as e:
-            logger.error(f"Update OMP roles failed for channel {channel_id}: {e}")
 
     def check_omp_roles_health(self):
         """主动检测 OMP 角色指向的 provider 端点是否存活（只报警，不自动切换）

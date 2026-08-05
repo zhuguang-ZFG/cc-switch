@@ -164,6 +164,31 @@ class AdminAuthTests(unittest.TestCase):
 
         self.assertEqual((token, user_id), ("new-tok", "9"))
 
+    def test_main_fails_on_invalid_channels_response(self):
+        """主流程：渠道接口 HTTP 500 或非法 items 时必须返回失败。"""
+        self.addCleanup(smoke.failures.clear)
+        for channel_status, channel_body in ((500, {}), (200, {"data": {"items": {}}})):
+            with self.subTest(channel_status=channel_status, channel_body=channel_body):
+                def fake_http(url, **kwargs):
+                    if url.endswith("/api/status"):
+                        return 200, {}
+                    if "/api/channel/?p=0&page_size=1" in url:
+                        return 200, {}
+                    if "/api/channel/?p=0&page_size=200" in url:
+                        return channel_status, channel_body
+                    if "/v1/chat/completions" in url:
+                        return 200, {"choices": [{"message": {"content": "OK"}}]}
+                    raise AssertionError(f"unexpected URL: {url}")
+
+                with (
+                    patch.object(smoke, "http_json", fake_http),
+                    patch.object(smoke, "read_json", fake_read_json()),
+                    patch.object(smoke.socket, "create_connection"),
+                    patch.object(smoke, "log"),
+                ):
+                    smoke.failures.clear()
+                    self.assertEqual(smoke.main(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
