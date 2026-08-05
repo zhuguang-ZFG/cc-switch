@@ -484,5 +484,5 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 - 按阿里云官方模型页注册能力：1,000,000 context、131,072 max output、reasoning、text+image 输入；官方同时声明 Function Calling 支持。
 - 现场 NewAPI 非流式请求返回 `reasoning_content` 和 `QWEN38_PROBE_OK`；OMP `:high` 路由返回 `QWEN38_OMP_OK`，TTFT 2.26 秒。
 - OMP 工具调用烟测真实调用 `read package.json:1-3`，第二轮返回 `QWEN38_TOOL_OK`，证明 NewAPI → OMP Function Calling 链路可用。
-- 本次仅注册为可手动选择模型，不改 `default`、角色分配或 fallback 顺序；`~/.omp/agent/models.yml` 现存备份为 `models.yml.20260805-bak`（本次未新增独立备份）。
+- 本次仅注册为可手动选择模型，不改 `default`、角色分配或 fallback 顺序；生效前配置备份为 `~/.omp/agent/models.yml.20260806-031500-qwen38.bak`（4311 字节，mtime 2026-08-06 03:14:49，内容为改动前状态，不含 `qwen3.8-max`）。
 - `scripts/ops/test_omp_routes.py` 增加规格门禁，防止模型 ID、上下文、输出上限、reasoning 或图像能力漂移。
