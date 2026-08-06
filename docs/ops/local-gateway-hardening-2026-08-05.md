@@ -603,6 +603,14 @@ AnyRouter 导入本地 NewAPI 为 channel 72：type 14（Anthropic）、`base_ur
 
 验证：仓库 smoke/route 共 50 项通过；live smoke 新增 anyrouter 8789 探针与 ch72 姿态/隔离检查均通过。整体仍仅因既有 ch18/ch70 auto-disabled 返回非零。
 
+### WorkBuddy Sol 可用性与 403 冷却加固（同日 20:52）
+
+结论：WorkBuddy 的 Sol 可用。经 8787 实测 12/12 全形态 200（非流式/流式、带/不带 tools、带/不带 system），时延 3-7s。日志中的大批 403 `unsupported_client` 是 freemodel 在并发 burst 期间对个别 key 的瞬时客户端门禁拒绝（同 key 随后又成功）；converter 此前把 403 判为不可重试、原样透传且不冷却，burst 期间坏 key 被反复选中直达客户端（OMP 兜底链重试放大 403 计数）。
+
+加固：`_is_retryable_code_text` 增加 `403 unsupported_client` 判为 key 质量问题——冷却换 key 重试（流式/非流式共用同一判定点），冷却 180s 到期自动重探自愈。备份 `converter.py.bak-20260806-403cooldown`；重载为 kill + `proxies-supervisor` 自愈。重载后验证：sol stream+tools 200、sol 非流式 200、hy3 200。
+
+ch44 策略未变：NewAPI 聚合仍只 hy3；WorkBuddy sol 由 OMP provider 链（slow/task/plan 三链 `codebuddy/gpt-5.6-sol`）直接消费。若要把 WorkBuddy sol 纳入 NewAPI 聚合，需要 ch44 重新加模型并移除 `CHANNEL_MODEL_EXCLUSIONS[44]`，且 ch44 为 priority 50 会进主池——待用户决策。
+
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
 
 背景：林夕/百倍路径当前不可作为可靠承接，用户要求 Agent 渠道顶上。历史门禁已明确 AgentRouter Claude 短流式存在上游敏感词误杀，因此不把 AgentRouter Claude 提升为 slow/plan/vision 主路由。
