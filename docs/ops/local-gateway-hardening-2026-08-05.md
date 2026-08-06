@@ -575,6 +575,18 @@ agent 的入口）。
 
 验证：NewAPI `/api/status` HTTP 200；`scripts/ops/test_omp_routes.py` + `test_smoke.py` 45 项通过；live smoke 的 `channels` 项仍因既有 auto-disabled channel 18/70 返回 FAIL，与 HugAI 登记无关；模型隔离与预期禁用检查均通过。
 
+### HugAI Opus 5 激活与兜底定位（同日 19:38）
+
+复测时发现前一轮命令错误地使用了 Windows CMD 的 `%HUGAI_KEY%` 环境变量语法，而执行环境实际为 POSIX shell；上游收到的是字面量而非密钥，因此此前 `INVALID_API_KEY` 结论无效。改用 `$HUGAI_KEY` 后，直连 `POST https://claude.hugai.vip/v1/messages`、模型 `claude-opus-5` 返回 HTTP 200 和 `HUGAI_OK`（约 1.8s）。
+
+在不创建重复渠道的前提下，原地更新 channel 71 为 `hugai-claude-opus5`：`type=14`（Anthropic）、`models=claude-opus-5`、`status=1`、`priority=40`、`weight=10`、`auto_ban=0`，保留浏览器式 User-Agent override。NewAPI 专属渠道测试 `success=true`（2.028s），abilities 重建成功；经本地聚合入口 `POST 127.0.0.1:3002/v1/messages` 实推返回 HTTP 200 和 `NEWAPI_HUGAI_OK`。
+
+路由定位：channel 71 不进入 priority 50 主池；主池仍为 ch3 `baibei-100xlabs` 与 ch9 `linxi-k40`。HugAI 位于 priority 40 最终兜底层，与额度有限/边界更复杂的 AgentRouter、AnyRouter 同类处理，只在主池失败并发生重试下落时承接 `claude-opus-5`。它只加入 NewAPI 聚合池，不设为 CC Switch current，不加入本机 failover queue，也不作为 OMP 独立直连 provider。
+
+本轮回滚快照：`C:\Users\zhugu\.new-api-local\backups\new-api-before-hugai-opus5-retest-20260806.db`（35,975,168 bytes）。聊天中出现过的 HugAI key 视为已暴露；稳定性观察后应在上游轮换，并通过 `PUT /api/channel/` 更新 channel 71（请求体不得含 `status`）。
+
+发布前回归：`scripts.ops.test_omp_routes` + `scripts.ops.test_smoke` 共 45 项通过；live smoke 的 NewAPI 状态、本地 8787/8788/9457、模型隔离及两条真实聚合请求通过。live smoke 整体仍非零：ch18/ch70 为既有 auto-disabled，ch45 AgentRouter 仍违反 intentional-disable 门禁；均非 channel 71 引入，本次不扩大范围修改。
+
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
 
 背景：林夕/百倍路径当前不可作为可靠承接，用户要求 Agent 渠道顶上。历史门禁已明确 AgentRouter Claude 短流式存在上游敏感词误杀，因此不把 AgentRouter Claude 提升为 slow/plan/vision 主路由。
