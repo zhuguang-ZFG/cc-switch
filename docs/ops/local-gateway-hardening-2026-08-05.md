@@ -585,7 +585,7 @@ agent 的入口）。
 
 本轮回滚快照：`C:\Users\zhugu\.new-api-local\backups\new-api-before-hugai-opus5-retest-20260806.db`（35,975,168 bytes）。聊天中出现过的 HugAI key 视为已暴露；稳定性观察后应在上游轮换，并通过 `PUT /api/channel/` 更新 channel 71（请求体不得含 `status`）。
 
-发布前回归：`scripts.ops.test_omp_routes` + `scripts.ops.test_smoke` 共 45 项通过；live smoke 的 NewAPI 状态、本地 8787/8788/9457、模型隔离及两条真实聚合请求通过。live smoke 整体仍非零：ch18/ch70 为既有 auto-disabled，ch45 AgentRouter 仍违反 intentional-disable 门禁；均非 channel 71 引入，本次不扩大范围修改。
+发布前回归：`scripts.ops.test_omp_routes` + `scripts.ops.test_smoke` 共 45 项通过；live smoke 的 NewAPI 状态、本地 8787/8788/9457、模型隔离及两条真实聚合请求通过。随后修正过期门禁：ch45 已按既定策略作为 priority 40 的 AgentRouter Sol 最终兜底，不再属于 `KNOWN_BROKEN_CHANNELS`；Claude 基础模型与显式 Claude 别名仍由 `CHANNEL_MODEL_EXCLUSIONS` 禁止进入 ch45。修正后 live smoke 的 `intentional channel disables` 与 `channel model isolation` 均通过；整体仍仅因既有 ch18/ch70 auto-disabled 返回非零。
 
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
 

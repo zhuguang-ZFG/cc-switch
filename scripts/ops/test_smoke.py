@@ -206,15 +206,15 @@ class AdminAuthTests(unittest.TestCase):
             ["45:agentrouter=zg-agent-claude-opus-4-8,zg-agent-claude-opus-5"],
         )
 
-    def test_expected_disabled_channel_cannot_reenter_pool(self):
+    def test_live_agentrouter_fallback_is_not_expected_disabled(self):
         channels = [
             {"id": 45, "name": "agentrouter", "status": 1},
-            {"id": 62, "name": "centos-eo-gpt", "status": 3},
+            {"id": 62, "name": "centos-eo-gpt", "status": 1},
         ]
 
         self.assertEqual(
             smoke.expected_disabled_violations(channels),
-            ["45:agentrouter"],
+            ["62:centos-eo-gpt"],
         )
 
     def test_main_fails_on_invalid_channels_response(self):

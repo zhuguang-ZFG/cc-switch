@@ -29,10 +29,10 @@ PROXY_PORTS = {"converter": 8787, "agentrouter": 8788, "atomcode": 9457}
 SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 
 # Channels whose auto-disabled state is currently intentional. Channel 2 has
-# no upstream model; channels 62-65 fail production-shaped pre-consumption;
-# channel 45 is isolated from NewAPI because its aggregate account is negative
-# while OMP's authenticated direct AgentRouter provider remains healthy.
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 45, 62, 63, 64, 65}
+# no upstream model; channels 62-65 fail production-shaped pre-consumption.
+# Channel 45 is intentionally live at priority 40 as the final AgentRouter Sol
+# fallback; CHANNEL_MODEL_EXCLUSIONS below keeps Claude aliases out of it.
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 62, 63, 64, 65}
 
 # These local proxy channels remain available only through explicit model
 # aliases. Keeping their base models in aggregate pools silently re-enters
