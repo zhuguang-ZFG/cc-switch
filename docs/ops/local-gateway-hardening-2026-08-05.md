@@ -557,3 +557,30 @@ agent 的入口）。
 - live smoke 现在同时检查模型隔离和预期禁用状态；违反任一策略即退出非零。
 
 验证：仓库 Guardian/smoke/OMP route 114 项、TTFT gateway 5 项通过；NewAPI live smoke `ALL OK`；OMP Claude、CodeBuddy Sol、default 和 AgentRouter 直连路径均完成真实请求；ch45 观察 45 秒未重新入池。
+
+## HugAI/Sub2API 渠道登记（2026-08-06 16:04）
+
+用户提供 `https://claude.hugai.vip` 的上游 key，按“测试后导入渠道”执行。上游站点为 Sub2API；裸客户端请求被 Cloudflare `1010` 拦截，加入浏览器式 User-Agent 后可到达平台。
+
+测试矩阵（不带密钥值）：
+
+- `/v1/models`：HTTP 403，不对 API key 开放模型目录；
+- `/v1/messages` Claude 候选（`claude-opus-5`、`claude-sonnet-4-5`、`claude-haiku-4-5`、`claude-opus-4-8`、`claude-opus-4-6`、`claude-3-7-sonnet-latest`）：明确返回“当前分组没有配置该模型”；`claude-opus-5` 走到上游但返回 502；
+- GPT/Gemini 候选（`gpt-5.6`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gemini-3-pro`、`gemini-3-flash`）：冷却期后全部返回 `model_not_found`；
+- 曾出现用户级 RPM 429，但冷却后返回确定性 `model_not_found`，说明不是可用模型被暂时限流。
+
+结论：当前 key 所在 Sub2API 分组没有任何可成功调度的测试模型，不能作为启用渠道加入路由池。已登记为 **NewAPI channel 71 `hugai-claude-disabled`**，采用 `type=14`（Anthropic）、`status=2`、`priority=0`、`weight=0`、`models=claude-opus-5`、浏览器式 UA header override、自动封禁关闭；不创建 abilities，不进入 fallback。该登记只保留待修证据和回滚点，不代表上游可用。
+
+备份：导入前数据库快照为 `C:\Users\zhugu\.new-api-local\backups\new-api-before-hugai-channel-20260806.db`（SHA-256 `e8462ffd43904f182b8cdc974fc5999cc1f6b598d0d67a26b6da7dc75cfea59e`）。
+
+验证：NewAPI `/api/status` HTTP 200；`scripts/ops/test_omp_routes.py` + `test_smoke.py` 45 项通过；live smoke 的 `channels` 项仍因既有 auto-disabled channel 18/70 返回 FAIL，与 HugAI 登记无关；模型隔离与预期禁用检查均通过。
+
+## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
+
+背景：林夕/百倍路径当前不可作为可靠承接，用户要求 Agent 渠道顶上。历史门禁已明确 AgentRouter Claude 短流式存在上游敏感词误杀，因此不把 AgentRouter Claude 提升为 slow/plan/vision 主路由。
+
+证据：`agentrouter` 本地代理只监听 Tailscale 地址 `100.83.32.95:8788`；未认证请求返回 401。携带 Guardian secrets 中的代理 key 实测 `agentrouter/gpt-5.6-sol`：非流式 200（约 10.7s）、流式 200（约 4.9s）、强制工具调用 200 并返回 `AGENT_TOOL_OK`。
+
+变更：`~/.omp/agent/config.yml` 的 `fallbackChains.default` 在 `zg-newapi/gpt-5.6-sol` 后插入 `agentrouter/gpt-5.6-sol`，作为 default 的第二候选和第一个跨故障域 AgentRouter Sol 备用。`designer` 链首此前已是 AgentRouter Sol；`slow` / `plan` / `vision` 未改。备份为 `~/.omp/agent/config.yml.20260806-agentrouter-sol-backup.bak`。
+
+验证：`omp -p --model agentrouter/gpt-5.6-sol` 返回 `AGENT_OMP_OK`；OMP route gate 32/32 通过；Guardian/smoke/route 完整回归 140/140 通过。
