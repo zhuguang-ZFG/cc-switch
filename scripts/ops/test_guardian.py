@@ -1863,6 +1863,45 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_bytes(), b"{ not valid json")
 
+
+    def test_state_corruption_recovers_last_good_snapshot(self):
+        """主状态损坏时恢复上一份快照，保留禁用原因而非回到空默认值"""
+        state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
+        last_good = guardian.Path.home() / ".omp" / "guardian" / "state.json.last-good"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        last_good.write_text(json.dumps({
+            "schema_version": 1,
+            "disabled_channels": [{"id": 45, "name": "agentrouter", "manual": False, "reason": "timeout"}],
+        }), encoding="utf-8")
+        state_file.write_text("{ broken", encoding="utf-8")
+
+        with patch.object(guardian.logger, "error"):
+            engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+            loaded = engine._load_state()
+
+        self.assertEqual(loaded["disabled_channels"][0]["id"], 45)
+        self.assertEqual(loaded["disabled_channels"][0]["reason"], "timeout")
+
+        engine.state = loaded
+        lifecycle = engine.derive_channel_lifecycle([
+            {"id": 45, "name": "agentrouter", "status": 2, "weight": 0},
+        ])
+        self.assertEqual([item["id"] for item in lifecycle["disabled_auto"]], [45])
+        self.assertEqual(lifecycle["disabled_orphan"], [])
+
+    def test_save_state_uses_process_scoped_atomic_files_and_snapshot(self):
+        """状态主文件与 last-good 快照均由进程隔离临时文件原子替换"""
+        engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+        engine.state = {"schema_version": 1, "disabled_channels": [{"id": 3}]}
+        with patch.object(guardian.os, "replace") as replace:
+            engine._save_state()
+
+        self.assertEqual(replace.call_count, 2)
+        destinations = {str(call.args[1]) for call in replace.call_args_list}
+        self.assertIn(str(guardian.STATE_FILE), destinations)
+        self.assertIn(str(guardian.STATE_BACKUP_FILE), destinations)
+        for call in replace.call_args_list:
+            self.assertIn(f".{os.getpid()}.tmp", str(call.args[0]))
     def test_state_oserror_not_backed_up(self):
         """state.json 读 I/O 错误（非内容损坏）：不搬文件，只记录"""
         state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"

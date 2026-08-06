@@ -174,6 +174,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "guardian.log"
 METRICS_FILE = LOG_DIR / "metrics.json"
 STATE_FILE = LOG_DIR / "state.json"
+STATE_BACKUP_FILE = LOG_DIR / "state.json.last-good"
 HEARTBEAT_FILE = LOG_DIR / "heartbeat.json"  # 心跳文件：外部 watchdog 监视新鲜度
 HEARTBEAT_STALE_SEC = 180  # 心跳过期阈值（秒）：超过视为 Guardian 卡死
 
@@ -757,16 +758,33 @@ class AutoFixEngine:
                         old.unlink()
                     except OSError:
                         pass
+                if STATE_BACKUP_FILE.exists():
+                    try:
+                        recovered = json.loads(STATE_BACKUP_FILE.read_text(encoding="utf-8"))
+                        if not isinstance(recovered, dict):
+                            raise ValueError("state.json.last-good root is not an object")
+                        for k, v in defaults.items():
+                            if k not in recovered:
+                                recovered[k] = v
+                        logger.error(f"state.json recovered from {STATE_BACKUP_FILE}")
+                        return recovered
+                    except (OSError, json.JSONDecodeError, ValueError) as recovery_error:
+                        logger.error(f"state.json last-good recovery failed: {recovery_error}")
             except OSError as e:
                 # I/O 错误（权限/占用/读盘）：不搬文件，记录后重试
                 logger.error(f"state.json read failed (not corrupted): {e}")
         return defaults
 
     def _save_state(self):
-        """原子写：先写临时文件再 os.replace，避免中途崩溃损坏 state.json"""
-        tmp = STATE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.state, indent=2))
+        """原子写入主状态并保留上一份可恢复快照。"""
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(self.state, indent=2)
+        tmp = STATE_FILE.with_name(f"{STATE_FILE.name}.{os.getpid()}.tmp")
+        tmp.write_text(payload, encoding="utf-8")
         os.replace(tmp, STATE_FILE)
+        backup_tmp = STATE_BACKUP_FILE.with_name(f"{STATE_BACKUP_FILE.name}.{os.getpid()}.tmp")
+        backup_tmp.write_text(payload, encoding="utf-8")
+        os.replace(backup_tmp, STATE_BACKUP_FILE)
 
     def _append_disabled(self, record: dict):
         """追加禁用渠道记录（防重复：同 id 不重复追加）"""
