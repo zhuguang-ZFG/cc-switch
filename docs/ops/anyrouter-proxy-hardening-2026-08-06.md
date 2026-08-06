@@ -22,12 +22,22 @@ exit 58 崩溃(约 10:02,无日志请求)+ 此前 09:45–09:46 429 限流风暴
 
 - `node --check` 通过。
 - `taskkill -F` 强杀 → hub 自动重启(restarts=1,新 PID 监听 8789)。
+
 - 6MiB 请求体 → 413 `request body too large`,进程存活。
 - 客户端中途断连(发送部分 body 后 destroy)→ 进程存活,端口仍监听。
 - 真实链路:`omp -p --model anyrouter/claude-opus-5 "Reply exactly BRIDGE_OK"` → `BRIDGE_OK`(76.9s)。
 
+## 第三轮：看护移交 proxies-supervisor(同日 19:00)
+
+- 8789 纳入 `~/.omp/guardian/proxies-supervisor.py` 的 `PROXIES`(`probe_host: 127.0.0.1`,其余代理走 tailnet 地址);hub 不再直接看护 proxy 进程,改为看护 supervisor 本身(on-failure + detached)。开机路径沿用既有 `LocalAIProxies-Supervisor-Logon` 计划任务;曾单独创建的 `AnyrouterProxy` 任务已删除(单属主原则)。
+- proxy.cjs 增加 EADDRINUSE 干净退出(exit 0):多属主竞态下败者静默退出,不触发重启风暴。
+- supervisor 增加 Telegram 告警:端口不可达且重启后仍失败、或一小时重启超 5 次预算时发送,30 分钟冷却。
+- 发现并处置:supervisor 旧实例(03:44 启动,pythonw,无 anyrouter 条目)一直在跑,新代码通过互斥体判重退出——已杀旧实例换新。
+
+验证:杀 hub 托管实例 → supervisor 30s 周期内自愈("anyrouter 重启成功");Telegram 测试消息送达;`omp -p --model anyrouter/claude-opus-5` → BRIDGE_OK(76.6s)。
+
 ## 遗留边界
 
-- hub broker 退出后 detached 进程存活但无人重启;重启电脑后需手动 `hub start` 或注册 Windows 计划任务(未做,需用户授权系统级变更)。
+- hub broker 退出后 detached 进程存活但无人重启 → 已由第三轮解决(proxies-supervisor + 既有 Logon 计划任务)。
 - 上游 520/429 属 AnyRouter 公益站侧限流,代理不重试(避免重试风暴);OMP slow 链 cooldown-expiry 已兜底。
 - 健康检查勿用最小 curl 体(门禁秒拒),用真实 OMP 请求。
