@@ -25,7 +25,13 @@ from pathlib import Path
 NEWAPI_BASE = "http://127.0.0.1:3002"
 DEPLOY_DIR = Path("C:/Users/zhugu/.new-api-local")
 PROBE_HOST = "100.83.32.95"  # local proxies bind the Tailscale IP (secrets.json)
-PROXY_PORTS = {"converter": 8787, "agentrouter": 8788, "atomcode": 9457}
+PROXY_PORTS: dict[str, tuple[str, int]] = {
+    "converter": (PROBE_HOST, 8787),
+    "agentrouter": (PROBE_HOST, 8788),
+    "atomcode": (PROBE_HOST, 9457),
+    # anyrouter binds loopback only (OMP slow chain + NewAPI ch72)
+    "anyrouter": ("127.0.0.1", 8789),
+}
 SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 
 # Channels whose auto-disabled state is currently intentional. Channel 2 has
@@ -34,9 +40,9 @@ SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 # fallback; CHANNEL_MODEL_EXCLUSIONS below keeps Claude aliases out of it.
 KNOWN_BROKEN_CHANNELS: set[int] = {2, 62, 63, 64, 65}
 
-# These local proxy channels remain available only through explicit model
-# aliases. Keeping their base models in aggregate pools silently re-enters
-# known failure domains before OMP can apply its cross-provider fallback.
+# Model isolation is channel-specific, not a global Sol ban. AgentRouter and
+# AnyRouter may serve base/aliased Sol models at their fallback tiers; only
+# their Claude models are excluded here. CodeBuddy has a separate Sol contract.
 CHANNEL_MODEL_EXCLUSIONS: dict[int, set[str]] = {
     44: {"gpt-5.6-sol", "zg-wb-gpt-5.6-sol"},
     45: {
@@ -46,7 +52,45 @@ CHANNEL_MODEL_EXCLUSIONS: dict[int, set[str]] = {
         "zg-agent-claude-opus-5",
         "zg-agent-claude-opus-4-8",
     },
+    72: {
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "zg-claude-opus-5",
+        "zg-agent-claude-opus-5",
+        "zg-agent-claude-opus-4-8",
+    },
 }
+
+# Live aggregate fallback contracts. These channels must stay enabled but below
+# the primary pool; model eligibility remains governed separately above.
+FALLBACK_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
+    45: {"priority": 40, "max_weight": 5},
+    72: {"priority": 40, "max_weight": 5},
+}
+
+
+def fallback_posture_violations(channels: list[dict]) -> list[str]:
+    """Return fallback channels that are disabled or drifted into a primary tier."""
+    by_id = {channel.get("id"): channel for channel in channels}
+    violations: list[str] = []
+    for channel_id, expected in FALLBACK_CHANNEL_POSTURES.items():
+        channel = by_id.get(channel_id)
+        if channel is None:
+            violations.append(f"{channel_id}:missing")
+            continue
+        reasons: list[str] = []
+        if channel.get("status") != 1:
+            reasons.append(f"status={channel.get('status')}")
+        if channel.get("priority") != expected["priority"]:
+            reasons.append(f"priority={channel.get('priority')}")
+        weight = channel.get("weight")
+        if not isinstance(weight, int) or weight > expected["max_weight"]:
+            reasons.append(f"weight={weight}")
+        if reasons:
+            violations.append(
+                f"{channel_id}:{channel.get('name', '')}=" + ",".join(reasons)
+            )
+    return violations
 
 
 def channel_policy_violations(channels: list[dict]) -> list[str]:
@@ -172,9 +216,9 @@ def main() -> int:
     check("newapi /api/status", status == 200, f"HTTP {status}")
 
     # 2. proxy ports
-    for name, port in PROXY_PORTS.items():
+    for name, (host, port) in PROXY_PORTS.items():
         try:
-            with socket.create_connection((PROBE_HOST, port), timeout=3):
+            with socket.create_connection((host, port), timeout=3):
                 check(f"proxy {name}:{port}", True)
         except OSError as e:
             check(f"proxy {name}:{port}", False, str(e))
@@ -211,6 +255,12 @@ def main() -> int:
                 "intentional channel disables",
                 not disable_violations,
                 f"violations={disable_violations or 'none'}",
+            )
+            posture_violations = fallback_posture_violations(items)
+            check(
+                "fallback channel posture",
+                not posture_violations,
+                f"violations={posture_violations or 'none'}",
             )
     except Exception as e:  # noqa: BLE001
         check("channels", False, f"admin api error: {e}")

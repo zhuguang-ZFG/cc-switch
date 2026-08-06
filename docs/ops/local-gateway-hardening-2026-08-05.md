@@ -587,6 +587,22 @@ agent 的入口）。
 
 发布前回归：`scripts.ops.test_omp_routes` + `scripts.ops.test_smoke` 共 45 项通过；live smoke 的 NewAPI 状态、本地 8787/8788/9457、模型隔离及两条真实聚合请求通过。随后修正过期门禁：ch45 已按既定策略作为 priority 40 的 AgentRouter Sol 最终兜底，不再属于 `KNOWN_BROKEN_CHANNELS`；Claude 基础模型与显式 Claude 别名仍由 `CHANNEL_MODEL_EXCLUSIONS` 禁止进入 ch45。修正后 live smoke 的 `intentional channel disables` 与 `channel model isolation` 均通过；整体仍仅因既有 ch18/ch70 auto-disabled 返回非零。
 
+### Sol 兜底渠道姿态门禁（同日 20:09）
+
+补强 `newapi-local-smoke.py`：Sol 模型本身不是违规条件，AgentRouter 与 AnyRouter 均可承载 Sol；门禁改为按渠道分别约束。现场 ch45 AgentRouter 与 ch72 AnyRouter 必须保持 `status=1`、`priority=40`、`weight<=5`，允许基础/别名 `gpt-5.6-sol`，但禁止 Claude 基础模型与显式 Claude 别名回流进这两个渠道；CodeBuddy ch44 保留独立 Sol 隔离合同。
+
+### AnyRouter 导入 NewAPI ch72（同日 20:36）
+
+AnyRouter 导入本地 NewAPI 为 channel 72：type 14（Anthropic）、`base_url=http://127.0.0.1:8789`、客户端 key 占位 `any`（8789 代理不校验客户端 key，上游用 secrets 的 `anyrouter_proxy_key`）、`status=1`、`priority=40`、`weight=5`、`auto_ban=0`（同 ch71，避免上游瞬时失败消耗兜底）、models `gpt-5.6-sol,zg-gpt-5.6-sol`。门禁以真实 ID 登记：`FALLBACK_CHANNEL_POSTURES[72]`、`CHANNEL_MODEL_EXCLUSIONS[72]`、`PROXY_PORTS["anyrouter"]=127.0.0.1:8789`。
+
+入口证据：anyrouter.top `/v1/models` 含 `gpt-5.6-sol`；chat-completions 与 messages 表面对 Sol 返回 404「当前 API 不支持所选模型」；`/v1/responses` 表面进入渠道选择（500 `get_channel_failed` 负载上限）——Sol 的入口是 responses 表面。据此扩展 8789 代理：非 Claude 模型在 chat/completions 与 messages 两表面均转换为上游 `/v1/responses`（OpenAI→responses、Anthropic→responses），并转回各自客户端协议（流式请求合成 SSE）；Claude 模型仍走 messages 指纹路径，chat 表面的 Claude 以 400 fail-closed。备份 `proxy.cjs.bak-20260806-responses`；重载方式为 kill 旧进程 + `proxies-supervisor` 自愈。
+
+上游现状（非本地链路问题）：Sol 在 responses 表面负载上限（500 `get_channel_failed`），Claude 在 messages 指纹网关被 520 拒绝。ch72 保持登记，NewAPI 按请求 failover；上游恢复后零配置生效。持续验证可用管理测试端点 `GET /api/channel/test/72?model=gpt-5.6-sol`。
+
+回滚：DB 快照 `~/.new-api-local/backups/new-api-before-anyrouter-import-20260806.db`；代理备份同上；移除渠道可 `PUT /api/channel/` 调整或恢复快照。
+
+验证：仓库 smoke/route 共 50 项通过；live smoke 新增 anyrouter 8789 探针与 ch72 姿态/隔离检查均通过。整体仍仅因既有 ch18/ch70 auto-disabled 返回非零。
+
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
 
 背景：林夕/百倍路径当前不可作为可靠承接，用户要求 Agent 渠道顶上。历史门禁已明确 AgentRouter Claude 短流式存在上游敏感词误杀，因此不把 AgentRouter Claude 提升为 slow/plan/vision 主路由。

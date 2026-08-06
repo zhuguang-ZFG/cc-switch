@@ -217,6 +217,115 @@ class AdminAuthTests(unittest.TestCase):
             ["62:centos-eo-gpt"],
         )
 
+    def test_agentrouter_sol_fallback_posture_is_valid(self):
+        channels = [
+            {
+                "id": 45,
+                "name": "agentrouter",
+                "status": 1,
+                "priority": 40,
+                "weight": 5,
+                "models": "gpt-5.6-sol,zg-agent-gpt-5.6-sol",
+            },
+            {
+                "id": 72,
+                "name": "anyrouter",
+                "status": 1,
+                "priority": 40,
+                "weight": 5,
+            },
+        ]
+
+        self.assertEqual(smoke.fallback_posture_violations(channels), [])
+
+    def test_agentrouter_primary_tier_or_excess_weight_is_rejected(self):
+        channels = [
+            {
+                "id": 45,
+                "name": "agentrouter",
+                "status": 1,
+                "priority": 50,
+                "weight": 10,
+                "models": "gpt-5.6-sol",
+            },
+            {
+                "id": 72,
+                "name": "anyrouter",
+                "status": 1,
+                "priority": 40,
+                "weight": 5,
+            },
+        ]
+
+        self.assertEqual(
+            smoke.fallback_posture_violations(channels),
+            ["45:agentrouter=priority=50,weight=10"],
+        )
+
+    def test_agentrouter_disabled_or_missing_is_rejected(self):
+        self.assertEqual(
+            smoke.fallback_posture_violations(
+                [
+                    {"id": 45, "name": "agentrouter", "status": 2, "priority": 40, "weight": 5},
+                    {"id": 72, "name": "anyrouter", "status": 1, "priority": 40, "weight": 5},
+                ]
+            ),
+            ["45:agentrouter=status=2"],
+        )
+        self.assertEqual(
+            smoke.fallback_posture_violations([]), ["45:missing", "72:missing"]
+        )
+
+    def test_anyrouter_sol_fallback_posture_is_registered(self):
+        channels = [
+            {
+                "id": 72,
+                "name": "anyrouter",
+                "status": 1,
+                "priority": 40,
+                "weight": 5,
+                "models": "gpt-5.6-sol,zg-gpt-5.6-sol",
+            },
+            {
+                "id": 45,
+                "name": "agentrouter",
+                "status": 1,
+                "priority": 40,
+                "weight": 5,
+            },
+        ]
+
+        self.assertEqual(smoke.fallback_posture_violations(channels), [])
+        self.assertEqual(smoke.channel_policy_violations(channels), [])
+
+    def test_anyrouter_primary_drift_or_claude_leak_is_rejected(self):
+        channels = [
+            {
+                "id": 72,
+                "name": "anyrouter",
+                "status": 1,
+                "priority": 50,
+                "weight": 5,
+                "models": "gpt-5.6-sol,claude-opus-5",
+            },
+            {
+                "id": 45,
+                "name": "agentrouter",
+                "status": 1,
+                "priority": 40,
+                "weight": 5,
+            },
+        ]
+
+        self.assertEqual(
+            smoke.fallback_posture_violations(channels),
+            ["72:anyrouter=priority=50"],
+        )
+        self.assertEqual(
+            smoke.channel_policy_violations(channels),
+            ["72:anyrouter=claude-opus-5"],
+        )
+
     def test_main_fails_on_invalid_channels_response(self):
         """主流程：渠道接口 HTTP 500 或非法 items 时必须返回失败。"""
         self.addCleanup(smoke.failures.clear)
