@@ -486,3 +486,20 @@ converter 前言注入修复（见 local-gateway-hardening-2026-08-05.md）后�
 - OMP 工具调用烟测真实调用 `read package.json:1-3`，第二轮返回 `QWEN38_TOOL_OK`，证明 NewAPI → OMP Function Calling 链路可用。
 - 本次仅注册为可手动选择模型，不改 `default`、角色分配或 fallback 顺序；生效前配置备份为 `~/.omp/agent/models.yml.20260806-031500-qwen38.bak`（4311 字节，mtime 2026-08-06 03:14:49，内容为改动前状态，不含 `qwen3.8-max`）。
 - `scripts/ops/test_omp_routes.py` 增加规格门禁，防止模型 ID、上下文、输出上限、reasoning 或图像能力漂移。
+
+### OMP 内置 shake 上下文压缩启用（2026-08-08）
+
+- 为减少长会话中大型工具输出、无效结果和大文本块继续占用 provider 输入上下文，显式写入 `~/.omp/agent/config.yml`：
+
+  ```yaml
+  compaction:
+    enabled: true
+    strategy: shake
+  ```
+
+- 本机 OMP 17.2.10 schema 支持 `context-full`、`handoff`、`shake`、`snapcompact`、`off`；当前 schema 默认值为 `snapcompact`，本次选择 `shake` 是为了使用不调用摘要模型、基于 `artifact://` 可恢复引用的机械式清理。`keepRecentTokens=20000`、`dropUseless=true` 保持默认安全值。
+- 重要边界：`shake` 会把符合条件的旧工具结果和大型文本块替换为可恢复的 `artifact://` 引用，从而缩短活动 provider 上下文；它不是不可逆删除，原内容仍可按引用取回。未达到阈值时不会自动执行。上下文压力达到维护条件后，OMP 先尝试 `contextPromotion`，无法扩容时才执行 shake；若回收不足，内置逻辑回退 `context-full`。
+- 与 `omp-cache-optimizer` 的职责不同：shake 减少出站上下文内容；cache optimizer 提高剩余稳定前缀的 KV/Prompt Cache 命中率。两者可叠加，但不能把缓存命中 token 直接等同于发送 token 减少。
+- 生效前备份：`C:/Users/zhugu/.omp/agent/config.yml.before-shake-20260808.bak`，与修改前配置均为 3029 bytes 且 `cmp` 一致。回滚 = 恢复该备份后重启 OMP。
+- 重启后验证：`omp config get compaction.strategy` → `shake`；`omp config get compaction.enabled` → `true`；`omp config get compaction.keepRecentTokens` → `20000`；`omp config get compaction.dropUseless` → `true`。独立无会话 smoke：`omp -p --no-session --model codebuddy/gpt-5.6-sol "Reply exactly SHAKE_CONFIG_OK"` → `SHAKE_CONFIG_OK`。
+- 本次验证没有伪造节省量：重启后尚未观察到新的 shake compaction 事件，原因是当前会话尚未达到触发阈值；后续应以 OMP compaction 事件和 token 统计记录实际收益。
