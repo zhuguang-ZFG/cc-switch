@@ -636,7 +636,8 @@ OAuth 授权被服务端阻断（3 次 401 `Unauthorized`，trace `3debe775`/`30
 - NewAPI：ch53 删除（`DELETE /api/channel/53`）。
 - OMP：models.yml 移除 atomcode provider；config.yml vision 主模型 `atomcode/Qwen3-VL` → `zg-newapi-anthropic/claude-opus-5`（fallback 链去重链首）、`maxInFlightRequests.atomcode` 删除、flash/smol 链的 `atomcode/deepseek-v4-flash` 删除（备份 `*.bak-20260807-atomcode-removal`；OMP 下次重启生效）。
 - 仓库门禁：smoke `PROXY_PORTS`、guardian `LOCAL_PROXIES`/探针 key/重启分支、三套测试同步（145/145 通过）。
-- 归档：`~/atomgit-opencode-bridge.bak-20260731`（原 `~/atomgit-opencode-bridge`）。
+- 归档：`~/atomgit-opencode-bridge.bak-20260807`（原 `~/atomgit-opencode-bridge`）。
+- 残留清理（同日 12:0x，用户确认）：`~/.atomcode/` 目录、`$LOCALAPPDATA/AtomCode/`（atomcode.exe CLI）、secrets.json 的 `atomcode_proxy_key` 已删除（secrets 备份 `secrets.json.bak-20260807-before-atomcode-key-removal`）。
 - 验证：live smoke 仅剩既有 ch18/ch70 auto-disabled 基线。
 
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
