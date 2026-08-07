@@ -639,6 +639,10 @@ OAuth 授权被服务端阻断（3 次 401 `Unauthorized`，trace `3debe775`/`30
 - 归档：`~/atomgit-opencode-bridge.bak-20260807`（原 `~/atomgit-opencode-bridge`）。
 - 残留清理（同日 12:0x，用户确认）：`~/.atomcode/` 目录、`$LOCALAPPDATA/AtomCode/`（atomcode.exe CLI）、secrets.json 的 `atomcode_proxy_key` 已删除（secrets 备份 `secrets.json.bak-20260807-before-atomcode-key-removal`）。
 - 终态（同日 12:2x）：`~/atomgit-opencode-bridge.bak-20260807` 归档目录已删除；Guardian `state.json`/`state.json.last-good` 的 ch53 `disabled_channels` 条目已清除（Guardian 不再对已删渠道反复 test/恢复，日志此前 11:42-12:11 持续出现 `test/53 failed`）。
+
+### agentrouter Claude 回归聚合兜底（同日 12:33）
+
+用户决策：ch45 agentrouter 的 Claude 模型加回 NewAPI 聚合池（兜底层 pri40/w5，主池 pri50 失败才承接）。实测 8788 直连 claude-opus-5 200（5.1s）；管理端点 `GET /api/channel/test/45?model=claude-opus-5` 200（4.5s）。ch45 models 增加 `claude-opus-5,claude-opus-4-8,zg-claude-opus-5,zg-agent-claude-opus-5,zg-agent-claude-opus-4-8`；`CHANNEL_MODEL_EXCLUSIONS` 移除 45 条目（保留 44 codebuddy sol 排除、72 anyrouter Claude 排除——anyrouter 上游 messages 指纹面仍 520 未恢复）。历史敏感词误杀风险按低权重接受。Claude 聚合池现为 5 活渠：ch3(50/20)/ch9(50/10)/ch18(50/9)/ch71(40/10)/ch45(40/5)。
 - 验证：live smoke 仅剩既有 ch18/ch70 auto-disabled 基线。
 
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）

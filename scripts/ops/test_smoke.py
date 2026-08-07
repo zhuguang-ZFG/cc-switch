@@ -164,7 +164,7 @@ class AdminAuthTests(unittest.TestCase):
 
         self.assertEqual((token, user_id), ("new-tok", "9"))
 
-    def test_channel_policy_rejects_agentrouter_claude_aggregate_models(self):
+    def test_channel_policy_allows_agentrouter_claude_aggregate_models(self):
         channels = [
             {
                 "id": 45,
@@ -173,10 +173,7 @@ class AdminAuthTests(unittest.TestCase):
             }
         ]
 
-        self.assertEqual(
-            smoke.channel_policy_violations(channels),
-            ["45:agentrouter=claude-opus-5"],
-        )
+        self.assertEqual(smoke.channel_policy_violations(channels), [])
 
     def test_channel_policy_rejects_codebuddy_sol_but_allows_hy3(self):
         channels = [
@@ -192,7 +189,7 @@ class AdminAuthTests(unittest.TestCase):
             ["44:codebuddy=gpt-5.6-sol,zg-wb-gpt-5.6-sol"],
         )
 
-    def test_channel_policy_rejects_explicit_agentrouter_claude_aliases(self):
+    def test_channel_policy_allows_explicit_agentrouter_claude_aliases(self):
         channels = [
             {
                 "id": 45,
@@ -201,10 +198,7 @@ class AdminAuthTests(unittest.TestCase):
             }
         ]
 
-        self.assertEqual(
-            smoke.channel_policy_violations(channels),
-            ["45:agentrouter=zg-agent-claude-opus-4-8,zg-agent-claude-opus-5"],
-        )
+        self.assertEqual(smoke.channel_policy_violations(channels), [])
 
     def test_live_agentrouter_fallback_is_not_expected_disabled(self):
         channels = [
