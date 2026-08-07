@@ -589,7 +589,7 @@ agent 的入口）。
 
 ### Sol 兜底渠道姿态门禁（同日 20:09）
 
-补强 `newapi-local-smoke.py`：Sol 模型本身不是违规条件，AgentRouter 与 AnyRouter 均可承载 Sol；门禁改为按渠道分别约束。现场 ch45 AgentRouter 与 ch72 AnyRouter 必须保持 `status=1`、`priority=40`、`weight<=5`，允许基础/别名 `gpt-5.6-sol`，但禁止 Claude 基础模型与显式 Claude 别名回流进这两个渠道；CodeBuddy ch44 保留独立 Sol 隔离合同。
+补强 `newapi-local-smoke.py`：Sol 模型本身不是违规条件，AgentRouter 与 AnyRouter 均可承载 Sol；门禁改为按渠道分别约束。现场 ch45 AgentRouter 与 ch72 AnyRouter 必须保持 `status=1`、`priority=40`、`weight<=5`，允许基础/别名 `gpt-5.6-sol`，但禁止 Claude 基础模型与显式 Claude 别名回流进这两个渠道；CodeBuddy ch44 保留独立 Sol 隔离合同。> **已逆转（08-07 12:33）**：ch45 的 Claude 排除已移除，Claude 加回 ch45 兜底层；本节对 ch45 的 Claude 禁止不再生效，仅 ch72/ch44 保留排除。见下文「agentrouter Claude 回归聚合兜底」。
 
 ### AnyRouter 导入 NewAPI ch72（同日 20:36）
 

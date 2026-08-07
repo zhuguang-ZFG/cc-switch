@@ -35,8 +35,8 @@ SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 
 # Channels whose auto-disabled state is currently intentional. Channel 2 has
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
-# Channel 45 is intentionally live at priority 40 as the final AgentRouter Sol
-# fallback; CHANNEL_MODEL_EXCLUSIONS below keeps Claude aliases out of it.
+# Channel 45 is intentionally live at priority 40 as the final AgentRouter
+# fallback (Sol + Claude since 2026-08-07; ch72 stays Claude-free).
 KNOWN_BROKEN_CHANNELS: set[int] = {2, 62, 63, 64, 65}
 
 # Model isolation is channel-specific, not a global Sol ban. AnyRouter (ch72)
