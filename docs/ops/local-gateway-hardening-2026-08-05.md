@@ -679,3 +679,33 @@ ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claud
 变更：`~/.omp/agent/config.yml` 的 `fallbackChains.default` 在 `zg-newapi/gpt-5.6-sol` 后插入 `agentrouter/gpt-5.6-sol`，作为 default 的第二候选和第一个跨故障域 AgentRouter Sol 备用。`designer` 链首此前已是 AgentRouter Sol；`slow` / `plan` / `vision` 未改。备份为 `~/.omp/agent/config.yml.20260806-agentrouter-sol-backup.bak`。
 
 验证：`omp -p --model agentrouter/gpt-5.6-sol` 返回 `AGENT_OMP_OK`；OMP route gate 32/32 通过；Guardian/smoke/route 完整回归 140/140 通过。
+
+---
+
+## 2026-08-07 追加：flash 上下文 500k + 登录限流关闭
+
+### DeepSeek V4 Flash 上下文 500k（同日 ~14:10）
+
+用户指令：上下文限制 500k、思维链最大、作为默认模型。
+
+变更：`~/.omp/agent/models.yml` zg-newapi provider 三条 flash 系注册 `contextWindow` 1048576 → **500000**（备份 `.bak-20260807-flash-500k`）：
+
+- `deepseek-v4-flash`（聚合池 ch42/48）——默认模型，`reasoning: true` 保持
+- `deepseek-official-v4-flash`（官方 ch42）
+- `opencode-go`（ch48 独立，flash 类角色走 max 的主力）
+
+思维链：`default: zg-newapi/deepseek-v4-flash:max`（`config.yml` 已是最强档 `:max`，未改动）。顺带修正聚合池名称中已删的 ch53 引用。
+
+注意：ch53 atomcode 已于 08-06 删除，08-03 review 文档中「聚合池不支持 max、走 opencode-go 独立渠道」的结论仍是现状（聚合池仅到 high，opencode-go 支持 max）。grok-4.5 原 500000 不受影响。
+
+验证：OMP route gate 32/32；**OMP 重启后生效**（2026-08-07 14:2x 重启完成）。
+
+### NewAPI 登录限流关闭（同日 ~14:45）
+
+现象：OMP 重启后浏览器登录 `POST /api/user/login` 连续 429（LoginLimit 默认限流窗口），14:40 自动恢复。
+
+处置：`PUT /api/option/` 写入 `LoginLimit=0`、`LoginLimitDuration=0`（自用实例无需登录频率限制），回读验证持久化。
+
+验证：5 连发登录突发全 200，无 429。
+
+同日 ch72 anyrouter 上游曾短暂 429（14:28–14:36），已自行恢复，无介入。
