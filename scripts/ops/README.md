@@ -149,3 +149,15 @@ Windows 以 `NewAPI Guardian` 计划任务作为 Guardian 的规范启动入口�
 - NewAPI 源码: https://github.com/QuantumNous/new-api
 - NewAPI Channel.Update() → UpdateAbilities(nil): abilities 表自动同步证据
 - OpenClaw WatchDog: https://clawhub.ai/abdullah4ai/openclaw-watchdog
+
+## OMP unexpected-stop guard
+
+`omp-unexpected-stop-guard.js` uses OMP's supported `session_stop` extension event to resume a main-agent turn that explicitly promises immediate work but ends without a tool call. It is deterministic, supports Chinese and English promises, rejects completion/question/blocker language, and caps a continuation chain at three turns.
+
+Validation:
+
+```powershell
+node --test scripts/ops/test_omp_unexpected_stop_guard.js
+```
+
+Production copy: `~/.omp/agent/extensions/omp-unexpected-stop-guard.js`. See `docs/ops/omp-unexpected-stop-guard.md` for deployment, reload, limitations, and rollback.
