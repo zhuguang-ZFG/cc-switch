@@ -2,6 +2,8 @@ import http.client
 import importlib.util
 import io
 import json
+import os
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -47,6 +49,12 @@ def partial_then_failed_sse(message="upstream rejected request"):
 
 
 class RelayUnitTests(unittest.TestCase):
+    def test_fingerprint_matches_current_codex_cli(self):
+        headers = relay.fingerprint_headers("test-session")
+        self.assertEqual(headers["Originator"], "codex_cli_rs")
+        self.assertEqual(headers["Version"], "0.146.0")
+        self.assertIn("codex_exec/0.146.0", headers["User-Agent"])
+
     def test_build_body_strips_captured_runtime_context(self):
         body, _ = relay.build_body(
             "gpt-5.6-sol",
@@ -96,9 +104,41 @@ class RelayUnitTests(unittest.TestCase):
         self.assertFalse(body["parallel_tool_calls"])
 
     def test_port_argument_is_honored(self):
-        args = relay.parse_args(["--port", "16001", "--log-file", "relay.log"])
+        args = relay.parse_args([
+            "--port", "16001",
+            "--log-file", "relay.log",
+            "--upstream", "https://example.test/codex/v1/responses",
+            "--secret-name", "sharedchat_codex_key",
+        ])
         self.assertEqual(args.port, 16001)
         self.assertEqual(args.log_file, "relay.log")
+        self.assertEqual(args.upstream, "https://example.test/codex/v1/responses")
+        self.assertEqual(args.secret_name, "sharedchat_codex_key")
+
+    def test_load_key_uses_selected_secret_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            secrets_file = Path(directory) / "secrets.json"
+            secrets_file.write_text(json.dumps({
+                "zzzcoding_codex_key": "old-key",
+                "sharedchat_codex_key": "selected-key",
+            }), encoding="utf-8")
+            with patch.object(relay, "SECRETS_FILE", secrets_file), patch.dict(
+                os.environ, {"CODEX_RELAY_KEY": ""}
+            ):
+                self.assertEqual(relay.load_key("sharedchat_codex_key"), "selected-key")
+
+    def test_configure_runtime_rejects_non_https_upstream(self):
+        with self.assertRaisesRegex(SystemExit, "HTTPS URL"):
+            relay.configure_runtime("http://example.test/responses", "sharedchat_codex_key")
+
+    def test_scheduled_task_defaults_to_windowless_python(self):
+        source = Path(__file__).with_name("register-codex-relay-task.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(r"python313\current\pythonw.exe", source)
+        self.assertIn("(Get-Command pythonw -ErrorAction Stop).Source", source)
+        self.assertNotIn(r"python313\current\python.exe", source)
+        self.assertNotIn("(Get-Command python -ErrorAction Stop).Source", source)
 
 
 class RelayHTTPTests(unittest.TestCase):

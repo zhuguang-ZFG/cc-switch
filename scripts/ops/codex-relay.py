@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -28,8 +29,12 @@ MAX_CONCURRENT_REQUESTS = int(os.environ.get("CODEX_RELAY_MAX_CONCURRENCY", "16"
 UPSTREAM_TIMEOUT = int(os.environ.get("CODEX_RELAY_UPSTREAM_TIMEOUT", "60"))
 SEMANTIC_TIMEOUT = int(os.environ.get("CODEX_RELAY_SEMANTIC_TIMEOUT", "60"))
 LOG_ROTATE_BYTES = int(os.environ.get("CODEX_RELAY_LOG_ROTATE_BYTES", str(1024 * 1024)))
-UPSTREAM = "https://api.zzzcoding.org/responses"
+DEFAULT_UPSTREAM = "https://api.zzzcoding.org/responses"
+DEFAULT_SECRET_NAME = "zzzcoding_codex_key"
+UPSTREAM = os.environ.get("CODEX_RELAY_UPSTREAM", DEFAULT_UPSTREAM)
+SECRET_NAME = os.environ.get("CODEX_RELAY_SECRET_NAME", DEFAULT_SECRET_NAME)
 CLI_UA = "codex_exec/0.146.0 (Windows 10.0.26200; x86_64) WindowsTerminal (codex_exec; 0.146.0)"
+CLI_VERSION = "0.146.0"
 HERE = Path(__file__).resolve().parent
 TEMPLATE_FILE = HERE / "codex-relay-template.json"
 MODELS = [
@@ -56,15 +61,15 @@ class RelayError(Exception):
         return {"error": {"message": self.message[:300], "type": self.error_type}}
 
 
-def load_key() -> str:
+def load_key(secret_name: str = DEFAULT_SECRET_NAME) -> str:
     key = os.environ.get("CODEX_RELAY_KEY", "")
     if not key:
         try:
-            key = str(json.loads(SECRETS_FILE.read_text(encoding="utf-8-sig")).get("zzzcoding_codex_key", ""))
+            key = str(json.loads(SECRETS_FILE.read_text(encoding="utf-8-sig")).get(secret_name, ""))
         except (OSError, ValueError):
             key = ""
     if not key:
-        raise SystemExit("zzzcoding_codex_key missing (secrets.json or CODEX_RELAY_KEY)")
+        raise SystemExit(f"{secret_name} missing (secrets.json or CODEX_RELAY_KEY)")
     return key
 
 
@@ -84,9 +89,16 @@ def load_installation_id() -> str:
     return installation_id
 
 
-def configure_runtime() -> None:
-    global KEY, INSTALL_ID
-    KEY = load_key()
+def configure_runtime(upstream: str = UPSTREAM, secret_name: str = SECRET_NAME) -> None:
+    global KEY, INSTALL_ID, UPSTREAM, SECRET_NAME
+    parsed = urllib.parse.urlsplit(upstream)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise SystemExit("--upstream must be an HTTPS URL without userinfo")
+    if not secret_name or not secret_name.replace("_", "").isalnum():
+        raise SystemExit("--secret-name must contain only letters, digits, and underscores")
+    UPSTREAM = upstream.rstrip("/")
+    SECRET_NAME = secret_name
+    KEY = load_key(secret_name)
     INSTALL_ID = load_installation_id()
 
 
@@ -114,7 +126,8 @@ def fingerprint_headers(session_id: str) -> dict:
         "Accept": "text/event-stream",
         "Authorization": f"Bearer {KEY}",
         "Content-Type": "application/json",
-        "Originator": "codex_exec",
+        "Originator": "codex_cli_rs",
+        "Version": CLI_VERSION,
         "Session-Id": session_id,
         "Thread-Id": session_id,
         "X-Client-Request-Id": session_id,
@@ -606,9 +619,11 @@ class BoundedThreadingHTTPServer(http.server.ThreadingHTTPServer):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="zzzcoding Codex OpenAI-compatible relay")
+    parser = argparse.ArgumentParser(description="Codex-only upstream OpenAI-compatible relay")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--log-file", default=os.environ.get("CODEX_RELAY_LOG_FILE"))
+    parser.add_argument("--upstream", default=UPSTREAM)
+    parser.add_argument("--secret-name", default=SECRET_NAME)
     return parser.parse_args(argv)
 
 
@@ -617,7 +632,7 @@ def main(argv=None):
     if not 1 <= args.port <= 65535:
         raise SystemExit("--port must be between 1 and 65535")
     configure_output(args.log_file)
-    configure_runtime()
+    configure_runtime(args.upstream, args.secret_name)
     server = BoundedThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"codex-relay on 127.0.0.1:{args.port}", flush=True)
     server.serve_forever()

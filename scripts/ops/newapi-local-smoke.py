@@ -30,14 +30,16 @@ PROXY_PORTS: dict[str, tuple[str, int]] = {
     "agentrouter": (PROBE_HOST, 8788),
     # anyrouter binds loopback only (OMP slow chain + NewAPI ch72)
     "anyrouter": ("127.0.0.1", 8789),
+    "codex-relay": ("127.0.0.1", 15999),
+    "sharedchat-codex-relay": ("127.0.0.1", 16000),
 }
 SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 
 # Channels whose auto-disabled state is currently intentional. Channel 2 has
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
-# Channel 45 is intentionally live at priority 40 as the final AgentRouter
-# fallback (Sol + Claude since 2026-08-07; ch72 stays Claude-free).
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 62, 63, 64, 65}
+# Channel 74 is held out until its shared upstream quota recovers and a real
+# relay + aggregate smoke passes. Channel 45 remains a live fallback.
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 62, 63, 64, 65, 74}
 
 # Model isolation is channel-specific. AgentRouter (ch45) and AnyRouter (ch72)
 # serve Sol AND Claude at their fallback tiers (Claude re-enabled 2026-08-07:

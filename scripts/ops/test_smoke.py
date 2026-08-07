@@ -220,11 +220,12 @@ class AdminAuthTests(unittest.TestCase):
         channels = [
             {"id": 45, "name": "agentrouter", "status": 1},
             {"id": 62, "name": "centos-eo-gpt", "status": 1},
+            {"id": 74, "name": "sharedchat-codex-sol", "status": 1},
         ]
 
         self.assertEqual(
             smoke.expected_disabled_violations(channels),
-            ["62:centos-eo-gpt"],
+            ["62:centos-eo-gpt", "74:sharedchat-codex-sol"],
         )
 
     def test_agentrouter_sol_fallback_posture_is_valid(self):
