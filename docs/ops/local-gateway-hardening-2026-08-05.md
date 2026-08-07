@@ -722,7 +722,7 @@ ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claud
 
 1. **ch9 禁用**：`POST /api/channel/9/status {"status":2}`（专用 status API；`PUT /api/channel/` 请求体含 status 会被拒——Guardian 注释早有此坑，勿走 PUT）
 2. **ch9 weight=0**：扫描过滤器 `status==1 && weight>0` 直接跳过，杜绝测试超时卷土重来
-3. **`AutomaticEnableChannelEnabled=false`**：首次禁用 ch9 被 NewAPI 自动启用回滚（ch9 一度复活 status=1 继续拖周期）。关闭后渠道恢复完全由 Guardian 状态机管控（`check_and_enable_recovered_channels`），内置测试本已关（`auto_test_channel_enabled=false`）
+3. **`AutomaticEnableChannelEnabled` 恢复为 `true`**：曾短暂关闭以阻止 ch9 复活，但当时 Guardian 的 `check_and_enable_recovered_channels` 只处理自身 `disabled_channels` 队列，不能发现 NewAPI 先行 auto-ban 的 `status=3` 渠道；全局关闭会让其他渠道永久失联。ch9 通过 `status=2 + weight=0` 单点隔离。本次修复同时让 Guardian 同步 `status=3 && auto_ban=1`（排除明确隔离渠道）进入受冷却和退避保护的恢复队列，并在 smoke 中门禁该全局选项必须为 `true`。
 
 ### 误诊风波（教训）
 
@@ -733,10 +733,47 @@ ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claud
 - faulthandler dump 停在 line 1950 = `time.sleep(HEALTH_CHECK_INTERVAL)` 正常位置
 - 健康节奏 = 心跳每 ~17s 一次（15s sleep + ~2s work）；5952 大概率健康，8028（schtasks /run 启动）无缝接管，state.json 完整，无实际损失
 
-**守则**：判断 Guardian 存活只看 `~/.omp/guardian/heartbeat.json` 新鲜度（<30s），不看日志沉默；日志静默 ≠ 卡死。
+**守则**：以 `~/.omp/guardian/heartbeat.json` 为首要存活信号，但 `<30s` 只是健康周期的典型节奏，不是死亡阈值。Guardian 在每轮开始时写一次心跳，慢周期运行期间心跳会自然变旧；自动处置必须沿用 watchdog 的 `>180s` 阈值，并复核心跳 PID、进程名和独立 `guardian.py` 参数。日志静默 ≠ 卡死。
 
 ### 补充事实
 
-- **计划任务无崩溃循环**：`NewAPI Guardian` 任务 Action 直接是 `pythonw.exe guardian.py`（无 start.bat 循环）——进程崩溃后要等下次登录触发才恢复；start.bat 的 10s 重启循环只在手动启动路径存在。建议后续把任务 Action 改为 start.bat（需提权改任务，未执行）。
+- **单一恢复入口**：`NewAPI Guardian` 计划任务继续直接运行 `pythonw.exe guardian.py`；仓库 `watchdog.ps1` 不再假设 hub 持有该进程，而是在精确核验并终止卡死实例后调用该计划任务重启，失败重试按 5 分钟退避。watchdog 由独立的 `NewAPI Guardian Watchdog` 计划任务持有（登录触发、`IgnoreNew`、允许电池供电且切换电源不中止、失败最多重启 3 次/每分钟），脚本命名互斥防止旧 Startup 入口制造重复实例。
 - opus-5 池波动（15:06 现场）：ch3 502 / ch45 500 / ch9 限流 / ch18 测试慢，**ch71 hugai 兜底成功**（58s 200）；摘除 ch9 后剩余 ch3/ch18/ch45/ch71。
 - Guardian 启动序列含 TG 告警发送（有 5s 超时），启动后先排除 402 重试策略；日志污染注意：任何前台复现（python -c import guardian）会写生产日志与心跳，复现请先备份或改 LOG_DIR。
+
+---
+
+## 2026-08-07 追加：zzzcoding Codex 渠道（ch73）——官方 CLI 指纹中继
+
+### 背景
+
+用户提供 Sub2API 网关 `https://api.zzzcoding.org`（余额 $984，Codex 计划账户）+ 密钥。全部标准路径（chat/completions、/v1/responses、/responses、/backend-api/codex/responses × Python/Node 双 TLS × 全指纹头）均被上游 403 `This account only allows Codex official clients`——OpenAI 对 Codex 计划账户做客户端级校验。
+
+### 破局（逐层验证）
+
+1. **官方 Codex CLI 0.146.0 直连成功**（scratch CODEX_HOME + base_url 直指网关）——网关只认真·CLI
+2. **捕获 CLI 真实请求**（本地转发代理）发现指纹 = `Originator: codex_exec` + `User-Agent: codex_exec/0.146.0...` + `X-Codex-Beta-Features` + `Session/Thread/X-Client-Request-Id` + `X-Codex-Window-Id`（**非** openai-beta/intent/client 头）
+3. **稳定 installation_id 是关键**：`client_metadata.x-codex-installation-id` 必须跨请求稳定（网关按设备身份跟踪；随机 id 会被 502）；`x-codex-turn-metadata` 是 JSON **字符串**非对象
+4. 请求体须为完整 codex agent 形态（21KB instructions + 10 tools + reasoning/stream/client_metadata）——最小体过指纹门但上游 502
+
+### 实现：`scripts/ops/codex-relay.py`（ch73 后端）
+
+- 本地 `127.0.0.1:15999` OpenAI 兼容端点（/v1/models、/v1/chat/completions 流式+非流式）
+- 每次请求：模板体 + 用户消息 → 网关 `/responses`（指纹头 + 稳定 installation_id，存 `~/.omp/guardian/codex-relay-install-id`）→ SSE 解析（response.output_text.delta / completed）→ OpenAI chat 格式
+- 密钥存 `~/.omp/guardian/secrets.json` → `zzzcoding_codex_key`（env 覆盖 `CODEX_RELAY_KEY`）
+- hub 托管：`codex-relay`，persist + on-failure（端口 15999）
+- 模板：`scripts/ops/codex-relay-template.json`（45KB，CLI 0.146.0 捕获）
+
+### 渠道（ch73 zzzcoding-codex-relay）
+
+- type 1（OpenAI），base_url `http://127.0.0.1:15999`，key `local-relay`（relay 不校验）
+- models：codex-auto-review / gpt-5.3-codex-spark / gpt-5.4 / gpt-5.4-mini / gpt-5.5 / gpt-5.6 / gpt-5.6-luna / gpt-5.6-sol / gpt-5.6-terra
+- **fork 创建契约**：`POST /api/channel/` body = `{"mode":"single","channel":{...}}`（直接对象报 "channel cannot be empty"；尾斜杠 307 重定向）
+- 验证：ch73 测试 3.4s；聚合 `gpt-5.5` 200/2.1s PONG
+
+### 成本与运维
+
+- 每请求约 1.4 万 token（21KB instructions 每次全量发送；CLI 因会话复用有缓存，relay 每请求新会话无缓存——余额 $984 可承受；后续可优化：稳定 Session-Id + prompt_cache_key 跨请求复用有会话状态累积风险，暂不启用）
+- 上游对快速/随机身份请求会 502/挂起——relay 已用稳定 installation_id 规避；若再次出现，先跑官方 CLI 对照（网关健康基准）
+- **勿将此 key 用于任何标准 API 直连**——只经 relay 指纹路径
+- key 已明文出现在聊天记录——轮换后需同步更新 secrets.json 的 zzzcoding_codex_key
