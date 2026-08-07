@@ -619,6 +619,24 @@ RCA：freemodel 网关在 08-06 20:44 至 08-07 10:31 之间服务端改了客�
 
 处置（converter 层，WorkBuddy app 与 OMP codebuddy 链同受益）：`_validate_custom_url` 增加显式白名单 `LOCAL_ALLOWED_UPSTREAMS={"127.0.0.1:3002"}`（置于 https/私网检查前）；models.json 的 sol 指向 `http://127.0.0.1:3002/v1/chat/completions`（NewAPI 客户端 key），freemodel key 池清空防 Bearer 污染；converter 重载。验证：sol stream+tools 200、sol 非流式 200、hy3 200。备份 `models.json.bak-20260807-freemodel-retire`。
 
+### WorkBuddy sol 原生链路修复——新客户端指纹（同日 23:20，推翻上文「退役」结论）
+
+上文「freemodel 门禁变更、本地不可解、转 NewAPI 中继」的 RCA 被证伪：WorkBuddy 客户端本身同期仍能正常使用这些 key（用户指正），说明账号无恙，是 converter 的旧指纹过期。
+
+修复方法（同 08-05 的回显抓包路线）：models.json 临时指向 `127.0.0.1:8899` 全量 echo（body 不截断），WorkBuddy 带 `--remote-debugging-port=9333` 启动，经 CDP 驱动 UI 发一条 sol 消息抓真实请求。
+
+**新门禁合同（2026-08-07 实测）**：
+
+- 请求头：客户端已改用 CLI UA `WorkBuddy/5.3.8 WorkBuddy/5.3.8 CLI/2.115.0` + OpenAI SDK stainless 头（`x-stainless-*`，package 6.25.0/runtime node v22.21.1）+ `x-ide-type/name/version=WorkBuddy/…/5.3.8` + `x-agent-intent: craft`、`x-agent-purpose: conversation_topic`、`x-user-id`、`x-domain: www.codebuddy.cn`、`x-product: SaaS`、`x-requested-with: XMLHttpRequest`、`Accept: application/json`、`X-API-Key`+`Authorization` 双写；**不再发 Electron UA/Referer/Origin**。
+- 请求体：系统前言仍是开头两段，但**旧短前言（139 字符）已不够**。二分实测：3072 字符 403、4096 字符 200；完整前言 42.7KB。非子串标记（旧前言+关键区段拼接 1.4KB 仍 403），按长度/前缀内容校验。converter 现注入 `wb_sol_preamble.txt`（抓包原文前 4096 字符）。
+- 探测矩阵：旧前言+新头 403；4096/6144/8192/全量 前言+新头 全 200。
+
+处置：converter 指纹常量与 headers 全量换新、前言改从 `wb_sol_preamble.txt` 加载（无 `{model}` 占位符则原文注入）、删除 `LOCAL_ALLOWED_UPSTREAMS` 白名单（NewAPI 中继路径撤销）；`custom_keys.json` 恢复 4-key 池；`models.json` 恢复 freemodel 直连 + key#4。备份：`converter.py.bak-20260807-wb538-fingerprint`（新）、`converter.py.bak-20260806-403cooldown`（旧指纹最后版）、`models.json.bak-echo-capture-20260807-final`（NewAPI 中继态）。
+
+验证（全部原生 freemodel 路径，converter.log 无 403）：8787 非流式 200（8.7s，上游 id `chatcmpl-resp_*`，948 prompt tokens≈4KB 前言）、流式 200（9.0s）、`omp -p --model codebuddy/gpt-5.6-sol` 200（17.4s）、`test_omp_routes.py` 32/32。抓包日志含明文 key，已删除（`echo-capture-20260807.log`）。
+
+注意：前言开销约 1K prompt tokens/请求（948 实测）；WorkBuddy 客户端本身发 42.7KB 全量。若 freemodel 再次提高门槛，重跑本节抓包流程更新 `wb_sol_preamble.txt` 即可，无需改代码。
+
 ### proxies-supervisor exit 58 重启（同日 11:09）
 
 supervisor 自 08-06 ~21:01 起挂掉（exit 58，日志无 traceback），期间子进程均存活但失去自愈；hub restart 恢复。已加 `faulthandler.enable()` 以便下次静默崩溃留栈；若复发按栈定位。

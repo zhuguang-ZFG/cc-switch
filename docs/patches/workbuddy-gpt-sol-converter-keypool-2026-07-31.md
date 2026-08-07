@@ -91,3 +91,23 @@ key#4 fe_oa_2502... 200 13.5s / 流式 2.5s
 - **OMP models.yml 的 codebuddy 块缺 `gpt-5.6-sol`**（文档第 34 行说加了，实际漏了）——已补：`contextWindow 262144 / maxTokens 32768 / reasoning / images`（对齐 workbuddy-sol-context-fix 的 262K 实测工作区）；`omp models` 已确认注册（262K/33K/thinking/images）
 - 转换器 8787 sol 非流式 → `OK`；Kimi CLI `kimi -m codebuddy/gpt-5.6-sol` → `OK`；NewAPI 6 渠道 test → 全 OK（3.3-6.3s）
 - OMP 重启后 `codebuddy/gpt-5.6-sol` 已解析
+
+## 8. 客户端指纹合同更新（2026-08-07，重建 converter 必读）
+
+freemodel 网关门禁在 08-06/08-07 之间升级，本文第 2/6 节的「Electron UA/Referer/Origin + 短前言」指纹已失效（403 `unsupported_client`）。**重建或修复 converter 时必须使用新合同**，否则全 key 403。
+
+**新请求头**（真实客户端 5.3.8 抓包，不再发 Electron UA/Referer/Origin）：
+
+- `User-Agent: WorkBuddy/5.3.8 WorkBuddy/5.3.8 CLI/2.115.0`
+- `x-stainless-arch/lang/os/package-version/retry-count/runtime/runtime-version`（OpenAI SDK 6.25.0 / node v22.21.1）
+- `x-ide-type: WorkBuddy`、`x-ide-name: WorkBuddy`、`x-ide-version: 5.3.8`
+- `x-agent-intent: craft`、`x-agent-purpose: conversation_topic`
+- `x-user-id`（本机 WorkBuddy 用户 ID）、`x-domain: www.codebuddy.cn`、`x-product: SaaS`
+- `x-requested-with: XMLHttpRequest`、`Accept: application/json`
+- `X-API-Key` 与 `Authorization: Bearer` 双写同一 key；`x-request-id`/`x-conversation-message-id` 每请求随机 32-hex
+
+**新请求体**：系统前言开头两段不变，但网关按**长度/前缀内容**校验——实测 3072 字符 403、4096 字符 200（完整前言 42.7KB；非子串标记，拼接关键区段无效）。converter 把抓包原文前 4096 字符存为同目录 `wb_sol_preamble.txt`，模块加载时读取；文件无 `{model}` 占位符则原文注入，有则 `.format(model=...)`（`_wb_preamble()` 处理两种形态）。
+
+**抓包流程**（门禁再升级时重跑）：`~/.workbuddy/models.json` 临时指向 `127.0.0.1:8899` 全量 echo 服务（body 禁止截断）→ 备份原文件 → `WorkBuddy.exe --remote-debugging-port=9333` 启动 → CDP 驱动 UI 选 `gpt-5.6-sol` 发一条消息 → 从 echo 日志提取 headers+前言 → 恢复 models.json、关 echo、删含明文 key 的抓包日志。前言文件更新后需重启 converter（kill 后 proxies-supervisor 自愈）。
+
+**教训**：freemodel 返回 403 `unsupported_client` 时，先验证「WorkBuddy 客户端本身是否还能用」——能用即账号无恙，问题必在本地指纹，不要轻言退役上游；2026-08-07 上午曾误判为账号授权问题并切换 NewAPI 中继，当日晚由用户指正后按本节修复。前言注入开销约 1K prompt tokens/请求，属合同要求，勿为省 token 缩短。
