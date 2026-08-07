@@ -258,3 +258,33 @@ test_proxies_supervisor_status.py    2/2 OK
 ```
 
 Supervisor 已重启（PID 21608），schema v2 状态正常，四服务健康。
+
+## 9. 死渠道隔离、zzzcoding 绕道、3002 端口收口（2026-08-08 02:31）
+
+### 渠道 70/71 标 known-broken
+
+- 渠道 71 `hugai-claude-opus5`：`group: default` 存在，"Failed to resolve routing group" 是**上游 hugai.vip 网关自身**错误，非本机配置；恢复失败 14 次。
+- 渠道 70 `vip-j3gb-gpt`：上游真死，恢复失败 15 次。
+- 处置：`AUTO_BAN_RECOVERY_EXCLUSIONS`（guardian.py）与 `KNOWN_BROKEN_CHANNELS`（smoke）同步加入 70/71；Guardian state 清理记录（4→2，剩 18/73）；Guardian 重启后 sync 未加回。
+- 回滚：恢复渠道后从两个集合移除 id 即可。
+
+### zzzcoding 上游 405 的 OMP 绕道
+
+- 实测：`agentrouter/gpt-5.6-sol` 可用（14s）。
+- OMP cooldown 机制（`modelFallback: true` + `fallbackRevertPolicy: cooldown-expiry`）已覆盖大部分 fallback 链的死模型跳损。
+- 唯一必踩的坑：designer 主模型 `zg-newapi/gpt-5.6-sol`（渠道 73）已死。临时改为 `agentrouter/gpt-5.6-sol:high`（config.yml 行内注释标注，zzzcoding 恢复后还原）。
+- 备份：`config.yml.before-designer-agentrouter-20260808.bak`。
+- 显式 `--model zg-newapi/gpt-5.6-sol` 调用在恢复前仍会 503（NewAPI 无可用渠道），属预期。
+
+### NewAPI 3002 端口收口（已执行）
+
+- 管理员脚本 `~/.new-api-local/harden-firewall-3002.ps1`（UAC 提权执行）：删除全放行规则 `new-api.exe`，新增 `new-api-3002-local`（LocalPort=3002、RemoteAddress=LocalSubnet、Allow、Enabled）。
+- 验证：规则详情正确；NewAPI smoke 全过（status 200、全部代理正常、两模型 200）；本机 loopback 与 Tailscale/LAN 子网仍可用，公网任意 IP 已无法直达 3002。
+
+### 验证汇总
+
+```text
+newapi-local-smoke: status 200 / 全代理 OK / 隔离 OK / 两模型 200
+渠道检查: known_broken 含 70；unexpected 只剩 73（上游真死，Guardian 继续跟踪）
+Guardian state: disabled_channels=[18, 73]，70/71 未被 sync 加回
+```
