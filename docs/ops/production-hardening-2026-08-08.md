@@ -182,3 +182,55 @@ HTTP 402 {"error":"Usage limit reached, will reset on today at 3:43 AM (UTC+8)"}
 ```
 
 每日用量额度整体耗尽，今天 03:43 自动重置。01:18 同路由 smoke 仍成功（`WB_QUARANTINE_OK`），额度在审计期间测试中消耗。402 不属于可重试错误，converter 原样透传、OMP 重试后失败，符合 fail-closed 设计；若 402 为单 key 限额而非共享额度，后续可考虑将 402 usage-limit 纳入隔离，但需先确认 key 独立性。
+
+
+## Code Review 二轮：并发租约 + Supervisor 结构化状态（2026-08-08 01:50-02:00）
+
+### 问题
+
+1. **并发 key 重复使用**：多个请求可在第一个 401 返回前同时选中同一 key，产生重复 401 和完整请求。
+2. **Supervisor 状态布尔化**：`port_state[name]` 只有 true/false，无法区分瞬时失败、重启失败、熔断阻断或脚本缺失。
+
+### 修复（converter.py）
+
+- 新增 `_KEY_IN_FLIGHT`（plaintext key → active lease count）。
+- 新增 `_lease_key`（原子选中并占用）、`_release_key`（幂等释放）。
+- 非流式 `_chat_custom`：每次 attempt 前 `_lease_key`，所有路径 `finally` 释放。
+- 流式 `_stream_custom`：生成器首次迭代时才 `_lease_key`（避免客户端在生成器启动前断开造成泄漏）；换 key 时先释放旧租约再租新 key；生成器关闭/取消时 `finally` 释放当前租约。
+
+### 修复（proxies-supervisor.py）
+
+- `write_status` 升级为 **schema_version=2**：`services: {name: {healthy, restartBlocked, lastError, restartsLastHour}}`。
+- 每轮循环记录每服务健康、阻断、错误原因、近一小时重启次数。
+
+### 回归
+
+```text
+test_workbuddy_converter_keypool.py   9/9 OK
+test_proxies_supervisor_status.py    2/2 OK
+test_guardian.py                     101/101 OK
+test_omp_routes.py                   31/32 OK（1 个已知 fallback 重复 primary，非本次改动）
+```
+
+### 生产重启（2026-08-08 01:49-01:50）
+
+| 进程 | 方式 | 结果 |
+|---|---|---|
+| Supervisor | kill 旧进程 → 后台启动 | PID 24580，schema v2 状态正常写入 |
+| converter | kill 旧进程 → 新 Supervisor 30s 内拉起 | PID 29884，`restarts_today.codebuddy=1` |
+
+### 验证
+
+- `hy3-preview-agent` 同路径成功（01:54，2.4s，tokens=26）。
+- `gpt-5.6-sol` 持续 **402 Usage limit reached, will reset on today at 3:43 AM (UTC+8)**——上游每日额度耗尽，非代码问题。
+- 租约生效证据：converter 日志显示网络错误后正确轮换 4 个 key（attempt=1/4→4/4），无重复占用。
+
+### 当前上游状态
+
+WorkBuddy Sol 全部 key 于 01:53 起返回：
+
+```text
+HTTP 402 {"error":"Usage limit reached, will reset on today at 3:43 AM (UTC+8)"}
+```
+
+每日用量额度整体耗尽，今天 03:43 自动重置。若 03:43 后 Sol 仍不可用，需确认 key 独立性（单 key 限额 vs 共享额度）。
