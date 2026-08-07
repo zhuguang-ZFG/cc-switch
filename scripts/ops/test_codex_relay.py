@@ -47,6 +47,25 @@ def partial_then_failed_sse(message="upstream rejected request"):
 
 
 class RelayUnitTests(unittest.TestCase):
+    def test_build_body_strips_captured_runtime_context(self):
+        body, _ = relay.build_body(
+            "gpt-5.6-sol",
+            [
+                {"role": "system", "content": "CURRENT_CALLER_MARKER"},
+                {"role": "user", "content": "continue"},
+            ],
+        )
+
+        serialized = json.dumps(body)
+        self.assertIn("CURRENT_CALLER_MARKER", body["instructions"])
+        self.assertEqual([item["role"] for item in body["input"]], ["user"])
+        self.assertNotIn("sandbox_mode", serialized)
+        self.assertNotIn("Approval policy is currently never", serialized)
+        self.assertNotIn("D:\\\\Users\\\\cc-switch", serialized)
+        self.assertNotIn("tools", body)
+        self.assertNotIn("tool_choice", body)
+        self.assertNotIn("parallel_tool_calls", body)
+
     def test_build_body_preserves_instructions_history_and_tools(self):
         body, _ = relay.build_body("gpt-5.5", [
             {"role": "system", "content": "Follow caller policy."},

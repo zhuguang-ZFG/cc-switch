@@ -238,16 +238,14 @@ def build_body(
     if extra_instructions:
         body["instructions"] = f"{body.get('instructions', '')}\n\nCaller instructions:\n{extra_instructions}"
 
-    developer_items = [copy.deepcopy(item) for item in body.get("input", []) if item.get("role") == "developer"]
-    for index, item in enumerate(developer_items):
-        item["id"] = f"msg_{session_id}_{index}"
-    developer_items.append({
+    # Captured input messages describe the capture session's sandbox, cwd, and
+    # approval policy. They are runtime state, not part of the client fingerprint.
+    body["input"] = [{
         "type": "message",
-        "id": f"msg_{session_id}_{len(developer_items)}",
+        "id": f"msg_{session_id}_0",
         "role": "user",
         "content": [{"type": "input_text", "text": conversation}],
-    })
-    body["input"] = developer_items
+    }]
 
     translated_tools = translate_tools(tools)
     if translated_tools:
@@ -255,6 +253,10 @@ def build_body(
         body["tool_choice"] = translate_tool_choice(tool_choice)
         if parallel_tool_calls is not None:
             body["parallel_tool_calls"] = bool(parallel_tool_calls)
+    else:
+        body.pop("tools", None)
+        body.pop("tool_choice", None)
+        body.pop("parallel_tool_calls", None)
 
     metadata = body.setdefault("client_metadata", {})
     metadata["turn_id"] = session_id
