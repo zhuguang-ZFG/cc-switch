@@ -62,14 +62,17 @@ class RelayError(Exception):
 
 
 def load_key(secret_name: str = DEFAULT_SECRET_NAME) -> str:
-    key = os.environ.get("CODEX_RELAY_KEY", "")
+    scoped_env = f"CODEX_RELAY_KEY_{secret_name.upper()}"
+    key = os.environ.get(scoped_env, "")
+    if not key and secret_name == DEFAULT_SECRET_NAME:
+        key = os.environ.get("CODEX_RELAY_KEY", "")
     if not key:
         try:
             key = str(json.loads(SECRETS_FILE.read_text(encoding="utf-8-sig")).get(secret_name, ""))
         except (OSError, ValueError):
             key = ""
     if not key:
-        raise SystemExit(f"{secret_name} missing (secrets.json or CODEX_RELAY_KEY)")
+        raise SystemExit(f"{secret_name} missing (secrets.json or {scoped_env})")
     return key
 
 

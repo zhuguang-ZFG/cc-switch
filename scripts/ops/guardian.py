@@ -108,7 +108,7 @@ RECOVERY_COOLDOWN_MIN = 5  # 恢复冷却时间（分钟）
 RECOVERY_TEST_COUNT = 3  # 恢复验证测试次数
 RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 # 明确隔离且不应自动恢复的本地渠道；与 newapi-local-smoke.py 策略保持一致。
-AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 62, 63, 64, 65}
+AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 62, 63, 64, 65, 74}
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）
 WEIGHT_DEGRADE_COOLDOWN_MIN = 5  # 降权最小间隔（分钟）— 自愈节流独立于告警冷却

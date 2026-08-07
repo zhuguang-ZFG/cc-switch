@@ -743,6 +743,7 @@ class RecoveryTests(unittest.TestCase):
         )
         engine.newapi.channels = {
             2: {"id": 2, "name": "excluded", "status": 3, "auto_ban": 1},
+            74: {"id": 74, "name": "sharedchat-quarantine", "status": 3, "auto_ban": 1},
             7: {"id": 7, "name": "manual", "status": 2, "auto_ban": 1},
             8: {"id": 8, "name": "not-auto-ban", "status": 3, "auto_ban": 0},
         }

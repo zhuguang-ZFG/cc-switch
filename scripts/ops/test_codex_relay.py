@@ -123,9 +123,20 @@ class RelayUnitTests(unittest.TestCase):
                 "sharedchat_codex_key": "selected-key",
             }), encoding="utf-8")
             with patch.object(relay, "SECRETS_FILE", secrets_file), patch.dict(
-                os.environ, {"CODEX_RELAY_KEY": ""}
+                os.environ,
+                {
+                    "CODEX_RELAY_KEY": "wrong-global-key",
+                    "CODEX_RELAY_KEY_SHAREDCHAT_CODEX_KEY": "",
+                },
             ):
                 self.assertEqual(relay.load_key("sharedchat_codex_key"), "selected-key")
+
+    def test_load_key_uses_scoped_environment_override(self):
+        with patch.dict(
+            os.environ,
+            {"CODEX_RELAY_KEY_SHAREDCHAT_CODEX_KEY": "selected-env-key"},
+        ):
+            self.assertEqual(relay.load_key("sharedchat_codex_key"), "selected-env-key")
 
     def test_configure_runtime_rejects_non_https_upstream(self):
         with self.assertRaisesRegex(SystemExit, "HTTPS URL"):
@@ -139,6 +150,19 @@ class RelayUnitTests(unittest.TestCase):
         self.assertIn("(Get-Command pythonw -ErrorAction Stop).Source", source)
         self.assertNotIn(r"python313\current\python.exe", source)
         self.assertNotIn("(Get-Command python -ErrorAction Stop).Source", source)
+
+    def test_scheduled_task_deployment_is_isolated_and_rollback_capable(self):
+        source = Path(__file__).with_name("register-codex-relay-task.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"codex-relay-$Port"', source)
+        self.assertIn("Export-ScheduledTask", source)
+        self.assertIn("Get-RelayListenerOwner", source)
+        self.assertIn("OwningProcess", source)
+        self.assertIn("$existingTaskXml", source)
+        self.assertIn("-m py_compile $sourceRelay", source)
+        self.assertIn("$env:PYTHONPYCACHEPREFIX = $validationCache", source)
+        self.assertLess(source.index("$upstreamUri = [Uri]$Upstream"), source.index("$stagedRelay"))
 
 
 class RelayHTTPTests(unittest.TestCase):

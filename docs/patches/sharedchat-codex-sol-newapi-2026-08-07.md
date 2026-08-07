@@ -47,15 +47,19 @@ Codex CLI 指纹。NewAPI 不再对 channel 74 进行全局 Chat-to-Responses �
 
 - 仓库实现：`scripts/ops/codex-relay.py`
 - 注册脚本：`scripts/ops/register-codex-relay-task.ps1`
-- 生产副本：`~/.omp/guardian/codex-relay.py`
+- 生产副本：`~/.omp/guardian/codex-relay-15999/` 与 `~/.omp/guardian/codex-relay-16000/`，每个任务拥有独立脚本和模板
 - SharedChat 任务：`OMP SharedChat Codex Relay`，端口 `16000`
 - 原 zzzcoding 任务：`OMP Codex Relay`，端口 `15999`
 - 两个任务均使用 `pythonw.exe`，不会弹出控制台窗口。
 - 两个任务均使用 `IgnoreNew`、Limited、battery-safe、`3 x PT1M` 有界重启。
 
 relay 支持独立的 `--upstream`、`--secret-name` 和 `--log-file`，两个渠道共享同一份
-经过测试的实现，但使用不同端口、上游、secret 名称和日志。上游 URL 必须是无
-userinfo 的 HTTPS URL，secret 名称只允许字母、数字和下划线。
+经过测试的仓库实现，但使用不同生产目录、端口、上游、secret 名称和日志。注册流程
+先完成 URL、Python 语法和模板 JSON 校验，再备份任务 XML 与旧运行时；启动后必须
+验证监听 PID 的解释器、脚本路径和端口参数，失败时恢复旧任务。上游 URL 必须是无
+userinfo 的 HTTPS URL，secret 名称只允许字母、数字和下划线。自定义 secret 使用
+作用域环境变量 `CODEX_RELAY_KEY_<SECRET_NAME>`；通用 `CODEX_RELAY_KEY` 只兼容默认
+zzzcoding secret，不能覆盖 SharedChat 的命名 secret。
 
 ## 假健康与真实阻塞
 
@@ -74,11 +78,13 @@ code=global_fixed_window_quota_exhausted
 ## 验证记录
 
 - relay 单元测试：12/12 通过（参数、secret 选择、HTTPS 校验、Codex 0.146 指纹、无窗口任务等）。
-- relay、Guardian、smoke、OMP route 完整相关回归共 165/165 通过；两个 relay 在测试前后保持同一 PID。
+- relay、Guardian、smoke、OMP route 完整相关回归共 168/168 通过；两个 relay 在测试前后保持同一 PID。
 - PowerShell 注册脚本 AST 解析为 0 errors。
 - `127.0.0.1:15999` 与 `127.0.0.1:16000` 均由独立 `pythonw.exe` 任务监听。
 - NewAPI `127.0.0.1:3002` 正常监听；channel 74 仍由 intentional-disable gate 保护。
+- Guardian 的 `AUTO_BAN_RECOVERY_EXCLUSIONS` 包含 74；即使渠道进入 `status=3`，也不会绕过人工验收自动恢复。
 - live smoke 中 `3002`、`8787/8788/8789`、`15999/16000` 均通过，两条真实低成本 completion 均返回 HTTP 200；唯一失败是本次变更前已存在的 channel 70 unexpected auto-disabled。
+- 隔离目录迁移后，15999 的 `gpt-5.5` 真实非流式 marker 返回 HTTP 200；16000 返回预期的 `global_fixed_window_quota_exhausted`，证明两个任务使用各自的运行时、secret 选择和上游。
 
 不能从这些局部检查声称端到端成功。当前缺少的生产验收全部依赖上游额度恢复。
 
@@ -101,6 +107,12 @@ code=global_fixed_window_quota_exhausted
 
 ```text
 C:\Users\zhugu\.omp\guardian\task-backups\sharedchat-sol-20260807-174716
+```
+
+审查修复前的 relay/Guardian/任务 XML 补充备份位于：
+
+```text
+C:\Users\zhugu\.omp\guardian\task-backups\sharedchat-review-fixes-20260807-195000
 ```
 
 其中 `new-api.before-sharedchat-sol.db` 是 SQLite 在线备份，创建后

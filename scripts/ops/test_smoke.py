@@ -4,6 +4,7 @@
 admin_auth 的全部 HTTP/文件交互都经模块级 http_json/read_json，测试就地替换，
 不发起真实网络请求。
 """
+import ast
 import importlib.util
 import sys
 import unittest
@@ -36,6 +37,22 @@ def fake_read_json(cache=CACHE):
 
 
 class AdminAuthTests(unittest.TestCase):
+    def test_quarantine_policy_matches_guardian_recovery_exclusions(self):
+        guardian_tree = ast.parse(
+            Path(__file__).with_name("guardian.py").read_text(encoding="utf-8")
+        )
+        guardian_exclusions = None
+        for node in guardian_tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name)
+                and target.id == "AUTO_BAN_RECOVERY_EXCLUSIONS"
+                for target in node.targets
+            ):
+                guardian_exclusions = set(ast.literal_eval(node.value))
+                break
+
+        self.assertEqual(guardian_exclusions, smoke.KNOWN_BROKEN_CHANNELS)
+
     def test_cached_token_reused_on_200(self):
         """缓存校验 200 → 直接复用，不发登录请求"""
         calls = []
