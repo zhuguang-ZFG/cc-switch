@@ -651,6 +651,10 @@ anyrouter 520 根因（现场捕获真 claude-cli 2.1.220 请求逐字对比）�
 修复：config.json `billing_header`/`harness_block` 更新为实时捕获文本（备份 `config.json.bak-20260807-ef5`）；proxy.cjs shapeBody 强制 `stream:true` + 注入 body extras，非流式客户端由 `aggregateMessagesSse` 聚合 SSE→JSON。验证：520→429（指纹门已过）；真请求+1m beta 逐字重放 200（97s，上游慢但通）。
 
 ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claude-opus-5,zg-agent-claude-opus-5,zg-agent-claude-opus-4-8`，`CHANNEL_MODEL_EXCLUSIONS` 72 条目移除（仅剩 44）。上游现状：anyrouter Claude 持续 429 `Service Unavailable`（负载/限流，非本地链路问题；200 重放证明链路通），恢复后 ch45/ch72 自动承接。Claude 聚合池 7 活渠（+ch72 40/5）。
+
+### ch45/ch72 别名映射（同日 13:10）
+
+复查发现 ch45 的 5 个 `zg-*` 别名在 8788 直传下全部 503（代理只认基础名「当前分组无可用渠道」）——别名是死条目。修复：ch45/ch72 加 `model_mapping`：`zg-gpt-5.6-sol→gpt-5.6-sol`、`zg-agent-gpt-5.6-sol→gpt-5.6-sol`、`zg-claude-opus-5→claude-opus-5`、`zg-agent-claude-opus-5→claude-opus-5`、`zg-agent-claude-opus-4-8→claude-opus-4-8`。验证：ch45 `zg-claude-opus-5` 200（8.8s）、`zg-gpt-5.6-sol` 200（3.9s）；ch72 `zg-gpt-5.6-sol` 到达上游（500 sol 负载上限，非映射问题）。agentrouter 8 个模型（3 基础 + 5 别名）全部可用。
 - 验证：live smoke 仅剩既有 ch18/ch70 auto-disabled 基线。
 
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
