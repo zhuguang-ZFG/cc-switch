@@ -181,6 +181,7 @@ class AdminAuthTests(unittest.TestCase):
                 "id": 44,
                 "name": "codebuddy",
                 "models": "hy3-preview-agent,zg-hy3-preview-agent,gpt-5.6-sol,zg-wb-gpt-5.6-sol",
+                "model_mapping": '{"zg-hy3-preview-agent":"hy3-preview-agent","zg-wb-gpt-5.6-sol":"gpt-5.6-sol"}',
             }
         ]
 
@@ -195,10 +196,25 @@ class AdminAuthTests(unittest.TestCase):
                 "id": 45,
                 "name": "agentrouter",
                 "models": "zg-agent-claude-opus-5,zg-agent-claude-opus-4-8,zg-agent-gpt-5.6-sol",
+                "model_mapping": '{"zg-agent-claude-opus-5":"claude-opus-5","zg-agent-claude-opus-4-8":"claude-opus-4-8","zg-agent-gpt-5.6-sol":"gpt-5.6-sol"}',
             }
         ]
 
         self.assertEqual(smoke.channel_policy_violations(channels), [])
+
+    def test_channel_policy_rejects_unmapped_zg_alias(self):
+        channels = [
+            {
+                "id": 45,
+                "name": "agentrouter",
+                "models": "gpt-5.6-sol,zg-gpt-5.6-sol",
+            }
+        ]
+
+        self.assertEqual(
+            smoke.channel_policy_violations(channels),
+            ["45:agentrouter=unmapped_aliases:zg-gpt-5.6-sol"],
+        )
 
     def test_live_agentrouter_fallback_is_not_expected_disabled(self):
         channels = [
@@ -220,6 +236,7 @@ class AdminAuthTests(unittest.TestCase):
                 "priority": 40,
                 "weight": 5,
                 "models": "gpt-5.6-sol,zg-agent-gpt-5.6-sol",
+                "model_mapping": '{"zg-agent-gpt-5.6-sol":"gpt-5.6-sol"}',
             },
             {
                 "id": 72,
@@ -227,6 +244,8 @@ class AdminAuthTests(unittest.TestCase):
                 "status": 1,
                 "priority": 40,
                 "weight": 5,
+                "models": "gpt-5.6-sol,zg-gpt-5.6-sol",
+                "model_mapping": '{"zg-gpt-5.6-sol":"gpt-5.6-sol"}',
             },
         ]
 
@@ -279,6 +298,7 @@ class AdminAuthTests(unittest.TestCase):
                 "priority": 40,
                 "weight": 5,
                 "models": "gpt-5.6-sol,zg-gpt-5.6-sol",
+                "model_mapping": '{"zg-gpt-5.6-sol":"gpt-5.6-sol"}',
             },
             {
                 "id": 45,

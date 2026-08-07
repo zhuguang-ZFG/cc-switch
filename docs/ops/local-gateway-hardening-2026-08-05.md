@@ -655,6 +655,10 @@ ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claud
 ### ch45/ch72 别名映射（同日 13:10）
 
 复查发现 ch45 的 5 个 `zg-*` 别名在 8788 直传下全部 503（代理只认基础名「当前分组无可用渠道」）——别名是死条目。修复：ch45/ch72 加 `model_mapping`：`zg-gpt-5.6-sol→gpt-5.6-sol`、`zg-agent-gpt-5.6-sol→gpt-5.6-sol`、`zg-claude-opus-5→claude-opus-5`、`zg-agent-claude-opus-5→claude-opus-5`、`zg-agent-claude-opus-4-8→claude-opus-4-8`。验证：ch45 `zg-claude-opus-5` 200（8.8s）、`zg-gpt-5.6-sol` 200（3.9s）；ch72 `zg-gpt-5.6-sol` 到达上游（500 sol 负载上限，非映射问题）。agentrouter 8 个模型（3 基础 + 5 别名）全部可用。
+
+### 全量别名清查（同日 13:15）
+
+9 个 `zg-*` 别名跨渠道盘点 + 修复：ch72/ch42 补齐 models 缺项（`zg-agent-gpt-5.6-sol`、`zg-deepseek-official-v4-flash`，映射已有）；门禁新增「models 中的 `zg-*` 必须有 `model_mapping` 否则违规」（`unmapped_aliases` 检查，防 503 别名回归）。现场抽查全过：ch3 `zg-claude-opus-5`、ch44 `zg-hy3-preview-agent`、ch33 `zg-k3`、ch39 `zg-grok-4.5`、ch42 `zg-deepseek-official-v4-flash` 均 200 success（此前 ch45/72 已验证）。别名覆盖：`zg-claude-opus-5`(ch3/9/18/45/57/72)、`zg-gpt-5.6-sol`(ch2/20/30/45/62-65/70/72)、`zg-agent-*`(ch45/72)、`zg-glm-5.2`(ch14/35)、`zg-grok-4.5`(ch39)、`zg-hy3-preview-agent`(ch44)、`zg-k3`(ch33)、`zg-deepseek-official-v4-flash`(ch42)。146 项测试通过。
 - 验证：live smoke 仅剩既有 ch18/ch70 auto-disabled 基线。
 
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）

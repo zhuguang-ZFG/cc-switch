@@ -84,16 +84,33 @@ def channel_policy_violations(channels: list[dict]) -> list[str]:
     violations: list[str] = []
     for channel in channels:
         forbidden = CHANNEL_MODEL_EXCLUSIONS.get(channel.get("id"))
-        if not forbidden:
-            continue
-        models = {
-            model.strip()
-            for model in str(channel.get("models") or "").split(",")
-            if model.strip()
-        }
-        leaked = sorted(models & forbidden)
-        if leaked:
-            violations.append(f"{channel['id']}:{channel.get('name', '')}={','.join(leaked)}")
+        if forbidden:
+            models = {
+                model.strip()
+                for model in str(channel.get("models") or "").split(",")
+                if model.strip()
+            }
+            leaked = sorted(models & forbidden)
+            if leaked:
+                violations.append(f"{channel['id']}:{channel.get('name', '')}={','.join(leaked)}")
+        # Every zg-* alias listed in a channel's models must resolve via
+        # model_mapping; unmapped aliases silently 503 (proxies only know base
+        # names) and waste a failover hop. Regression: ch45 zg-* 503 on 08-07.
+        try:
+            mapping = json.loads(str(channel.get("model_mapping") or "{}"))
+        except (ValueError, TypeError):
+            mapping = {}
+        if not isinstance(mapping, dict):
+            mapping = {}
+        unmapped = sorted(
+            m.strip()
+            for m in str(channel.get("models") or "").split(",")
+            if m.strip().startswith("zg-") and m.strip() not in mapping
+        )
+        if unmapped:
+            violations.append(
+                f"{channel['id']}:{channel.get('name', '')}=unmapped_aliases:{','.join(unmapped)}"
+            )
     return violations
 
 
