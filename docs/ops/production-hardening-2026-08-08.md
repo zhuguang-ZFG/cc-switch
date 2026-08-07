@@ -288,3 +288,12 @@ newapi-local-smoke: status 200 / 全代理 OK / 隔离 OK / 两模型 200
 渠道检查: known_broken 含 70；unexpected 只剩 73（上游真死，Guardian 继续跟踪）
 Guardian state: disabled_channels=[18, 73]，70/71 未被 sync 加回
 ```
+
+### Code Review 复核（2026-08-08 02:40，VERIFIED WITH CAVEATS）
+
+复核范围 `95e448db` + `f021725d`，核心声明全部复现。两个边界需知：
+
+1. **LocalSubnet 不含 Tailscale 其他节点**：Tailscale 接口前缀为 /32（实测 `PrefixLength=32`），Windows 防火墙 `LocalSubnet` 只含本机各接口本地子网。因此 `new-api-3002-local` 规则实际比预期更严格：其他 Tailscale 节点（VPS/其他设备）访问 3002 会被拒。当前实测 3002 消费者全部来自 127.0.0.1，无影响；若未来需要跨 Tailscale 节点访问，需显式新增 `RemoteAddress 100.64.0.0/10` 的规则。
+2. **designer 改动需 reload**：修改 config.yml 时运行中的 OMP 会话仍用旧 designer 主模型；新启动的 OMP 进程自动加载新值。交互会话执行 `/reload` 或重启后生效。
+
+另注：`guardian.log` 超 1MB 自动截断保留尾部，渠道 70 早期恢复失败记录已被轮转（既有行为，非本次改动）。
