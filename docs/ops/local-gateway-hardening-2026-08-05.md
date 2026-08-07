@@ -638,6 +638,7 @@ OAuth 授权被服务端阻断（3 次 401 `Unauthorized`，trace `3debe775`/`30
 - 仓库门禁：smoke `PROXY_PORTS`、guardian `LOCAL_PROXIES`/探针 key/重启分支、三套测试同步（145/145 通过）。
 - 归档：`~/atomgit-opencode-bridge.bak-20260807`（原 `~/atomgit-opencode-bridge`）。
 - 残留清理（同日 12:0x，用户确认）：`~/.atomcode/` 目录、`$LOCALAPPDATA/AtomCode/`（atomcode.exe CLI）、secrets.json 的 `atomcode_proxy_key` 已删除（secrets 备份 `secrets.json.bak-20260807-before-atomcode-key-removal`）。
+- 终态（同日 12:2x）：`~/atomgit-opencode-bridge.bak-20260807` 归档目录已删除；Guardian `state.json`/`state.json.last-good` 的 ch53 `disabled_channels` 条目已清除（Guardian 不再对已删渠道反复 test/恢复，日志此前 11:42-12:11 持续出现 `test/53 failed`）。
 - 验证：live smoke 仅剩既有 ch18/ch70 auto-disabled 基线。
 
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
