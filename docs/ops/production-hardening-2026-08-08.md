@@ -156,3 +156,29 @@ user_sessions 50 → 0（备份: backups/new-api-before-session-clear-20260808-0
 | OMP unexpected-stop + TTFT | 8/8 OK |
 | NewAPI smoke | 除已知渠道 70 外全 OK |
 | 备份恢复演练 | OK |
+
+## Code Review 修复（2026-08-08 凌晨，4bf46ad5 后追加）
+
+1. **converter `_persist_key_state` 锁内 I/O**（P1）：原实现在 `_CUSTOM_LOCK` 内做 mkstemp+fsync+replace，高并发下阻塞所有 key 选择；且无锁读 `_KEY_EXHAUSTED_UNTIL` 存在并发遍历风险。改为锁内快照、锁外写文件；`_mark_key_exhausted` 锁内只改字典、锁外持久化。
+2. **supervisor `restarts_today` 跨天不清零**（P2）：字段名 `_today` 但自启动起累计。按日重置。
+3. **drill glob 误匹配手工快照**（P2）：`new-api-*.db` 会把 `new-api-before-*` 快照（如 before-session-clear）纳入候选，可能选中错误备份。改为正则只匹配 `new-api-YYYY-MM-DD.db` 每日备份格式。
+
+## 三进程重启完成（2026-08-08 01:24-01:26）
+
+| 进程 | 方式 | 结果 |
+|---|---|---|
+| Guardian | 计划任务 `NewAPI Guardian` Stop/Start | Running，heartbeat PID 16892 新鲜 |
+| Supervisor | kill 旧进程 → Start-Process 新 python | PID 29744，`supervisor-status.json` 正常写入 |
+| converter | kill 旧进程 → 新 Supervisor 30s 内探测重启 | PID 26304，`restarts_today.codebuddy=1` |
+
+重启后真实请求验证：converter 日志出现 `↻ exhausted 401 | key quarantined`——新隔离分支实测触发。
+
+## 当前上游状态（非代码问题）
+
+WorkBuddy 全部 Sol key 于 01:27 起返回：
+
+```text
+HTTP 402 {"error":"Usage limit reached, will reset on today at 3:43 AM (UTC+8)"}
+```
+
+每日用量额度整体耗尽，今天 03:43 自动重置。01:18 同路由 smoke 仍成功（`WB_QUARANTINE_OK`），额度在审计期间测试中消耗。402 不属于可重试错误，converter 原样透传、OMP 重试后失败，符合 fail-closed 设计；若 402 为单 key 限额而非共享额度，后续可考虑将 402 usage-limit 纳入隔离，但需先确认 key 独立性。

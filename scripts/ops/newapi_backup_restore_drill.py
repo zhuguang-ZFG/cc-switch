@@ -8,6 +8,7 @@ Never touches the live new-api.db or the backups directory contents.
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sqlite3
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 
 BACKUP_DIR = Path.home() / ".new-api-local" / "backups"
 MAX_AGE_DAYS = 3  # drill should always run against a fresh daily backup
+DAILY_BACKUP_RE = re.compile(r"^new-api-\d{4}-\d{2}-\d{2}\.db$")
 
 
 def main() -> int:
@@ -26,7 +28,11 @@ def main() -> int:
     args = parser.parse_args()
 
     backup_dir = Path(args.dir)
-    candidates = sorted(backup_dir.glob("new-api-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = sorted(
+        (p for p in backup_dir.glob("new-api-*.db") if DAILY_BACKUP_RE.match(p.name)),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     if not candidates:
         print(f"FAIL: no backups found in {backup_dir}")
         return 1
