@@ -308,3 +308,23 @@ Guardian state: disabled_channels=[18, 73]，70/71 未被 sync 加回
 - **基线**（开启前，2026-08-08 03:10）：本会话 K3 74 请求 100% 缓存命中（18.1M/18.9M），Sol 48 请求 12.5%（1.17M/8.15M）。
 - **评估标准**：1-2 天后对比 cache-optimizer stats 的 cachedInputTokens 占比；若命中率明显下降而 token 节省有限，关闭还原（备份 `config.yml.before-snapcompact-20260808.bak`）。
 - 注意：`algorithmic` 压缩策略（OMP 主分支已合并 pi-blackhole）17.2.10 不含，等稳定版再评估。
+
+## 11. AnyRouter 上游故障诊断（2026-08-08 03:20）
+
+### 症状
+
+`anyrouter/claude-opus-5`、`anyrouter/claude-opus-4-8` 调用失败。
+
+### 诊断（逐层排除）
+
+| 检查 | 结果 |
+|---|---|
+| 本地代理 8789 | 进程 PID 2456 监听正常，Supervisor 健康 |
+| 代理代码/指纹 | 完整（含 context-1m-2025-08-07 等 9 个 beta 头、billing_header、harness_block） |
+| key 有效性 | `/v1/models` 200，17 个模型可列 |
+| `/v1/messages`（全模型） | **全部 429/503 Service Unavailable**（含 claude-3-5-haiku 轻量模型） |
+| 错误类型 | 网关活着、推理端点整体停摆 |
+
+### 结论
+
+**上游 `anyrouter.top` 推理端点整体故障**（08-07 18:47 起持续），非本机配置/key/指纹问题。`/v1/models` 200 但 `/v1/messages` 全模型 429/503。OMP 中 anyrouter 只在 `slow` fallback 链尾，不影响主路径，无需改动配置。恢复靠上游；Supervisor 保持代理存活，恢复后自动可用。
