@@ -328,3 +328,35 @@ Guardian state: disabled_channels=[18, 73]，70/71 未被 sync 加回
 ### 结论
 
 **上游 `anyrouter.top` 推理端点整体故障**（08-07 18:47 起持续），非本机配置/key/指纹问题。`/v1/models` 200 但 `/v1/messages` 全模型 429/503。OMP 中 anyrouter 只在 `slow` fallback 链尾，不影响主路径，无需改动配置。恢复靠上游；Supervisor 保持代理存活，恢复后自动可用。
+
+## 12. 上游故障潮与子代理模型调整（2026-08-08 03:40）
+
+### 实测：claude-opus-5 渠道 3/9 持续 429
+
+`zg-newapi-anthropic/claude-opus-5`（slow/plan/vision 主模型）3 连测全 429 Service Unavailable——渠道 3（baibei-100xlabs）、9（linxi-k40）上游真死，与 zzzcoding（ch73）、anyrouter 同一波上游故障潮。渠道 45（agentrouter NewAPI 侧）也被 auto-ban，但 OMP 的 agentrouter provider 直连 8788 不受影响，实测可用（54s）。
+
+### 可用性强模型盘点（2026-08-08 03:40 实测）
+
+| 模型 | 状态 |
+|---|---|
+| `agentrouter/gpt-5.6-sol` | ✅ 可用（54s） |
+| `zg-newapi/k3` | ✅ 可用（100% 缓存命中） |
+| `zg-newapi/deepseek-v4-flash` | ✅ 可用 |
+| `zg-newapi/gpt-5.6-sol` | ❌ ch73 zzzcoding 405 |
+| `claude-opus-5`（渠道 3/9） | ❌ 429 |
+| `codebuddy/gpt-5.6-sol` | ❌ WorkBuddy 402（03:43 重置） |
+| anyrouter 全模型 | ❌ 上游 503 |
+
+### 子代理模型调整
+
+reviewer / security-reviewer 原绑定 `zg-newapi/gpt-5.6-sol:high`（死渠道 73）→ 先改 `@slow`（claude-opus-5，未料也 429）→ 最终指向 `agentrouter/gpt-5.6-sol:high`（唯一可用强模型），行内注释标注恢复后还原。
+
+librarian/scout/sonic 用 `@smol`（sensenova）✅ 合理；task 用 `@task`（deepseek）✅ 合理——弱模型已正确用于搜索/探索/机械任务。
+
+备份：`reviewer.md.before-slow-20260808.bak`、`security-reviewer.md.before-slow-20260808.bak`。
+
+### 待观察
+
+- WorkBuddy Sol 03:43 重置后恢复
+- claude-opus-5 渠道 3/9 上游恢复后还原 reviewer 为 `@slow`
+- 渠道 3/9 应纳入 Guardian 跟踪（当前 error_scan 尚未发现，需确认周期）
