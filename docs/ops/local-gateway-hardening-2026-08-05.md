@@ -643,6 +643,14 @@ OAuth 授权被服务端阻断（3 次 401 `Unauthorized`，trace `3debe775`/`30
 ### agentrouter Claude 回归聚合兜底（同日 12:33）
 
 用户决策：ch45 agentrouter 的 Claude 模型加回 NewAPI 聚合池（兜底层 pri40/w5，主池 pri50 失败才承接）。实测 8788 直连 claude-opus-5 200（5.1s）；管理端点 `GET /api/channel/test/45?model=claude-opus-5` 200（4.5s）。ch45 models 增加 `claude-opus-5,claude-opus-4-8,zg-claude-opus-5,zg-agent-claude-opus-5,zg-agent-claude-opus-4-8`；`CHANNEL_MODEL_EXCLUSIONS` 移除 45 条目（保留 44 codebuddy sol 排除、72 anyrouter Claude 排除——anyrouter 上游 messages 指纹面仍 520 未恢复）。历史敏感词误杀风险按低权重接受。Claude 聚合池现为 5 活渠：ch3(50/20)/ch9(50/10)/ch18(50/9)/ch71(40/10)/ch45(40/5)。
+
+### anyrouter 指纹修复与 ch72 Claude 启用（同日 13:03）
+
+anyrouter 520 根因（现场捕获真 claude-cli 2.1.220 请求逐字对比）：门禁要求**真实客户端指纹**，桥的构造有三处过期——billing build 后缀 `.76a` vs 真 `.ef5`、harness prompt 9977 vs 真 9998 字符（`cc_version=2.1.220.ef5` 构建）、缺 `context_management`/`output_config` body 字段；且**门禁拒绝非流式**（stream=false → 520，逐字重放二分验证）。
+
+修复：config.json `billing_header`/`harness_block` 更新为实时捕获文本（备份 `config.json.bak-20260807-ef5`）；proxy.cjs shapeBody 强制 `stream:true` + 注入 body extras，非流式客户端由 `aggregateMessagesSse` 聚合 SSE→JSON。验证：520→429（指纹门已过）；真请求+1m beta 逐字重放 200（97s，上游慢但通）。
+
+ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claude-opus-5,zg-agent-claude-opus-5,zg-agent-claude-opus-4-8`，`CHANNEL_MODEL_EXCLUSIONS` 72 条目移除（仅剩 44）。上游现状：anyrouter Claude 持续 429 `Service Unavailable`（负载/限流，非本地链路问题；200 重放证明链路通），恢复后 ch45/ch72 自动承接。Claude 聚合池 7 活渠（+ch72 40/5）。
 - 验证：live smoke 仅剩既有 ch18/ch70 auto-disabled 基线。
 
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）

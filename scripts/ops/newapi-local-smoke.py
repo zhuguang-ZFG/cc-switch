@@ -39,20 +39,12 @@ SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 # fallback (Sol + Claude since 2026-08-07; ch72 stays Claude-free).
 KNOWN_BROKEN_CHANNELS: set[int] = {2, 62, 63, 64, 65}
 
-# Model isolation is channel-specific, not a global Sol ban. AnyRouter (ch72)
-# may serve base/aliased Sol models but stays Claude-free (upstream 520 gate);
-# CodeBuddy has a separate Sol exclusion contract. AgentRouter (ch45) serves
-# Sol AND Claude at its fallback tier (Claude re-added 2026-08-07 by decision;
-# sensitive-word false-kill risk accepted at low weight).
+# Model isolation is channel-specific. AgentRouter (ch45) and AnyRouter (ch72)
+# serve Sol AND Claude at their fallback tiers (Claude re-enabled 2026-08-07:
+# anyrouter gate fingerprint fixed, upstream 429 = transient load). CodeBuddy
+# (ch44) keeps its Sol exclusion contract.
 CHANNEL_MODEL_EXCLUSIONS: dict[int, set[str]] = {
     44: {"gpt-5.6-sol", "zg-wb-gpt-5.6-sol"},
-    72: {
-        "claude-opus-5",
-        "claude-opus-4-8",
-        "zg-claude-opus-5",
-        "zg-agent-claude-opus-5",
-        "zg-agent-claude-opus-4-8",
-    },
 }
 
 # Live aggregate fallback contracts. These channels must stay enabled but below

@@ -292,7 +292,7 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual(smoke.fallback_posture_violations(channels), [])
         self.assertEqual(smoke.channel_policy_violations(channels), [])
 
-    def test_anyrouter_primary_drift_or_claude_leak_is_rejected(self):
+    def test_anyrouter_primary_drift_rejected_and_claude_allowed(self):
         channels = [
             {
                 "id": 72,
@@ -315,10 +315,7 @@ class AdminAuthTests(unittest.TestCase):
             smoke.fallback_posture_violations(channels),
             ["72:anyrouter=priority=50"],
         )
-        self.assertEqual(
-            smoke.channel_policy_violations(channels),
-            ["72:anyrouter=claude-opus-5"],
-        )
+        self.assertEqual(smoke.channel_policy_violations(channels), [])
 
     def test_main_fails_on_invalid_channels_response(self):
         """主流程：渠道接口 HTTP 500 或非法 items 时必须返回失败。"""
