@@ -625,7 +625,7 @@ supervisor 自 08-06 ~21:01 起挂掉（exit 58，日志无 traceback），期�
 
 ### ch53 atomcode-bridge 401 与 Gitcode token 失效（同日 11:37）
 
-ch53 在 11:31 被 NewAPI auto-disable（401「Gitcode auth: token rejected」），桥本身存活（9457 探针 OK）。RCA：`~/.atomcode/auth.toml` 的 access_token 名义有效期至 08-08 01:52，但已被服务端拒绝（疑似撤销）；refresh_token 亦已死——`acs.atomgit.com/oauth/refresh` 返回 502 `refresh_token不存在或已过期`。桥的自动刷新与 401 强制刷新均无法恢复。修复需重新登录（`atomcode login` 或 AtomCode 应用内重新授权，重写 auth.toml），本地无 CLI 可用；ch53 保持禁用（fail-closed 正确），新 token 就绪后恢复 status=1（该 fork 更新端点需大写键 `{'Id':53,'Status':1}`）。
+ch53 在 11:31 被 NewAPI auto-disable（401「Gitcode auth: token rejected」），桥本身存活（9457 探针 OK）。RCA：`~/.atomcode/auth.toml` 的 access_token 名义有效期至 08-08 01:52，但已被服务端拒绝（疑似撤销）；refresh_token 亦已死——`acs.atomgit.com/oauth/refresh` 返回 502 `refresh_token不存在或已过期`。桥的自动刷新与 401 强制刷新均无法恢复。修复需重新登录（`atomcode login` 或 AtomCode 应用内重新授权，重写 auth.toml），本地无 CLI 可用；ch53 保持禁用（fail-closed 正确），新 token 就绪后恢复 status=1（状态切换规范端点为 `POST /api/channel/{id}/status`，body `{"status":1}`，实测 200；`PUT /api/channel/` 请求体不得含 status）。
 
 ### atomcode 整体下架（同日 11:57）
 

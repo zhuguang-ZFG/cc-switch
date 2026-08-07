@@ -8,8 +8,9 @@
 |---|---|---|---|
 | 42 | deepseek-official | 1 | 活体验证 PERSONA（名字探针答 Just-Lisa） |
 | 48 | opencode-go-flash | 1 | 活体验证 PERSONA |
-| 53 | atomcode-bridge | 1 | 活体验证 PERSONA |
 | 35 | cline-free-proxy | 2（手工禁用，原有） | 配置已逐字写入；上游连接死（两上游模型均 500 `do request failed`），活体验证被阻断，恢复后自动生效 |
+
+> 注（2026-08-07）：ch53 atomcode-bridge 已随 atomcode 整体下架删除（OAuth 被服务端阻断），opencode-go 现仅 ch48 提供。
 
 ## 机制（本机 new-api 实测语义）
 
@@ -20,11 +21,11 @@
 ## 验证方法（可复用）
 
 - 管理端 `GET /api/channel/test/{id}` 只回 `{success,time}`，**不含响应文本**，不能验证注入。
-- 请求级钉选无原生支持；用**唯一可路由模型名**归因：42=`deepseek-official-v4-flash`，35=`deepseek/deepseek-v4-flash`（或 `stepfun/step-3.7-flash`），48/53 共用 `opencode-go` → 临时互斥禁用再恢复。
+- 请求级钉选无原生支持；用**唯一可路由模型名**归因：42=`deepseek-official-v4-flash`，35=`deepseek/deepseek-v4-flash`（或 `stepfun/step-3.7-flash`），48 独用 `opencode-go`（ch53 已删）→ 临时互斥禁用再恢复。
 - 探针用判别性问题「What is your name?」：persona 答 Lisa/Just-Lisa，裸模型答 DeepSeek/Assistant。**不要**用「Understoond」前缀（顺从模型会跳过开场直接服从用户格式指令），也**不要**用含 lisa 的固定回复串做正则（自污染）。
 - 部分渠道响应 content 为嵌套 completion JSON（force_format 路径），需二次解析。
 
 ## 清理
 
-- 验证用临时 token（id 7）已删除；所有渠道 status 已还原（35:2, 42/48/53:1）。
+- 验证用临时 token（id 7）已删除；所有渠道 status 已还原（35:2, 42/48:1）。
 - 提示词全文仅存于 NewAPI 渠道 setting 与用户本地文件，不入 Git。
