@@ -142,7 +142,7 @@ def _is_probe_incompatible(message: str) -> bool:
     """探针形态被拒绝：无健康结论，不得据此降权或禁用渠道。"""
     msg = (message or "").lower()
     return any(marker in msg for marker in PROBE_INCOMPATIBLE_MARKERS)
-TEST_CHANNEL_TIMEOUT = 15  # test_channel 独立超时（秒）：上游实测 6-30s 常见，5s 全面误报
+TEST_CHANNEL_TIMEOUT = 30  # test_channel 独立超时（秒）：上游实测 6-30s 常见，15s 在慢 opus 渠道下误报（2026-08-07 现场 test/3/9/18/33 timed out）
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
 RECOVERY_BACKOFF_MAX = 60  # 失败退避上限（分钟）
