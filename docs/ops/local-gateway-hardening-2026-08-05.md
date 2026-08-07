@@ -623,6 +623,10 @@ RCA：freemodel 网关在 08-06 20:44 至 08-07 10:31 之间服务端改了客�
 
 supervisor 自 08-06 ~21:01 起挂掉（exit 58，日志无 traceback），期间子进程均存活但失去自愈；hub restart 恢复。已加 `faulthandler.enable()` 以便下次静默崩溃留栈；若复发按栈定位。
 
+### ch53 atomcode-bridge 401 与 Gitcode token 失效（同日 11:37）
+
+ch53 在 11:31 被 NewAPI auto-disable（401「Gitcode auth: token rejected」），桥本身存活（9457 探针 OK）。RCA：`~/.atomcode/auth.toml` 的 access_token 名义有效期至 08-08 01:52，但已被服务端拒绝（疑似撤销）；refresh_token 亦已死——`acs.atomgit.com/oauth/refresh` 返回 502 `refresh_token不存在或已过期`。桥的自动刷新与 401 强制刷新均无法恢复。修复需重新登录（`atomcode login` 或 AtomCode 应用内重新授权，重写 auth.toml），本地无 CLI 可用；ch53 保持禁用（fail-closed 正确），新 token 就绪后恢复 status=1（该 fork 更新端点需大写键 `{'Id':53,'Status':1}`）。
+
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
 
 背景：林夕/百倍路径当前不可作为可靠承接，用户要求 Agent 渠道顶上。历史门禁已明确 AgentRouter Claude 短流式存在上游敏感词误杀，因此不把 AgentRouter Claude 提升为 slow/plan/vision 主路由。
