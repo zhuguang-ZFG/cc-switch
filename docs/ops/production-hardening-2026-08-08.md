@@ -297,3 +297,14 @@ Guardian state: disabled_channels=[18, 73]，70/71 未被 sync 加回
 2. **designer 改动需 reload**：修改 config.yml 时运行中的 OMP 会话仍用旧 designer 主模型；新启动的 OMP 进程自动加载新值。交互会话执行 `/reload` 或重启后生效。
 
 另注：`guardian.log` 超 1MB 自动截断保留尾部，渠道 70 早期恢复失败记录已被轮转（既有行为，非本次改动）。
+
+## 10. snapcompact.toolResults 实验启用（2026-08-08 03:10）
+
+社区调研（OMP issue #1568，pi-blackhole 项目）后确认：17.2.10 内置 `snapcompact.toolResults` 实验项——把**大型历史工具输出**渲染为密集 PNG 图片（仅视觉模型），替代文本继续占用上下文。不调 LLM、纯本地。
+
+- 配置：`~/.omp/agent/config.yml` 追加 `snapcompact.toolResults: true`（`systemPrompt` 保持 `none`，只归档工具输出，不动系统提示词 → 缓存影响面最小）。
+- 主压缩策略保持 `shake` 不变；toolResults 是独立实验开关。
+- 影响模型：K3/Sol（视觉）会收到归档图片；`omp config get snapcompact.toolResults` → true 已验证。
+- **基线**（开启前，2026-08-08 03:10）：本会话 K3 74 请求 100% 缓存命中（18.1M/18.9M），Sol 48 请求 12.5%（1.17M/8.15M）。
+- **评估标准**：1-2 天后对比 cache-optimizer stats 的 cachedInputTokens 占比；若命中率明显下降而 token 节省有限，关闭还原（备份 `config.yml.before-snapcompact-20260808.bak`）。
+- 注意：`algorithmic` 压缩策略（OMP 主分支已合并 pi-blackhole）17.2.10 不含，等稳定版再评估。
