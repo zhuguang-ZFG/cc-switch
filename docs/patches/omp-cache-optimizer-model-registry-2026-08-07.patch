@@ -1,0 +1,97 @@
+--- C:/Users/zhugu/.omp/plugins/node_modules/omp-cache-optimizer/index.ts.orig-1.2.3
++++ C:/Users/zhugu/.omp/plugins/node_modules/omp-cache-optimizer/index.ts
+@@ -1587,27 +1587,38 @@
+   return lower(model?.provider) === "router";
+ }
+ 
+-function modelFromAssistantMessage(message: unknown, fallback: PiModel | undefined): PiModel | undefined {
++function modelFromAssistantMessage(
++  message: unknown,
++  fallback: PiModel | undefined,
++  registry?: ModelRegistryLike,
++): PiModel | undefined {
+   const record = getAssistantRecord(message);
+   if (!record) return fallback;
+ 
+   const id = firstNonEmptyString(record.responseModel, record.model, fallback?.id);
+   const provider = firstNonEmptyString(record.provider, fallback?.provider);
+-  const api = firstNonEmptyString(record.api, fallback?.api) ?? "";
+   if (!id || !provider) return fallback;
+ 
++  // 响应消息只有 provider/wire id；虚拟路由时 fallback 是 router 模型，不能
++  // 提供实际上游的显示名和协议元数据。优先回查注册表，确保 k3/hy3/
++  // opencode-go 等别名仍按实际家族匹配并写入正确的上游模型桶。
++  const registered = findModelInRegistry(registry, provider, id);
++  const sameIdentity =
++    !!fallback && lower(fallback.id) === lower(id) && lower(fallback.provider) === lower(provider);
++  const base = registered ?? fallback;
++  const api = firstNonEmptyString(record.api, registered?.api, sameIdentity ? fallback?.api : undefined) ?? "";
+   return {
+-    ...(fallback ?? {}),
++    ...(base ?? {}),
+     id,
+-    name: id,
++    name: registered?.name ?? (sameIdentity && fallback?.name ? fallback.name : id),
+     provider,
+     api,
+-    baseUrl: fallback?.baseUrl ?? "",
+-    reasoning: fallback?.reasoning ?? false,
+-    input: fallback?.input ?? ["text"],
+-    cost: fallback?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+-    contextWindow: fallback?.contextWindow ?? 0,
+-    maxTokens: fallback?.maxTokens ?? 0,
++    baseUrl: base?.baseUrl ?? "",
++    reasoning: base?.reasoning ?? false,
++    input: base?.input ?? ["text"],
++    cost: base?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++    contextWindow: base?.contextWindow ?? 0,
++    maxTokens: base?.maxTokens ?? 0,
+   } as PiModel;
+ }
+ 
+@@ -3141,11 +3152,15 @@
+   return CACHE_PROVIDER_ADAPTERS.find((adapter) => adapter.matchesModel(model));
+ }
+ 
+-function selectAdapterForAssistantMessage(message: unknown, model: PiModel | undefined): CacheProviderAdapter | undefined {
++function selectAdapterForAssistantMessage(
++  message: unknown,
++  model: PiModel | undefined,
++  registry?: ModelRegistryLike,
++): CacheProviderAdapter | undefined {
+   // Assistant message metadata is request-local and authoritative for virtual
+-  // routing providers. Use it first for every model; direct providers normally
+-  // echo the same provider/model and therefore remain unchanged.
+-  const responseModel = modelFromAssistantMessage(message, model);
++  // routing providers. Resolve its provider/id through the registry so aliases
++  // retain the registered display name used by family detection.
++  const responseModel = modelFromAssistantMessage(message, model, registry);
+   return CACHE_PROVIDER_ADAPTERS.find((adapter) => adapter.matchesAssistantMessage(message, responseModel));
+ }
+ 
+@@ -4366,6 +4381,7 @@
+   getAssistantMessageModelTokenValues,
+   getCompat,
+   modelKey,
++  modelFromAssistantMessage,
+   // Platform-friendly path helpers
+   getModelsYmlDisplayPath,
+   buildProviderCompatOverride,
+@@ -5079,7 +5095,7 @@
+     const operation = (async () => {
+       await ensureActiveSessionStats(ctx);
+       syncSessionHash(ctx);
+-      const adapter = selectAdapterForAssistantMessage(event.message, ctx.model);
++      const adapter = selectAdapterForAssistantMessage(event.message, ctx.model, ctx.modelRegistry);
+       if (!adapter) return;
+ 
+       const usage = adapter.normalizeUsage(event.message);
+@@ -5087,7 +5103,7 @@
+       // Completed message metadata is request-local and authoritative for virtual
+       // routing providers. Use it whenever it supplies provider/model identity;
+       // fall back to the active context model for direct providers.
+-      const statsModel = modelFromAssistantMessage(event.message, ctx.model) ?? ctx.model;
++      const statsModel = modelFromAssistantMessage(event.message, ctx.model, ctx.modelRegistry) ?? ctx.model;
+       let routedModelChanged = false;
+       if (isVirtualRoutingModel(ctx.model, ctx) && statsModel && !isVirtualRoutingModel(statsModel, ctx)) {
+         const nextRoutedModel: PersistedRoutedModelRef = {
