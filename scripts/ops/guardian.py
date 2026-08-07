@@ -74,7 +74,6 @@ TELEGRAM_ALLOWED_USERS = set(
 )
 TELEGRAM_PROXY = _config_value("TELEGRAM_PROXY", "telegram_proxy")
 CODEBUDDY_API_KEY = _config_value("CODEBUDDY_API_KEY", "codebuddy_api_key")
-ATOMCODE_PROXY_KEY = _config_value("ATOMCODE_PROXY_KEY", "atomcode_proxy_key")
 AGENTROUTER_PROXY_KEY = _config_value("AGENTROUTER_PROXY_KEY", "agentrouter_proxy_key")
 # The local clients use loopback while NewAPI reaches these proxies over
 # Tailscale. Authentication and the host firewall are required when this is
@@ -161,11 +160,10 @@ CYCLE_BUDGET_SEC = 90  # 单轮执行预算：超时后跳过剩余低优先级�
 # 本地代理（anyrouter 已从 OMP disabledProviders + 本表移除：上游 anyrouter.top
 # key 失效 502，进程活着但推理不可用，重启解决不了——见踩坑 10；保留进程，
 # 恢复时手工加回本表即可）
-# agentrouter/atomcode 加固后只绑定 127.0.0.1 并要求 Bearer key（secrets.json）
+# agentrouter/codebuddy 加固后只绑定 127.0.0.1 并要求 Bearer key（secrets.json）
 LOCAL_PROXIES = {
     "agentrouter": {"port": 8788, "name": "agentrouter", "script": "agentrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
     "codebuddy": {"port": 8787, "name": "codebuddy", "script": "converter.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/codebuddy2openai"},
-    "atomcode": {"port": 9457, "name": "atomcode", "script": "proxy.js", "dir": "C:/Users/zhugu/atomgit-opencode-bridge"},
 }
 
 # 日志
@@ -1399,7 +1397,7 @@ class AutoFixEngine:
         """探测端点存活（短超时）
 
         - 路径感知：base 已含 /v1 时只拼 /models，否则拼 /v1/models（避免 /v1/v1/models 404）
-        - 本地代理需鉴权：按端口带对应 Bearer key（atomcode 9457 / agentrouter 8788 / codebuddy 8787）
+        - 本地代理需鉴权：按端口带对应 Bearer key（agentrouter 8788 / codebuddy 8787）
         - 语义：任何 HTTP 响应（含 401/403）都算存活，只有连接失败/超时才算死
         """
         base = base_url.rstrip("/")
@@ -1410,7 +1408,7 @@ class AutoFixEngine:
 
         # 本地代理端口 → 探针 key
         probe_key = "any"
-        for port, key in ((9457, ATOMCODE_PROXY_KEY), (8788, AGENTROUTER_PROXY_KEY), (8787, CODEBUDDY_API_KEY)):
+        for port, key in ((8788, AGENTROUTER_PROXY_KEY), (8787, CODEBUDDY_API_KEY)):
             if f":{port}" in models_path:
                 probe_key = key
                 break
@@ -1622,9 +1620,8 @@ class AutoFixEngine:
             return False
 
         try:
-            # atomcode 用 node 启动，其他用 python.exe；按脚本名识别旧进程。
-            # node 的命令行只有 proxy.js，不包含 "atomcode"，按代理名匹配会漏杀。
-            proc_name = "node.exe" if name == "atomcode" else "python.exe"
+            # 本地代理均以 python.exe 启动；按脚本名识别旧进程。
+            proc_name = "python.exe"
             script_pattern = re.escape(info["script"])
             ps_cmd = f'Get-CimInstance Win32_Process -Filter "Name=\'{proc_name}\'" | Where-Object {{ $_.CommandLine -match \'{script_pattern}\' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'
             subprocess.run(
@@ -1658,13 +1655,6 @@ class AutoFixEngine:
                     "--log", "converter.log"
                 ]
                 env = {**os.environ, "CODEBUDDY2OPENAI_KEY": CODEBUDDY_API_KEY}
-            elif name == "atomcode":
-                cmd = ["node", str(script_path)]
-                env = {
-                    **os.environ,
-                    "HOST": LOCAL_PROXY_BIND_HOST,
-                    "LOCAL_API_KEY": ATOMCODE_PROXY_KEY,
-                }
             else:
                 logger.error(f"Unknown proxy type: {name}")
                 return False

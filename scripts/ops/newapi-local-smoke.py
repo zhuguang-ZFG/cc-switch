@@ -3,7 +3,7 @@
 
 Checks, in order:
   1. NewAPI /api/status reachable (http://127.0.0.1:3002)
-  2. Local gateway proxies listening on the Tailscale bind host (8787/8788/9457)
+  2. Local gateway proxies listening on the Tailscale bind host (8787/8788)
   3. Admin API: channel health summary (auto-disabled channels are flagged)
   4. Two cheap real completions through the gateway (latency sample)
 
@@ -28,7 +28,6 @@ PROBE_HOST = "100.83.32.95"  # local proxies bind the Tailscale IP (secrets.json
 PROXY_PORTS: dict[str, tuple[str, int]] = {
     "converter": (PROBE_HOST, 8787),
     "agentrouter": (PROBE_HOST, 8788),
-    "atomcode": (PROBE_HOST, 9457),
     # anyrouter binds loopback only (OMP slow chain + NewAPI ch72)
     "anyrouter": ("127.0.0.1", 8789),
 }

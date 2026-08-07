@@ -627,6 +627,18 @@ supervisor 自 08-06 ~21:01 起挂掉（exit 58，日志无 traceback），期�
 
 ch53 在 11:31 被 NewAPI auto-disable（401「Gitcode auth: token rejected」），桥本身存活（9457 探针 OK）。RCA：`~/.atomcode/auth.toml` 的 access_token 名义有效期至 08-08 01:52，但已被服务端拒绝（疑似撤销）；refresh_token 亦已死——`acs.atomgit.com/oauth/refresh` 返回 502 `refresh_token不存在或已过期`。桥的自动刷新与 401 强制刷新均无法恢复。修复需重新登录（`atomcode login` 或 AtomCode 应用内重新授权，重写 auth.toml），本地无 CLI 可用；ch53 保持禁用（fail-closed 正确），新 token 就绪后恢复 status=1（该 fork 更新端点需大写键 `{'Id':53,'Status':1}`）。
 
+### atomcode 整体下架（同日 11:57）
+
+OAuth 授权被服务端阻断（3 次 401 `Unauthorized`，trace `3debe775`/`30d6d818`/`b5a1bece`，登录态下仍拒；设备码注册正常说明客户端未被拉黑）→ 按用户决定整体删除：
+
+- 进程：bridge proxy.js、watchdog.js、watchdog.ps1 全部终止；Startup `atomcode-bridge-watchdog.cmd` 禁用（`.disabled`）；计划任务本就禁用。
+- supervisor：`PROXIES` 移除 atomcode 登记（proxies-supervisor.py）。
+- NewAPI：ch53 删除（`DELETE /api/channel/53`）。
+- OMP：models.yml 移除 atomcode provider；config.yml vision 主模型 `atomcode/Qwen3-VL` → `zg-newapi-anthropic/claude-opus-5`（fallback 链去重链首）、`maxInFlightRequests.atomcode` 删除、flash/smol 链的 `atomcode/deepseek-v4-flash` 删除（备份 `*.bak-20260807-atomcode-removal`；OMP 下次重启生效）。
+- 仓库门禁：smoke `PROXY_PORTS`、guardian `LOCAL_PROXIES`/探针 key/重启分支、三套测试同步（145/145 通过）。
+- 归档：`~/atomgit-opencode-bridge.bak-20260731`（原 `~/atomgit-opencode-bridge`）。
+- 验证：live smoke 仅剩既有 ch18/ch70 auto-disabled 基线。
+
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
 
 背景：林夕/百倍路径当前不可作为可靠承接，用户要求 Agent 渠道顶上。历史门禁已明确 AgentRouter Claude 短流式存在上游敏感词误杀，因此不把 AgentRouter Claude 提升为 slow/plan/vision 主路由。

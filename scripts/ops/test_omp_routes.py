@@ -517,7 +517,7 @@ class OmpRouteGateTests(unittest.TestCase):
 
     def test_codebuddy_registers_only_hy3_and_sol(self):
         text = MODELS_FILE.read_text(encoding="utf-8")
-        codebuddy_block = text.split("  codebuddy:\n", 1)[1].split("\n  atomcode:\n", 1)[0]
+        codebuddy_block = text.split("  codebuddy:\n", 1)[1].split("\n  agentrouter:\n", 1)[0]
         registered = {
             line.split(":", 1)[1].strip()
             for line in codebuddy_block.splitlines()
@@ -604,8 +604,8 @@ class OmpRouteGateTests(unittest.TestCase):
             _parse_selector("zg-newapi/gpt-5.6-sol"), ("zg-newapi", "gpt-5.6-sol")
         )
         self.assertEqual(
-            _parse_selector("atomcode/Qwen/Qwen3-VL-8B-Instruct"),
-            ("atomcode", "Qwen/Qwen3-VL-8B-Instruct"),
+            _parse_selector("agentrouter/Qwen/Qwen3-VL-8B-Instruct"),
+            ("agentrouter", "Qwen/Qwen3-VL-8B-Instruct"),
         )
         self.assertEqual(_parse_selector("zg-newapi/*"), ("zg-newapi", "*"))
         for bad in (
@@ -884,7 +884,7 @@ class OmpRouteGateTests(unittest.TestCase):
     def test_live_models_registrations_parse_expected_providers(self):
         parsed = _parse_model_registrations(MODELS_FILE.read_text(encoding="utf-8"))
         self.assertTrue(
-            {"zg-newapi", "zg-newapi-anthropic", "codebuddy", "atomcode", "agentrouter", "longcat"}
+            {"zg-newapi", "zg-newapi-anthropic", "codebuddy", "agentrouter", "longcat"}
             <= set(parsed),
             sorted(parsed),
         )

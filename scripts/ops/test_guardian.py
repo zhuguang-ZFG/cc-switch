@@ -512,7 +512,7 @@ class PowerShellInvocationTests(unittest.TestCase):
             patch.object(guardian.subprocess, "Popen"),
             patch.object(guardian.time, "sleep"),
         ):
-            engine.restart_local_proxy("atomcode", 9457)
+            engine.restart_local_proxy("codebuddy", 8787)
 
         args = run.call_args.args[0]
         self.assertIsInstance(args, list)
@@ -520,13 +520,12 @@ class PowerShellInvocationTests(unittest.TestCase):
         self.assertIn("-Command", args)
         self.assertIn("shell", run.call_args.kwargs)
         self.assertIs(run.call_args.kwargs["shell"], False)
-        self.assertIn(r"proxy\.js", args[-1])
+        self.assertIn(r"converter\.py", args[-1])
 
     def test_proxy_start_uses_env_keys_and_shared_bind_host(self):
         cases = (
             ("agentrouter", 8788, "AGENTROUTER_PROXY_KEY", "agent-secret"),
             ("codebuddy", 8787, "CODEBUDDY2OPENAI_KEY", "codebuddy-secret"),
-            ("atomcode", 9457, "LOCAL_API_KEY", "atom-secret"),
         )
 
         with patch.multiple(
@@ -534,7 +533,6 @@ class PowerShellInvocationTests(unittest.TestCase):
             LOCAL_PROXY_BIND_HOST="0.0.0.0",
             AGENTROUTER_PROXY_KEY="agent-secret",
             CODEBUDDY_API_KEY="codebuddy-secret",
-            ATOMCODE_PROXY_KEY="atom-secret",
         ):
             for name, port, env_name, secret in cases:
                 with self.subTest(name=name):
@@ -558,12 +556,9 @@ class PowerShellInvocationTests(unittest.TestCase):
                     self.assertNotIn("--api-key", cmd)
                     self.assertNotIn(secret, cmd)
                     self.assertEqual(env[env_name], secret)
-                    if name == "atomcode":
-                        self.assertEqual(env["HOST"], "0.0.0.0")
-                    else:
-                        self.assertTrue(cmd[0].endswith("/python.exe"))
-                        self.assertIn("--host", cmd)
-                        self.assertEqual(cmd[cmd.index("--host") + 1], "0.0.0.0")
+                    self.assertTrue(cmd[0].endswith("/python.exe"))
+                    self.assertIn("--host", cmd)
+                    self.assertEqual(cmd[cmd.index("--host") + 1], "0.0.0.0")
 
 class RetryPolicyTests(unittest.TestCase):
     def make_client(self, value):
@@ -1168,8 +1163,8 @@ class ProxyRestartTests(unittest.TestCase):
         for _ in range(3):
             g._check_cycle()
 
-        # 当前只管理 agentrouter/codebuddy/atomcode 三个本地代理
-        self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
+        # 当前只管理 agentrouter/codebuddy 两个本地代理
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 2)
         g.telegram.send_alert.assert_not_called()
 
     def test_successful_local_proxy_restart_does_not_send_stale_failure_alert(self):
@@ -1194,7 +1189,7 @@ class ProxyRestartTests(unittest.TestCase):
         for _ in range(3):
             g._check_cycle()
 
-        self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 2)
         g.telegram.send_alert.assert_not_called()
 
     def test_failed_local_proxy_restart_sends_failure_alert(self):
@@ -1219,7 +1214,7 @@ class ProxyRestartTests(unittest.TestCase):
         for _ in range(3):
             g._check_cycle()
 
-        self.assertEqual(g.telegram.send_alert.call_count, 3)
+        self.assertEqual(g.telegram.send_alert.call_count, 2)
         self.assertTrue(
             all(call.args[0] == "本地代理故障" for call in g.telegram.send_alert.call_args_list)
         )
@@ -1246,7 +1241,7 @@ class ProxyRestartTests(unittest.TestCase):
 
         g._check_cycle()
 
-        self.assertEqual(g.autofix.restart_local_proxy.call_count, 3)
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 2)
         g.telegram.send_alert.assert_not_called()
 
 
@@ -2127,7 +2122,7 @@ class OmpRoleTests(unittest.TestCase):
 
     def test_probe_endpoint_sends_correct_bearer_key_by_port(self):
         """按端口选择 Bearer key：agentrouter 8788 → AGENTROUTER_PROXY_KEY，
-        codebuddy 8787 → CODEBUDDY_API_KEY，atomcode 9457 → ATOMCODE_PROXY_KEY"""
+        codebuddy 8787 → CODEBUDDY_API_KEY"""
         with patch.object(
             guardian.urllib.request,
             "urlopen",
@@ -2146,9 +2141,7 @@ class OmpRoleTests(unittest.TestCase):
             auth = mk_req.call_args.kwargs["headers"]["Authorization"]
             self.assertEqual(auth, f"Bearer {guardian.CODEBUDDY_API_KEY}")
 
-            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:9457/v1")
-            auth = mk_req.call_args.kwargs["headers"]["Authorization"]
-            self.assertEqual(auth, f"Bearer {guardian.ATOMCODE_PROXY_KEY}")
+
 
 
 class DailyReportTests(unittest.TestCase):
