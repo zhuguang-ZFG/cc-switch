@@ -234,3 +234,27 @@ HTTP 402 {"error":"Usage limit reached, will reset on today at 3:43 AM (UTC+8)"}
 ```
 
 每日用量额度整体耗尽，今天 03:43 自动重置。若 03:43 后 Sol 仍不可用，需确认 key 独立性（单 key 限额 vs 共享额度）。
+
+## 8. NewAPI user_sessions 每日自动清理（2026-08-08 02:25）
+
+### 问题
+
+`user_sessions` 上限 50，Guardian 每周期登录累积，打满后所有登录 409 `AUTH_SESSION_LIMIT`（重启不清，昨晚已手动清空一次）。机制性复发风险。
+
+### 修复（proxies-supervisor.py）
+
+新增 `cleanup_user_sessions()`：每日 03:00 后（与每日备份同一时机）：
+
+1. `DELETE FROM user_sessions WHERE expires_at < now`（删除已过期会话）
+2. 按 `last_active_at DESC` 只保留最近 10 条（`SESSION_KEEP=10`），删除其余
+
+删除安全：Guardian/管理端下次请求会自动重新登录建立新会话（昨晚清空验证过）。对真实 DB 手动验证：2 条活跃会话删 0 条，无副作用。
+
+### 回归与验证
+
+```text
+test_supervisor_session_cleanup.py   2/2 OK（60 条造数：删 30 过期 + 20 超量，保留最新 10 条；幂等）
+test_proxies_supervisor_status.py    2/2 OK
+```
+
+Supervisor 已重启（PID 21608），schema v2 状态正常，四服务健康。
