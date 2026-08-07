@@ -625,7 +625,7 @@ supervisor 自 08-06 ~21:01 起挂掉（exit 58，日志无 traceback），期�
 
 ### supervisor 管理约定（同日 13:50，经历 13:30 误判风波后固化）
 
-- **统一经 hub 管理**（`hub restart proxies-supervisor`）：当前实例 persist+detached（pid 15936），broker 重启与 omp 退出均存活。
+- **统一经 hub 管理**（`hub restart proxies-supervisor`）：当前实例 persist+detached（pid 9648），broker 重启与 omp 退出均存活；**hub restart=on-failure**（2026-08-07 14:23 起）——supervisor 崩溃自动拉起（互斥退出 exit 0 不触发重启）。
 - Startup `LocalAIProxies-Supervisor.lnk` → `start-proxies-supervisor.bat` 仅作登录兜底（hub 未运行时自动拉起）。
 - **单实例互斥**：后启动者静默退出（无任何输出是正常语义，勿判为故障——13:30 误判根因之一）。
 - **hub readiness 不匹配 ≠ 故障**：supervisor 的 print 走块缓冲 stdout，ready.log 永不匹配；以日志文件与端口为准。
