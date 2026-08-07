@@ -777,3 +777,12 @@ ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claud
 - 上游对快速/随机身份请求会 502/挂起——relay 已用稳定 installation_id 规避；若再次出现，先跑官方 CLI 对照（网关健康基准）
 - **勿将此 key 用于任何标准 API 直连**——只经 relay 指纹路径
 - key 已明文出现在聊天记录——轮换后需同步更新 secrets.json 的 zzzcoding_codex_key
+
+### OMP 注册（同日 ~16:1x）
+
+`~/.omp/agent/models.yml` zg-newapi 新增 6 模型（备份 `.bak-20260807-zzzcoding`）：
+
+- gpt-5.5 / gpt-5.6 / gpt-5.6-luna / gpt-5.6-terra / gpt-5.4（400k ctx / 128k maxTokens，reasoning）
+- gpt-5.4-mini（200k / 128k）
+
+未注册 codex-auto-review / gpt-5.3-codex-spark（Codex CLI 内部模型，不适合常规对话）。gpt-5.6-sol 原有注册不动（ch73 新增为聚合池内 sol 又一来源）。route gate 32/32 通过；**OMP 重启后生效**。

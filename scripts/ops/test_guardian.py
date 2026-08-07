@@ -669,6 +669,51 @@ class WeightAdjustmentTests(unittest.TestCase):
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_imports_newapi_auto_bans_into_recovery_queue(self):
+        engine = make_engine(
+            {
+                "disabled_channels": [],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[70] = {
+            "id": 70,
+            "name": "auto-banned",
+            "status": 3,
+            "auto_ban": 1,
+            "weight": 10,
+            "priority": 50,
+        }
+
+        self.assertEqual(engine._sync_newapi_auto_bans(), 1)
+
+        self.assertEqual([record["id"] for record in engine.state["disabled_channels"]], [70])
+        self.assertFalse(engine.state["disabled_channels"][0]["manual"])
+        self.assertEqual(engine.state["weight_history"]["70"]["weight"], 10)
+
+        engine.check_and_enable_recovered_channels()
+        self.assertEqual(engine.newapi.test_calls, [])
+
+    def test_auto_ban_import_skips_manual_and_policy_exclusions(self):
+        engine = make_engine(
+            {
+                "disabled_channels": [],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels = {
+            2: {"id": 2, "name": "excluded", "status": 3, "auto_ban": 1},
+            7: {"id": 7, "name": "manual", "status": 2, "auto_ban": 1},
+            8: {"id": 8, "name": "not-auto-ban", "status": 3, "auto_ban": 0},
+        }
+
+        self.assertEqual(engine._sync_newapi_auto_bans(), 0)
+        self.assertEqual(engine.state["disabled_channels"], [])
+
     def test_restores_saved_weight_even_when_disabled_channel_kept_nonzero_weight(self):
         engine = make_engine(
             {
@@ -2142,6 +2187,23 @@ class OmpRoleTests(unittest.TestCase):
             self.assertEqual(auth, f"Bearer {guardian.CODEBUDDY_API_KEY}")
 
 
+
+
+class WatchdogContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source = Path(__file__).with_name("watchdog.ps1").read_text(encoding="utf-8")
+
+    def test_stale_threshold_tolerates_slow_guardian_cycles(self):
+        self.assertIn('$staleSec = 180', self.source)
+        self.assertIn("'^pythonw?(\\.exe)?$'", self.source)
+
+    def test_restart_uses_canonical_task_with_backoff(self):
+        self.assertIn('$guardianTask = "NewAPI Guardian"', self.source)
+        self.assertIn('$restartBackoffSec = 300', self.source)
+        self.assertIn('Start-ScheduledTask -TaskName $guardianTask', self.source)
+        self.assertIn(r'Local\CCSwitchGuardianWatchdog', self.source)
+        self.assertNotIn('hub restart=on-failure', self.source)
 
 
 class DailyReportTests(unittest.TestCase):

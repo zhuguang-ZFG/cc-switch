@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Guardian auto-ban 恢复闭环 + watchdog 单属主**: 修复 `AutomaticEnableChannelEnabled=false` 导致 NewAPI auto-ban 渠道永久失联的问题。Guardian 现在只把 `status=3 && auto_ban=1`（排除明确隔离的 2/62/63/64/65）同步进受 5 分钟冷却、指数退避、3 次探测和稳定性回滚保护的恢复队列；本地 smoke 新增 `AutomaticEnableChannelEnabled=true` 门禁。watchdog 的卡死阈值统一为 180 秒，支持识别 `pythonw.exe`，精确核验心跳 PID 后通过 `NewAPI Guardian` 计划任务恢复，包含 5 分钟重启退避和命名互斥。生产新增 `NewAPI Guardian Watchdog` 单实例计划任务（允许电池供电、失败最多重启 3 次/每分钟）。ch70 已被实际导入队列，首次恢复探测失败后保持 fail-closed。详见 `docs/ops/local-gateway-hardening-2026-08-05.md`。
 - **Guardian 自愈修复 + Telegram 告警治理**: ① 本地代理探针禁用（`check_local_proxy` 直接返回，不再发 `/v1/models` 请求）；② 推理超时告警按 episode 去重（同一代理连续失败只发一次，恢复后清除）；③ 渠道测试超时放宽 5→15 秒（吸收常见 6-15s 上游）。详见 `docs/patches/guardian-self-heal-agnes-relay-telegram-2026-08-04.md`。
 - **agnes-relay 360 弹窗修复**: 命令从 `powershell.exe -WindowStyle Hidden` 改为 `pythonw.exe`（无窗口版），`subprocess.Popen` 加 `CREATE_NO_WINDOW`，移除 `TimeTrigger PT1M`（仅保留 LogonTrigger），避免触发 360 "隐藏执行 PowerShell" 弹窗及 cmd 闪窗。详见同上。
 - **CatPaw Bridge 完整移除**: 实测有效上下文 ≈13k tokens 且无思维链控制，用户选择当日移除。Bridge 目录、ch71、models.yml 6 条目、secrets.json key、tmp/应用数据/注册表全部清理。详见 `docs/ops/omp-model-config-review-2026-08-03.md` §CatPaw。

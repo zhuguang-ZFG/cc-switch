@@ -107,6 +107,8 @@ MAX_AUTO_WEIGHT = 20  # 自动加权上限
 RECOVERY_COOLDOWN_MIN = 5  # 恢复冷却时间（分钟）
 RECOVERY_TEST_COUNT = 3  # 恢复验证测试次数
 RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
+# 明确隔离且不应自动恢复的本地渠道；与 newapi-local-smoke.py 策略保持一致。
+AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 62, 63, 64, 65}
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）
 WEIGHT_DEGRADE_COOLDOWN_MIN = 5  # 降权最小间隔（分钟）— 自愈节流独立于告警冷却
@@ -114,9 +116,9 @@ NEWAPI_RESTART_COOLDOWN_MIN = 30  # NewAPI 容器重启最小间隔（成功后�
 NEWAPI_FAIL_THRESHOLD = 3  # 连续失败次数才触发破坏性重启（防瞬态抖动）
 NEWAPI_RESTART_BACKOFF_SEC = 60  # 重启失败后的退避间隔（秒），成功才进 30min 冷却
 
-# 错误渠道检测（补充 NewAPI 内置 30min 自动测试，不重复）
-# NewAPI 已内置: 每 30min 全量测试 + 401/402/403 自动禁用 + 自动启用
-# Guardian 补充: 更频繁的错误码扫描（NewAPI 只在定时测试时检测）+ 本地代理 + OMP
+# 错误渠道检测（本机已关闭 NewAPI 内置定时测试）
+# NewAPI 仍负责请求路径的自动禁用；Guardian 将 status=3 + auto_ban=1
+# 同步进受冷却/退避保护的恢复队列，并补充错误码扫描、本地代理和 OMP 观测。
 ERROR_SCAN_INTERVAL = 20  # 每 N 个检查周期扫描一次（20*15s=5min，NewAPI 30min 太慢）
 ERROR_SCAN_BATCH_SIZE = 5  # 每次最多测试 N 个渠道（降低 API 负载）
 ERROR_DISABLE_KEYWORDS = ["余额不足", "INSUFFICIENT_BALANCE", "credit balance", "quota", "402", "401", "invalid"]
@@ -790,6 +792,53 @@ class AutoFixEngine:
         if not any(r["id"] == record["id"] for r in self.state["disabled_channels"]):
             self.state["disabled_channels"].append(record)
 
+    def _sync_newapi_auto_bans(self) -> int:
+        """Import NewAPI auto-bans into Guardian's bounded recovery queue."""
+        disabled = self.state.setdefault("disabled_channels", [])
+        known_ids = {record.get("id") for record in disabled}
+        added = 0
+        for channel in self.newapi.get_channels():
+            channel_id = channel.get("id")
+            auto_ban = str(channel.get("auto_ban", "")).strip().lower()
+            if (
+                not isinstance(channel_id, int)
+                or channel.get("status") != 3
+                or auto_ban not in {"1", "true"}
+                or channel_id in AUTO_BAN_RECOVERY_EXCLUSIONS
+                or channel_id in known_ids
+            ):
+                continue
+
+            weight = channel.get("weight", 0)
+            if isinstance(weight, int) and weight > 0:
+                history = self.state.setdefault("weight_history", {})
+                history.setdefault(
+                    str(channel_id),
+                    {
+                        "weight": weight,
+                        "priority": channel.get("priority", 50),
+                        "time": datetime.now().isoformat(),
+                    },
+                )
+            self._append_disabled(
+                {
+                    "id": channel_id,
+                    "name": channel.get("name", str(channel_id)),
+                    "reason": "newapi_auto_ban",
+                    "time": datetime.now().isoformat(),
+                    "manual": False,
+                }
+            )
+            known_ids.add(channel_id)
+            added += 1
+            logger.warning(
+                f"Imported NewAPI auto-ban for channel {channel_id} "
+                f"({channel.get('name', channel_id)}) into recovery queue"
+            )
+        if added:
+            self._save_state()
+        return added
+
     # ── P1: 渠道性能监控 ──────────────────────────────────────────────────
 
     def _record_channel_perf(self, channel: dict, healthy: bool) -> bool:
@@ -1105,7 +1154,8 @@ class AutoFixEngine:
         return False
 
     def check_and_enable_recovered_channels(self):
-        """检查已禁用渠道是否稳定恢复，再启用并加入聚合池。"""
+        """同步 NewAPI auto-ban，稳定复测后再启用并加入聚合池。"""
+        self._sync_newapi_auto_bans()
         tested = 0
         for record in self.state["disabled_channels"][:]:
             if tested >= RECOVERY_BATCH_SIZE:

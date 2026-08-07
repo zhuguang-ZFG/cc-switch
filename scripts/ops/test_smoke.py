@@ -337,6 +337,24 @@ class AdminAuthTests(unittest.TestCase):
         )
         self.assertEqual(smoke.channel_policy_violations(channels), [])
 
+    def test_option_policy_requires_automatic_channel_recovery(self):
+        self.assertEqual(
+            smoke.option_policy_violations(
+                [{"key": "AutomaticEnableChannelEnabled", "value": "true"}]
+            ),
+            [],
+        )
+        self.assertEqual(
+            smoke.option_policy_violations(
+                [{"key": "AutomaticEnableChannelEnabled", "value": "false"}]
+            ),
+            ["AutomaticEnableChannelEnabled=false"],
+        )
+        self.assertEqual(
+            smoke.option_policy_violations([]),
+            ["AutomaticEnableChannelEnabled=missing"],
+        )
+
     def test_main_fails_on_invalid_channels_response(self):
         """主流程：渠道接口 HTTP 500 或非法 items 时必须返回失败。"""
         self.addCleanup(smoke.failures.clear)
@@ -347,6 +365,12 @@ class AdminAuthTests(unittest.TestCase):
                         return 200, {}
                     if "/api/channel/?p=0&page_size=1" in url:
                         return 200, {}
+                    if url.endswith("/api/option/"):
+                        return 200, {
+                            "data": [
+                                {"key": "AutomaticEnableChannelEnabled", "value": "true"}
+                            ]
+                        }
                     if "/api/channel/?p=0&page_size=200" in url:
                         return channel_status, channel_body
                     if "/v1/chat/completions" in url:

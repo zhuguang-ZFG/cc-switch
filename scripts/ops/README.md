@@ -79,6 +79,8 @@ Guardian 依赖以下 NewAPI 设置（已通过 API 配置）：
 | `ChannelDisableThreshold` | `3` | NewAPI 连续失败阈值 |
 | `RetryTimes` | `2` | 请求重试次数 |
 
+本机关闭 NewAPI 内置定时渠道测试以控制探测成本，因此 Guardian 每轮会把 `status=3 && auto_ban=1` 的渠道同步到自身恢复队列。同步不立即启用：先等待至少 5 分钟，再执行 3 次探测、至少 2 次通过、恢复权重和 10 分钟稳定性回滚。手工 `status=2`、`auto_ban=0` 以及明确隔离的 2/62/63/64/65 不进入自动恢复。
+
 ## 安装
 
 ### 1. 配置
@@ -106,7 +108,7 @@ Guardian 依赖以下 NewAPI 设置（已通过 API 配置）：
 python guardian.py
 ```
 
-Windows 当前使用两个用户登录入口：现有 `NewAPI Guardian` 计划任务，以及 Startup 目录中的 `cline-glm-proxy.bat`。`start.bat` 自带退出重启循环，Guardian 进程互斥锁会拒绝重复实例。
+Windows 以 `NewAPI Guardian` 计划任务作为 Guardian 的规范启动入口，以 `NewAPI Guardian Watchdog` 计划任务常驻 `watchdog.ps1`。watchdog 仅在心跳超过 180 秒且精确核验心跳 PID 后终止卡死实例，再通过 Guardian 计划任务重新拉起。watchdog 进程使用命名互斥，计划任务采用 `IgnoreNew`、允许电池供电运行且电源切换时不中止，重启尝试有 5 分钟退避；旧 Startup 入口即使重复触发也会立即退出。
 
 ## Telegram 命令
 
@@ -127,9 +129,10 @@ Windows 当前使用两个用户登录入口：现有 `NewAPI Guardian` 计划�
 | `~/.omp/guardian/guardian.log` | 日志（RotatingFileHandler, 5MB × 5） |
 | `~/.omp/guardian/state.json` | 状态（禁用/降权/加入/权重历史） |
 | `~/.omp/guardian/metrics.json` | 指标导出 |
-| Startup `cline-glm-proxy.bat` | 登录时启动代理 watchdog 与 Guardian |
+| 计划任务 `NewAPI Guardian` | Guardian 唯一规范启动/恢复入口 |
+| 计划任务 `NewAPI Guardian Watchdog` | 登录触发，单实例常驻；自身失败最多重启 3 次、间隔 1 分钟；电池供电不停止 |
 | `~/.omp/guardian/heartbeat.json` | 心跳（Guardian.run() 每轮原子写 ts+pid） |
-| `~/.omp/guardian/watchdog.ps1` | Guardian watchdog：心跳超 180s 杀卡死进程，hub on-failure 拉起 |
+| `~/.omp/guardian/watchdog.ps1` | Guardian watchdog：心跳超 180s 后精确核验并终止卡死进程，通过 `NewAPI Guardian` 计划任务拉起；重启退避 5 分钟 |
 | `~/.omp/guardian/watchdog.log` | watchdog 运行日志 |
 
 ## 安全

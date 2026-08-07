@@ -54,6 +54,26 @@ FALLBACK_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     72: {"priority": 40, "max_weight": 5},
 }
 
+REQUIRED_OPTIONS: dict[str, str] = {
+    "AutomaticEnableChannelEnabled": "true",
+}
+
+
+def option_policy_violations(options: object) -> list[str]:
+    """Return required NewAPI options that are missing or have drifted."""
+    if not isinstance(options, list):
+        return [f"{key}=missing" for key in REQUIRED_OPTIONS]
+    by_key = {
+        item.get("key"): item.get("value")
+        for item in options
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    }
+    return [
+        f"{key}={by_key.get(key, 'missing')}"
+        for key, expected in REQUIRED_OPTIONS.items()
+        if str(by_key.get(key, "missing")).strip().lower() != expected
+    ]
+
 
 def fallback_posture_violations(channels: list[dict]) -> list[str]:
     """Return fallback channels that are disabled or drifted into a primary tier."""
@@ -229,9 +249,20 @@ def main() -> int:
     # 3. channel summary via admin API
     try:
         token, user_id = admin_auth()
+        headers = {"Authorization": f"Bearer {token}", "New-Api-User": str(user_id)}
+        option_status, option_body = http_json(
+            f"{NEWAPI_BASE}/api/option/",
+            headers=headers,
+        )
+        option_violations = option_policy_violations(option_body.get("data"))
+        check(
+            "automatic channel recovery",
+            option_status == 200 and not option_violations,
+            f"HTTP {option_status} violations={option_violations or 'none'}",
+        )
         status, ch = http_json(
             f"{NEWAPI_BASE}/api/channel/?p=0&page_size=200",
-            headers={"Authorization": f"Bearer {token}", "New-Api-User": str(user_id)},
+            headers=headers,
         )
         items = (ch.get("data") or {}).get("items")
         if items is None:
