@@ -121,7 +121,18 @@ NEWAPI_RESTART_BACKOFF_SEC = 60  # 重启失败后的退避间隔（秒），成
 # 同步进受冷却/退避保护的恢复队列，并补充错误码扫描、本地代理和 OMP 观测。
 ERROR_SCAN_INTERVAL = 20  # 每 N 个检查周期扫描一次（20*15s=5min，NewAPI 30min 太慢）
 ERROR_SCAN_BATCH_SIZE = 5  # 每次最多测试 N 个渠道（降低 API 负载）
-ERROR_DISABLE_KEYWORDS = ["余额不足", "INSUFFICIENT_BALANCE", "credit balance", "quota", "402", "401", "invalid"]
+ERROR_DISABLE_KEYWORDS = [
+    "余额不足",
+    "INSUFFICIENT_BALANCE",
+    "credit balance",
+    "quota",
+    "402",
+    "401",
+    "invalid api key",
+    "invalid_api_key",
+    "invalid token",
+    "invalid_token",
+]
 
 # 瞬态限流：HTTP 429 / rate limit / too many requests 不是渠道故障——
 # 不禁用、不累计永久失败计数（交给 NewAPI 池内重试/上游退避处理）
@@ -143,7 +154,11 @@ PROBE_INCOMPATIBLE_MARKERS = (
 def _is_probe_incompatible(message: str) -> bool:
     """探针形态被拒绝：无健康结论，不得据此降权或禁用渠道。"""
     msg = (message or "").lower()
-    return any(marker in msg for marker in PROBE_INCOMPATIBLE_MARKERS)
+    if any(marker in msg for marker in PROBE_INCOMPATIBLE_MARKERS):
+        return True
+    # A channel test can choose an endpoint the provider does not implement.
+    # That is not evidence that real traffic or credentials are unhealthy.
+    return "invalid_request_error" in msg and ("404" in msg or "not found" in msg)
 TEST_CHANNEL_TIMEOUT = 30  # test_channel 独立超时（秒）：上游实测 6-30s 常见，15s 在慢 opus 渠道下误报（2026-08-07 现场 test/3/9/18/33 timed out）
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）

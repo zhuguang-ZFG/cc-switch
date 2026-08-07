@@ -359,6 +359,42 @@ class FullHealthScanTests(unittest.TestCase):
         self.assertEqual(engine.newapi.updates, [])
         self.assertEqual(engine.newapi.disable_calls, [])
 class TransientRateLimitTests(unittest.TestCase):
+    def test_error_scan_404_invalid_request_does_not_disable(self):
+        engine = make_engine()
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine._scan_offset = 0
+        engine.newapi.channels[73] = {
+            "id": 73, "name": "codex-relay", "status": 1, "weight": 5,
+            "priority": 50, "models": "gpt-5.5",
+        }
+        engine.newapi.test_results.append((
+            False,
+            'bad response status code 404, body: {"error":{"type":"invalid_request_error"}}',
+        ))
+        engine.telegram = Mock()
+
+        engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertNotIn("73", engine.state["weight_history"])
+        engine.telegram.send_alert.assert_not_called()
+
+    def test_precise_invalid_api_key_still_disables(self):
+        engine = make_engine()
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine._scan_offset = 0
+        engine.newapi.channels[73] = {
+            "id": 73, "name": "codex-relay", "status": 1, "weight": 5,
+            "priority": 50, "models": "gpt-5.5",
+        }
+        engine.newapi.test_results.append((False, "invalid_api_key"))
+        engine.telegram = Mock()
+
+        engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [73])
+        engine.telegram.send_alert.assert_called_once()
+
     def test_error_scan_rate_limit_does_not_disable(self):
         """429/rate limit 是瞬态：错误扫描不得禁用渠道、不写 weight_history"""
         engine = make_engine()

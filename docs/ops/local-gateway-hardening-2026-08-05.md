@@ -761,7 +761,7 @@ ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claud
 - 本地 `127.0.0.1:15999` OpenAI 兼容端点（/v1/models、/v1/chat/completions 流式+非流式）
 - 每次请求：模板体 + 用户消息 → 网关 `/responses`（指纹头 + 稳定 installation_id，存 `~/.omp/guardian/codex-relay-install-id`）→ SSE 解析（response.output_text.delta / completed）→ OpenAI chat 格式
 - 密钥存 `~/.omp/guardian/secrets.json` → `zzzcoding_codex_key`（env 覆盖 `CODEX_RELAY_KEY`）
-- hub 托管：`codex-relay`，persist + on-failure（端口 15999）
+- Windows 计划任务 `OMP Codex Relay` 托管：当前用户 Limited principal、登录启动、`IgnoreNew`单实例、失败最多重启 3 次/每分钟（端口 15999）；使用 `scripts/ops/register-codex-relay-task.ps1` 幂等注册
 - 模板：`scripts/ops/codex-relay-template.json`（45KB，CLI 0.146.0 捕获）
 
 ### 渠道（ch73 zzzcoding-codex-relay）
@@ -786,3 +786,11 @@ ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claud
 - gpt-5.4-mini（200k / 128k）
 
 未注册 codex-auto-review / gpt-5.3-codex-spark（Codex CLI 内部模型，不适合常规对话）。gpt-5.6-sol 原有注册不动（ch73 新增为聚合池内 sol 又一来源）。route gate 32/32 通过；**OMP 重启后生效**。
+
+### 16:11 故障与修复（同日）
+
+- 故障链：relay 对未知测试路径返回 `404 invalid_request_error` → Guardian 用过宽的 `invalid` 关键词立即禁用 ch73 → hub 实际规格是 `restart=no` 且跨会话退出，15999 无人恢复。
+- relay 修复：流式响应在首个文本/工具语义事件到达后才提交合法 HTTP/SSE 头，超时/上游错误在未提交时保留非 200 语义，保留 system/历史/tool 上下文，转换 function tools/calls，限制 2 MiB 请求体、16 并发和 60s 首语义/上游读超时，支持 `--port`/`--log-file`。日志只记时间、方法、路径、状态，不记 body/key。
+- Guardian 修复：移除裸 `invalid` 关键词，仅对精确的 invalid key/token 保留立即禁用；`404 + invalid_request_error` 归类为探针不兼容，不用作渠道健康结论。
+- ch73 固定 `test_model=gpt-5.5`，恢复 `status=1`，weight/priority 保持 `5/50`。
+- 验证：160/160 ops 回归测试通过；本地非流式返回 `FINAL_LOCAL_OK`；本地流式返回 `FINAL_STREAM_OK`，HTTP 200、`text/event-stream` 且仅一个 `[DONE]`；强制 function call 正确返回 `marker_tool({"marker":"TOOL_OK"})` 和 `finish_reason=tool_calls`；NewAPI ch73 连续测试 3/3 通过，约 3.5s、5.4s、3.8s。最终 OMP 语义门输出 `SEMANTIC_GATE_OK`，NewAPI 日志确认 16:59:30 的 `gpt-5.5` 流式请求命中 ch73，该渠道请求耗时约 5s；整个 OMP 聚合命令因前序 Claude/DeepSeek 路由与 fallback 过程耗时约 98s，两者不得混作 ch73 延迟。未注入故障验证任务计划程序的自动重启，仅校验配置、单实例和端口所有权。
