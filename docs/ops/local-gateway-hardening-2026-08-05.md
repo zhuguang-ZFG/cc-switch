@@ -709,3 +709,34 @@ ch72 随之启用 Claude：models 增加 `claude-opus-5,claude-opus-4-8,zg-claud
 验证：5 连发登录突发全 200，无 429。
 
 同日 ch72 anyrouter 上游曾短暂 429（14:28–14:36），已自行恢复，无介入。
+
+---
+
+## 2026-08-07 追加：ch9 周期拖垮 + Guardian 误诊风波（15:0x 收尾）
+
+### 告警（14:45:50）：周期 107.2s > 90s —— 真实告警
+
+根因：ch9（linxi-k40，opus-5 供应，w10）上游并发受限（429 "Concurrency limit exceeded"）→ 渠道测试 38s > Guardian 客户端超时 30s，周期内重试再吃 30s → 单周期 107.2s。
+
+处置（三连，全部回读验证）：
+
+1. **ch9 禁用**：`POST /api/channel/9/status {"status":2}`（专用 status API；`PUT /api/channel/` 请求体含 status 会被拒——Guardian 注释早有此坑，勿走 PUT）
+2. **ch9 weight=0**：扫描过滤器 `status==1 && weight>0` 直接跳过，杜绝测试超时卷土重来
+3. **`AutomaticEnableChannelEnabled=false`**：首次禁用 ch9 被 NewAPI 自动启用回滚（ch9 一度复活 status=1 继续拖周期）。关闭后渠道恢复完全由 Guardian 状态机管控（`check_and_enable_recovered_channels`），内置测试本已关（`auto_test_channel_enabled=false`）
+
+### 误诊风波（教训）
+
+14:52-14:58 我一度判定 Guardian "卡死"并 kill 5952 + schtasks 重启——**误判**，事实：
+
+- 心跳检查用错文件名（查了 `guardian-heartbeat.json`，实际是 `heartbeat.json`）→ 假阴性
+- 健康且无事可报的周期**静默**（不产生日志）→ 日志"停滞"是正常
+- faulthandler dump 停在 line 1950 = `time.sleep(HEALTH_CHECK_INTERVAL)` 正常位置
+- 健康节奏 = 心跳每 ~17s 一次（15s sleep + ~2s work）；5952 大概率健康，8028（schtasks /run 启动）无缝接管，state.json 完整，无实际损失
+
+**守则**：判断 Guardian 存活只看 `~/.omp/guardian/heartbeat.json` 新鲜度（<30s），不看日志沉默；日志静默 ≠ 卡死。
+
+### 补充事实
+
+- **计划任务无崩溃循环**：`NewAPI Guardian` 任务 Action 直接是 `pythonw.exe guardian.py`（无 start.bat 循环）——进程崩溃后要等下次登录触发才恢复；start.bat 的 10s 重启循环只在手动启动路径存在。建议后续把任务 Action 改为 start.bat（需提权改任务，未执行）。
+- opus-5 池波动（15:06 现场）：ch3 502 / ch45 500 / ch9 限流 / ch18 测试慢，**ch71 hugai 兜底成功**（58s 200）；摘除 ch9 后剩余 ch3/ch18/ch45/ch71。
+- Guardian 启动序列含 TG 告警发送（有 5s 超时），启动后先排除 402 重试策略；日志污染注意：任何前台复现（python -c import guardian）会写生产日志与心跳，复现请先备份或改 LOG_DIR。
