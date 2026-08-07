@@ -611,6 +611,18 @@ AnyRouter 导入本地 NewAPI 为 channel 72：type 14（Anthropic）、`base_ur
 
 ch44 策略未变：NewAPI 聚合仍只 hy3；WorkBuddy sol 由 OMP provider 链（slow/task/plan 三链 `codebuddy/gpt-5.6-sol`）直接消费。若要把 WorkBuddy sol 纳入 NewAPI 聚合，需要 ch44 重新加模型并移除 `CHANNEL_MODEL_EXCLUSIONS[44]`，且 ch44 为 priority 50 会进主池——待用户决策。
 
+### WorkBuddy sol 中断 RCA 与 NewAPI 中继（同日 11:22）
+
+症状：freemodel 全 key 403 `unsupported_client`；官方后端 copilot.tencent.com 对 sol 返回 11102「model only available for authorized users」。
+
+RCA：freemodel 网关在 08-06 20:44 至 08-07 10:31 之间服务端改了客户端门禁——4 个 key 的 `/v1/models` 仍 200 含 sol，但 chat 表面拒绝旧 preamble 指纹，TLS 层亦间歇 RST；本地无新指纹源（现装 WorkBuddy 客户端 app.asar 无 freemodel/preamble 字符串，app 的 sol 走 `custom-local:gpt-5.6-sol` 即本 converter）。官方后端 11102 与身份头组合、本地代理 7897 均无关——账号授权问题，本地不可解。
+
+处置（converter 层，WorkBuddy app 与 OMP codebuddy 链同受益）：`_validate_custom_url` 增加显式白名单 `LOCAL_ALLOWED_UPSTREAMS={"127.0.0.1:3002"}`（置于 https/私网检查前）；models.json 的 sol 指向 `http://127.0.0.1:3002/v1/chat/completions`（NewAPI 客户端 key），freemodel key 池清空防 Bearer 污染；converter 重载。验证：sol stream+tools 200、sol 非流式 200、hy3 200。备份 `models.json.bak-20260807-freemodel-retire`。
+
+### proxies-supervisor exit 58 重启（同日 11:09）
+
+supervisor 自 08-06 ~21:01 起挂掉（exit 58，日志无 traceback），期间子进程均存活但失去自愈；hub restart 恢复。已加 `faulthandler.enable()` 以便下次静默崩溃留栈；若复发按栈定位。
+
 ## AgentRouter Sol 顶上 default 备用（2026-08-06 16:19）
 
 背景：林夕/百倍路径当前不可作为可靠承接，用户要求 Agent 渠道顶上。历史门禁已明确 AgentRouter Claude 短流式存在上游敏感词误杀，因此不把 AgentRouter Claude 提升为 slow/plan/vision 主路由。
