@@ -623,6 +623,15 @@ RCA：freemodel 网关在 08-06 20:44 至 08-07 10:31 之间服务端改了客�
 
 supervisor 自 08-06 ~21:01 起挂掉（exit 58，日志无 traceback），期间子进程均存活但失去自愈；hub restart 恢复。已加 `faulthandler.enable()` 以便下次静默崩溃留栈；若复发按栈定位。
 
+### supervisor 管理约定（同日 13:50，经历 13:30 误判风波后固化）
+
+- **统一经 hub 管理**（`hub restart proxies-supervisor`）：当前实例 persist+detached（pid 15936），broker 重启与 omp 退出均存活。
+- Startup `LocalAIProxies-Supervisor.lnk` → `start-proxies-supervisor.bat` 仅作登录兜底（hub 未运行时自动拉起）。
+- **单实例互斥**：后启动者静默退出（无任何输出是正常语义，勿判为故障——13:30 误判根因之一）。
+- **hub readiness 不匹配 ≠ 故障**：supervisor 的 print 走块缓冲 stdout，ready.log 永不匹配；以日志文件与端口为准。
+- **启动先静默备份 new-api.db**（35MB，1-90s）才打首行日志；期间零输出属正常。
+- 探活目标是 Tailscale `100.83.32.95`（secrets.local_proxy_bind_host），8787/8788 不绑 127.0.0.1——端口检查必须用 Tailscale IP（live smoke 的 PROBE_HOST 即此）。
+
 ### ch53 atomcode-bridge 401 与 Gitcode token 失效（同日 11:37）
 
 ch53 在 11:31 被 NewAPI auto-disable（401「Gitcode auth: token rejected」），桥本身存活（9457 探针 OK）。RCA：`~/.atomcode/auth.toml` 的 access_token 名义有效期至 08-08 01:52，但已被服务端拒绝（疑似撤销）；refresh_token 亦已死——`acs.atomgit.com/oauth/refresh` 返回 502 `refresh_token不存在或已过期`。桥的自动刷新与 401 强制刷新均无法恢复。修复需重新登录（`atomcode login` 或 AtomCode 应用内重新授权，重写 auth.toml），本地无 CLI 可用；ch53 保持禁用（fail-closed 正确），新 token 就绪后恢复 status=1（状态切换规范端点为 `POST /api/channel/{id}/status`，body `{"status":1}`，实测 200；`PUT /api/channel/` 请求体不得含 status）。
