@@ -211,6 +211,26 @@ config.yml（designer 链改动，无独立备份，历史备份见 §4）
 test_guardian.py（FakeNewAPI.test_channel 签名，无独立备份）
 ```
 
+## 10. 运维成熟化：日志轮转 / 管理源收敛 / 崩溃留痕（2026-08-08 下午）
+
+### 变更清单
+
+1. **watchdog.log 轮转**：Write-Log 超 1MB 自动改名 `.old` 再续写（guardian.log 已有 5MB×5 轮转，watchdog 此前无限增长）。
+2. **relay 计划任务收敛**：`OMP Codex Relay` / `OMP SharedChat Codex Relay` 已 Disable——relay 由 supervisor 单一管理源控制（消除登录时双实例 + 配置漂移；可随时 Enable 回滚）。
+3. **NewAPI 备份 drill 计划化**：新建计划任务 `NewAPI-Backup-Restore-Drill`（每月 1 日 04:00 跑 `scripts/ops/newapi_backup_restore_drill.py`，production-hardening §6 建议落地）。
+4. **watchdog 崩溃留痕 + 循环不退出**：while 循环体包 try/catch，任何未捕获异常写 `watchdog-crash.log` 并继续循环（此前异常即死且无痕迹，曾出现 2 分钟内自发死亡无法定位）。
+5. **资源观察**：~/.omp 3.2G（agent/sessions 1.1G 会话历史 + plugins 919M + puppeteer 420M + run/daemons 398M headless profile）——均为运行数据，不动；日志总量 53M 可控。
+
+### 踩坑（重要操作教训）
+
+- **PowerShell 查询自匹配**：`Get-CimInstance | Where { $_.CommandLine -match 'watchdog.ps1' }` 会匹配到**查询命令自己**（-Command 参数含目标字符串）→ 输出 PID 是查询进程，误判 watchdog 存活/死亡；更危险的是**无差别 kill 会误杀真实 watchdog**（曾因此误杀 13:01:31 实例）。
+- **BOM 二踩**：edit 工具每次重写 .ps1 都会移除 UTF-8 BOM（§7 修复过又复发）→ **修改含中文的 .ps1 后必须重加 BOM + Parser 验证**（已记入持久记忆）。
+- **验证 watchdog 存活的可靠方法**：手动跑 `watchdog.ps1` 看日志是否出现 "already running"（mutex 探测），或精确匹配 `-like '*-File*watchdog.ps1*'` 且人工核对命令行。
+
+### 观察（13:16 启动后 10 分钟）
+
+watchdog 崩溃捕获已生效；若 crash log 出现内容说明循环内有未捕获异常（当前无）。
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
