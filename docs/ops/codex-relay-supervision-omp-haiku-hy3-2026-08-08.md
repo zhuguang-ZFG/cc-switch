@@ -527,6 +527,29 @@ OMP 重启后恢复 623KB 旧会话 → 首次续写 400（每次恢复都发生
 - 修复：contextWindow 500000 → **380000**（压缩阈值降至 ~323k，输入不再触及危险区）。**OMP 重启后生效**
 - glm-5.2 同类 400（3 次 8/2）：该模型未在 models.yml 注册（非 OMP 发起），无需动作
 
+## 24. deepseek 官方直连粘性 + relay 缓存实测（2026-08-09）
+
+### deepseek 粘性官方直连（已配置）
+
+deepseek-v4-flash 原在 ch42（官方直连 api.deepseek.com，w5）与 ch48（opencode-go relay，w20）间同优先级轮换 → 官方渠道仅分到 20% 流量。改为 **ch42 p51 粘性主 / ch48 p50 备**。实测 3/3 命中官方，延迟 0.7-0.9s（比 relay 2.4s 快）。
+
+### relay 是否透传 prompt cache——实测（用户提出多 key 亲和质疑）
+
+方法：绕过 NewAPI，用单 key 直发两次相同长前缀请求（10k tokens + cache_control），看 Anthropic 响应 usage 的 cache_creation/cache_read 字段：
+
+| 渠道 | 第 1 次 | 第 2 次 | 结论 |
+|------|--------|--------|------|
+| 百倍 ch3（relay 6 key） | cache_creation=0 | cache_read=0 | **不透传缓存**（单 key 也无效） |
+| 林夕 ch9（relay 2 key） | 502 | 502 | 上游故障 |
+| deepseek 官方 ch42 | cache_hit=0（写入） | **cache_hit=1920（96% 命中）** | **缓存真实生效** |
+
+### 结论
+
+1. 多 key 轮换破坏粘性的原理成立，但 relay 不透传缓存 → **拆单 key 无意义**（cache 恒 0）
+2. **真正的缓存收益只在官方直连**：deepseek ch42 实测命中 96%（缓存计费 ~0.1x）
+3. claude 渠道保持百倍粘性（故障收敛用途，缓存收益 0）
+4. 注意：百倍 relay 有 Cloudflare 防护，直连需浏览器 UA（error 1010）
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
