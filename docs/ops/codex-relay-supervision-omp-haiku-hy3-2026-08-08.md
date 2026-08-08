@@ -150,12 +150,42 @@ OMP 重启会带走其进程树（含 supervisor 等由 shell 拉起的进程）
 watchdog.ps1.bak-*-supervisor
 ```
 
+## 8. cc-switch 代理（15721）纳入 Supervisor 监管（2026-08-08 下午）
+
+### 背景
+
+cc-switch 是 OMP 主链路关键节点（Claude Code → 15721），但**无任何自启动/自愈机制**（无 Run 键、无计划任务、guardian LOCAL_PROXIES 不含它）——崩溃后只能手动/重启恢复。
+
+### 变更（`~/.omp/guardian/proxies-supervisor.py`）
+
+1. PROXIES 新增 `cc-switch-proxy`（port 15721、probe_host 127.0.0.1、dir 安装目录、match `cc-switch\.exe`）。**仅进程级自愈**：崩溃时重启 exe，不触碰本体代码/配置/DB；cc-switch 启动时自动恢复代理接管状态（restore_proxy_state_on_startup）。
+2. env 检查兼容无密钥条目（`info.get("env")` 防警告噪音）。
+3. 重启逻辑兼容单元素 exe 命令（`len(cmd) > 1` 才做 script 存在性检查）。
+
+### 踩坑
+
+- **相对路径 exe 启动失败**：`cmd: ["cc-switch.exe"]` + cwd 下 Popen 报 `WinError 2`（Windows CreateProcess 对相对 exe 名解析异常）；改为**绝对路径**后成功。
+- 重启验证窗口 4s 对 Tauri 应用偏短（启动含 DB 初始化 + 代理恢复，实测 ~15-20s），可能产生 "port unavailable after restart" 假告警；当前可接受（崩溃场景本就该告警），后续可考虑按服务配置验证等待。
+
+### 验证（完整演练）
+
+1. kill cc-switch（PID 1420）→ supervisor 30s 内自动拉起（绝对路径 Popen）→ cc-switch 启动并恢复代理接管（15721 重新监听）✅
+2. 主链路 smoke：POST 15721/v1/messages → 200（完整响应含 signature）✅
+3. 7 服务全 OK（agentrouter/anyrouter/codebuddy/omp-ttft/codex-relay-15999/codex-relay-16000/cc-switch-proxy）✅
+4. cc-switch 主进程 + WebView 子进程（msedgewebview2）正常共存 ✅
+
+### 回滚
+
+```text
+proxies-supervisor.py.bak-*-ccswitch
+```
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
 2. **reviewer/security-reviewer 已还原 @slow**（2026-08-08 下午，claude-opus-5 429 实测恢复后还原；agentrouter/gpt-5.6-sol 覆盖已移除）。
 3. 计划任务（LogonTrigger）登录时仍会拉起 pythonw relay，与 supervisor 管理的 python.exe 双实例共存（Windows SO_REUSEADDR 双绑，无冲突）；如需单一管理源，可停两个计划任务让 supervisor 全权接管（未执行，保持现状）。
-4. **15721 cc-switch 代理无自愈**：guardian LOCAL_PROXIES 仅 agentrouter/codebuddy；cc-switch 进程崩溃后无人拉起（用户边界，未纳入监管，需人工确认后决定）。
+4. **ch73/74 relay 渠道类型（OpenAI vs Responses）**：relay 只接受 /v1/responses，NewAPI 按 OpenAI 类型发 chat/completions 探测 → 405 阻碍渠道自动恢复；当前两渠道均禁用且上游有真实问题（zzzcoding 405），待上游恢复后若 NewAPI 支持 Responses 渠道类型再调整。
 
 ## 相关文件
 
