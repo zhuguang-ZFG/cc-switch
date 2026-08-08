@@ -412,6 +412,34 @@ LongCat-2.0 从主路由剔除后，用户决策：**专门用作翻译子代理
 
 20/20 ALL GREEN；guardian 心跳新鲜；语法全过。
 
+## 19. claude-opus-5 渠道亲和配置（2026-08-09 凌晨）
+
+### 背景
+
+用户要求 claude 渠道配置亲和（百倍/林夕/agentrouter）。调查发现：百倍单点承载 opus-5（林夕 weight=0 闲置、aagent 全禁用）；林夕实测已恢复健康（2.2s）但被零权重闲置。
+
+### 配置（NewAPI）
+
+| 渠道 | status | weight | priority | 角色 |
+|------|--------|--------|----------|------|
+| ch3 百倍 | 1 | 20 | 50 | 主层（加权） |
+| ch9 林夕 | 1 | 10（原 0） | 50（原 50→40→50） | 主层（加权） |
+| ch45 agentrouter | **1（原 2 已启用）** | 5 | 40 | 兜底层 |
+
+### 踩坑：NewAPI priority 语义是【数值大优先】
+
+首次配置按"小优先"假设（百倍 p40 / agent 兜底 p50）→ 实测 3 请求全命中 agentrouter。反转后（主层 p50 / 兜底 p40）行为正确。**NewAPI 渠道选择：priority 降序（大优先），同 priority 按 weight 加权随机**。
+
+### 验证（实测）
+
+- 主层分流：近 8 请求分布 {ch9: 4, ch3: 2}——两渠道均参与（20:10 加权），林夕延迟 1.8-6s 健康
+- 兜底触发：主层瞬时失败时 agentrouter 接住（28-53s，慢但不丢请求）
+- 注意：agentrouter 兜底延迟高（其上游质量），仅作最后防线
+
+### 管理说明
+
+guardian 会继续自动管理这三渠道（测试失败自动降权/恢复）；本次为手动基线配置，guardian 权重闭环在其上运行。
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
