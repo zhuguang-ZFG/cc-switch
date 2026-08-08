@@ -287,6 +287,23 @@ watchdog.ps1 存在**自发死亡**现象（计划任务实例存活 2-20 分钟
 | NewAPI | LocalNewAPI-Watchdog（1min） | guardian 自身（3 连败后重启） |
 | 本地代理 7 服务 | supervisor（30s） | — |
 
+## 13. 自监控机制化：System-Health-Check（2026-08-08 下午）
+
+### 变更
+
+新增 `scripts/ops/system-health-check.py` 一键巡检（17 项）：NewAPI 3002 HTTP、TTFT 3003、cc-switch 15721、5 本地代理端口、guardian 心跳+进程、supervisor 状态、watchdog 崩溃记录、渠道健康快照、~/.omp 体积、3 关键日志大小。
+
+- 退出码：0 全绿 / 1 有失败（可供告警链判断）
+- `--json` 结构化输出
+- **结果自动追加** `~/.omp/guardian/health-check.log`（脚本内写文件，规避计划任务 `>>` 重定向引号解析问题——已踩坑）
+- 注册计划任务 **System-Health-Check**：每 4 小时（hourly /mo 4），手动触发实测通过（17/17 ALL GREEN 落盘）
+
+### 巡检命令（日常/agent 会话复用）
+
+```powershell
+python D:\Users\cc-switch\scripts\ops\system-health-check.py
+```
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
