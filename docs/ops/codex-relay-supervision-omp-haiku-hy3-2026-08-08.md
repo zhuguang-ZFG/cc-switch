@@ -543,12 +543,22 @@ deepseek-v4-flash 原在 ch42（官方直连 api.deepseek.com，w5）与 ch48（
 | 林夕 ch9（relay 2 key） | 502 | 502 | 上游故障 |
 | deepseek 官方 ch42 | cache_hit=0（写入） | **cache_hit=1920（96% 命中）** | **缓存真实生效** |
 
-### 结论
+### 结论（2026-08-09 二次修正：百倍/林夕 = Kiro 反代，官方来源佐证）
 
-1. 多 key 轮换破坏粘性的原理成立，但 relay 不透传缓存 → **拆单 key 无意义**（cache 恒 0）
-2. **真正的缓存收益只在官方直连**：deepseek ch42 实测命中 96%（缓存计费 ~0.1x）
-3. claude 渠道保持百倍粘性（故障收敛用途，缓存收益 0）
-4. 注意：百倍 relay 有 Cloudflare 防护，直连需浏览器 UA（error 1010）
+用户指出百倍/林夕是 **Kiro 反代**，且 OMP 状态栏显示 1/103 缓存命中（101.2k/11.5M，非 0）。此前"不透传缓存"结论不准确。GitHub 权威因果链（CLIProxyAPIPlus #125，closed）：
+
+1. 客户端发 `cache_control` ✓
+2. **Kiro 请求翻译层（BuildKiroPayload）丢弃 cache_control**（不转发到 Kiro 私有协议）
+3. Kiro 后端按独立未缓存请求处理 → 不返回 tokenUsage 缓存字段
+4. 响应侧无数据源 → cache_read/creation 恒 0
+
+即：**Kiro 反代默认丢 cache_control，缓存基本无效**；仅优化版反代实现（80aj：优化 kiro.rs 适配 Prompt Cache 语义）可透传。百倍/林夕实测 1% 命中 = 其反代实现部分/偶发透传（或后端偶发命中）。
+
+修正后结论：
+1. 多 key 轮换破坏粘性的原理成立；Kiro 反代缓存收益 ≈0（1%）→ 拆单 key 无意义
+2. deepseek 缓存收益在官方直连（96%）与 opencode-go（98%，OpenAI 自动前缀缓存，非 Kiro 路径）
+3. claude 渠道保持百倍粘性（故障收敛用途，缓存收益 ≈0）
+4. 百倍 relay 有 Cloudflare 防护，直连需浏览器 UA（error 1010）
 
 ## 25. deepseek 路由反转：opencode-go 主力 / 官方备用（2026-08-09，用户决策）
 
