@@ -180,6 +180,37 @@ cc-switch 是 OMP 主链路关键节点（Claude Code → 15721），但**无任
 proxies-supervisor.py.bak-*-ccswitch
 ```
 
+## 9. 全链路验证套件修复（2026-08-08 下午）
+
+系统性验证发现并修复 3 处运维资产漂移，**全套测试转绿**：
+
+| 套件 | 修复前 | 修复 | 修复后 |
+|------|--------|------|--------|
+| Guardian 运行时测试（~/.omp/guardian/test_guardian.py） | 95 tests / 6 errors | `FakeNewAPI.test_channel` 补 `timeout` 参数（生产代码新增 `RECOVERY_PROBE_TIMEOUT` 后测试未跟进） | 95/95 OK |
+| OMP 路由测试（test_omp_routes.py） | 31/32 | designer fallback 链首与主模型重复（`agentrouter/gpt-5.6-sol` 重复）→ 链改为 `codebuddy/gpt-5.6-sol` → `zg-newapi/gpt-5.6-sol` → `claude-opus-5`（codebuddy 实测可用，独立故障域） | 32/32 OK |
+| NewAPI smoke（newapi-local-smoke.py） | channels FAIL | ch73（zzzcoding 上游 405 真死）加入 `KNOWN_BROKEN_CHANNELS`，guardian 同步加入 `AUTO_BAN_RECOVERY_EXCLUSIONS`（避免每周期白耗恢复探测；上游恢复后需手动启用并从两集移除） | **ALL OK** |
+
+另：仓库镜像 `scripts/ops/guardian.py` 排除集落后运行时（缺 70/71/73），已同步——**后续修改 guardian.py 需同时更新运行时与仓库镜像**。
+
+### 全量验证矩阵（2026-08-08 13:07 快照）
+
+```text
+newapi-local-smoke:   ALL OK（status 200 / 7 代理 OK / 渠道预期一致 / 双模型 smoke 200）
+test_guardian.py:     95/95 OK（运行时）
+test_omp_routes.py:   32/32 OK
+test_codex_relay.py:  14/14 OK
+test_omp_ttft_gateway.cjs: 5/5 OK
+```
+
+### 回滚
+
+```text
+guardian.py.bak-*-ch73-exclude
+newapi-local-smoke.py.bak-*-ch73
+config.yml（designer 链改动，无独立备份，历史备份见 §4）
+test_guardian.py（FakeNewAPI.test_channel 签名，无独立备份）
+```
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。

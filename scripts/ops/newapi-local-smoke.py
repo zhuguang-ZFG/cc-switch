@@ -39,7 +39,7 @@ SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
 # Channel 74 is held out until its shared upstream quota recovers and a real
 # relay + aggregate smoke passes. Channel 45 remains a live fallback.
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 62, 63, 64, 65, 70, 71, 74}  # 70/71: 上游真死（2026-08-08 实测），与 Guardian 排除集一致
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 62, 63, 64, 65, 70, 71, 73, 74}  # 70/71: 上游真死（2026-08-08 实测），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中
 
 # Model isolation is channel-specific. AgentRouter (ch45) and AnyRouter (ch72)
 # serve Sol AND Claude at their fallback tiers (Claude re-enabled 2026-08-07:
