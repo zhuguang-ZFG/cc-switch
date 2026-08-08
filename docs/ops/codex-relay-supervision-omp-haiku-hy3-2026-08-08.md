@@ -328,6 +328,27 @@ python D:\Users\cc-switch\scripts\ops\system-health-check.py
 - watchdog/supervisor/guardian 全部重启加载新代码 ✅
 - 注意：watchdog.ps1 修改后重加 BOM（同 §7 规则）
 
+## 15. LongCat-2.0 全面剔除（2026-08-08 晚，用户判定质量不达标）
+
+### 变更（`~/.omp/agent/config.yml`，备份 `.bak-*-nolongcat`）
+
+| 位置 | 原 | 现 |
+|------|-----|-----|
+| bigctx 主模型 | `longcat/LongCat-2.0`（1M ctx） | `zg-newapi/gpt-5.6-sol`（400k ctx，实测 200；anyrouter/opus-5 曾候选但实测 502 弃用） |
+| slow 链第 2 项 | longcat | 移除（codebuddy→opus-4-8→gpt-5.6-sol→k3→anyrouter/opus-5） |
+| plan 链第 2 项 | longcat | 移除 |
+| default 链第 3 项 | longcat | 移除 |
+| maxInFlightRequests `longcat: 4` | 保留后删除 | 清理（顺带修复行粘连） |
+
+bigctx 链去主模型重复：`k3 → opus-5 → deepseek-v4-flash`。
+
+### 验证
+
+- YAML 有效；全文件 0 处 longcat 引用
+- test_omp_routes 32/32 OK（无悬空引用）
+- anyrouter/opus-5 实测 502（上游不稳，未采用）
+- 注：OMP 重启后生效（当前会话仍用旧配置）
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
