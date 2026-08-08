@@ -112,6 +112,19 @@ def main() -> int:
         sz = log.stat().st_size if log.exists() else 0
         check(f"{log.name}", sz < 8 * 1048576, f"{sz // 1024}KB（阈值 8MB）")
 
+    # ── NewAPI 备份新鲜度与 DB 体积 ───────────────────────────────
+    backups = sorted(NEWAPI_LOCAL.glob("backups/new-api-*.db"))
+    today_bak = any("new-api-" + time.strftime("%Y-%m-%d") in b.name for b in backups)
+    check("NewAPI 今日备份", today_bak, f"最近: {backups[-1].name if backups else '无'}")
+    db_size_mb = 0
+    for db in NEWAPI_LOCAL.glob("*.db"):
+        db_size_mb += db.stat().st_size / 1048576
+    check("NewAPI DB 体积", db_size_mb < 2048, f"{db_size_mb:.0f}MB（阈值 2GB）")
+
+    # ── OMP 会话数据基线（观察项，阈值 5GB）────────────────────────
+    sess_mb = dir_size(OMP / "agent" / "sessions") / 1048576
+    check("OMP sessions 体积", sess_mb < 5120, f"{sess_mb:.0f}MB（阈值 5GB）")
+
     # ── 汇总 ──────────────────────────────────────────────────────
     failed = [r for r in RESULT if not r["ok"]]
     # 结果追加到健康日志（脚本内写文件，避免计划任务重定向引号问题）
