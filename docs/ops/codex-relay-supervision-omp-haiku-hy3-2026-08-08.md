@@ -440,6 +440,33 @@ LongCat-2.0 从主路由剔除后，用户决策：**专门用作翻译子代理
 
 guardian 会继续自动管理这三渠道（测试失败自动降权/恢复）；本次为手动基线配置，guardian 权重闭环在其上运行。
 
+## 20. opus-5 请求 400（上下文超限）根因与修复（2026-08-09）
+
+### 现象
+
+OMP 频繁报 `bad response status code 400`，原始请求存 `~/.omp/logs/http-400-requests/`（45 个，6 类）。
+
+### 根因链（用户遇到的主类）
+
+1. 8/8 渠道亲和配置前，opus-5 走 agentrouter/anyrouter（代理透传不检查上下文）；配置后**主流量走百倍（上游严格 200k 上限）**
+2. OMP 认为 opus-5 窗口 200k（anyrouter 条目甚至宣称 1M）→ 长会话上下文膨胀到 200k+（实测 400 请求体 375KB→622KB/44 条消息）
+3. 百倍上游拒绝超限请求 → **400**（与"Auto-shake 压缩不彻底"是同一问题两面）
+
+### 修复（`~/.omp/agent/models.yml`，备份 `.bak-*-ctx`）
+
+| 条目 | 原 | 现 | 理由 |
+|------|-----|-----|------|
+| zg-newapi-anthropic/claude-opus-5（3003 网关） | 200000 | **170000** | 压缩阈值 85% → 144.5k，更早压缩留安全边际 |
+| anyrouter/claude-opus-5 | **1000000** | 200000 | 修正虚假宣称（代理透传但上游仍 200k），防未来参与时同坑 |
+
+路由测试 32/32 OK。**OMP 重启后生效**。
+
+### 其余 5 类 400（观察/已知）
+
+- content-blocked（17x，上游审核拦截，无法修复）
+- glm-5.2/deepseek 上下文超限（64k 输出配置 vs 模型上限，配置问题，模型未用）
+- deepseek reasoning_content 未回传（2x，旧版）
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
