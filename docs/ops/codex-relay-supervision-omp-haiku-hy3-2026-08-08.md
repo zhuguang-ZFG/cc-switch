@@ -467,6 +467,24 @@ OMP 频繁报 `bad response status code 400`，原始请求存 `~/.omp/logs/http
 - glm-5.2/deepseek 上下文超限（64k 输出配置 vs 模型上限，配置问题，模型未用）
 - deepseek reasoning_content 未回传（2x，旧版）
 
+## 21. OMP resume 无压缩——结构性限制（2026-08-09）
+
+### 现象
+
+OMP 重启后恢复 623KB 旧会话 → 首次续写 400（每次恢复都发生）。
+
+### 机制证据
+
+- compaction 决策日志全部是 `phase: post-agent-end`（agent 回合结束），**无 resume 阶段压缩**
+- pi-coding-agent dist 无 compactBeforeResume/resumeCompaction 机制；CLI `--resume` 无 compact 选项
+- **结论**：OMP 恢复会话不做压缩 = 结构性设计，非配置可修
+
+### 处置规则
+
+1. **新会话**：170k 窗口（§20 配置）在 agent_end 提前压缩，不再超限——根治
+2. **存量超限会话**（修复前积累的大会话）：恢复一次 400 一次，**唯一处置是重开**，不可恢复续用
+3. 恢复长期闲置旧会话前需评估其大小（OMP 恢复不压缩）
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
