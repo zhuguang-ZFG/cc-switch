@@ -370,6 +370,27 @@ LongCat-2.0 从主路由剔除后，用户决策：**专门用作翻译子代理
 让 translator 翻译：<文本或文件路径> 到 <目标语言>
 ```
 
+## 17. pi-hermes-memory 整合超时修复（2026-08-08 晚）
+
+### 现象
+
+频繁弹 `Auto-consolidation failed for 'failure': Consolidation subprocess was terminated (likely timeout or cancellation). Timeout: 180000ms`。
+
+### 根因
+
+- 记忆插件 pi-hermes-memory（v0.9.3）自动整合子进程默认超时 `DEFAULT_CONSOLIDATION_TIMEOUT_MS=180000`
+- **163 个 `.MEMORY.md.recovery-*` 崩溃残留文件**（8/7 起每次整合超时留下）——长期反复失败
+- failures.md 达 16.4KB（failure 记忆积累大）
+
+### 修复
+
+1. 新建 `~/.pi/agent/hermes-memory-config.json`：`{"consolidationTimeoutMs": 600000}`（10 分钟，字段名对照源码 config.ts:61/119-120 验证；**OMP 重启后生效**）
+2. 清理 recovery 残留：163 → 保留最新 3 个（主记忆 MEMORY.md/USER.md/failures.md 完好）
+
+### 影响
+
+记忆从未丢失（recovery 机制本身即崩溃保护）；警告无碍系统运行。重启后若仍弹：需精简 failures.md 或深查整合子进程模型调用。
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
