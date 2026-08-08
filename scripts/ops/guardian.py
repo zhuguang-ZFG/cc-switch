@@ -160,10 +160,11 @@ def _is_probe_incompatible(message: str) -> bool:
     # That is not evidence that real traffic or credentials are unhealthy.
     return "invalid_request_error" in msg and ("404" in msg or "not found" in msg)
 TEST_CHANNEL_TIMEOUT = 30  # test_channel 独立超时（秒）：上游实测 6-30s 常见，15s 在慢 opus 渠道下误报（2026-08-07 现场 test/3/9/18/33 timed out）
-RECOVERY_PROBE_TIMEOUT = 12  # 恢复探测独立短超时（秒）：慢渠道 30s 会把恢复周期拖到预算截断；
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
 RECOVERY_BACKOFF_MAX = 60  # 失败退避上限（分钟）
+RECOVERY_PROBE_TIMEOUT = 12  # 恢复探测独立短超时（秒）：慢渠道 30s 会把恢复周期拖到预算截断；
+                             # 恢复探测只需判断是否恢复，12s 未回即按失败进入指数退避
 OMP_ROLE_CHECK_INTERVAL = 80  # 每 N 周期主动检测 OMP 角色（80*15s=20min）
 
 # 自循环维护
@@ -1206,7 +1207,7 @@ class AutoFixEngine:
             probe_incompatible_count = 0
             test_msg = "无响应"
             for attempt in range(RECOVERY_TEST_COUNT):
-                test_ok, test_msg = self.newapi.test_channel(channel_id)
+                test_ok, test_msg = self.newapi.test_channel(channel_id, timeout=RECOVERY_PROBE_TIMEOUT)
                 stable_count += int(test_ok)
                 probe_incompatible_count += int(not test_ok and _is_probe_incompatible(test_msg))
                 if attempt + 1 < RECOVERY_TEST_COUNT:
