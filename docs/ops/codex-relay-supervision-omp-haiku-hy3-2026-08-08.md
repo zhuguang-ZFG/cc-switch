@@ -120,11 +120,42 @@ claude-opus-5 上游 429 期间的临时切换（用户决策），恢复后需�
 - config.yml 重启后未被 OMP 启动重选改写（mtime 未变；踩坑 2 的覆盖本次未发生）。
 - `commit → claude-haiku-4-5`、`tiny → hy3` 无法用子代理探针验证（非 agent 角色），首次触发时以 NewAPI consume log 复核（commit 应显示 `model=claude-haiku-4-5 → agnes-2.0-flash`）。
 
+## 7. 稳定性加固：watchdog 看护 supervisor + UTF-8 BOM 踩坑（2026-08-08 下午）
+
+### 背景
+
+OMP 重启会带走其进程树（含 supervisor 等由 shell 拉起的进程）；supervisor 死后只有登录时的 Run 键/启动文件夹会拉起，**运行中崩溃无任何看护**（实测：OMP 重启后 supervisor 消失，无人拉起）。Guardian 有 watchdog.ps1（计划任务常驻，30s 循环检查 heartbeat 新鲜度），supervisor 无。
+
+### 变更（`~/.omp/guardian/watchdog.ps1`）
+
+1. **新增 supervisor 看护块**：与 Guardian 同模式——读 `supervisor-status.json` 的 ts/pid，stale（>180s）且 PID 精确验证（python/pythonw + `proxies-supervisor.py` 独立参数）后杀旧进程并拉起；独立 5 分钟退避（`$script:lastSupRestartAttempt`）。
+2. **拉起用 `python.exe` 而非 `pythonw.exe`**：实测 pythonw 在 PowerShell 启动环境下初始化即退（无控制台 + logging StreamHandler 副作用），python.exe 稳定；用 `[System.Diagnostics.Process]::Start` 启动（`Start-Process` 同样静默失败）。
+
+### 踩坑（重要）：PowerShell 5.1 无 BOM UTF-8 中文注释吞行
+
+- watchdog.ps1 无 BOM，PowerShell 5.1 按 ANSI(GBK) 解码 UTF-8 中文注释；**注释行尾字节与下一行 `\n` 配对，把相邻的 `$supStatus`/`$supPy` 赋值行吞进乱码注释** → 运行时 Path 空值 / Process.Start 无文件名 / pid 空，三处连锁失败，且 AST 解析 0 错误、语法检查通过——**极难定位**。
+- 原文件中文注释恰好未触发（行尾字节安全），本次插入的注释触发。
+- 修复：文件转 **UTF-8 with BOM**（`WriteAllText` + `UTF8Encoding($true)`），PowerShell 5.1 正确识别。AST 复查赋值语句全部恢复。
+
+### 验证（完整自愈演练）
+
+1. kill supervisor → watchdog 30s 内检测 stale → 自动拉起（python.exe）→ status 新 pid、6 服务全 OK ✅
+2. relay 15999/16000 在演练中由 supervisor 自愈（10928 为新拉起实例）✅
+3. mutex 正确挡重复实例（[Process]::Start 测试实例正常退出）✅
+4. watchdog 日志无 Path 错误、pid 正确读取 ✅
+
+### 回滚
+
+```text
+watchdog.ps1.bak-*-supervisor
+```
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
-2. **reviewer/security-reviewer 临时覆盖还原**：claude-opus-5 上游 429 恢复后，把两个 agent frontmatter 的 model 改回 `@slow`（注释已标明）。
+2. **reviewer/security-reviewer 已还原 @slow**（2026-08-08 下午，claude-opus-5 429 实测恢复后还原；agentrouter/gpt-5.6-sol 覆盖已移除）。
 3. 计划任务（LogonTrigger）登录时仍会拉起 pythonw relay，与 supervisor 管理的 python.exe 双实例共存（Windows SO_REUSEADDR 双绑，无冲突）；如需单一管理源，可停两个计划任务让 supervisor 全权接管（未执行，保持现状）。
+4. **15721 cc-switch 代理无自愈**：guardian LOCAL_PROXIES 仅 agentrouter/codebuddy；cc-switch 进程崩溃后无人拉起（用户边界，未纳入监管，需人工确认后决定）。
 
 ## 相关文件
 
