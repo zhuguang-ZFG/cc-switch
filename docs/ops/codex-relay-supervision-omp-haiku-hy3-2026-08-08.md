@@ -349,6 +349,27 @@ bigctx 链去主模型重复：`k3 → opus-5 → deepseek-v4-flash`。
 - anyrouter/opus-5 实测 502（上游不稳，未采用）
 - 注：OMP 重启后生效（当前会话仍用旧配置）
 
+## 16. LongCat 转职：翻译子代理（2026-08-08 晚）
+
+LongCat-2.0 从主路由剔除后，用户决策：**专门用作翻译子代理**（1M 上下文适合长文本翻译）。
+
+### 变更
+
+1. 新建 `~/.omp/agent/agents/translator.md`：翻译专用子代理，`model: longcat/LongCat-2.0`（显式指定，不受 fallbackChains 影响）、`thinkingLevel: minimal`、最小工具集（read/write/yield）
+2. `config.yml` providers 段加回 `longcat: 2`（翻译并发限制）
+
+### 验证
+
+- frontmatter YAML 解析 OK；config/models.yml 均有效
+- longcat provider 注册确认（LongCat-2.0，ctx=1048576）
+- **OMP 重启后生效**：重启后 spawn `translator` 子代理应路由到 longcat/LongCat-2.0（探针验证）
+
+### 使用方式（重启后）
+
+```text
+让 translator 翻译：<文本或文件路径> 到 <目标语言>
+```
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
