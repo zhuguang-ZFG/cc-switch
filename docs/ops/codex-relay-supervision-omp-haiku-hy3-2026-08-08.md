@@ -513,6 +513,20 @@ OMP 重启后恢复 623KB 旧会话 → 首次续写 400（每次恢复都发生
 - opus-5 请求固定走百倍上游 key → Anthropic prompt cache 命中率最大化（CacheRatio 已支持 0.1x 缓存计费）
 - 代价：百倍慢时请求滞留（NewAPI 超时切换兜底）——接受（成本优先）
 
+## 23. 参数覆盖与 memory.backend 核查结论 + deepseek 窗口修复（2026-08-09）
+
+### 核查结论（两项均不做，有依据）
+
+1. **参数覆盖（temperature/thinking）不配置**：45 个 400 中仅 4 个参数类——2 个是 deepseek reasoning_content 未回传（客户端多轮问题，参数覆盖无法修）、2 个是输出超限（见下）。盲目覆盖 temperature 会改变 coding 行为且无收益。
+2. **OMP memory.backend 保持 off**：pi-hermes-memory 已确认是 **system prompt 注入型**记忆（preview-context.ts inject）；开启 OMP 内置 memory 会**双重注入**（token 翻倍 + 冲突）。不叠加。
+
+### 新发现并修复：deepseek 窗口虚假声明（同 anyrouter 1M 问题）
+
+- 400 详情：deepseek-v4-flash "max context 393216, requested 64000 output + 329217 input = 393217"——**超 1 token**
+- 根因：models.yml `deepseek-v4-flash/deepseek-official-v4-flash` contextWindow=500000 **大于上游实际 393216** → OMP 压缩阈值 425k 超过实际可用 → 输入 329k+ 时输出 64k 必超限
+- 修复：contextWindow 500000 → **380000**（压缩阈值降至 ~323k，输入不再触及危险区）。**OMP 重启后生效**
+- glm-5.2 同类 400（3 次 8/2）：该模型未在 models.yml 注册（非 OMP 发起），无需动作
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
