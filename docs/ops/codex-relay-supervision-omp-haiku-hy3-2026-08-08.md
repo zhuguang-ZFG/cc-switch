@@ -575,6 +575,42 @@ deepseek-v4-flash 原在 ch42（官方直连 api.deepseek.com，w5）与 ch48（
 
 **最终结论：当前配置三重收益全占**——消耗套餐额度 + 缓存折扣（98% 命中）+ 官方兜底。无需调整，用户决策恰为最优解。
 
+## 27. NewAPI + OMP 配置全面审查（2026-08-09，官方来源对照）
+
+### 方法
+
+全量 dump NewAPI options + OMP `config list --json`（450 项 schema），逐项对照官方文档/GitHub issue，只采纳有官方来源佐证的改动。
+
+### OMP：实施 5 项（`omp config set`，schema 校验落盘）
+
+| 配置 | 原值 | 新值 | 依据 |
+|------|------|------|------|
+| `display.cacheMissMarker` | false | **true** | 官方 schema：缓存未命中时在该轮上方显示分隔线——缓存优化效果直接可视 |
+| `display.showTokenUsage` | false | **true** | 每轮显示 token 用量——成本可视 |
+| `task.showResolvedModelBadge` | false | **true** | 子代理 widget 显示实际解析的模型 ID——直接支持"commit/tiny 首触发复核"待办 |
+| `edit.streamingAbort` | false | **true** | patch 预览失败时中止流式 edit 调用，省 token（失败编辑提前返回） |
+| `task.maxRuntimeMs` | 1200000 | **1800000** | 修复实测问题：reviewer 子代理 20 分钟被强杀；30 分钟 + softRequestBudget=80 双护栏 |
+
+### OMP：评估后不改（附依据）
+
+- `compaction.idleEnabled`（空闲压缩）：阈值 200k > opus 窗口 170k，常规压缩先触发，开了无用
+- `autolearn.enabled`：额外消耗 token 且与 hermes 记忆双重注入（既有决策）
+- `providers.streamIdleTimeoutSeconds`/`streamFirstEventTimeoutSeconds` = -1（用 provider 默认）：无挂流证据，claude thinking 首事件可超 60s，不设死
+- `bash.autoBackground.enabled`：工作流变化大，留给用户决策
+- OMP 版本 17.2.11 = npm 最新（2026-08-07 发布）
+
+### NewAPI：全部不改（官方来源否决）
+
+1. **claude/deepseek 不加渠道亲和规则**——三重证据：① priority 路由已实现渠道级粘性（ch3 p51 / ch48 p51 全量命中）；② key 级亲和 issue #5992 被官方关闭（not planned），亲和只绑渠道不绑 key，百倍多 key 轮缓存照样破；③ BER 博客实测坑：亲和会把请求钉死在故障渠道上（`keep_on_channel_disabled=false` 才缓解）。加了零收益还引入故障钉死风险
+2. **渠道透传（pass_through）不开**——issue #2796 的低缓存命中仅限 Codex/Responses 路径；本机 deepseek 实测 98% 命中（chat/completions 路径无前缀破坏）；透传会绕过 model mapping，claude 渠道全部依赖 mapping，风险远大于收益
+3. **StreamCacheQueueLength=0**：官方文档/源码未查到语义（本机 v0.0.0 自编译版），无依据不动
+4. **checkin 签到**：本机 build 渠道表无 checkin 列，功能不可用
+5. 既有项复核全部合理：RetryTimes=3 + 408,429,500-503、自动禁用 401/402/403/502+余额关键词、monitor 自动测试关闭（guardian 接管）、日志清理开、磁盘缓存开、claude.thinking_adapter 开
+
+### 观察项（非本次范围）
+
+- `qwen3.8-max` 近 24h 158 请求 / 45M prompt tokens——非 OMP 角色（疑 Kimi Code 等其他工具），若为付费模型是最大单项成本，建议排查来源
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
