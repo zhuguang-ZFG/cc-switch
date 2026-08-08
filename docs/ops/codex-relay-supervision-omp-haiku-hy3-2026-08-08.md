@@ -550,6 +550,19 @@ deepseek-v4-flash 原在 ch42（官方直连 api.deepseek.com，w5）与 ch48（
 3. claude 渠道保持百倍粘性（故障收敛用途，缓存收益 0）
 4. 注意：百倍 relay 有 Cloudflare 防护，直连需浏览器 UA（error 1010）
 
+## 25. deepseek 路由反转：opencode-go 主力 / 官方备用（2026-08-09，用户决策）
+
+§24 曾配置官方直连粘性（缓存收益 ~1/10）。**用户决策：优先消耗 opencode-go 套餐额度，官方作备用**——反转：
+
+| 渠道 | weight | priority | 角色 |
+|------|--------|----------|------|
+| ch48 opencode-go-flash | 20 | **51** | 主力（消耗套餐） |
+| ch42 deepseek-official | 5 | 50 | 备用（opencode-go 故障/限流接管） |
+
+实测 3/3 命中 opencode-go，延迟 1.8-2.3s。
+
+**已知代价**（用户接受）：放弃官方输入缓存的 ~1/10 成本收益（轮换/relay 不透传缓存，§24 实测）；换取 opencode-go 套餐额度消耗 + 官方兜底可用性。若未来套餐耗尽，改回官方粘性（§24 配置）即可。
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
