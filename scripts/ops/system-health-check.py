@@ -113,9 +113,11 @@ def main() -> int:
         check(f"{log.name}", sz < 8 * 1048576, f"{sz // 1024}KB（阈值 8MB）")
 
     # ── NewAPI 备份新鲜度与 DB 体积 ───────────────────────────────
-    backups = sorted(NEWAPI_LOCAL.glob("backups/new-api-*.db"))
-    today_bak = any("new-api-" + time.strftime("%Y-%m-%d") in b.name for b in backups)
-    check("NewAPI 今日备份", today_bak, f"最近: {backups[-1].name if backups else '无'}")
+    # 检查最近 24h 内有备份（凌晨 0-3 点"今日备份"尚未生成，按日判断会误报）
+    backups = sorted(NEWAPI_LOCAL.glob("backups/new-api-*.db"), key=lambda p: p.stat().st_mtime)
+    cutoff = time.time() - 24 * 3600
+    recent_bak = any(p.stat().st_mtime >= cutoff for p in backups)
+    check("NewAPI 备份新鲜度", recent_bak, f"最近: {backups[-1].name if backups else '无'}")
     db_size_mb = 0
     for db in NEWAPI_LOCAL.glob("*.db"):
         db_size_mb += db.stat().st_size / 1048576

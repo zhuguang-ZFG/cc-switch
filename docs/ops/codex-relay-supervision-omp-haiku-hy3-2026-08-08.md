@@ -391,6 +391,27 @@ LongCat-2.0 从主路由剔除后，用户决策：**专门用作翻译子代理
 
 记忆从未丢失（recovery 机制本身即崩溃保护）；警告无碍系统运行。重启后若仍弹：需精简 failures.md 或深查整合子进程模型调用。
 
+## 18. 日志告警扫描与优化（2026-08-09 凌晨）
+
+### 扫描结果
+
+| 告警源 | 发现 | 处置 |
+|--------|------|------|
+| guardian | **ch18 linxi-k40-opus5-backup 恢复测试持续超时**（13.7s，多次 12s 超时）——不在排除集，每周期白耗 | ✅ 加入排除集 |
+| guardian | **ch57 gorouter 余额不足**（$0.05 < 预扣 $0.30，403 billing_error）——不在排除集，白耗 error scan | ✅ 加入排除集 |
+| guardian | ch72 anyrouter 500 负载上限（gpt-5.6-sol）——瞬态，活跃渠道 | 观察（不可排除） |
+| supervisor | cc-switch FileNotFoundError（12:57）——已修复的相对路径 bug 历史残留 | 无需动作 |
+| health-check | **备份检查按"今日"误报**（凌晨 0-3 点昨日已过/今日未到） | ✅ 改为 24h 窗口 |
+| OMP 主日志（8/9） | JSON 格式，0 条 warn/error | 干净 |
+
+### 变更
+
+排除集三处同步：`{2, 18, 57, 62, 63, 64, 65, 70, 71, 73, 74}`（guardian 运行时 + 镜像 + smoke）。guardian 已重启生效（pid 20732）。health-check 备份检查改最近 24h。
+
+### 验证
+
+20/20 ALL GREEN；guardian 心跳新鲜；语法全过。
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
