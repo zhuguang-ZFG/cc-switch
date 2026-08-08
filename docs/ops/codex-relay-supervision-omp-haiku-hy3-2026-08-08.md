@@ -231,6 +231,31 @@ test_guardian.py（FakeNewAPI.test_channel 签名，无独立备份）
 
 watchdog 崩溃捕获已生效；若 crash log 出现内容说明循环内有未捕获异常（当前无）。
 
+## 11. 核心自愈路径实测 + 定价完整性（2026-08-08 下午）
+
+### 未定价模型补齐（成本爆炸风险消除）
+
+渠道 49 个模型中有 4 个无 ModelRatio 定价——NewAPI 按 37.5 倍兜底计费（mercury-2 同款坑）。其中 **k3-256k（ch33 健康）与 qwen3.8-max（ch31 健康，OMP 已注册模型）有真实使用风险**。已补齐：
+
+| 模型 | 定价 | 参考 |
+|------|------|------|
+| k3-256k | 2 | 同 k3 |
+| qwen3.8-max | 0.5 | 同 qwen 档 |
+| gpt-5.3-codex-spark | 0.5 | gpt 档 |
+| gpt-image-2 | 2 | 图像档 |
+
+### 核心自愈路径实测（此前从未演练）
+
+| 路径 | 演练 | 结果 |
+|------|------|------|
+| guardian 崩溃 → watchdog 拉起 | kill guardian → 180s 心跳过期 → watchdog 检测 dead pid → Start-ScheduledTask 拉起 | ✅ 总恢复 ~3.5min（新 pid 33568） |
+| NewAPI 崩溃 → 自动拉起 | kill new-api.exe → 3002 断开 → <90s 恢复（新 pid 6056，LocalNewAPI-Watchdog 每分钟触发） | ✅ |
+| 恢复后全链路 | smoke ALL OK + guardian/supervisor 心跳新鲜 + 15721 主链路 200 | ✅ |
+
+### 配置矛盾记录（未改动）
+
+`ModelRequestRateLimitEnabled: false` + `Count: 0`，与公告"每用户限速 120 次/分钟"不符。当前由 OMP `maxInFlightRequests`（应用层）承担限流；NewAPI 级限流开启可能误伤 6 并发 task 场景，**保持关闭**，记录观察。
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
