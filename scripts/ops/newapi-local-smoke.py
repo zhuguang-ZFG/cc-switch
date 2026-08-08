@@ -225,7 +225,8 @@ def admin_auth() -> tuple[str, str]:
         body={"username": creds["username"], "password": creds["password"]},
     )
     if not (login.get("data") or {}).get("access_token"):
-        raise RuntimeError(f"login failed: {str(login)[:160]}")
+        err = (login.get("error") or login.get("message") or "unknown")
+        raise RuntimeError(f"login failed: {str(err)[:160]} (响应体不打印，防凭据泄露)")
     token = login["data"]["access_token"]
     user_id = str((login.get("data") or {}).get("id") or "1")  # fork may omit id
     try:

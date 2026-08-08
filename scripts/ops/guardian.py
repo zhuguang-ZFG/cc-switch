@@ -160,6 +160,7 @@ def _is_probe_incompatible(message: str) -> bool:
     # That is not evidence that real traffic or credentials are unhealthy.
     return "invalid_request_error" in msg and ("404" in msg or "not found" in msg)
 TEST_CHANNEL_TIMEOUT = 30  # test_channel 独立超时（秒）：上游实测 6-30s 常见，15s 在慢 opus 渠道下误报（2026-08-07 现场 test/3/9/18/33 timed out）
+RECOVERY_PROBE_TIMEOUT = 12  # 恢复探测独立短超时（秒）：慢渠道 30s 会把恢复周期拖到预算截断；
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
 RECOVERY_BACKOFF_MAX = 60  # 失败退避上限（分钟）
