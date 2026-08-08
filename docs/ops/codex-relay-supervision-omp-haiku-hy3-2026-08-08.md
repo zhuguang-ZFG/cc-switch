@@ -304,6 +304,30 @@ watchdog.ps1 存在**自发死亡**现象（计划任务实例存活 2-20 分钟
 python D:\Users\cc-switch\scripts\ops\system-health-check.py
 ```
 
+## 14. cmd 弹窗问题根除（2026-08-08 下午，用户报告）
+
+### 弹窗源（4 类）
+
+1. **计划任务 System-Health-Check / NewAPI-Backup-Restore-Drill**：Action 直接跑 `python.exe`（控制台程序）→ 每 4 小时/每月弹窗。
+2. **watchdog.ps1 / LocalNewAPI-Watchdog** 拉起 supervisor：`[Process]::Start(python.exe)` 无隐藏 flag → 崩溃恢复时弹窗。
+3. **start.ps1**：`& $exePath`（new-api.exe 是 Go 控制台程序）→ NewAPI 拉起时弹窗。
+4. 注：supervisor.py / guardian.py 的 Popen **原本就有** `CREATE_NO_WINDOW`（确认非弹窗源）。
+
+### 修复
+
+| 位置 | 修改 |
+|------|------|
+| 两个计划任务 | Action → `powershell.exe -WindowStyle Hidden -Command "Start-Process -FilePath python.exe -ArgumentList ... -WindowStyle Hidden -Wait"`（双重隐藏） |
+| watchdog.ps1 / LocalNewAPI-Watchdog.ps1 | `ProcessStartInfo { CreateNoWindow=$true, WindowStyle=Hidden }` |
+| start.ps1 | `Start-Process -FilePath new-api.exe -WindowStyle Hidden -Wait`（保留同步防重入 + stdout/stderr 重定向） |
+
+### 验证
+
+- System-Health-Check 任务改后手动触发：20/20 OK 落盘 ✅
+- start.ps1 语法 + exit 0（3002 已监听分支）✅
+- watchdog/supervisor/guardian 全部重启加载新代码 ✅
+- 注意：watchdog.ps1 修改后重加 BOM（同 §7 规则）
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
