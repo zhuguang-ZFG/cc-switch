@@ -93,10 +93,38 @@ production-hardening-2026-08-08.md 第 9 节已记录 02:31 收口：删除宽�
 - `LocalSubnet` 不含 Tailscale 其他节点（Tailscale 接口 /32），当前 3002 消费者全部 127.0.0.1，无影响。
 - 若未来需要跨 Tailscale 节点访问 3002，需显式新增 `RemoteAddress 100.64.0.0/10` 规则（已记录于该文档，此处仅为交叉确认）。
 
+## 6. 重启后路由验证（2026-08-08 下午）
+
+OMP 重启后四探针验证（每个子代理仅报告自身 system prompt 的 Model 行）：
+
+| 子代理 | 实际模型 | 配置来源 | 判定 |
+|--------|---------|---------|------|
+| task | `zg-newapi/deepseek-v4-flash` | modelRoles.task（回退生效） | ✅ |
+| scout | `zg-newapi/sensenova-6.7-flash-lite` | modelRoles.smol | ✅ |
+| reviewer | `agentrouter/gpt-5.6-sol:high` | **reviewer.md frontmatter 覆盖** | ✅ 用户临时配置 |
+| security-reviewer | `agentrouter/gpt-5.6-sol:high` | **security-reviewer.md frontmatter 覆盖** | ✅ 用户临时配置 |
+
+### reviewer/security-reviewer 临时覆盖（重要现状）
+
+`~/.omp/agent/agents/reviewer.md` 与 `security-reviewer.md` frontmatter 均含：
+
+```yaml
+model:
+  - "agentrouter/gpt-5.6-sol:high"  # 临时：claude-opus-5 上游 429（2026-08-08），恢复后还原 @slow
+```
+
+claude-opus-5 上游 429 期间的临时切换（用户决策），恢复后需还原 `@slow`。**08-03 文档"reviewer 走 @slow"记录已过时**，以 agent 文件 frontmatter 为准。
+
+### 附带确认
+
+- config.yml 重启后未被 OMP 启动重选改写（mtime 未变；踩坑 2 的覆盖本次未发生）。
+- `commit → claude-haiku-4-5`、`tiny → hy3` 无法用子代理探针验证（非 agent 角色），首次触发时以 NewAPI consume log 复核（commit 应显示 `model=claude-haiku-4-5 → agnes-2.0-flash`）。
+
 ## 待办
 
-1. **OMP 重启后验证** commit/tiny 实际路由（当前会话仍跑旧配置；探针确认 task 仍 deepseek、scout 走 smol）。
-2. 计划任务（LogonTrigger）登录时仍会拉起 pythonw relay，与 supervisor 管理的 python.exe 双实例共存（Windows SO_REUSEADDR 双绑，无冲突）；如需单一管理源，可停两个计划任务让 supervisor 全权接管（未执行，保持现状）。
+1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
+2. **reviewer/security-reviewer 临时覆盖还原**：claude-opus-5 上游 429 恢复后，把两个 agent frontmatter 的 model 改回 `@slow`（注释已标明）。
+3. 计划任务（LogonTrigger）登录时仍会拉起 pythonw relay，与 supervisor 管理的 python.exe 双实例共存（Windows SO_REUSEADDR 双绑，无冲突）；如需单一管理源，可停两个计划任务让 supervisor 全权接管（未执行，保持现状）。
 
 ## 相关文件
 
