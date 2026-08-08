@@ -256,6 +256,37 @@ watchdog 崩溃捕获已生效；若 crash log 出现内容说明循环内有未
 
 `ModelRequestRateLimitEnabled: false` + `Count: 0`，与公告"每用户限速 120 次/分钟"不符。当前由 OMP `maxInFlightRequests`（应用层）承担限流；NewAPI 级限流开启可能误伤 6 并发 task 场景，**保持关闭**，记录观察。
 
+## 12. 双看护冗余：LocalNewAPI-Watchdog 扩展（2026-08-08 下午）
+
+### 背景
+
+watchdog.ps1 存在**自发死亡**现象（计划任务实例存活 2-20 分钟不等，崩溃捕获未触发=循环外死亡，死因未定位；此前 13:11 误杀 + probe 探测自杀为部分诱因，但 C/E 实例死亡无解释）。单看护存在盲区。
+
+### 变更（`~/.new-api-local/watchdog.ps1`，已备份 `.bak-*-triple`）
+
+由"仅 NewAPI 3002 探活"扩展为**三路看护**（每分钟触发式，原架构不变）：
+
+1. **NewAPI**：3002 端口不可达 → start.ps1（原有）
+2. **guardian**：heartbeat 180s 过期 + PID 精确验证 → Start-ScheduledTask `NewAPI Guardian`（新增）
+3. **supervisor**：supervisor-status 180s 过期 + PID 精确验证 → python.exe 拉起（新增）
+
+文件保持 ASCII-only（避免 BOM 吞行坑）。由此形成**双看护冗余**：watchdog.ps1（30s 常驻）与 LocalNewAPI-Watchdog（每分钟触发）都可拉起 guardian/supervisor，任一死亡不致命。
+
+### 验证
+
+- kill guardian → LocalNewAPI-Watchdog 在心跳过期后拉起（新 pid 1824，总恢复 ~4min）✅
+- NewAPI 崩溃拉起（此前演练，<90s）✅
+- 语法 Parser 验证通过 ✅
+
+### 当前守护体系（终态）
+
+| 组件 | 看护 1 | 看护 2 |
+|------|--------|--------|
+| guardian | watchdog.ps1（30s） | LocalNewAPI-Watchdog（1min） |
+| supervisor | watchdog.ps1（30s） | LocalNewAPI-Watchdog（1min） |
+| NewAPI | LocalNewAPI-Watchdog（1min） | guardian 自身（3 连败后重启） |
+| 本地代理 7 服务 | supervisor（30s） | — |
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
