@@ -100,3 +100,28 @@ new-api.exe（PID 34488）→ start.ps1 因 `-Wait` 不返回 → 实例挂起�
   聚合池健康前提下重试命中健康渠道（ch75 等）概率高，降低降级到 k3 的概率。
 - 未动：TTFT 网关 60s 语义超时（thinking 不计语义为既定设计契约，有测试锁定）；
   NewAPI RetryTimes=1 及对 401/402/403/504 不重试（08-03 既定防放大策略）。
+
+## 同日追加：02:07 二次 403 与 linxi 全灭（02:2x）
+
+事件：02:07 又一次 `403 insufficient balance`（150K in / 509 out / 126.3s 后报错），
+OMP 按新 default 链降级 `claude-opus-5:max → claude-opus-4-8`——**新链生效**（说明 OMP 已重启加载新配置）。
+
+根因链：
+1. **linxi 余额彻底耗尽**：ch9 在 01:48 渠道测试还通过（18.3s，残余余额），02:08 测试已 403；
+   ch9/ch18 同账号先后全灭。
+2. **ch18 被自动回捞**：NewAPI 选项 `AutomaticEnableChannelEnabled=true`——被禁用渠道一旦测试通过就自动启用
+   （内部行为，不写 manage 日志）。01:50 前后 linxi 还有残余余额、测试通过，ch18 被静默回捞进池，
+   余额耗尽后成为 403 毒丸。同期 ch9 的 pri/weight 被改写为 50/20（管理日志无记录，写入者未查明，
+   与 01:17 start.ps1 被改写并列为本晚第二起未归因变更）。
+3. ch3 baibei 持续 502（每分钟级），主路由名存实亡，流量实际靠 failover。
+
+处置：ch9 + ch18 再次手动禁用（status API）。余额为 0 期间测试只会失败，自动启用不会触发，禁用可保持。
+验证：池终态 ch3(57/20) > ch75(50/7) > ch45(40/5)，ch9/18/57/72 禁用；真实冒烟 200 / 2.1s。
+
+踩坑备忘：
+- **`AutomaticEnableChannelEnabled=true` 会对抗手动禁用**：只要测试还能通过，被禁渠道就会被静默回捞。
+  余额耗尽的渠道在余额恢复后会自动复活——linxi 充值后需重新评估 ch9/ch18 是否回到降级备用位。
+- NewAPI `AutomaticDisableStatusCodes=401,402,403,502` 且 ch18 `auto_ban=1` 但 403 后未见自动禁用生效，
+  auto-disable 对该 fork 的 403 路径不可靠，不能依赖。
+- `AutomaticRetryStatusCodes=408,429,500-503` 不含 403——余额类错误必穿透到客户端，池内必须没有死余额渠道。
+- 观察项：ch3 若 502 长期不恢复，主路由切 ch75（已实测 2-7s 稳定）。
