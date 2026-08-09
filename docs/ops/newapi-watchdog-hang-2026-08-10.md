@@ -171,3 +171,15 @@ ch72 anyrouter 实测结论（02:53–02:55）：
   直接拿带后缀的模型名打 NewAPI 会 503「No available channel」——烟测必须用基础模型名。
   今晚一度误判"禁用 ch9/18 导致 opus-5 无渠道"，实为烟测姿势错误的假警报。
 - 单禁用不保险：凡被列入隔离的渠道一律 `status=2 + weight=0` 双锁，防任何调用方回捞后立刻吃流量。
+
+## 同日追加：default 角色取消故障路由（03:0x）
+
+用户决策：default 角色不再走 fallback 链（不要 opus-4-8/k3 降级，失败就报错）。
+- 改动：`~/.omp/agent/config.yml` 删除 `retry.fallbackChains.default` 整条
+  （opus-4-8 / k3:max / kimi-for-coding / opencode-go 四跳全移除），
+  `maxRetries: 3` 保留——同模型重试 3 次仍失败则直接报错，不降级。
+  其余角色（slow/plan/vision/designer/bigctx 等）链不动。
+  备份 `config.yml.bak-20260810-default-noroute`。**需重启 OMP 生效**。
+- 注意：这是回滚 01:5x 的"default 链插缓冲跳"方案；当时要防的跨家族降级
+  现在由"不降级"替代——聚合池毒丸（ch9/18/57）已清是前提，池再脏时
+  default 会直接报错而不是悄悄换成别的模型，用户可按报错显式处理。
