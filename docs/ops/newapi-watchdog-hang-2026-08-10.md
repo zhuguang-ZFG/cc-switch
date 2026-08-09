@@ -202,3 +202,41 @@ ch72 anyrouter 实测结论（02:53–02:55）：
   `newapi/k3` 是可行的中间档，待用户决策。
 - 联动风险：子代理模型（flash）走本地 NewAPI，NewAPI 宕机时主模型（官方端点）
   不受影响但子代理全挂——LocalNewAPI-Watchdog 每分钟看护是前置保障。
+
+## 同日追加：03:20 ch75 被自动禁用、ch3 降为备用（03:2x）
+
+事件：03:20:03 ch75 tabitoken（当时唯一健康的 opus 主力）被禁用，4 秒后 OMP 的
+beta 请求只剩 ch3/ch45 可路由，400/500 穿透，OMP 走旧 default 链降级。
+
+根因链：
+1. **NewAPI auto-ban 自禁用**：ch75 `auto_ban=1`，GIN 日志显示
+   `POST /api/channel/75/status`（127.0.0.1 自调），manage 日志 `channel.status_update`——
+   本 fork 的自动禁用通过内部自调 status API 实现，这解释了前几起"管理员身份"的
+   未归因 status_update（02:28 ch9/ch18 回捞大概率同为 auto-enable 自调）。
+2. **ch3 权重再次漂移**：20→24（03:07:21-24 三条 "Updated channel baibei" manage 记录），
+   写入者仍未完全锁定（Guardian 日志同时段无记录，但其权重自愈只 +1/周期且上限 20，
+   不能完全解释；保持观察）。
+3. ch3 已坏数小时（502/400），却以 pri57 占据首跳，放大了每次故障。
+
+处置：
+- ch75 重新启用（status=1），beta 形状请求实测 33.6s→**3.5s**。
+- **ch3 降 pri 57→45**：首跳变为 ch75(50)，ch3 退为 ch45(40) 之前的备用；
+  不直接禁用是保留其恢复后的容量。待 baibei 稳定后可评估调回。
+- 池终态：ch75(50/7) > ch3(45/24) > ch45(40/5)；ch9/18/57 双锁禁用，ch72 禁用。
+
+DeepSeek V4 Flash 实测（03:3x，四道编程题）：
+- 并发 bug 诊断：正确定位 read-modify-write 竞态并给锁修复，4.9s ✓
+- LRU（dict+双向链表）：教科书级完整实现 ✓
+- SQL 窗口+索引建议：查询正确，且指出 (user_id,created_at) 索引对该查询无效、
+  建议覆盖索引 (created_at,user_id,amount)——判断细腻 ✓
+- **命中渠道：ch48 opencode-go-flash（opencode.ai/zen/go 第三方转发，pri51/w20），
+  非官方直连**（ch42 deepseek-official 仍"模型不存在"）。回答质量在线，但
+  是否官方最新 checkpoint 无法从本地验证。
+- 首次探测两题 900 token 全耗在 reasoning 导致 content 为空——flash 是强思考模型，
+  max_tokens 预算要留足 reasoning 空间。
+
+踩坑备忘（追加）：
+- 本 fork auto-ban/auto-enable 走**内部自调 status API**：GIN 有 api 记录、manage 日志
+  记 admin、不写 Guardian 日志——以后排查渠道状态变更先查 `auto_ban` 标志区分人/机。
+- 健康主力渠道也会被 auto-ban（瞬断即触发），auto-disable 不能替代人工巡检；
+  DX 冒烟的 known_broken/fallback posture 校验要常驻。
