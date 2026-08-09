@@ -125,3 +125,49 @@ OMP 按新 default 链降级 `claude-opus-5:max → claude-opus-4-8`——**新�
   auto-disable 对该 fork 的 403 路径不可靠，不能依赖。
 - `AutomaticRetryStatusCodes=408,429,500-503` 不含 403——余额类错误必穿透到客户端，池内必须没有死余额渠道。
 - 观察项：ch3 若 502 长期不恢复，主路由切 ch75（已实测 2-7s 稳定）。
+
+## 同日追加：02:28 禁用被回捞、02:47 双锁止血与 ch57 毒丸（02:5x）
+
+事件：02:14 手动禁用 ch9/ch18 后，02:28:11/15/41 manage 日志出现三条 `channel.status_update`
+（username=admin），ch9/ch18 被重新启用且权重回到 50/20、50/9，02:29–02:45 再次穿透
+`403 insufficient balance`，OMP 连续降级到 claude-opus-4-8。
+
+归因排查（02:47–02:56）：
+- **Guardian 排除**：其 `check_and_enable_recovered_channels` 只遍历自有 `disabled_channels`
+  列表（70/73/72/39），不含 ch9/ch18；guardian.log 该时段无 enable 动作、无 Telegram 告警；
+  02:28:08 的 ch72 恢复探测失败（recovery_failures=31），未产生 enable。
+- **DX-Ops 冒烟排除**：`scripts/ops/newapi-local-smoke.py` 全程只读（GET），无写渠道能力。
+- **NewAPI 内部 auto-enable 存疑但证据不足**：ch9/ch18 余额为 0、测试只失败，理论上不触发。
+- **剩余嫌疑**：其他持有 admin 凭据的会话/脚本手动调用了 status API（本晚第三起未归因变更，
+  与前两起——start.ps1 改写、ch9 权重改回 50/20——同源可能）。
+
+处置（双锁）：ch9 + ch18 再次禁用（status=2）**并 weight=0**——即使 status 被回捞，
+权重 0 也抢不到流量。备份 `~/.new-api-local/backups/channels-before-zeroweight-20260810-0247.json`。
+
+新发现毒丸 ch57 gorouter：smoke 黑名单校验发现其被重新启用（pri40/w6），渠道测试
+403「预付费额度失败, 用户剩余额度 $0.166 < 需要 $0.20」——同样已 禁用 + weight 0 双锁。
+
+防复发加固：
+- `scripts/ops/newapi-local-smoke.py` 的 `KNOWN_BROKEN_CHANNELS` 加入 ch9
+  （ch18/57 本就在列），定时冒烟会在死渠道回捞时 FAIL 报警。
+- 冒烟复跑收敛：唯一剩余 FAIL 为 `fallback channel posture: 72:anyrouter=status=2`
+  （契约要求 ch72 常开做兜底，当前 anyrouter 上游不可用，属真实告警，保留）。
+
+ch72 anyrouter 实测结论（02:53–02:55）：
+- 指纹代理（127.0.0.1:8789）转发正常到达上游，但 anyrouter 对 Claude 模型持续
+  `429 Service Unavailable`（冷却 90s 后依旧）；渠道测试报
+  「当前模型 gpt-5.6-sol 的使用已经达到上限」——**上游额度/限流问题，非本地配置缺口**，
+  保持禁用待上游恢复，不靠用户操作。
+- ch72 models 列表 gpt-5.6-sol 在最前，NewAPI 渠道测试只测到被 cap 的 gpt；
+  Claude 实际可用性需以上游 429 消退后实测为准。
+
+验证（02:55–02:56）：
+- 池终态：ch3 baibei(57/20) > ch75 tabitoken(50/7) > ch45 agentrouter(40/5)；
+  ch9/18/57/72 全部禁用（9/18/57 weight=0）。
+- 真实冒烟：`POST /v1/messages claude-opus-5` 200 / 1.7s，`claude-opus-4-8` 200 / 1.2s。
+
+踩坑备忘（追加）：
+- **OMP 模型名后缀（`:xhigh`/`:max`）是 OMP 侧 effort 语法，OMP 发出前会剥掉**；
+  直接拿带后缀的模型名打 NewAPI 会 503「No available channel」——烟测必须用基础模型名。
+  今晚一度误判"禁用 ch9/18 导致 opus-5 无渠道"，实为烟测姿势错误的假警报。
+- 单禁用不保险：凡被列入隔离的渠道一律 `status=2 + weight=0` 双锁，防任何调用方回捞后立刻吃流量。
