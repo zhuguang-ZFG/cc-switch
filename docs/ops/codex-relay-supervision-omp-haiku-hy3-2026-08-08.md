@@ -391,6 +391,18 @@ LongCat-2.0 从主路由剔除后，用户决策：**专门用作翻译子代理
 
 记忆从未丢失（recovery 机制本身即崩溃保护）；警告无碍系统运行。重启后若仍弹：需精简 failures.md 或深查整合子进程模型调用。
 
+### 2026-08-09 跟进：根因定位 + llmModelOverride 修复
+
+600s 仍弹报警。深查 `pi-hermes-memory` 源码（`src/handlers/auto-consolidate.ts` + `pi-child-process.ts` + `index.ts:248`）后定位根因：
+
+- **整合子进程用 `modelRoles.default` = `zg-newapi-anthropic/claude-opus-5:max`**（thinking auto）——`llmModelOverride` 未配置时子进程继承默认模型
+- 整合回合 = 完整 Pi CLI 对话：16KB failures.md 全量条目 + 要求多轮 memory 工具读写（每次写全量重写 + fingerprint 校验），多 OMP 实例并发写同文件还叠加写冲突重试
+- 慢模型 × 大 prompt × 多轮工具 = 600s 完不成；08-08 的 180s→600s 只是延后被杀，没解决回合过重
+
+**修复**（2026-08-09）：`hermes-memory-config.json` 加 `"llmModelOverride": "zg-newapi/deepseek-v4-flash"`（字段名对照 config.ts:149-151），整合子进程改用 flash 模型（~2s/回合）。**OMP 重启后生效**，验证方式：观察不再弹报警，或 `/memory-consolidate` 手动触发。
+
+**澄清**：641 个 `.MEMORY.md.recovery-*` 不是 641 次失败——每次记忆写入都留 recovery 快照，插件 7 天宽限期（`RECOVERY_ACTIVE_GRACE_MS`）后才 prune，属设计行为，非故障指标。08-08 手工清理只是腾空间，对超时无帮助。
+
 ## 18. 日志告警扫描与优化（2026-08-09 凌晨）
 
 ### 扫描结果
