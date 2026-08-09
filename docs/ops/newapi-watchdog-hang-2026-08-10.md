@@ -183,3 +183,22 @@ ch72 anyrouter 实测结论（02:53–02:55）：
 - 注意：这是回滚 01:5x 的"default 链插缓冲跳"方案；当时要防的跨家族降级
   现在由"不降级"替代——聚合池毒丸（ch9/18/57）已清是前提，池再脏时
   default 会直接报错而不是悄悄换成别的模型，用户可按报错显式处理。
+
+## 同日追加：kimi-code 子代理分工档案（03:1x）
+
+背景：用户要求按工种给 kimi CLI 子代理分工。核实现状与官方文档后落地：
+- 现状核实：`~/.kimi-code/config.toml` 已配 `[secondary_model] model = "newapi/deepseek-v4-flash"`
+  （走本地 NewAPI 127.0.0.1:3002，provider `local-newapi`），子代理默认绑它；
+  已注册 NewAPI 别名 4 个：deepseek-v4-flash / gpt-5.6-sol / k3 / claude-opus-5。
+- 新建用户级档案 `~/.kimi-code/agents/`（所有项目生效，`/reload` 或新会话加载）：
+  - `builder.md`：复杂实现/疑难 bug/跨层重构，`model_preference: primary`（k3-256k），全工具。
+  - `reviewer.md`：严格代码审查，blocker>major>minor 分级，只读（Read/Grep/Glob/Bash），`primary`。
+- 分工终态：探索/例行 → 内置 explore/coder（secondary=deepseek-v4-flash）；
+  硬实现 → builder、审查 → reviewer（均 k3-256k）；spawn 时显式 `model` 参数优先级最高。
+- 格式约束备忘：`model_preference` 只接受 `primary`/`secondary` 两个符号值，
+  **不能写具体模型别名**（官方明确）；要让子代理用某个 NewAPI 模型只能改
+  `[secondary_model]` 槽位（全局单槽）或主会话 `/model` 切换后靠 primary 跟随。
+  暂不建议把 secondary 换成 newapi/claude-opus-5：Claude 池今晚刚整治、成本高；
+  `newapi/k3` 是可行的中间档，待用户决策。
+- 联动风险：子代理模型（flash）走本地 NewAPI，NewAPI 宕机时主模型（官方端点）
+  不受影响但子代理全挂——LocalNewAPI-Watchdog 每分钟看护是前置保障。
