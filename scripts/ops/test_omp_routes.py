@@ -499,6 +499,30 @@ class OmpRouteGateTests(unittest.TestCase):
                     f"{provider} Claude models must stay Claude during context recovery",
                 )
 
+    def test_opus5_gateway_window_stays_under_upstream_rejection_zone(self):
+        """zg-newapi-anthropic/claude-opus-5 的 contextWindow 必须低于上游实测拒绝区。
+
+        2026-08-09 实测：~602KB/69 消息真实请求在 claude 三渠道（3/9/45）全部
+        确定性 400；557KB 截断版与 604KB 低 token 填充版均被接受，拒绝由
+        token 总量触发，上限约 130k。NewAPI 把上游 400 包装成
+        bad_response_status_code，OMP 无法归类为 context-overflow，不触发
+        压缩/提升/fallback，会话直接卡死。窗口定为 110000（85% 阈值 93.5k，
+        单轮边界跳变余量充足）；回归 170000 会重新越过上游上限。
+        """
+        text = MODELS_FILE.read_text(encoding="utf-8")
+        registrations = _parse_model_registrations(text)
+        index = _registration_index(registrations)
+        opus5 = (index.get("zg-newapi-anthropic") or {}).get("claude-opus-5")
+        self.assertIsNotNone(opus5, "zg-newapi-anthropic/claude-opus-5 must be registered")
+        window = opus5["contextWindow"]
+        self.assertIsNotNone(window, "claude-opus-5 contextWindow must be explicit")
+        self.assertLessEqual(
+            window,
+            110000,
+            f"claude-opus-5 contextWindow {window} exceeds the probed upstream safe ceiling; "
+            "requests past ~130k tokens are hard-400ed by all claude channels (2026-08-09 probe)",
+        )
+
 
 
     def test_codebuddy_fallbacks_use_only_hy3_and_sol(self):
