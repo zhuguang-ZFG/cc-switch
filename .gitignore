@@ -44,4 +44,4 @@ mainWindow.js
 # Local ops scratch dumps (NewAPI option/channel exports may contain credentials)
 tmp/
 _dump/
-*.bak
+*.bak*
