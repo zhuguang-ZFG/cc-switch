@@ -48,6 +48,7 @@
 - NewAPI 渠道测试：`GET /api/channel/test/76?model=claude-opus-5` → success，4.75s
 - ch77 渠道测试：`GET /api/channel/test/77?model=gpt-5.6-sol` → `bad_response_body`（预期，见上约束）
 - 网关 e2e（用户令牌走 127.0.0.1:3002，`zg-gpt-5.6-sol`，流式 ×6）：全部 200，消费日志归因全部 ch77（`channel:77`、`is_stream:true`、`upstream_model_name:gpt-5.6-sol`）
+- prompt caching（ch76）：直连 `/v1/messages` 带 `cache_control` 两次调用均报 `cache_read_input_tokens:1203`；经网关 `claude-opus-5-max`（仅 ch76 serving，强制路由）同样透传缓存用量，消费日志 `cache_tokens:1102`、缓存调用 quota 49875 < 未命中调用 60206——**缓存真实生效且 NewAPI 计费有折扣**。异常点：全新内容首调即报 cache_read（`cache_creation:0`），上游为多租户中转，cache 口径可能跨用户共享或为其自报，不可按 Anthropic 官方语义理解；个别调用日志 `cache_tokens:0`（缓存归因偶发丢失）
 
 ## 备注
 
