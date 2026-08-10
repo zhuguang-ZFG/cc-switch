@@ -36,7 +36,7 @@ class FakeNewAPI:
 
     def get_channels(self):
         return list(self.channels.values())
-    def test_channel(self, channel_id):
+    def test_channel(self, channel_id, timeout=None):
         self.test_calls.append(channel_id)
         return self.test_results.popleft()
 
@@ -714,8 +714,8 @@ class RecoveryTests(unittest.TestCase):
                 "joined_channels": {},
             }
         )
-        engine.newapi.channels[70] = {
-            "id": 70,
+        engine.newapi.channels[80] = {
+            "id": 80,
             "name": "auto-banned",
             "status": 3,
             "auto_ban": 1,
@@ -725,9 +725,9 @@ class RecoveryTests(unittest.TestCase):
 
         self.assertEqual(engine._sync_newapi_auto_bans(), 1)
 
-        self.assertEqual([record["id"] for record in engine.state["disabled_channels"]], [70])
+        self.assertEqual([record["id"] for record in engine.state["disabled_channels"]], [80])
         self.assertFalse(engine.state["disabled_channels"][0]["manual"])
-        self.assertEqual(engine.state["weight_history"]["70"]["weight"], 10)
+        self.assertEqual(engine.state["weight_history"]["80"]["weight"], 10)
 
         engine.check_and_enable_recovered_channels()
         self.assertEqual(engine.newapi.test_calls, [])
@@ -886,9 +886,10 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn(record, engine.state["disabled_channels"])
 
     def test_auto_enabled_agentic_only_channel_is_left_unchanged(self):
-        """探针全部不相容时无健康结论，不得改变已自动启用渠道的状态。"""
+        """探针全部不相容时无健康结论，不得改变已自动启用渠道的状态；
+        但须计入退避（2026-08-11 评审 P1-5，防止饿死恢复队列）。"""
         record = {
-            "id": 57,
+            "id": 86,
             "name": "agentic-only",
             "time": (datetime.now() - timedelta(minutes=10)).isoformat(),
         }
@@ -900,7 +901,7 @@ class RecoveryTests(unittest.TestCase):
                 "joined_channels": {},
             }
         )
-        engine.newapi.channels[57] = {"id": 57, "name": "agentic-only", "status": 1}
+        engine.newapi.channels[86] = {"id": 86, "name": "agentic-only", "status": 1}
         engine.newapi.test_results.extend(
             [(False, "403 non_agentic_blocked: relay only serves agentic clients")] * 3
         )
@@ -910,13 +911,13 @@ class RecoveryTests(unittest.TestCase):
 
         self.assertEqual(engine.newapi.disable_calls, [])
         self.assertEqual(engine.newapi.enable_calls, [])
-        self.assertNotIn("recovery_failures", record)
+        self.assertEqual(record["recovery_failures"], 1)
         self.assertIn(record, engine.state["disabled_channels"])
 
     def test_real_recovery_failure_is_not_hidden_by_probe_incompatibility(self):
         """只要存在真实失败，已自动启用但未稳定的渠道仍须重新禁用。"""
         record = {
-            "id": 57,
+            "id": 87,
             "name": "mixed-failure",
             "time": (datetime.now() - timedelta(minutes=10)).isoformat(),
         }
@@ -928,7 +929,7 @@ class RecoveryTests(unittest.TestCase):
                 "joined_channels": {},
             }
         )
-        engine.newapi.channels[57] = {"id": 57, "name": "mixed-failure", "status": 1}
+        engine.newapi.channels[87] = {"id": 87, "name": "mixed-failure", "status": 1}
         engine.newapi.test_results.extend(
             [
                 (False, "403 non_agentic_blocked: only serves agentic clients"),
@@ -940,7 +941,7 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(guardian.time, "sleep"):
             engine.check_and_enable_recovered_channels()
 
-        self.assertEqual(engine.newapi.disable_calls, [57])
+        self.assertEqual(engine.newapi.disable_calls, [87])
         self.assertEqual(record["recovery_failures"], 1)
 
     def test_recovery_preserves_current_manual_priority(self):
@@ -1979,8 +1980,10 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertIn(str(guardian.STATE_BACKUP_FILE), destinations)
         for call in replace.call_args_list:
             self.assertIn(f".{os.getpid()}.tmp", str(call.args[0]))
+
     def test_state_oserror_not_backed_up(self):
-        """state.json 读 I/O 错误（非内容损坏）：不搬文件，只记录"""
+        """state.json 读 I/O 错误（非内容损坏）：不搬文件、有限重试，
+        仍失败则拒绝带空状态启动（2026-08-11 评审 P1-3 契约变更）"""
         state_file = guardian.Path.home() / ".omp" / "guardian" / "state.json"
         state_file.parent.mkdir(parents=True, exist_ok=True)
         # 清理前一个测试可能残留的备份
@@ -1994,12 +1997,14 @@ class ProxyRestartTests(unittest.TestCase):
                 "loads",
                 side_effect=OSError("sharing violation"),
             ) as loads,
+            patch.object(guardian.time, "sleep"),
             patch.object(guardian.logger, "error") as err,
         ):
             engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
-            loaded = engine._load_state()
+            with self.assertRaises(RuntimeError):
+                engine._load_state()
 
-        loads.assert_called()
+        self.assertGreaterEqual(loads.call_count, 2)  # 重试语义
         err.assert_called()
         # 原文件未被动（未被搬走/改名）
         self.assertTrue(state_file.exists())
@@ -2308,6 +2313,234 @@ class DailyReportTests(unittest.TestCase):
         bot._cmd_report(g)
 
         self.assertIn("已生成", bot.send.call_args.args[0])
+
+
+
+class Step6ChannelPerfTests(unittest.TestCase):
+    """2026-08-11 评审 P1-1/P1-2：主循环 step 6（慢渠道检测 + 性能记录）曾是唯一
+    生产调用点，被删后 channel_perf 恒空、权重调整/慢渠道禁用全链路失效。"""
+
+    def _make_guardian(self):
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        engine = make_engine(
+            {
+                "disabled_channels": [],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        g.autofix = engine
+        g.health = guardian.HealthChecker(engine.newapi)
+        return g, engine
+
+    def test_step6_records_each_distinct_test_result_once(self):
+        g, engine = self._make_guardian()
+        channel = {
+            "id": 76,
+            "name": "c",
+            "status": 1,
+            "weight": 5,
+            "response_time": 100,
+            "test_time": 111,
+        }
+
+        g._check_channels_health([channel])
+        self.assertEqual(len(engine.channel_perf[76]), 1)
+
+        # 同一 test_time 轮询不重复记录（去重语义保留）
+        g._check_channels_health([channel])
+        self.assertEqual(len(engine.channel_perf[76]), 1)
+
+        channel["test_time"] = 222
+        g._check_channels_health([channel])
+        self.assertEqual(len(engine.channel_perf[76]), 2)
+
+    def test_step6_disables_slow_channel_after_active_test_fails(self):
+        g, engine = self._make_guardian()
+        engine.newapi.test_results.append((False, "probe timeout"))
+
+        for t in (1, 2, 3):
+            channel = {
+                "id": 77,
+                "name": "slow",
+                "status": 1,
+                "weight": 5,
+                "response_time": guardian.CHANNEL_SLOW_THRESHOLD_MS + 1,
+                "test_time": t,
+            }
+            g._check_channels_health([channel])
+
+        # 3 份不同慢结果触发主动测试；测试失败 → 禁用并排队（非降权路径）
+        self.assertEqual(engine.newapi.disable_calls, [77])
+        self.assertEqual(
+            [r["id"] for r in engine.state["disabled_channels"]], [77]
+        )
+
+
+class StateLoadHardeningTests(unittest.TestCase):
+    """2026-08-11 评审 P1-3：_load_state 遇 OSError 静默降级空 defaults，
+    随后 _save_state 双写覆盖 last-good → 状态+备份双丢。"""
+
+    def _engine(self):
+        return guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+
+    def test_oserror_retries_then_refuses_empty_start(self):
+        engine = self._engine()
+        bad = Mock()
+        bad.exists.return_value = True
+        bad.read_text.side_effect = OSError("file locked")
+
+        with patch.object(guardian, "STATE_FILE", bad), patch.object(
+            guardian.time, "sleep"
+        ):
+            with self.assertRaises(RuntimeError):
+                engine._load_state()
+
+        self.assertGreaterEqual(bad.read_text.call_count, 2)
+
+    def test_oserror_recovers_on_retry(self):
+        engine = self._engine()
+        flaky = Mock()
+        flaky.exists.return_value = True
+        flaky.read_text.side_effect = [
+            OSError("file locked"),
+            json.dumps({"disabled_channels": [{"id": 1, "name": "x"}]}),
+        ]
+
+        with patch.object(guardian, "STATE_FILE", flaky), patch.object(
+            guardian.time, "sleep"
+        ):
+            state = engine._load_state()
+
+        self.assertEqual(state["disabled_channels"], [{"id": 1, "name": "x"}])
+        # 默认值合并语义不变
+        self.assertIn("weight_history", state)
+
+
+class CleanupGuardTests(unittest.TestCase):
+    """2026-08-11 评审 P1-4：get_channels 失败返回 [] 时 cleanup 会把
+    disabled/degraded/weight_history 全量误删且不可自愈。"""
+
+    def test_empty_channel_list_skips_cleanup(self):
+        engine = make_engine(
+            {
+                "disabled_channels": [
+                    {"id": 99, "name": "x", "time": "2026-08-01T00:00:00"}
+                ],
+                "weight_history": {
+                    "99": {"weight": 5, "time": "2026-08-01T00:00:00"}
+                },
+                "degraded_channels": {"99": {"time": "2026-08-01T00:00:00"}},
+                "joined_channels": {},
+            }
+        )
+        engine._cleanup_count = guardian.STATE_CLEANUP_INTERVAL - 1
+
+        engine.cleanup_stale_state()  # FakeNewAPI.channels 为空 → 模拟 API 失败
+
+        self.assertEqual(len(engine.state["disabled_channels"]), 1)
+        self.assertIn("99", engine.state["weight_history"])
+        self.assertIn("99", engine.state["degraded_channels"])
+
+
+class RecoveryBackoffTests(unittest.TestCase):
+    """2026-08-11 评审 P1-5：探针全 incompatible 时 failures 恒 0、退避恒 5min，
+    队首记录持续烧恢复配额饿死其后渠道。"""
+
+    def test_incompatible_probes_still_grow_backoff(self):
+        engine = make_engine(
+            {
+                "disabled_channels": [
+                    {
+                        "id": 88,
+                        "name": "probe-incompatible",
+                        "time": "2026-08-10T00:00:00",
+                        "manual": False,
+                        "recovery_failures": 0,
+                    }
+                ],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        for _ in range(guardian.RECOVERY_TEST_COUNT):
+            engine.newapi.test_results.append(
+                (False, "HTTP 403 non_agentic_blocked: only serves agentic clients")
+            )
+
+        engine.check_and_enable_recovered_channels()
+
+        record = engine.state["disabled_channels"][0]
+        self.assertEqual(record["recovery_failures"], 1)
+        # 探针不兼容不是恢复：不启用、不入池
+        self.assertEqual(engine.newapi.enable_calls, [])
+
+
+class ExclusionEnforcementTests(unittest.TestCase):
+    """2026-08-11 评审 P1-6：AUTO_BAN_RECOVERY_EXCLUSIONS 只在导入时检查，
+    Guardian 自禁用路径与恢复循环绕过排除语义。"""
+
+    def test_append_disabled_skips_policy_excluded_auto_record(self):
+        excluded = sorted(guardian.AUTO_BAN_RECOVERY_EXCLUSIONS)[0]
+        engine = make_engine(
+            {
+                "disabled_channels": [],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+
+        engine._append_disabled(
+            {
+                "id": excluded,
+                "name": "x",
+                "reason": "full_scan: boom",
+                "time": "2026-08-11T00:00:00",
+                "manual": False,
+            }
+        )
+        self.assertEqual(engine.state["disabled_channels"], [])
+
+        # 显式人工记录仍允许（/disable 命令语义不受排除集限制）
+        engine._append_disabled(
+            {
+                "id": excluded,
+                "name": "x",
+                "reason": "manual",
+                "time": "2026-08-11T00:00:00",
+                "manual": True,
+            }
+        )
+        self.assertEqual(len(engine.state["disabled_channels"]), 1)
+
+    def test_recovery_never_reenables_excluded_channel(self):
+        excluded = sorted(guardian.AUTO_BAN_RECOVERY_EXCLUSIONS)[0]
+        engine = make_engine(
+            {
+                "disabled_channels": [
+                    {
+                        "id": excluded,
+                        "name": "excluded",
+                        "time": "2026-08-10T00:00:00",
+                        "manual": False,
+                        "recovery_failures": 0,
+                    }
+                ],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        for _ in range(guardian.RECOVERY_TEST_COUNT):
+            engine.newapi.test_results.append((True, "ok"))
+
+        engine.check_and_enable_recovered_channels()
+
+        self.assertEqual(engine.newapi.enable_calls, [])
+        self.assertEqual(engine.newapi.test_calls, [])
 
 
 def tearDownModule():

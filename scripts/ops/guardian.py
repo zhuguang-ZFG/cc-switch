@@ -788,8 +788,30 @@ class AutoFixEngine:
                     except (OSError, json.JSONDecodeError, ValueError) as recovery_error:
                         logger.error(f"state.json last-good recovery failed: {recovery_error}")
             except OSError as e:
-                # I/O 错误（权限/占用/读盘）：不搬文件，记录后重试
-                logger.error(f"state.json read failed (not corrupted): {e}")
+                # I/O 错误（权限/占用/读盘）：不搬文件，有限重试；仍失败则拒绝
+                # 带空状态启动——空 defaults 会被 _save_state 同步覆盖 last-good，
+                # 造成状态+备份双丢（2026-08-11 评审 P1-3）。
+                for attempt in range(3):
+                    time.sleep(0.5 * (attempt + 1))
+                    try:
+                        loaded = json.loads(STATE_FILE.read_text())
+                        if not isinstance(loaded, dict):
+                            raise ValueError("state.json root is not an object")
+                        for k, v in defaults.items():
+                            if k not in loaded:
+                                loaded[k] = v
+                        logger.info(f"state.json read recovered on retry {attempt + 1}/3")
+                        return loaded
+                    except OSError:
+                        logger.error(f"state.json read retry {attempt + 1}/3 failed: {e}")
+                    except (json.JSONDecodeError, ValueError) as decode_error:
+                        raise RuntimeError(
+                            f"state.json became corrupt while retrying: {decode_error}"
+                        ) from decode_error
+                raise RuntimeError(
+                    f"state.json unreadable after retries, refusing to start "
+                    f"with empty state: {e}"
+                ) from e
         return defaults
 
     def _save_state(self):
@@ -804,7 +826,18 @@ class AutoFixEngine:
         os.replace(backup_tmp, STATE_BACKUP_FILE)
 
     def _append_disabled(self, record: dict):
-        """追加禁用渠道记录（防重复：同 id 不重复追加）"""
+        """追加禁用渠道记录（防重复：同 id 不重复追加）。
+
+        策略排除集（AUTO_BAN_RECOVERY_EXCLUSIONS）的自动记录不入队：入队即获得
+        被自动恢复的资格，与排除语义冲突（2026-08-11 评审 P1-6）。
+        显式 manual=True 仍记录（人工操作本就免于自动恢复）。
+        """
+        if not record.get("manual") and record.get("id") in AUTO_BAN_RECOVERY_EXCLUSIONS:
+            logger.info(
+                f"skip queueing policy-excluded channel {record.get('id')} "
+                f"({record.get('reason', '')})"
+            )
+            return
         self.state.setdefault("disabled_channels", [])
         if not any(r["id"] == record["id"] for r in self.state["disabled_channels"]):
             self.state["disabled_channels"].append(record)
@@ -1179,6 +1212,10 @@ class AutoFixEngine:
                 break
             if record.get("manual"):
                 continue
+            # 策略排除集永不自动恢复（与 _sync_newapi_auto_bans 导入侧一致，
+            # 2026-08-11 评审 P1-6）
+            if record["id"] in AUTO_BAN_RECOVERY_EXCLUSIONS:
+                continue
 
             channel_id = record["id"]
             name = record["name"]
@@ -1214,6 +1251,10 @@ class AutoFixEngine:
                     time.sleep(1)
 
             if probe_incompatible_count == RECOVERY_TEST_COUNT:
+                # 探针不兼容不算渠道故障，但必须计入退避：否则 failures 恒 0、
+                # 退避恒 5min，队首 incompatible 记录每轮烧恢复配额，
+                # 饿死其后渠道（2026-08-11 评审 P1-5）
+                record["recovery_failures"] = failures + 1
                 self._save_state()
                 logger.info(
                     f"Channel {channel_id} ({name}) recovery probes all incompatible; "
@@ -1590,6 +1631,13 @@ class AutoFixEngine:
         cutoff = datetime.now() - timedelta(hours=STATE_MAX_AGE_HOURS)
         cleaned = 0
         channels = {str(c["id"]): c for c in self.newapi.get_channels()}
+        if not channels:
+            # get_channels 失败（API 抖动/宕机）返回 []——此时清理会把
+            # disabled/degraded/weight_history 全量误删且不可自愈
+            #（Guardian 自禁用是 status=2，_sync_newapi_auto_bans 只导入 status=3，
+            # 2026-08-11 评审 P1-4）。空列表一律视为获取失败，跳过本轮。
+            logger.warning("State cleanup skipped: channel list empty (fetch failure?)")
+            return
 
         disabled = self.state.get("disabled_channels", [])
         for record in disabled[:]:
@@ -2115,8 +2163,10 @@ class Guardian:
         if self._budget_left("OMP role check"):
             self.autofix.check_omp_roles_health()
 
-
-
+        # 6. P1: 慢渠道检测 + 性能记录（step 3 权重调整的唯一数据源；
+        # 366e41ef 误删后 channel_perf 恒空、调权/慢禁用链路全失效，2026-08-11 评审 P1-1）
+        if self._budget_left("channel perf check"):
+            self._check_channels_health(self.newapi.get_channels())
 
         # 7. 错误率（get_logs 网络调用，超预算跳过并给默认值）
         if self._budget_left("error rate check"):
@@ -2175,6 +2225,20 @@ class Guardian:
         # 11. 每日报告
         if self._budget_left("daily report"):
             self._maybe_daily_report()
+
+    def _check_channels_health(self, channels):
+        """P1: 慢渠道检测 + 性能记录。
+
+        check_channel 只看 NewAPI 上报的 response_time（不主动探测，零上游费用）；
+        连续 CHANNEL_FAIL_THRESHOLD 份不同慢结果才触发一次主动测试，测试仍失败
+        才禁用。性能样本喂给 step 3 的 _auto_adjust_weights 做降权/回升。
+        """
+        for channel in channels:
+            healthy, msg, _rt = self.health.check_channel(channel)
+            self.autofix._record_channel_perf(channel, healthy)
+            if not healthy:
+                logger.warning(f"Channel {channel.get('id')} unhealthy: {msg}")
+                self.autofix.disable_slow_channel(channel)
 
     def _budget_left(self, step: str) -> bool:
         """预算还剩时间？超预算则跳过该低优先级步骤并记日志"""
