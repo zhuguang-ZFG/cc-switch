@@ -1,5 +1,7 @@
 # 本地运维栈深度评审（2026-08-11）
 
+> **修复状态（2026-08-11 当日）**：guardian.py 全部 6 个 P1 已修复并部署（commit `bbfec3be`，镜像 `~/.omp/guardian/guardian.py` 已同步，watchdog 接管重启 03:31:45 上线，心跳正常）。P1-2 随 P1-1 修复自动恢复。配套：新增 8 个针对性测试 + 更新 3 个契约变更测试 + 修复 1 个 08-10 遗留陈旧测试，全套 109 tests OK（仓库与镜像双侧）。存量契约变更：_load_state OSError 由"静默降级 defaults"改为"重试 3 次→拒绝空状态启动"；探针全 incompatible 由"不计退避"改为"计入退避（仍不启用/不禁用）"。P2/P3 未动，排期。
+
 > 方法：3 个评审代理全文通读 + 主代理对全部 P1 人工复核（同 07-27 流程）。
 > 范围：`scripts/ops/` 本地栈——guardian.py（2247 行，首次全文评审）、codex-relay.py、newapi-local-smoke.py、watchdog.ps1、system-health-check.py。NewAPI 渠道配置另见亲和一节。
 > 复核撤回：codex-relay "上游 socket 泄漏"（误报，`finally: upstream.close()` 在 `return` 时照常执行）、"tool_calls 排序 bug"（误报，int key 字典 sorted 正确）、"信号量未释放"（误报，except 已 release）。
