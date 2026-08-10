@@ -4,7 +4,13 @@
 Checks, in order:
   1. NewAPI /api/status reachable (http://127.0.0.1:3002)
   2. Local gateway proxies listening on the Tailscale bind host (8787/8788)
-  3. Admin API: channel health summary (auto-disabled channels are flagged)
+  3. Admin API contracts:
+     - required options pinned (auto-enable/disable/retry status codes)
+     - disable attribution: unexpected disables (status=3, or status=2 with
+       auto_ban=0 not in KNOWN_BROKEN/DEGRADED_ACCEPTED_DISABLED/guardian queue)
+     - model isolation, quarantine double-lock (status + weight=0),
+       fallback posture, critical-model pool capacity
+  3b. multi-key silent degradation via DB channel_info (upstream issue #3537)
   4. Two cheap real completions through the gateway (latency sample)
 
 Logs one summary block to .tmp-newapi-dx-ops.log (repo root, same file the
@@ -17,6 +23,7 @@ from __future__ import annotations
 
 import json
 import socket
+import sqlite3
 import sys
 import time
 import urllib.request
@@ -39,7 +46,7 @@ SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
 # Channel 74 is held out until its shared upstream quota recovers and a real
 # relay + aggregate smoke passes. Channel 45 remains a live fallback.
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 9, 18, 57, 62, 63, 64, 65, 70, 71, 73, 74}  # 9/18: linxi 同账号余额耗尽（2026-08-10 403 insufficient balance），禁用+weight 0 双锁，被未知调用方回捞过一次；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 9, 18, 20, 57, 62, 63, 64, 65, 70, 71, 73, 74}  # 9/18: linxi 同账号余额耗尽（2026-08-10 403 insufficient balance），禁用+weight 0 双锁，被未知调用方回捞过一次；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中（73 于 08-10 15:06 被重新启用且未同步本契约，冒烟会持续 FAIL 直至 codex-relay 修复完成并更新本集合）
 
 # Model isolation is channel-specific. AgentRouter (ch45) and AnyRouter (ch72)
 # serve Sol AND Claude at their fallback tiers (Claude re-enabled 2026-08-07:
@@ -56,8 +63,37 @@ FALLBACK_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     72: {"priority": 40, "max_weight": 5},
 }
 
+# Channels disabled by local automation due to upstream degradation (NOT config
+# breakage). Distinct from KNOWN_BROKEN: these are expected to auto-recover via
+# AutomaticEnableChannelEnabled once their scheduled channel test passes again,
+# so neither their disable nor their future re-enable is a violation.
+# Attribution: ch3 disabled 2026-08-10 12:04 (baibei upstream 502 for hours,
+# Guardian had already degraded its weight 24→12 at 09:06); ch45 disabled 22:05
+# (agentrouter upstream 429/503 flapping; channel carries auto_ban=1).
+DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
+    3: "baibei upstream 502; disabled 2026-08-10 12:04 by local automation",
+    45: "agentrouter upstream flapping; disabled 2026-08-10 22:05 by local automation",
+}
+
+# Critical models that must never lose their last enabled channel. Value is the
+# minimum number of enabled (status=1) channels serving the model; 0 enabled =
+# hard FAIL ("503 No available channel" state detected before traffic hits it).
+# Current capacity is reported in the check detail either way.
+MIN_ENABLED_CRITICAL_MODELS: dict[str, int] = {
+    "claude-opus-5": 1,
+    "deepseek-v4-flash": 1,
+}
+
+NEWAPI_DB = DEPLOY_DIR / "new-api.db"
+
 REQUIRED_OPTIONS: dict[str, str] = {
     "AutomaticEnableChannelEnabled": "true",
+    # 08-03 防放大策略固化（docs/ops/omp-model-config-review-2026-08-03.md）：
+    # 403/401/402/502 触发自动禁用；重试只覆盖瞬时类状态码，403 余额错误必穿透。
+    # 上游参考：QuantumNous/new-api#1457/#1609 —— auto-disable 依赖状态码/关键词
+    # 匹配，社区多例失效报告，故本 fork 不得依赖 auto_ban，靠本契约钉死选项防漂移。
+    "AutomaticDisableStatusCodes": "401,402,403,502",
+    "AutomaticRetryStatusCodes": "408,429,500-503",
 }
 
 
@@ -78,7 +114,14 @@ def option_policy_violations(options: object) -> list[str]:
 
 
 def fallback_posture_violations(channels: list[dict]) -> list[str]:
-    """Return fallback channels that are disabled or drifted into a primary tier."""
+    """Return fallback channels that are disabled or drifted into a primary tier.
+
+    Channels in DEGRADED_ACCEPTED_DISABLED are exempt from the status==1
+    requirement while disabled (local automation took them down for upstream
+    degradation; AutomaticEnableChannelEnabled restores them once their
+    scheduled test passes). Priority/weight drift is still enforced so they
+    re-enter at the correct tier.
+    """
     by_id = {channel.get("id"): channel for channel in channels}
     violations: list[str] = []
     for channel_id, expected in FALLBACK_CHANNEL_POSTURES.items():
@@ -87,7 +130,11 @@ def fallback_posture_violations(channels: list[dict]) -> list[str]:
             violations.append(f"{channel_id}:missing")
             continue
         reasons: list[str] = []
-        if channel.get("status") != 1:
+        degraded = (
+            channel_id in DEGRADED_ACCEPTED_DISABLED
+            and channel.get("status") != 1
+        )
+        if channel.get("status") != 1 and not degraded:
             reasons.append(f"status={channel.get('status')}")
         if channel.get("priority") != expected["priority"]:
             reasons.append(f"priority={channel.get('priority')}")
@@ -137,12 +184,90 @@ def channel_policy_violations(channels: list[dict]) -> list[str]:
 
 
 def expected_disabled_violations(channels: list[dict]) -> list[str]:
-    """Return intentional isolation channels that have re-entered service."""
-    return [
-        f"{channel['id']}:{channel.get('name', '')}"
-        for channel in channels
-        if channel.get("id") in KNOWN_BROKEN_CHANNELS and channel.get("status") == 1
-    ]
+    """Return intentional isolation channels that broke their quarantine contract.
+
+    Two violation classes:
+    - re-entered service: status flipped back to 1 (auto-enable or manual pull);
+    - double-lock broken: status is down but weight != 0 — the 2026-08-10 linxi
+      incident showed a status flip alone can resurrect traffic, so quarantined
+      channels carry status=2 AND weight=0; either lock missing is a violation.
+    """
+    violations: list[str] = []
+    for channel in channels:
+        if channel.get("id") not in KNOWN_BROKEN_CHANNELS:
+            continue
+        label = f"{channel['id']}:{channel.get('name', '')}"
+        if channel.get("status") == 1:
+            violations.append(f"{label}=re-entered service")
+        else:
+            weight = channel.get("weight")
+            if isinstance(weight, int) and weight != 0:
+                violations.append(f"{label}=double-lock broken (weight={weight})")
+    return violations
+
+
+def multi_key_health_violations() -> list[str]:
+    """Detect silent multi-key degradation (upstream QuantumNous/new-api#3537).
+
+    In multi_to_single/polling channels, individually auto-disabled keys are
+    NEVER auto-recovered upstream (ShouldEnableChannel only sees channel-level
+    status; GetNextEnabledKey never re-tests disabled keys). The pool only
+    shrinks, silently. Recovery is manual: DB channel_info fix + PUT refresh,
+    documented in docs/ops/tabitoken-channel-2026-08-09.md.
+    Reads the NewAPI SQLite DB read-only; the admin API does not expose
+    multi_key_status_list on this fork.
+    """
+    violations: list[str] = []
+    try:
+        con = sqlite3.connect(f"file:{NEWAPI_DB.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        return [f"db-open-failed={e}"]
+    try:
+        for cid, name, status, info in con.execute(
+            "SELECT id, name, status, channel_info FROM channels"
+        ):
+            try:
+                ci = json.loads(info) if info else {}
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(ci, dict) or not ci.get("is_multi_key"):
+                continue
+            key_list = ci.get("multi_key_status_list") or {}
+            if isinstance(key_list, dict):
+                disabled = sorted(k for k, v in key_list.items() if v == 3)
+            else:
+                disabled = []
+            if disabled and status == 1:
+                violations.append(
+                    f"{cid}:{name}=keys_disabled:{','.join(map(str, disabled))}"
+                    f"/{ci.get('multi_key_size', '?')}"
+                )
+    except sqlite3.Error as e:
+        violations.append(f"db-read-failed={e}")
+    finally:
+        con.close()
+    return violations
+
+GUARDIAN_STATE_FILE = Path.home() / ".omp" / "guardian" / "state.json"
+
+
+def guardian_disabled_ids() -> set[int]:
+    """Channel ids in Guardian's bounded recovery queue (its own disables).
+
+    Guardian disables via POST /api/channel/{id}/status with auto_ban=0 — the
+    same signature as a human actor — so attribution needs this cross-reference.
+    Unreadable state degrades to an empty set (the 4h health check separately
+    asserts guardian heartbeat freshness).
+    """
+    try:
+        state = json.loads(GUARDIAN_STATE_FILE.read_text(encoding="utf-8-sig"))
+        return {
+            int(record["id"])
+            for record in state.get("disabled_channels", [])
+            if isinstance(record, dict) and record.get("id") is not None
+        }
+    except (OSError, ValueError, KeyError, TypeError):
+        return set()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOG_FILE = REPO_ROOT / ".tmp-newapi-dx-ops.log"
@@ -274,13 +399,36 @@ def main() -> int:
         if status != 200 or not isinstance(items, list):
             check("channels", False, f"bad response: HTTP {status}, items={str(items)[:80]!r}")
         else:
-            auto_disabled = [f"{c['id']}:{c['name']}" for c in items if c.get("status") == 3]
-            unexpected = [c for c in auto_disabled if int(c.split(":")[0]) not in KNOWN_BROKEN_CHANNELS]
-            known = [c for c in auto_disabled if int(c.split(":")[0]) in KNOWN_BROKEN_CHANNELS]
+            # 意外禁用归因（2026-08-10 事故类：多起渠道状态变更无法归因）：
+            # - status=2 ∧ auto_ban=1 = fork 内部 auto-ban 自调（机器行为，预期）；
+            # - status=2 ∧ auto_ban=0 = 人工/脚本禁用 → 必须能归因：白名单集合
+            #   或 Guardian 恢复队列（state.json）在案，否则 FAIL；
+            # - status=3（老式 auto-disable 落库）同理须可归因。
+            def _auto_banned(c: dict) -> bool:
+                return str(c.get("auto_ban", "")).strip().lower() in ("1", "true")
+
+            accepted = (
+                KNOWN_BROKEN_CHANNELS
+                | set(DEGRADED_ACCEPTED_DISABLED)
+                | guardian_disabled_ids()
+            )
+            unexpected = [
+                f"{c['id']}:{c['name']}"
+                for c in items
+                if c.get("id") not in accepted and (
+                    c.get("status") == 3
+                    or (c.get("status") == 2 and not _auto_banned(c))
+                )
+            ]
+            disabled_attributed = [
+                f"{c['id']}:{c['name']}"
+                for c in items
+                if c.get("id") in accepted and c.get("status") in (2, 3)
+            ]
             enabled = sum(1 for c in items if c.get("status") == 1)
             check("channels", not unexpected,
-                  f"total={len(items)} enabled={enabled} auto_disabled={unexpected or 'none'}"
-                  + (f" known_broken={known}" if known else ""))
+                  f"total={len(items)} enabled={enabled} unexpected_disabled={unexpected or 'none'}"
+                  + (f" accepted_disabled={disabled_attributed}" if disabled_attributed else ""))
             policy_violations = channel_policy_violations(items)
             check(
                 "channel model isolation",
@@ -299,8 +447,32 @@ def main() -> int:
                 not posture_violations,
                 f"violations={posture_violations or 'none'}",
             )
+            # 池冗余：关键模型不得失去最后一个启用渠道（0 = "503 No available
+            # channel" 前置检测；2026-08-10 凌晨 opus 池曾退化到单渠道 ch75）。
+            for model, minimum in MIN_ENABLED_CRITICAL_MODELS.items():
+                serving = [
+                    c for c in items
+                    if c.get("status") == 1 and model in {
+                        m.strip() for m in str(c.get("models") or "").split(",")
+                    }
+                ]
+                check(
+                    f"pool capacity {model}",
+                    len(serving) >= minimum,
+                    f"enabled_channels={len(serving)} min={minimum}"
+                    f" ids={[c['id'] for c in serving]}",
+                )
     except Exception as e:  # noqa: BLE001
         check("channels", False, f"admin api error: {e}")
+
+    # 3b. 多 key 渠道静默退化（上游 QuantumNous/new-api#3537：被自动禁用的单 key
+    # 永不自动恢复，池只减不增且无告警）——直读 DB channel_info，API 不暴露该字段。
+    mk_violations = multi_key_health_violations()
+    check(
+        "multi-key pool health",
+        not mk_violations,
+        f"violations={mk_violations or 'none'}",
+    )
 
     # 4. real cheap completions
     try:

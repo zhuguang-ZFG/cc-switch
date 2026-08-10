@@ -2,7 +2,9 @@
 """system-health-check — 一键巡检 OMP × NewAPI × 本地代理全链路。
 
 覆盖：NewAPI/TTFT/cc-switch/7 本地代理端口、guardian 心跳、supervisor 状态、
-watchdog 崩溃记录、NewAPI 渠道健康、关键日志大小、磁盘余量。
+watchdog 崩溃记录、new-api 进程存活、看门狗计划任务上次结果/新鲜度
+（0x800710E0 挂起类）、start.ps1 BOM/-Wait 完整性、watchdog.ps1 ASCII 契约、
+NewAPI 渠道健康、关键日志大小、磁盘余量。
 退出码：0 = 全绿；1 = 有失败项（供计划任务/告警判断）。
 用法：python scripts/ops/system-health-check.py [--json]
 """
@@ -95,6 +97,60 @@ def main() -> int:
     crash = GUARDIAN / "watchdog-crash.log"
     crash_size = crash.stat().st_size if crash.exists() else 0
     check("watchdog 崩溃记录", crash_size == 0, f"{crash_size}B（应空）")
+
+    # ── new-api 进程与看门狗任务活性（2026-08-10 事故类）────────────
+    # 端口存活不等于进程健康；进程存在但端口死 = 半死状态，两者都查。
+    try:
+        proc = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq new-api.exe", "/NH", "/FO", "CSV"],
+            capture_output=True, text=True, timeout=15)
+        check("new-api.exe 进程存活", "new-api.exe" in proc.stdout,
+              "tasklist 探测")
+    except Exception as e:  # noqa: BLE001
+        check("new-api.exe 进程存活", False, f"tasklist error: {e}")
+    # 计划任务"已启用"≠能跑：MultipleInstancesPolicy=IgnoreNew 下，挂起实例会以
+    # 0x800710E0 拒绝每次新触发（start.ps1 曾被注入 -Wait 导致）。校验上次结果与新鲜度。
+    try:
+        ps = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "$t = Get-ScheduledTask -TaskName 'LocalNewAPI-Watchdog' -ErrorAction SilentlyContinue; "
+             "$i = Get-ScheduledTaskInfo -TaskName 'LocalNewAPI-Watchdog' -ErrorAction SilentlyContinue; "
+             "if ($t -and $i) { '{0}|{1}|{2}' -f $i.LastTaskResult, $i.LastRunTime.ToString('o'), $t.State } "
+             "else { 'missing' }"],
+            capture_output=True, text=True, timeout=20).stdout.strip()
+        if ps == "missing" or not ps:
+            check("看门狗计划任务", False, f"task missing or unreadable: {ps!r}")
+        else:
+            result_s, run_s, state = (ps.split("|") + ["", ""])[:3]
+            result = int(result_s) & 0xFFFFFFFF
+            from datetime import datetime
+            age = (datetime.now() - datetime.fromisoformat(run_s[:19])).total_seconds()
+            ok = result == 0 and age < 600
+            detail = f"result=0x{result:08X} last_run={run_s[:19]} state={state}"
+            if result == 0x800710E0:
+                detail += "（IgnoreNew 拒绝触发：存在挂起的看门狗实例，见 2026-08-10 事故）"
+            check("看门狗计划任务", ok, detail)
+    except Exception as e:  # noqa: BLE001
+        check("看门狗计划任务", False, f"query error: {e}")
+    # start.ps1 完整性：PS 5.1 对无 BOM 脚本按 ANSI 解析（中文注释字节错位→崩溃），
+    # -Wait 会让看门狗同步挂起（两者均为 2026-08-10 凌晨事故根因，防回归）。
+    try:
+        raw = (NEWAPI_LOCAL / "start.ps1").read_bytes()
+        has_bom = raw.startswith(b"\xef\xbb\xbf")
+        import re
+        wait_on_start = bool(re.search(rb"Start-Process[^\n]*-Wait", raw))
+        check("start.ps1 完整性", has_bom and not wait_on_start,
+              f"BOM={has_bom} Start-Process-Wait={wait_on_start}")
+    except OSError as e:
+        check("start.ps1 完整性", False, f"read error: {e}")
+    # watchdog.ps1 契约：必须 ASCII-only（文件头注释声明；非 ASCII + 无 BOM = PS 5.1 解析错位）。
+    try:
+        wd = (NEWAPI_LOCAL / "watchdog.ps1").read_bytes()
+        ascii_only = all(b < 128 for b in wd)
+        check("watchdog.ps1 ASCII 契约", ascii_only,
+              "ascii" if ascii_only else "发现非 ASCII 字节（需补 UTF-8 BOM 或改回 ASCII）")
+    except OSError as e:
+        check("watchdog.ps1 ASCII 契约", False, f"read error: {e}")
 
     # ── NewAPI 渠道健康（guardian metrics 快照）────────────────────
     m_fresh, m_data = fresh_json(GUARDIAN / "metrics.json", 600)
