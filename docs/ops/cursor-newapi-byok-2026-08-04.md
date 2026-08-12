@@ -135,3 +135,25 @@ OMP 改动需重启 OMP（或 reload）生效。Cursor 侧 13 个 `zg-*` 模型�
 **修复:** `UPDATE abilities SET priority=49 WHERE channel_id=48 AND model='deepseek-v4-flash'`（备份 `new-api.db.bak-*-ch48-prio49`）→ 现在 ch42(50) 优先、ch48(49) 兜底（Go 恢复后自动重新参与）。重启 new-api 生效。复测：TTFB 5.6s → 0.61–2.0s；日志确认 `channel_id=42`。
 
 **顺带发现（未处理，需用户决策）:** `qwen3.8-max`（ch31 阿里云 maas）429 非瞬时限流——日志明确 `Your token-plan 1-week quota has been exhausted. reset at 08-17 14:27:00 UTC`。8-17 前该模型不可用；要恢复需换 key/加渠道。
+
+## 追加（2026-08-12 深夜续）：opus 慢 = 上游全线故障 + 重试链，非 priority
+
+**现象:** Cursor 里 `zg-claude-opus-5` 体感极慢：本地直测 TTFB 18–31s，偶发 401/500。其余模型实测正常：`deepseek-v4-flash` 0.97s / `zg-k3` 1.03s / `zg-deepseek-official-v4-flash` 1.84s（探针 `scripts/ops/probe-ttfb.ps1`，从 OMP `models.yml` 读 key，不落密钥）。
+
+**根因（stderr.log + agentrouter proxy.log 证据）:** opus 的 30s 不是单渠慢，是 `RetryTimes=3` 逐渠失败重试的累加：
+
+| 渠道 | 故障 | 证据 |
+|------|------|------|
+| ch45 agentrouter | 上游对 opus-5 近乎全拦 `sensitive words detected` 500（探针 "hi" 也拦）+ Bedrock 429 + 偶发 `Invalid token` 401 | `~/.kimi-code/proxies/agentrouter-proxy/proxy.log` 连续 500/429；本地敏感词检查全关（`CheckSensitiveEnabled=false`），拦截来自上游 |
+| ch76 sotamodel | new-api 走 Anthropic `/v1/messages` 路径时 `EOF` 断连 | stderr `do request failed: Post https://www.sotamodel.net/v1/messages: EOF` |
+| ch3 百倍 / ch9、ch18 林夕 | `503 No available accounts`，公益站额度空 | stderr 连续 503 |
+
+**踩坑记录:** 直测 ch76 `/v1/chat/completions` 路径 200/4.7s，据此误判"ch76 快"并试调 priority（ch45→50/ch76→40），实测 18/21/30s 更差（流量撞上敏感词全拦的 ch45）——**已回滚原值（ch76=50 主、ch45=40 兜底）**。教训：直测渠道必须走 new-api 实际使用的端点路径（Anthropic 渠 = `/v1/messages`），否则结论不可比。
+
+**状态:** abilities 与改动前一致；DB 备份 `new-api.db.bak-20260812-2246-opus-prio`；new-api 两次重启后 3002 正常监听；一次性脚本已删，留 `probe-ttfb.ps1` 复测。
+
+**待用户决策:**
+- ch76 改渠道类型 Anthropic(type=14) → OpenAI 兼容(type=1) 走可用的 chat/completions 路径（中风险：请求格式与计费映射会变）。
+- ch45 上游换 key/换站（敏感词拦截在上游侧，本地改 UA/头无效）。
+- 公益站 ch3/9/18 等额度/签到恢复。
+- 短期绕行：opus 类任务用 `zg-k3` / `deepseek-v4-flash`。
