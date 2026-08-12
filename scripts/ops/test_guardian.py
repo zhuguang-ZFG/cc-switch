@@ -548,7 +548,7 @@ class PowerShellInvocationTests(unittest.TestCase):
             patch.object(guardian.subprocess, "Popen"),
             patch.object(guardian.time, "sleep"),
         ):
-            engine.restart_local_proxy("codebuddy", 8787)
+            engine.restart_local_proxy("agentrouter", 8788)
 
         args = run.call_args.args[0]
         self.assertIsInstance(args, list)
@@ -556,19 +556,17 @@ class PowerShellInvocationTests(unittest.TestCase):
         self.assertIn("-Command", args)
         self.assertIn("shell", run.call_args.kwargs)
         self.assertIs(run.call_args.kwargs["shell"], False)
-        self.assertIn(r"converter\.py", args[-1])
+        self.assertIn(r"agentrouter\-proxy\.py", args[-1])
 
     def test_proxy_start_uses_env_keys_and_shared_bind_host(self):
         cases = (
             ("agentrouter", 8788, "AGENTROUTER_PROXY_KEY", "agent-secret"),
-            ("codebuddy", 8787, "CODEBUDDY2OPENAI_KEY", "codebuddy-secret"),
         )
 
         with patch.multiple(
             guardian,
             LOCAL_PROXY_BIND_HOST="0.0.0.0",
             AGENTROUTER_PROXY_KEY="agent-secret",
-            CODEBUDDY_API_KEY="codebuddy-secret",
         ):
             for name, port, env_name, secret in cases:
                 with self.subTest(name=name):
@@ -1246,8 +1244,8 @@ class ProxyRestartTests(unittest.TestCase):
         for _ in range(3):
             g._check_cycle()
 
-        # 当前只管理 agentrouter/codebuddy 两个本地代理
-        self.assertEqual(g.autofix.restart_local_proxy.call_count, 2)
+        # 当前只管理 agentrouter 一个本地代理
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 1)
         g.telegram.send_alert.assert_not_called()
 
     def test_successful_local_proxy_restart_does_not_send_stale_failure_alert(self):
@@ -1272,7 +1270,7 @@ class ProxyRestartTests(unittest.TestCase):
         for _ in range(3):
             g._check_cycle()
 
-        self.assertEqual(g.autofix.restart_local_proxy.call_count, 2)
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 1)
         g.telegram.send_alert.assert_not_called()
 
     def test_failed_local_proxy_restart_sends_failure_alert(self):
@@ -1297,7 +1295,7 @@ class ProxyRestartTests(unittest.TestCase):
         for _ in range(3):
             g._check_cycle()
 
-        self.assertEqual(g.telegram.send_alert.call_count, 2)
+        self.assertEqual(g.telegram.send_alert.call_count, 1)
         self.assertTrue(
             all(call.args[0] == "本地代理故障" for call in g.telegram.send_alert.call_args_list)
         )
@@ -1324,7 +1322,7 @@ class ProxyRestartTests(unittest.TestCase):
 
         g._check_cycle()
 
-        self.assertEqual(g.autofix.restart_local_proxy.call_count, 2)
+        self.assertEqual(g.autofix.restart_local_proxy.call_count, 1)
         g.telegram.send_alert.assert_not_called()
 
 
@@ -2208,8 +2206,7 @@ class OmpRoleTests(unittest.TestCase):
             )
 
     def test_probe_endpoint_sends_correct_bearer_key_by_port(self):
-        """按端口选择 Bearer key：agentrouter 8788 → AGENTROUTER_PROXY_KEY，
-        codebuddy 8787 → CODEBUDDY_API_KEY"""
+        """按端口选择 Bearer key：agentrouter 8788 → AGENTROUTER_PROXY_KEY"""
         with patch.object(
             guardian.urllib.request,
             "urlopen",
@@ -2224,9 +2221,55 @@ class OmpRoleTests(unittest.TestCase):
             self.assertEqual(auth, f"Bearer {guardian.AGENTROUTER_PROXY_KEY}")
             self.assertIn("127.0.0.1:8788", mk_req.call_args.args[0])
 
-            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:8787/v1")
+    def test_probe_endpoint_uses_newapi_probe_key_on_loopback_newapi_ports(self):
+        """NEWAPI_PROBE_KEY 配置后，NewAPI 本机端口（含 TTFT 网关 3003）
+        探测用真实 token 而非 'any'，消除 relay 日志 401 噪音"""
+        with patch.object(guardian, "NEWAPI_PROBE_KEY", "sk-probe-token"), patch.object(
+            guardian.urllib.request,
+            "urlopen",
+            return_value=Mock(status=200),
+        ), patch.object(
+            guardian.urllib.request,
+            "Request",
+            wraps=guardian.urllib.request.Request,
+        ) as mk_req:
+            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:3002/v1")
             auth = mk_req.call_args.kwargs["headers"]["Authorization"]
-            self.assertEqual(auth, f"Bearer {guardian.CODEBUDDY_API_KEY}")
+            self.assertEqual(auth, "Bearer sk-probe-token")
+
+            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:3003")
+            auth = mk_req.call_args.kwargs["headers"]["Authorization"]
+            self.assertEqual(auth, "Bearer sk-probe-token")
+
+    def test_probe_endpoint_never_sends_real_key_to_non_loopback(self):
+        """非 loopback 探测一律 'any'：真实 key 不得离开本机（防重定向泄露）"""
+        with patch.object(guardian, "NEWAPI_PROBE_KEY", "sk-probe-token"), patch.object(
+            guardian.urllib.request,
+            "urlopen",
+            return_value=Mock(status=200),
+        ), patch.object(
+            guardian.urllib.request,
+            "Request",
+            wraps=guardian.urllib.request.Request,
+        ) as mk_req:
+            guardian.AutoFixEngine._probe_endpoint("https://api.example.com:3002/v1")
+            auth = mk_req.call_args.kwargs["headers"]["Authorization"]
+            self.assertEqual(auth, "Bearer any")
+
+    def test_probe_endpoint_falls_back_to_any_without_probe_key(self):
+        """NEWAPI_PROBE_KEY 未配置时维持 'any' 原语义（任何响应算存活）"""
+        with patch.object(guardian, "NEWAPI_PROBE_KEY", ""), patch.object(
+            guardian.urllib.request,
+            "urlopen",
+            return_value=Mock(status=200),
+        ), patch.object(
+            guardian.urllib.request,
+            "Request",
+            wraps=guardian.urllib.request.Request,
+        ) as mk_req:
+            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:3002/v1")
+            auth = mk_req.call_args.kwargs["headers"]["Authorization"]
+            self.assertEqual(auth, "Bearer any")
 
 
 

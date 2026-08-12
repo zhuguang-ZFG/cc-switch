@@ -242,7 +242,10 @@ class AdminAuthTests(unittest.TestCase):
 
         self.assertEqual(
             smoke.expected_disabled_violations(channels),
-            ["62:centos-eo-gpt", "74:sharedchat-codex-sol"],
+            [
+                "62:centos-eo-gpt=re-entered service",
+                "74:sharedchat-codex-sol=re-entered service",
+            ],
         )
 
     def test_agentrouter_sol_fallback_posture_is_valid(self):
@@ -301,10 +304,24 @@ class AdminAuthTests(unittest.TestCase):
                     {"id": 72, "name": "anyrouter", "status": 1, "priority": 40, "weight": 5},
                 ]
             ),
-            ["45:agentrouter=status=2"],
+            # ch45 is in DEGRADED_ACCEPTED_DISABLED: its disabled state is an
+            # accepted upstream-degradation posture, so only priority/weight
+            # drift would be flagged; status=2 alone is not a violation.
+            [],
         )
         self.assertEqual(
             smoke.fallback_posture_violations([]), ["45:missing", "72:missing"]
+        )
+        self.assertEqual(
+            smoke.fallback_posture_violations(
+                [
+                    {"id": 45, "name": "agentrouter", "status": 2, "priority": 50, "weight": 10},
+                    {"id": 72, "name": "anyrouter", "status": 1, "priority": 40, "weight": 5},
+                ]
+            ),
+            # Degraded exemption covers status only; tier drift is still a
+            # violation so the channel re-enters at the correct fallback tier.
+            ["45:agentrouter=priority=50,weight=10"],
         )
 
     def test_anyrouter_sol_fallback_posture_is_registered(self):
@@ -358,19 +375,31 @@ class AdminAuthTests(unittest.TestCase):
     def test_option_policy_requires_automatic_channel_recovery(self):
         self.assertEqual(
             smoke.option_policy_violations(
-                [{"key": "AutomaticEnableChannelEnabled", "value": "true"}]
+                [
+                    {"key": "AutomaticEnableChannelEnabled", "value": "true"},
+                    {"key": "AutomaticDisableStatusCodes", "value": "401,402,403,502"},
+                    {"key": "AutomaticRetryStatusCodes", "value": "408,500-503"},
+                ]
             ),
             [],
         )
         self.assertEqual(
             smoke.option_policy_violations(
-                [{"key": "AutomaticEnableChannelEnabled", "value": "false"}]
+                [
+                    {"key": "AutomaticEnableChannelEnabled", "value": "false"},
+                    {"key": "AutomaticDisableStatusCodes", "value": "401,402,403,502"},
+                    {"key": "AutomaticRetryStatusCodes", "value": "408,500-503"},
+                ]
             ),
             ["AutomaticEnableChannelEnabled=false"],
         )
         self.assertEqual(
             smoke.option_policy_violations([]),
-            ["AutomaticEnableChannelEnabled=missing"],
+            [
+                "AutomaticEnableChannelEnabled=missing",
+                "AutomaticDisableStatusCodes=missing",
+                "AutomaticRetryStatusCodes=missing",
+            ],
         )
 
     def test_main_fails_on_invalid_channels_response(self):

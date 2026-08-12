@@ -89,11 +89,13 @@ NEWAPI_DB = DEPLOY_DIR / "new-api.db"
 REQUIRED_OPTIONS: dict[str, str] = {
     "AutomaticEnableChannelEnabled": "true",
     # 08-03 防放大策略固化（docs/ops/omp-model-config-review-2026-08-03.md）：
-    # 403/401/402/502 触发自动禁用；重试只覆盖瞬时类状态码，403 余额错误必穿透。
+    # 403/401/402/502 触发自动禁用；403 余额错误必穿透。
     # 上游参考：QuantumNous/new-api#1457/#1609 —— auto-disable 依赖状态码/关键词
     # 匹配，社区多例失效报告，故本 fork 不得依赖 auto_ban，靠本契约钉死选项防漂移。
+    # 08-11 去除 429：RPM 耗尽的同渠道重试零收益且放大拥塞（实测 173 请求×4
+    # 重试全失败），429 透传交客户端退避+回退链；重试仅覆盖瞬时类状态码。
     "AutomaticDisableStatusCodes": "401,402,403,502",
-    "AutomaticRetryStatusCodes": "408,429,500-503",
+    "AutomaticRetryStatusCodes": "408,500-503",
 }
 
 
