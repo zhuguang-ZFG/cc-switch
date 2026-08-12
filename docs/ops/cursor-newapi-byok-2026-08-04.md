@@ -99,3 +99,30 @@ NewAPI 备份：`one-api.before-cursor-models4-20260805-013232.db`；Cursor `sta
 - **OMP 全链路实测**：codebuddy glm-5.2/hy3/kimi-k3/deepseek-v4-flash 200；agentrouter claude-opus-5/4-8/gpt-5.6-sol 200；atomcode deepseek-v4-flash 200。
 
 OMP 改动需重启 OMP（或 reload）生效。Cursor 侧 13 个 `zg-*` 模型维持 8-05 早前状态（agent 三个别名现已可用，`zg-wb-gpt-5.6-sol` 仍 403）。
+
+## 追加（2026-08-12）：公网出口恢复 + 模型集切换
+
+**背景:** VPS 极简化后 new-api 容器已移除，nginx `aliyun.donglicao.com` → VPS `127.0.0.1:3000` 无监听 → 502；NewAPI SSOT 在本机 `127.0.0.1:3002`。Cursor BYOK 经云端转发、拒私网，本机地址不可直用。
+
+**恢复:** 反向隧道 `ssh -N -R 127.0.0.1:3000:127.0.0.1:3002 lima` 由自愈循环脚本 `C:\Users\zhugu\.cursor-byok-router\newapi-edge-tunnel.vbs`（隐藏 wscript，断线 5s 重连）承载；**开机自启** = 启动目录快捷方式 `newapi-edge-tunnel.lnk`（`schtasks /Create` 本机拒绝访问，改用 Startup 文件夹）。VPS nginx 配置未动。
+
+**Cursor 配置:** Override=`https://aliyun.donglicao.com/v1`；key=OMP `providers.zg-newapi.apiKey`；自定义模型切为 8 个 `zg-*`：`zg-k3`、`zg-deepseek-official-v4-flash`、`zg-claude-opus-5`、`zg-gpt-5.6-sol`、`zg-hy3-preview-agent`、`zg-agent-claude-opus-5`、`zg-agent-claude-opus-4-8`、`zg-agent-gpt-5.6-sol`。当日早些的 kimi.com / OpenCode Go 直连配置与本地 15722 路由代理已废弃（router 已停）。
+
+**坑（复证）:** ① BYOK 全经 Cursor 云端转发，loopback/内网必拒；② 与目录 serverModelName 同名的自定义模型被静默去重（如 `kimi-k3`）；③ Remove 需二次对话框确认，且模型被选中/启用时按钮 disabled；④ 新增自定义模型默认不启用，需手动开；⑤ "Use OpenAI API key" 开关在重存密钥后约 2.5s 自动激活。
+
+**验证:** 公网 `/v1/models` 200；`zg-k3` 网关直测 200；Cursor 实测 `zg-deepseek-official-v4-flash`→`ZGDS-OK`、`zg-k3`→`ZGK3-OK`；日志 `bring_your_own_key=true`、`outcome=success`、0 错误。
+
+**追加（2026-08-12 晚）:** Cursor 新增裸聚合模型 `deepseek-v4-flash`、`qwen3.8-max`（实测 `DSAGG-OK`/`QW-OK`；qwen 首测遇 NewAPI token 限流，稍后重测通过）。**hy3 阻塞（需用户侧）**：`copilot.tencent.com` 后端 2026-08-11 14:45 起拒绝 converter 流式请求（403 code 11140 `request illegal`；非流式 400 11101）。已排除：opencode go 的 hy3（用户禁用，go 仅限 DeepSeekV4Flash）、freemodel 4 key（hy3 全 `Insufficient balance`）、指纹/preamble/SSE Accept/stream_options/端点变体均 403。修复需抓真实 WorkBuddy 客户端流式请求（客户端带 `--remote-debugging-port` 重启抓包，或用户提供新格式）。converter 默认路径（`copilot.tencent.com/v2/chat/completions`）保持不动。
+
+**更新（同日更晚）:** 真实 WorkBuddy 客户端同报 11140（Trace `71d20905f8d446fd803c890f19d627c3`）。非流式探测全模型 400 11101（账号/模型/头均正常），唯 `stream=true` 全拒——**服务端流式收紧（8-11 14:45 起），本地无法修复**。用户侧动作：WorkBuddy 内提交反馈附 Trace ID，等后端恢复。
+
+**WorkBuddy 全链路弃用（2026-08-12 深夜，用户决定）：**
+- NewAPI：删 ch44 codebuddy（含 2 条 abilities），重启生效；`/v1/models` 已无 hy3。
+- 本地代理：converter.py 已杀、8787 已关；`proxies-supervisor.py` 移除 codebuddy 条目并停用（计划任务本已禁用）；OMP `models.yml` 删除 codebuddy provider（已备份）。
+- Cursor：`zg-hy3-preview-agent` 从 `state.vscdb` 存储层移除（availableDefaultModels2 条目 + aiSettings.modelOverrideEnabled/userAddedModels/modelLastUsedAt），picker 实测无残留。
+- 不受影响：`gpt-5.6-sol`/`zg-gpt-5.6-sol` 有十余条非 WorkBuddy 渠道兜底（centos/fengwind/fastaitoken/agentrouter/anyrouter/sotamodel/seekai 等）。
+
+**清理复查（同日 code review）：**
+- 补漏：OMP `config.yml`（tiny 角色→`zg-newapi/deepseek-v4-flash`、providers 权重、fallbackChains 移除 codebuddy 项）；`guardian.py` 5 处（常量/LOCAL_PROXIES/探针 key 元组/重启分支/required 检查）已清并重启验证；`secrets.json` 删除 codebuddy_api_key（已备份）；cc-switch provider `local-newapi-sol` 备注去掉 codebuddy 描述。
+- 验净：NewAPI DB 无 8787/freemodel/hy3 残留（token 限额、abilities、全表扫描 0）；guardian 日志无 codebuddy；8787 端口常闭、无 converter 进程、supervisor 不复活（任务已禁用）；Cursor 全库无 zg-hy3（仅 statsig/cache 内部数据，自愈）。
+- 有意保留：`model_pricing` 两行 hy3 计价（历史用量计费需要）、代理历史日志/备份文件（`.bak`）、`~/.workbuddy`/`~/.kimi-code` 沉睡文件（converter 源码，若 WorkBuddy 恢复可复用）。
