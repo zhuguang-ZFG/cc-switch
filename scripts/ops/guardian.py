@@ -73,8 +73,18 @@ TELEGRAM_ALLOWED_USERS = set(
     if u.strip()
 )
 TELEGRAM_PROXY = _config_value("TELEGRAM_PROXY", "telegram_proxy")
-CODEBUDDY_API_KEY = _config_value("CODEBUDDY_API_KEY", "codebuddy_api_key")
 AGENTROUTER_PROXY_KEY = _config_value("AGENTROUTER_PROXY_KEY", "agentrouter_proxy_key")
+# NewAPI relay 探针 key（可选）：OMP 角色检查探测 NewAPI 本机端口时若带
+# "any" 会在 relay 日志每轮记一批 "Invalid token" 401 噪音；配置真实
+# relay token 后消除噪音。未配置时维持 "any" 原语义（任何响应算存活）。
+NEWAPI_PROBE_KEY = _config_value("NEWAPI_PROBE_KEY", "newapi_probe_key")
+# 需带真实 relay token 探测的本机端口：NewAPI 自身（NEWAPI_BASE 端口）+
+# TTFT 网关 3003（/v1/models 转发给 NewAPI，同样校验 token）。
+_NEWAPI_PROBE_PORTS = {3003}
+try:
+    _NEWAPI_PROBE_PORTS.add(urlparse(NEWAPI_BASE).port or 3002)
+except ValueError:
+    _NEWAPI_PROBE_PORTS.add(3002)
 # The local clients use loopback while NewAPI reaches these proxies over
 # Tailscale. Authentication and the host firewall are required when this is
 # set to a wildcard address.
@@ -179,10 +189,10 @@ CYCLE_BUDGET_SEC = 90  # 单轮执行预算：超时后跳过剩余低优先级�
 # 本地代理（anyrouter 已从 OMP disabledProviders + 本表移除：上游 anyrouter.top
 # key 失效 502，进程活着但推理不可用，重启解决不了——见踩坑 10；保留进程，
 # 恢复时手工加回本表即可）
-# agentrouter/codebuddy 加固后只绑定 127.0.0.1 并要求 Bearer key（secrets.json）
+# codebuddy/converter (8787) 已删除（2026-08-12）：WorkBuddy 上游流式 11140 不可用，
+# 用户决定弃用 WorkBuddy 渠道（NewAPI ch44 / OMP provider / Cursor 模型已同步清理）。
 LOCAL_PROXIES = {
     "agentrouter": {"port": 8788, "name": "agentrouter", "script": "agentrouter-proxy.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy"},
-    "codebuddy": {"port": 8787, "name": "codebuddy", "script": "converter.py", "dir": "C:/Users/zhugu/.kimi-code/proxies/codebuddy2openai"},
 }
 
 # 日志
@@ -1505,7 +1515,8 @@ class AutoFixEngine:
         """探测端点存活（短超时）
 
         - 路径感知：base 已含 /v1 时只拼 /models，否则拼 /v1/models（避免 /v1/v1/models 404）
-        - 本地代理需鉴权：按端口带对应 Bearer key（agentrouter 8788 / codebuddy 8787）
+        - 本地代理需鉴权：按端口带对应 Bearer key（agentrouter 8788 /
+          NewAPI 本机端口用 NEWAPI_PROBE_KEY，未配置则 "any"）
         - 语义：任何 HTTP 响应（含 401/403）都算存活，只有连接失败/超时才算死
         """
         base = base_url.rstrip("/")
@@ -1516,10 +1527,23 @@ class AutoFixEngine:
 
         # 本地代理端口 → 探针 key
         probe_key = "any"
-        for port, key in ((8788, AGENTROUTER_PROXY_KEY), (8787, CODEBUDDY_API_KEY)):
+        for port, key in ((8788, AGENTROUTER_PROXY_KEY),):
             if f":{port}" in models_path:
                 probe_key = key
                 break
+        else:
+            # NewAPI 本机端口：带真实 relay token 探测，消除每轮角色检查的
+            parsed = urlparse(models_path)
+            try:
+                parsed_port = parsed.port
+            except ValueError:
+                parsed_port = None
+            if (
+                NEWAPI_PROBE_KEY
+                and parsed.hostname in ("127.0.0.1", "localhost", "::1")
+                and parsed_port in _NEWAPI_PROBE_PORTS
+            ):
+                probe_key = NEWAPI_PROBE_KEY
 
         try:
             req = urllib.request.Request(models_path, headers={"Authorization": f"Bearer {probe_key}"})
@@ -1762,14 +1786,6 @@ class AutoFixEngine:
                     "--log", "proxy.log"
                 ]
                 env = {**os.environ, "AGENTROUTER_PROXY_KEY": AGENTROUTER_PROXY_KEY}
-            elif name == "codebuddy":
-                cmd = [
-                    "C:/Users/zhugu/scoop/apps/python313/current/python.exe",
-                    str(script_path),
-                    "--host", LOCAL_PROXY_BIND_HOST,
-                    "--log", "converter.log"
-                ]
-                env = {**os.environ, "CODEBUDDY2OPENAI_KEY": CODEBUDDY_API_KEY}
             else:
                 logger.error(f"Unknown proxy type: {name}")
                 return False
@@ -1960,7 +1976,6 @@ class Guardian:
             "newapi_token": NEWAPI_TOKEN,
             "telegram_token": TELEGRAM_TOKEN,
             "telegram_chat_id": TELEGRAM_CHAT_ID,
-            "codebuddy_api_key": CODEBUDDY_API_KEY,
         }
         missing = [name for name, value in required.items() if not value]
         if missing:
