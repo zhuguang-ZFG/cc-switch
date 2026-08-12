@@ -35,6 +35,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置
@@ -481,6 +482,15 @@ class TelegramBot:
 # NewAPI 客户端
 # ═══════════════════════════════════════════════════════════════════════════
 
+@dataclass
+class ChannelListResult:
+    """Explicit outcome of a channel list fetch: empty list ≠ fetch failure."""
+
+    ok: bool
+    channels: List[dict]
+    reason: str
+
+
 class NewAPIClient:
     def __init__(self, base_url: str, token: str, user_id: str):
         self.base_url = base_url.rstrip("/")
@@ -515,9 +525,22 @@ class NewAPIClient:
         except Exception:
             return False
 
-    def get_channels(self) -> List[dict]:
+    def get_channels_result(self) -> "ChannelListResult":
+        """Return an authoritative channel snapshot or an explicit failure."""
         result = self._request("GET", "/api/channel/?p=0&page_size=200")
-        return result.get("data", {}).get("items", []) if result else []
+        if not isinstance(result, dict):
+            return ChannelListResult(False, [], "channel list request failed")
+        data = result.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            return ChannelListResult(False, [], "channel list response shape invalid")
+        channels = [item for item in data["items"] if isinstance(item, dict)]
+        if len(channels) != len(data["items"]):
+            return ChannelListResult(False, [], "channel list contains invalid entries")
+        return ChannelListResult(True, channels, "ok")
+
+    def get_channels(self) -> List[dict]:
+        """Compatibility view; automation must use get_channels_result()."""
+        return self.get_channels_result().channels
 
     def get_channel(self, channel_id: int) -> Optional[dict]:
         result = self._request("GET", f"/api/channel/{channel_id}")

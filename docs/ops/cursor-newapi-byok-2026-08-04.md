@@ -133,6 +133,7 @@ OMP 改动需重启 OMP（或 reload）生效。Cursor 侧 13 个 `zg-*` 模型�
 **根因（日志 + abilities 表定位）:** `deepseek-v4-flash` 的 ability 只有 ch48 opencode-go-flash 是 enabled 且 priority=51（唯一最高）→ **100% 流量走 opencode.ai 海外上游**（本机实测 TLS 握手 1.4s、上游响应 1.5–2s+）；ch42 deepseek 官方（api.deepseek.com，TLS 0.22s / TTFB 0.33s）永远轮不到。每次请求 = 海外链路 + 上游推理 ≈ 5–6s 首 token。
 
 **修复:** `UPDATE abilities SET priority=49 WHERE channel_id=48 AND model='deepseek-v4-flash'`（备份 `new-api.db.bak-*-ch48-prio49`）→ 现在 ch42(50) 优先、ch48(49) 兜底（Go 恢复后自动重新参与）。重启 new-api 生效。复测：TTFB 5.6s → 0.61–2.0s；日志确认 `channel_id=42`。
+**（2026-08-13 用户改判，见 deepseek-v4-pro-pool-2026-08-13.md 更正节）**：8-13 的 pro 接入 PUT 把本行重置回 51 后，用户明确要求 opencode-go 套餐优先、不得官方优先——flash 池最终恢复 ch48=51 主 / ch42=50 兜底，本段「官方优先」不再有效；Go 上游已恢复（池 TTFB ≈1.5s）。
 
 **顺带发现（未处理，需用户决策）:** `qwen3.8-max`（ch31 阿里云 maas）429 非瞬时限流——日志明确 `Your token-plan 1-week quota has been exhausted. reset at 08-17 14:27:00 UTC`。8-17 前该模型不可用；要恢复需换 key/加渠道。
 

@@ -3,7 +3,7 @@
 
 Checks, in order:
   1. NewAPI /api/status reachable (http://127.0.0.1:3002)
-  2. Local gateway proxies listening on the Tailscale bind host (8787/8788)
+  2. Local gateway proxies listening on the Tailscale bind host (8788)
   3. Admin API contracts:
      - required options pinned (auto-enable/disable/retry status codes)
      - disable attribution: unexpected disables (status=3, or status=2 with
@@ -33,7 +33,8 @@ NEWAPI_BASE = "http://127.0.0.1:3002"
 DEPLOY_DIR = Path("C:/Users/zhugu/.new-api-local")
 PROBE_HOST = "100.83.32.95"  # local proxies bind the Tailscale IP (secrets.json)
 PROXY_PORTS: dict[str, tuple[str, int]] = {
-    "converter": (PROBE_HOST, 8787),
+    # converter:8787 (codebuddy/WorkBuddy) removed 2026-08-12 — upstream streaming
+    # endpoint 11140 unavailable; do not re-add unless the service is restored.
     "agentrouter": (PROBE_HOST, 8788),
     # anyrouter binds loopback only (OMP slow chain + NewAPI ch72)
     "anyrouter": ("127.0.0.1", 8789),
@@ -69,10 +70,14 @@ FALLBACK_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
 # so neither their disable nor their future re-enable is a violation.
 # Attribution: ch3 disabled 2026-08-10 12:04 (baibei upstream 502 for hours,
 # Guardian had already degraded its weight 24→12 at 09:06); ch45 disabled 22:05
-# (agentrouter upstream 429/503 flapping; channel carries auto_ban=1).
+# (agentrouter upstream 429/503 flapping; channel carries auto_ban=1); ch72
+# disabled 2026-08-09 00:10 by Guardian (anyrouter upstream gpt-5.6-sol
+# overload, 500 "负载已经达到上限"; 100+ recovery probes failed through
+# 2026-08-13 — Guardian keeps retrying, re-enable is automatic on recovery).
 DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
     3: "baibei upstream 502; disabled 2026-08-10 12:04 by local automation",
     45: "agentrouter upstream flapping; disabled 2026-08-10 22:05 by local automation",
+    72: "anyrouter upstream sol overload; disabled 2026-08-09 00:10 by Guardian",
 }
 
 # Critical models that must never lose their last enabled channel. Value is the
