@@ -126,3 +126,12 @@ OMP 改动需重启 OMP（或 reload）生效。Cursor 侧 13 个 `zg-*` 模型�
 - 补漏：OMP `config.yml`（tiny 角色→`zg-newapi/deepseek-v4-flash`、providers 权重、fallbackChains 移除 codebuddy 项）；`guardian.py` 5 处（常量/LOCAL_PROXIES/探针 key 元组/重启分支/required 检查）已清并重启验证；`secrets.json` 删除 codebuddy_api_key（已备份）；cc-switch provider `local-newapi-sol` 备注去掉 codebuddy 描述。
 - 验净：NewAPI DB 无 8787/freemodel/hy3 残留（token 限额、abilities、全表扫描 0）；guardian 日志无 codebuddy；8787 端口常闭、无 converter 进程、supervisor 不复活（任务已禁用）；Cursor 全库无 zg-hy3（仅 statsig/cache 内部数据，自愈）。
 - 有意保留：`model_pricing` 两行 hy3 计价（历史用量计费需要）、代理历史日志/备份文件（`.bak`）、`~/.workbuddy`/`~/.kimi-code` 沉睡文件（converter 源码，若 WorkBuddy 恢复可复用）。
+## 追加（2026-08-12 深夜）：聚合模型慢根因 + 渠道优先级修正
+
+**现象:** Cursor 里 `deepseek-v4-flash`（默认聚合模型）体感很慢：公网直测 TTFB 5.6s，其余模型（zg-k3 1.19s / zg-deepseek-official 0.68s）正常。
+
+**根因（日志 + abilities 表定位）:** `deepseek-v4-flash` 的 ability 只有 ch48 opencode-go-flash 是 enabled 且 priority=51（唯一最高）→ **100% 流量走 opencode.ai 海外上游**（本机实测 TLS 握手 1.4s、上游响应 1.5–2s+）；ch42 deepseek 官方（api.deepseek.com，TLS 0.22s / TTFB 0.33s）永远轮不到。每次请求 = 海外链路 + 上游推理 ≈ 5–6s 首 token。
+
+**修复:** `UPDATE abilities SET priority=49 WHERE channel_id=48 AND model='deepseek-v4-flash'`（备份 `new-api.db.bak-*-ch48-prio49`）→ 现在 ch42(50) 优先、ch48(49) 兜底（Go 恢复后自动重新参与）。重启 new-api 生效。复测：TTFB 5.6s → 0.61–2.0s；日志确认 `channel_id=42`。
+
+**顺带发现（未处理，需用户决策）:** `qwen3.8-max`（ch31 阿里云 maas）429 非瞬时限流——日志明确 `Your token-plan 1-week quota has been exhausted. reset at 08-17 14:27:00 UTC`。8-17 前该模型不可用；要恢复需换 key/加渠道。
