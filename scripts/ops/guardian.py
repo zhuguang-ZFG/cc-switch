@@ -86,6 +86,20 @@ try:
     _NEWAPI_PROBE_PORTS.add(urlparse(NEWAPI_BASE).port or 3002)
 except ValueError:
     _NEWAPI_PROBE_PORTS.add(3002)
+
+
+# 2026-08-11 评审 P3-20：探测请求带真实 Bearer token，urllib 默认跟随 3xx
+# 且会把 Authorization 头原样重放到重定向目标。若本机端口被劫持/错配指向
+# 外部主机，NEWAPI_PROBE_KEY 就随之外泄。此 opener 直接拒绝跟随重定向：
+# HTTPRedirectHandler.redirect_request 返回 None 会让 urllib 把 3xx 当
+# HTTPError 抛出，而 _probe_endpoint 的 HTTPError 分支本就把 <500 判为存活，
+# 因此"任何 HTTP 响应都算存活"的语义不变。
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_PROBE_OPENER = urllib.request.build_opener(_NoRedirect)
 # The local clients use loopback while NewAPI reaches these proxies over
 # Tailscale. Authentication and the host firewall are required when this is
 # set to a wildcard address.
@@ -145,6 +159,49 @@ ERROR_DISABLE_KEYWORDS = [
     "invalid_token",
 ]
 
+# 2026-08-11 评审 P2-7：数字关键词（401/402/429）不得裸子串匹配。NewAPI 错误
+# 消息常内嵌 request_id / 时间戳（如 20260810123402 含 402），裸子串会误禁健康
+# 渠道；反向 429 裸匹配也会把真·余额耗尽渠道当瞬态限流跳过。修法：匹配前剥离
+# 标识字段/时间戳/长数字串，再对纯数字关键词做词边界匹配。
+# 文本关键词（quota / invalid_token 等）保持子串匹配——它们常嵌在
+# quota_exceeded 一类复合词里，加词边界反而漏判真故障。
+_ID_FIELD_RE = re.compile(
+    r"(?:request|upstream_request|correlation|trace|task|session|log|req)"
+    r"[_\-]?id[\"'\s:=]*[\"']?[\w.:\-]+",
+    re.IGNORECASE,
+)
+_TIME_RE = re.compile(r"\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?")
+_LONG_DIGITS_RE = re.compile(r"\d{5,}")
+_NUMERIC_CODE_RES: Dict[str, "re.Pattern[str]"] = {}
+
+
+def _strip_identifiers(message: str) -> str:
+    """剥离 request_id/trace_id 等标识字段、时钟串与 5 位以上长数字，
+    避免其中偶然出现的 401/402/429 被当成上游状态码。"""
+    scrubbed = _ID_FIELD_RE.sub(" ", message or "")
+    scrubbed = _TIME_RE.sub(" ", scrubbed)
+    return _LONG_DIGITS_RE.sub(" ", scrubbed)
+
+
+def _matches_code_or_text(message: str, keyword: str) -> bool:
+    """纯数字关键词按词边界匹配（先剥离标识），文本关键词按子串匹配。"""
+    if keyword.isdigit():
+        pattern = _NUMERIC_CODE_RES.get(keyword)
+        if pattern is None:
+            pattern = re.compile(rf"(?<!\w){re.escape(keyword)}(?!\w)")
+            _NUMERIC_CODE_RES[keyword] = pattern
+        return bool(pattern.search(_strip_identifiers(message)))
+    return keyword.lower() in (message or "").lower()
+
+
+def _matched_disable_keyword(message: str) -> Optional[str]:
+    """返回命中的禁用关键词原文；无命中返回 None。"""
+    for keyword in ERROR_DISABLE_KEYWORDS:
+        if _matches_code_or_text(message, keyword):
+            return keyword
+    return None
+
+
 # 瞬态限流：HTTP 429 / rate limit / too many requests 不是渠道故障——
 # 不禁用、不累计永久失败计数（交给 NewAPI 池内重试/上游退避处理）
 TRANSIENT_RATE_LIMIT_MARKERS = ("429", "rate limit", "rate_limit", "too many requests")
@@ -152,8 +209,10 @@ TRANSIENT_RATE_LIMIT_MARKERS = ("429", "rate limit", "rate_limit", "too many req
 
 def _is_transient_rate_limit(message: str) -> bool:
     """429 / rate limit / too many requests → 瞬态限流，非渠道故障。"""
-    msg = (message or "").lower()
-    return any(marker in msg for marker in TRANSIENT_RATE_LIMIT_MARKERS)
+    return any(
+        _matches_code_or_text(message, marker)
+        for marker in TRANSIENT_RATE_LIMIT_MARKERS
+    )
 
 PROBE_INCOMPATIBLE_MARKERS = (
     "non_agentic_blocked",
@@ -221,6 +280,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger("guardian")
 
+
+def _write_heartbeat() -> None:
+    """原子写心跳文件；外部 watchdog 按 HEARTBEAT_STALE_SEC 判定卡死。
+
+    2026-08-11 评审 P2-9：原先每轮只在 cycle 开头写一次，而恢复循环
+    （RECOVERY_BATCH_SIZE 条 × RECOVERY_PROBE_TIMEOUT 秒探测）＋全量扫描
+    的最坏耗时可逼近 HEARTBEAT_STALE_SEC，watchdog 会误杀正在干活的
+    Guardian。因此提为模块级函数，供长耗时步骤中途刷新。
+    写失败只影响存活信号，绝不抛出打断自愈逻辑。
+    """
+    try:
+        hb_tmp = HEARTBEAT_FILE.with_suffix(".json.tmp")
+        hb_tmp.write_text(json.dumps({
+            "ts": datetime.now().isoformat(),
+            "pid": os.getpid(),
+        }), encoding="utf-8")
+        os.replace(hb_tmp, HEARTBEAT_FILE)
+    except OSError as hb_err:
+        logger.error(f"Heartbeat write failed: {hb_err}")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Telegram
 # ═══════════════════════════════════════════════════════════════════════════
@@ -241,14 +321,16 @@ class TelegramBot:
 
     def send(self, text: str, parse_mode: str = "HTML") -> bool:
         """发送 Telegram 消息（带速率限制）"""
+        # 2026-08-11 评审 P3-19：先查熔断再限流睡——熔断期间本就不发，
+        # 原顺序会白睡 MIN_SEND_INTERVAL 并把 _last_send 推到未来。
+        if time.time() < self._offline_until:
+            return False
         # 速率限制：距上次发送不足 MIN_SEND_INTERVAL 则等待
         now = time.time()
         wait = self.MIN_SEND_INTERVAL - (now - self._last_send)
         if wait > 0:
             time.sleep(wait)
         self._last_send = time.time()
-        if time.time() < self._offline_until:
-            return False
         try:
             url = f"{self.base_url}/sendMessage"
             data = json.dumps({
@@ -969,7 +1051,10 @@ class AutoFixEngine:
             if not isinstance(log, dict):
                 continue
             log_channel = log.get("channel_id")
-            if log_channel is not None and str(log_channel) != str(channel_id):
+            # 2026-08-11 评审 P3-17：缺 channel_id 的日志没有归属证据，
+            # 原实现跳过渠道过滤会把别的渠道 request_id 附到本渠道告警上。
+            # 本函数是 best-effort，宁可不给 id 也不给错 id。
+            if log_channel is None or str(log_channel) != str(channel_id):
                 continue
             if fragment and fragment not in str(log.get("content") or "").lower():
                 continue
@@ -1017,13 +1102,8 @@ class AutoFixEngine:
                 )
                 continue
 
-            # 检查错误消息是否匹配禁用关键词
-            msg_lower = test_msg.lower()
-            matched_keyword = None
-            for kw in ERROR_DISABLE_KEYWORDS:
-                if kw.lower() in msg_lower:
-                    matched_keyword = kw
-                    break
+            # 检查错误消息是否匹配禁用关键词（数字状态码走词边界匹配，P2-7）
+            matched_keyword = _matched_disable_keyword(test_msg)
 
             if matched_keyword:
                 logger.warning(f"Channel {channel_id} ({name}) error scan failed: {test_msg[:100]}")
@@ -1098,9 +1178,14 @@ class AutoFixEngine:
             return self.disable_slow_channel(channel)
 
         new_weight = max(MIN_WEIGHT, int(current_weight * WEIGHT_DEGRADE_FACTOR))
-        channel["weight"] = new_weight
+        # 2026-08-11 评审 P3-16：先 copy 再 PUT，成功后才回写调用方 dict
+        # （与 _auto_adjust_weights 回升路径一致）；否则 update 失败时调用方
+        # 手上的 channel 已被就地改成未落库的权重，后续判断基于假状态。
+        updated = channel.copy()
+        updated["weight"] = new_weight
 
-        if self.newapi.update_channel(channel):
+        if self.newapi.update_channel(updated):
+            channel["weight"] = new_weight
             self.state.setdefault("degraded_channels", {})
             self.state["degraded_channels"][str(channel_id)] = {
                 "name": name,
@@ -1126,7 +1211,7 @@ class AutoFixEngine:
     # ── P1: 权重自动调整 ──────────────────────────────────────────────────
 
     def _auto_adjust_weights(self, channels: List[dict]):
-        """按完整的新测试窗口调权；每个窗口最多执行一次动作。"""
+        """按滚动的新测试窗口调权；执行动作后才清窗（P3-15），未动作则窗口继续滚动。"""
         degraded = self.state.get("degraded_channels", {})
         for channel in channels:
             channel_id = channel["id"]
@@ -1141,16 +1226,21 @@ class AutoFixEngine:
             current_weight = channel.get("weight", 0)
             cid_str = str(channel_id)
             is_degraded = cid_str in degraded
+            # 2026-08-11 评审 P3-15：只有真正执行了动作才清空 20 样本窗口。
+            # 原实现在 finally 无条件 clear，未采取动作（如已降权、权重已达标）
+            # 也把窗口清零，需再攒满 WEIGHT_ADJUST_WINDOW 份新测试才能再评估，
+            # 叠加 P1-1 修复后会显著削弱统计灵敏度。未动作则让 deque 滚动。
+            acted = False
             try:
                 if stats["success_rate"] < WEIGHT_ADJUST_SUCCESS_THRESHOLD:
                     if not is_degraded:
-                        self.degrade_channel_weight(
+                        acted = self.degrade_channel_weight(
                             channel,
                             f"success_rate={stats['success_rate']:.0%}",
                         )
                 elif stats["avg_response_time"] > WEIGHT_ADJUST_SLOW_THRESHOLD:
                     if not is_degraded:
-                        self.degrade_channel_weight(
+                        acted = self.degrade_channel_weight(
                             channel,
                             f"avg_response_time={stats['avg_response_time']:.0f}ms",
                         )
@@ -1170,6 +1260,7 @@ class AutoFixEngine:
                         updated["weight"] = new_weight
                         if self.newapi.update_channel(updated):
                             channel["weight"] = new_weight
+                            acted = True
                             logger.info(
                                 f"Channel {channel_id} degraded-recovery: weight "
                                 f"{current_weight} → {new_weight} (target={original_weight})"
@@ -1177,9 +1268,11 @@ class AutoFixEngine:
                     else:
                         del self.state["degraded_channels"][cid_str]
                         self._save_state()
+                        acted = True
                         logger.info(f"Channel {channel_id} fully recovered, cleared degraded record")
             finally:
-                history.clear()
+                if acted:
+                    history.clear()
 
     # ── P0: 防抖动 + 恢复 + 加入聚合池 ────────────────────────────────────
 
@@ -1277,6 +1370,10 @@ class AutoFixEngine:
             probe_incompatible_count = 0
             test_msg = "无响应"
             for attempt in range(RECOVERY_TEST_COUNT):
+                # 单条记录最坏 RECOVERY_TEST_COUNT × RECOVERY_PROBE_TIMEOUT 秒；
+                # 逐次探测前刷心跳，避免整批恢复把心跳拖过 HEARTBEAT_STALE_SEC
+                # 被 watchdog 误判卡死（2026-08-11 评审 P2-9）
+                _write_heartbeat()
                 test_ok, test_msg = self.newapi.test_channel(channel_id, timeout=RECOVERY_PROBE_TIMEOUT)
                 stable_count += int(test_ok)
                 probe_incompatible_count += int(not test_ok and _is_probe_incompatible(test_msg))
@@ -1570,7 +1667,8 @@ class AutoFixEngine:
 
         try:
             req = urllib.request.Request(models_path, headers={"Authorization": f"Bearer {probe_key}"})
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            # P3-20：不跟随重定向，避免 Authorization 头被重放到重定向目标
+            with _PROBE_OPENER.open(req, timeout=3) as resp:
                 return resp.status < 500  # 2xx/3xx/4xx 都算存活
         except urllib.error.HTTPError as error:
             # 4xx 是客户端拒绝（服务存活）；5xx 是服务端故障，不算存活
@@ -1621,9 +1719,8 @@ class AutoFixEngine:
                     f"Full scan: channel {channel_id} probe-incompatible, skipped: {test_msg[:100]}"
                 )
                 continue
-            msg_lower = test_msg.lower()
-            # 硬错误（402/401）直接禁用
-            if any(kw.lower() in msg_lower for kw in ERROR_DISABLE_KEYWORDS):
+            # 硬错误（402/401）直接禁用；数字状态码走词边界匹配（P2-7）
+            if _matched_disable_keyword(test_msg):
                 self._full_scan_failures.pop(channel_id, None)
                 self.state.setdefault("weight_history", {})
                 if str(channel_id) not in self.state["weight_history"]:
@@ -1867,14 +1964,15 @@ class AutoFixEngine:
         """本地 NewAPI 的自动重启已禁用（远端 VPS 实例已删除，原 SSH 重启路径已移除）。
 
         健康检查失败时只告警，请使用本机启动脚本处理。
+        返回值＝告警是否真的投递成功（2026-08-11 评审 P2-11 需要它来决定
+        是否持久化"本段已告警"标记），而非"是否重启成功"。
         """
         logger.error("NewAPI health failure: automatic restart is disabled for the local service")
-        self.telegram.send_alert(
+        return self.telegram.send_alert(
             "NewAPI 健康检查失败",
             "本地 NewAPI 自动重启已禁用；请使用本机启动脚本处理。",
             "error",
         )
-        return False
 
     def export_metrics(self, channels: List[dict], error_rate: float, remaining: int):
         """P2: 导出 JSON 指标（含渠道生命周期状态机视图）"""
@@ -2070,16 +2168,8 @@ class Guardian:
             cycle_start = time.time()
             try:
                 # 心跳：外部 watchdog 监视此文件新鲜度，超时判定 Guardian 卡死。
-                # 独立 try：写失败只影响存活信号，不阻断本轮自愈
-                try:
-                    hb_tmp = HEARTBEAT_FILE.with_suffix(".json.tmp")
-                    hb_tmp.write_text(json.dumps({
-                        "ts": datetime.now().isoformat(),
-                        "pid": os.getpid(),
-                    }), encoding="utf-8")
-                    os.replace(hb_tmp, HEARTBEAT_FILE)
-                except OSError as hb_err:
-                    logger.error(f"Heartbeat write failed: {hb_err}")
+                # 步骤级刷新见 _run_step（P2-9）
+                _write_heartbeat()
                 self.telegram.process_commands(self)
                 self._check_cycle()
             except KeyboardInterrupt:
@@ -2102,12 +2192,35 @@ class Guardian:
 
             time.sleep(HEALTH_CHECK_INTERVAL)
 
-    def _check_cycle(self):
-        # 单轮预算：故障时避免无限拉长周期。高优先级（1/2/6 代理重启）必须做，
-        # 其余步骤超预算则跳过并记日志，下轮再补
-        self._cycle_deadline = time.monotonic() + CYCLE_BUDGET_SEC
+    def _run_step(self, label: str, action, *, budgeted: bool = True, default=None):
+        """执行单个自愈步骤：预算守卫 → 心跳刷新 → 独立异常隔离。
 
-        # 1. NewAPI 健康：连续 NEWAPI_FAIL_THRESHOLD 次失败才触发破坏性重启。
+        2026-08-11 评审 P2-10：原实现整轮共用一个 try/except，任一步骤抛异常
+        （如 get_channels 解析失败）会静默吞掉其后全部步骤——余额告警、指标导出、
+        全量扫描、每日报告一起消失，而日志只有一行 "Check cycle error"。
+        现在每步独立 try：失败只丢该步，其余步骤照常执行，并按步骤名告警。
+        P2-9：每步执行前刷心跳，防慢步骤把心跳拖过 HEARTBEAT_STALE_SEC 被 watchdog 误杀。
+
+        `default` 是步骤被跳过或抛异常时的返回值，供调用方保持类型一致。
+        """
+        if budgeted and not self._budget_left(label):
+            return default
+        _write_heartbeat()
+        try:
+            return action()
+        except Exception as err:
+            logger.error(f"Cycle step '{label}' failed: {err}", exc_info=True)
+            if self.alerts.should_alert(f"step_{label}", "warning"):
+                self.telegram.send_alert(
+                    "Guardian 步骤异常",
+                    f"步骤 <b>{_html_escape(label)}</b> 抛出异常，本轮跳过该步\n"
+                    f"{_html_escape(str(err)[:200])}",
+                    "warning",
+                )
+            return default
+
+    def _step_newapi_health(self) -> Tuple[bool, str]:
+        """1. NewAPI 健康：连续 NEWAPI_FAIL_THRESHOLD 次失败才触发破坏性重启。"""
         newapi_ok, newapi_msg = self.health.check_newapi()
         if newapi_ok:
             state_changed = False
@@ -2128,11 +2241,20 @@ class Guardian:
                 and self.alerts.should_alert("newapi_health", "error")
             ):
                 # 按故障段只告警一次；标记持久化，Guardian 重启或通用冷却到期也不重发。
-                self.autofix.state["newapi_outage_alerted"] = True
-                self.autofix._save_state()
-                self.autofix.restart_newapi_container()
+                # 2026-08-11 评审 P2-11：先发后持久化。原顺序在 Telegram 熔断
+                # （_offline_until）期间会把"已告警"钉死，故障段内再无重试机会，
+                # NewAPI 宕机可能全程静默。投递失败则不落标记，下轮重试。
+                if self.autofix.restart_newapi_container():
+                    self.autofix.state["newapi_outage_alerted"] = True
+                    self.autofix._save_state()
+                else:
+                    logger.warning(
+                        "NewAPI outage alert not delivered; leaving flag unset for retry next cycle"
+                    )
+        return newapi_ok, newapi_msg
 
-        # 2. 本地代理健康：只有端口无响应才重启；进程存活但上游异常只告警。
+    def _step_local_proxies(self) -> None:
+        """2. 本地代理健康：只有端口无响应才重启；进程存活但上游异常只告警。"""
         for name, info in LOCAL_PROXIES.items():
             ok, msg, alive = self.health.check_local_proxy(info["port"], name)
             proxy_fail_streaks = self.autofix.state.setdefault("proxy_fail_streaks", {})
@@ -2174,66 +2296,91 @@ class Guardian:
                 ):
                     self.telegram.send_alert("本地代理故障", _html_escape(msg), "error")
 
+    def _check_cycle(self):
+        # 单轮预算：故障时避免无限拉长周期。高优先级（1/2/5 稳定性回滚）必须做，
+        # 其余步骤超预算则跳过并记日志，下轮再补。
+        # 每步经 _run_step 独立隔离异常并刷心跳（P2-9 / P2-10）。
+        self._cycle_deadline = time.monotonic() + CYCLE_BUDGET_SEC
+        # 跨步骤共享值的安全默认：任一步骤被跳过或抛异常时，后续步骤不得 NameError
+        channels: List[dict] = []
+        rate = 0.0
+        remaining = -1
+
+        newapi_ok, newapi_msg = self._run_step(
+            "newapi health",
+            self._step_newapi_health,
+            budgeted=False,
+            default=(False, "health step raised"),
+        )
+        self._run_step("local proxy health", self._step_local_proxies, budgeted=False)
+
         # NewAPI 已判定不可达：保留本地代理检查，但不再向同一故障端点扇出渠道、
         # 日志、余额和 abilities 请求。下轮健康检查恢复后自动继续完整闭环。
         if not newapi_ok:
             logger.warning(f"NewAPI unavailable; skipped dependent work: {newapi_msg}")
             return
+
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
-        if self._budget_left("error scan"):
-            self.autofix.scan_error_channels()
+        self._run_step("error scan", self.autofix.scan_error_channels)
 
         # 3. P1: 权重自动调整（根据性能历史）
-        if self._budget_left("weight adjust"):
+        def _weight_adjust():
+            nonlocal channels
             # 重新获取渠道列表：步骤 2/2.5 可能已禁用/降权某些渠道，过期列表会错误处理它们
             channels = self.newapi.get_channels()
             self.autofix._auto_adjust_weights(channels)
 
+        self._run_step("weight adjust", _weight_adjust)
+
         # 4. P0: 检查已禁用渠道是否恢复（自动启用 + 防抖动）
-        if self._budget_left("recovery check"):
-            self.autofix.check_and_enable_recovered_channels()
+        self._run_step("recovery check", self.autofix.check_and_enable_recovered_channels)
 
         # 5. P0: 检查已加入渠道的稳定性（回滚机制）— 安全关键，不参与预算跳过：
         # 预算风暴时仍须回滚不稳定渠道，防止其继续服务
-        self.autofix._check_joined_channels_stability()
+        self._run_step(
+            "joined stability",
+            self.autofix._check_joined_channels_stability,
+            budgeted=False,
+        )
 
         # 5.5 OMP 角色端点主动检测（只报警，不自动切换）
-        if self._budget_left("OMP role check"):
-            self.autofix.check_omp_roles_health()
+        self._run_step("OMP role check", self.autofix.check_omp_roles_health)
 
         # 6. P1: 慢渠道检测 + 性能记录（step 3 权重调整的唯一数据源；
         # 366e41ef 误删后 channel_perf 恒空、调权/慢禁用链路全失效，2026-08-11 评审 P1-1）
-        if self._budget_left("channel perf check"):
-            self._check_channels_health(self.newapi.get_channels())
+        self._run_step(
+            "channel perf check",
+            lambda: self._check_channels_health(self.newapi.get_channels()),
+        )
 
-        # 7. 错误率（get_logs 网络调用，超预算跳过并给默认值）
-        if self._budget_left("error rate check"):
+        # 7. 错误率（get_logs 网络调用，超预算跳过则保留默认值）
+        def _error_rate():
+            nonlocal rate
             ok, rate, errors, total = self.health.check_error_rate()
-            if not ok:
-                if self.alerts.should_alert("error_rate", "warning"):
-                    self.telegram.send_alert(
-                        "错误率超标",
-                        f"错误率: {rate:.1%} ({errors}/{total})\n"
-                        f"阈值: {ERROR_RATE_THRESHOLD:.0%}",
-                        "warning"
-                    )
-        else:
-            rate, remaining = 0.0, -1  # 默认值，metrics 不因跳过而 NameError
+            if not ok and self.alerts.should_alert("error_rate", "warning"):
+                self.telegram.send_alert(
+                    "错误率超标",
+                    f"错误率: {rate:.1%} ({errors}/{total})\n"
+                    f"阈值: {ERROR_RATE_THRESHOLD:.0%}",
+                    "warning"
+                )
+
+        self._run_step("error rate check", _error_rate)
 
         # 8. 余额 + P2: 趋势分析（get_user_info 网络调用，预算守卫）
-        if self._budget_left("balance check"):
+        def _balance():
+            nonlocal remaining
             ok, remaining, quota = self.health.check_balance()
             if remaining >= 0:  # -1 表示 API 失败，不记录不告警
                 self.autofix.record_balance(remaining)
-                if not ok:
-                    if self.alerts.should_alert("balance", "warning"):
-                        self.telegram.send_alert(
-                            "余额不足",
-                            f"剩余: {remaining:,}\n"
-                            f"总额: {quota:,}\n"
-                            f"建议充值或切换 provider",
-                            "warning"
-                        )
+                if not ok and self.alerts.should_alert("balance", "warning"):
+                    self.telegram.send_alert(
+                        "余额不足",
+                        f"剩余: {remaining:,}\n"
+                        f"总额: {quota:,}\n"
+                        f"建议充值或切换 provider",
+                        "warning"
+                    )
             # P2: 余额趋势预警
             trend = self.autofix.get_balance_trend()
             if trend and trend["hours_to_depletion"] < BALANCE_TREND_DEPLETION_HOURS and trend["rate_per_hour"] > 0:
@@ -2245,24 +2392,22 @@ class Guardian:
                         f"建议尽快充值",
                         "warning"
                     )
-        else:
-            remaining = -1
+
+        self._run_step("balance check", _balance)
 
         # 9. P2: 导出指标
-        if self._budget_left("metrics export"):
-            self.autofix.export_metrics(channels, rate, remaining)
+        self._run_step(
+            "metrics export",
+            lambda: self.autofix.export_metrics(channels, rate, remaining),
+        )
 
         # 10. 自循环维护（无需人工干预持续运转）
-        if self._budget_left("full health scan"):
-            self.autofix.full_health_scan()
-        if self._budget_left("ability fix"):
-            self.autofix.periodic_ability_fix()
-        if self._budget_left("state cleanup"):
-            self.autofix.cleanup_stale_state()
+        self._run_step("full health scan", self.autofix.full_health_scan)
+        self._run_step("ability fix", self.autofix.periodic_ability_fix)
+        self._run_step("state cleanup", self.autofix.cleanup_stale_state)
 
         # 11. 每日报告
-        if self._budget_left("daily report"):
-            self._maybe_daily_report()
+        self._run_step("daily report", self._maybe_daily_report)
 
     def _check_channels_health(self, channels):
         """P1: 慢渠道检测 + 性能记录。
@@ -2322,7 +2467,14 @@ class Guardian:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _acquire_single_instance():
-    """Acquire a process-lifetime Windows mutex; return None for a duplicate."""
+    """Acquire a process-lifetime Windows mutex; return None for a duplicate.
+
+    2026-08-11 评审 P2-8：原用 `Local\\` 会话级命名空间——任务计划（session 0）
+    与交互式 wscript 可各跑一个 Guardian，两者 `_save_state()` 全量覆盖同一
+    state.json 造成 lost update + 双份告警。改 `Global\\` 做跨会话互斥。
+    `Global\\` 需要 SeCreateGlobalPrivilege（交互式登录与 SYSTEM 默认持有）；
+    仅在明确缺权限（1314）时退回 `Local\\` 并显式告警，绝不静默降级。
+    """
     if sys.platform != "win32":
         return True
     import ctypes
@@ -2331,10 +2483,27 @@ def _acquire_single_instance():
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
     kernel32.CreateMutexW.restype = ctypes.c_void_p
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    handle = kernel32.CreateMutexW(None, False, "Local\\NewAPIGuardian")
+
+    def _try_create(name: str):
+        ctypes.set_last_error(0)
+        handle = kernel32.CreateMutexW(None, False, name)
+        return handle, ctypes.get_last_error()
+
+    handle, err = _try_create("Global\\NewAPIGuardian")
+    if not handle and err == 5:  # ERROR_ACCESS_DENIED
+        # 名字已存在于 Global 命名空间但 DACL 拒绝访问（另一会话/账户持有）
+        # → 等价于"已有实例在跑"，按重复实例退出，不得改跑 Local 绕过互斥。
+        logger.warning("Global guardian mutex exists but access denied; treating as duplicate")
+        return None
+    if not handle and err == 1314:  # ERROR_PRIVILEGE_NOT_HELD
+        logger.error(
+            "SeCreateGlobalPrivilege unavailable; falling back to session-local mutex "
+            "(cross-session duplicate Guardian is NOT prevented)"
+        )
+        handle, err = _try_create("Local\\NewAPIGuardian")
     if not handle:
-        raise ctypes.WinError(ctypes.get_last_error())
-    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        raise ctypes.WinError(err)
+    if err == 183:  # ERROR_ALREADY_EXISTS
         kernel32.CloseHandle(handle)
         return None
     return handle

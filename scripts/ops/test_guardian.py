@@ -7,7 +7,9 @@ import tempfile
 import logging
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -664,7 +666,33 @@ class WeightAdjustmentTests(unittest.TestCase):
 
         self.assertEqual(engine.newapi.updates, [])
         self.assertEqual(channel["weight"], 10)
+        # P3-15：未采取任何动作 → 保留样本窗口继续滚动，不清零
+        self.assertEqual(len(engine.channel_perf[7]), guardian.WEIGHT_ADJUST_WINDOW)
+
+    def test_keeps_window_when_already_degraded_channel_stays_bad(self):
+        """已降权渠道继续不达标 → 不重复降权也不清窗（P3-15）"""
+        engine = make_engine(
+            {"degraded_channels": {"7": {"name": "bad", "original_weight": 10}}}
+        )
+        channel = {"id": 7, "name": "bad", "status": 1, "weight": 5}
+        add_samples(engine, 7, guardian.WEIGHT_ADJUST_WINDOW, healthy=False)
+
+        engine._auto_adjust_weights([channel])
+
+        self.assertEqual(engine.newapi.updates, [])
+        self.assertEqual(len(engine.channel_perf[7]), guardian.WEIGHT_ADJUST_WINDOW)
+
+    def test_clears_window_after_a_degrade_action(self):
+        """真正降权后清窗，避免同一窗口重复触发（P3-15 保留原语义）"""
+        engine = make_engine()
+        channel = {"id": 7, "name": "slow", "status": 1, "weight": 10}
+        add_samples(engine, 7, guardian.WEIGHT_ADJUST_WINDOW, healthy=False)
+
+        engine._auto_adjust_weights([channel])
+
+        self.assertEqual(len(engine.newapi.updates), 1)
         self.assertEqual(len(engine.channel_perf[7]), 0)
+
 
     def test_consumes_window_after_one_degraded_recovery_step(self):
         engine = make_engine(
@@ -1326,22 +1354,33 @@ class ProxyRestartTests(unittest.TestCase):
         g.telegram.send_alert.assert_not_called()
 
 
-    def test_newapi_restart_disabled_returns_false_and_alerts(self):
-        """自动重启已禁用：直接返回 False 并发送告警，不执行任何重启动作"""
+    def test_newapi_restart_disabled_alerts_and_reports_delivery(self):
+        """自动重启已禁用：只告警不重启；返回值＝告警是否投递成功（P2-11）"""
         engine = make_engine({
             "restart_counts": {},
             "restarted_proxies": {},
         })
         engine._save_state = Mock()
         engine.telegram = Mock()
+        engine.telegram.send_alert.return_value = True
 
-        ok = engine.restart_newapi_container()
-
-        self.assertFalse(ok)
+        self.assertTrue(engine.restart_newapi_container())
         engine.telegram.send_alert.assert_called_once()
         self.assertEqual(
             engine.telegram.send_alert.call_args.args[0], "NewAPI 健康检查失败"
         )
+
+    def test_newapi_restart_reports_false_when_alert_undelivered(self):
+        """Telegram 熔断/投递失败 → 返回 False，供调用方保留重试机会（P2-11）"""
+        engine = make_engine({
+            "restart_counts": {},
+            "restarted_proxies": {},
+        })
+        engine._save_state = Mock()
+        engine.telegram = Mock()
+        engine.telegram.send_alert.return_value = False
+
+        self.assertFalse(engine.restart_newapi_container())
 
     def test_newapi_restart_disabled_never_calls_subprocess(self):
         """禁用桩不得调用 subprocess：远端 VPS 已删除，不存在 SSH 重启路径"""
@@ -2179,11 +2218,18 @@ class OmpRoleTests(unittest.TestCase):
         engine.telegram.send_alert.assert_called_once()
 
 
+    @staticmethod
+    def _ok_response(status=200):
+        """_probe_endpoint 用 `with opener.open(...) as resp`，需支持上下文管理协议。"""
+        resp = MagicMock()
+        resp.__enter__.return_value = Mock(status=status)
+        return resp
+
     def test_probe_endpoint_treats_500_as_down(self):
         """HTTPError 500 是服务端故障，不算端点存活"""
         with patch.object(
-            guardian.urllib.request,
-            "urlopen",
+            guardian._PROBE_OPENER,
+            "open",
             side_effect=guardian.urllib.error.HTTPError(
                 "http://127.0.0.1:8788/v1/models", 500, "Internal Server Error", None, None
             ),
@@ -2195,8 +2241,8 @@ class OmpRoleTests(unittest.TestCase):
     def test_probe_endpoint_treats_401_as_alive(self):
         """4xx 是客户端拒绝，服务存活"""
         with patch.object(
-            guardian.urllib.request,
-            "urlopen",
+            guardian._PROBE_OPENER,
+            "open",
             side_effect=guardian.urllib.error.HTTPError(
                 "http://127.0.0.1:8788/v1/models", 401, "Unauthorized", None, None
             ),
@@ -2208,15 +2254,17 @@ class OmpRoleTests(unittest.TestCase):
     def test_probe_endpoint_sends_correct_bearer_key_by_port(self):
         """按端口选择 Bearer key：agentrouter 8788 → AGENTROUTER_PROXY_KEY"""
         with patch.object(
-            guardian.urllib.request,
-            "urlopen",
-            return_value=Mock(status=200),
+            guardian._PROBE_OPENER,
+            "open",
+            return_value=self._ok_response(),
         ), patch.object(
             guardian.urllib.request,
             "Request",
             wraps=guardian.urllib.request.Request,
         ) as mk_req:
-            guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:8788/v1")
+            self.assertTrue(
+                guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:8788/v1")
+            )
             auth = mk_req.call_args.kwargs["headers"]["Authorization"]
             self.assertEqual(auth, f"Bearer {guardian.AGENTROUTER_PROXY_KEY}")
             self.assertIn("127.0.0.1:8788", mk_req.call_args.args[0])
@@ -2225,9 +2273,9 @@ class OmpRoleTests(unittest.TestCase):
         """NEWAPI_PROBE_KEY 配置后，NewAPI 本机端口（含 TTFT 网关 3003）
         探测用真实 token 而非 'any'，消除 relay 日志 401 噪音"""
         with patch.object(guardian, "NEWAPI_PROBE_KEY", "sk-probe-token"), patch.object(
-            guardian.urllib.request,
-            "urlopen",
-            return_value=Mock(status=200),
+            guardian._PROBE_OPENER,
+            "open",
+            return_value=self._ok_response(),
         ), patch.object(
             guardian.urllib.request,
             "Request",
@@ -2244,9 +2292,9 @@ class OmpRoleTests(unittest.TestCase):
     def test_probe_endpoint_never_sends_real_key_to_non_loopback(self):
         """非 loopback 探测一律 'any'：真实 key 不得离开本机（防重定向泄露）"""
         with patch.object(guardian, "NEWAPI_PROBE_KEY", "sk-probe-token"), patch.object(
-            guardian.urllib.request,
-            "urlopen",
-            return_value=Mock(status=200),
+            guardian._PROBE_OPENER,
+            "open",
+            return_value=self._ok_response(),
         ), patch.object(
             guardian.urllib.request,
             "Request",
@@ -2259,9 +2307,9 @@ class OmpRoleTests(unittest.TestCase):
     def test_probe_endpoint_falls_back_to_any_without_probe_key(self):
         """NEWAPI_PROBE_KEY 未配置时维持 'any' 原语义（任何响应算存活）"""
         with patch.object(guardian, "NEWAPI_PROBE_KEY", ""), patch.object(
-            guardian.urllib.request,
-            "urlopen",
-            return_value=Mock(status=200),
+            guardian._PROBE_OPENER,
+            "open",
+            return_value=self._ok_response(),
         ), patch.object(
             guardian.urllib.request,
             "Request",
@@ -2270,6 +2318,56 @@ class OmpRoleTests(unittest.TestCase):
             guardian.AutoFixEngine._probe_endpoint("http://127.0.0.1:3002/v1")
             auth = mk_req.call_args.kwargs["headers"]["Authorization"]
             self.assertEqual(auth, "Bearer any")
+
+    def test_probe_opener_never_follows_redirect_with_bearer_header(self):
+        """P3-20：探测 opener 拒绝跟随 3xx —— Authorization 头不得重放到重定向目标。
+
+        用两个真实 loopback HTTPServer 验证：源站 302 指向"外部"站点，
+        外部站点记录收到的 Authorization。断言外部站点零请求，且 3xx 按
+        HTTPError 抛出（<500 仍判存活，语义不变）。
+        """
+        leaked_auth = []
+
+        class SinkHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                leaked_auth.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        class RedirectHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", sink_url)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        sink = HTTPServer(("127.0.0.1", 0), SinkHandler)
+        src = HTTPServer(("127.0.0.1", 0), RedirectHandler)
+        sink_url = f"http://127.0.0.1:{sink.server_port}/sink"
+        threading.Thread(target=sink.serve_forever, daemon=True).start()
+        threading.Thread(target=src.serve_forever, daemon=True).start()
+        try:
+            req = guardian.urllib.request.Request(
+                f"http://127.0.0.1:{src.server_port}/v1/models",
+                headers={"Authorization": "Bearer sk-probe-token"},
+            )
+            with self.assertRaises(guardian.urllib.error.HTTPError) as caught:
+                guardian._PROBE_OPENER.open(req, timeout=5)
+            self.assertEqual(caught.exception.code, 302)
+            # 3xx <500 → _probe_endpoint 仍判存活（P3-20 不改变存活语义）
+            self.assertTrue(caught.exception.code < 500)
+        finally:
+            src.shutdown()
+            sink.shutdown()
+            src.server_close()
+            sink.server_close()
+
+        self.assertEqual(leaked_auth, [], "Bearer token leaked to redirect target")
 
 
 
@@ -2584,6 +2682,339 @@ class ExclusionEnforcementTests(unittest.TestCase):
 
         self.assertEqual(engine.newapi.enable_calls, [])
         self.assertEqual(engine.newapi.test_calls, [])
+
+
+class KeywordBoundaryTests(unittest.TestCase):
+    """2026-08-11 评审 P2-7：数字关键词必须按词边界匹配，不得裸子串。"""
+
+    def test_request_id_containing_402_is_not_a_balance_failure(self):
+        msg = 'upstream error, request_id: req_20260810123402abc'
+        self.assertIsNone(guardian._matched_disable_keyword(msg))
+
+    def test_timestamp_digits_containing_401_do_not_disable(self):
+        self.assertIsNone(
+            guardian._matched_disable_keyword("failed at 2026-08-10T13:24:01.4012Z")
+        )
+
+    def test_real_402_still_disables(self):
+        self.assertEqual(guardian._matched_disable_keyword("HTTP 402 Payment Required"), "402")
+        self.assertEqual(guardian._matched_disable_keyword('{"code":402}'), "402")
+        self.assertEqual(guardian._matched_disable_keyword("(402)"), "402")
+
+    def test_real_401_still_disables(self):
+        self.assertEqual(guardian._matched_disable_keyword("status=401 unauthorized"), "401")
+
+    def test_text_keywords_keep_substring_semantics(self):
+        """文本关键词仍走子串：quota_exceeded 一类复合词不得漏判"""
+        self.assertEqual(guardian._matched_disable_keyword("quota_exceeded"), "quota")
+        self.assertEqual(guardian._matched_disable_keyword("余额不足，请充值"), "余额不足")
+
+    def test_request_id_containing_429_is_not_transient_rate_limit(self):
+        """反向：request_id 里的 429 不得把真·硬错误当瞬态限流跳过"""
+        msg = "余额不足 (402), request_id: req-429abc"
+        self.assertFalse(guardian._is_transient_rate_limit(msg))
+        self.assertEqual(guardian._matched_disable_keyword(msg), "余额不足")
+
+    def test_real_429_still_transient(self):
+        self.assertTrue(guardian._is_transient_rate_limit("HTTP 429 too many requests"))
+        self.assertTrue(guardian._is_transient_rate_limit("rate limit exceeded"))
+
+    def test_error_scan_ignores_channel_whose_only_402_is_in_request_id(self):
+        """端到端：错误扫描不得因 request_id 含 402 而禁用健康渠道"""
+        engine = make_engine({"weight_history": {}, "degraded_channels": {}, "disabled_channels": []})
+        engine.newapi.channels = {
+            45: {"id": 45, "name": "agentrouter", "status": 1, "weight": 5, "used_quota": 1}
+        }
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine._scan_offset = 0
+        engine.newapi.test_results.append(
+            (False, "upstream 500, request_id: req_20260810123402xyz")
+        )
+
+        engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [])
+
+
+class GlobalMutexTests(unittest.TestCase):
+    """2026-08-11 评审 P2-8：单实例互斥必须跨会话（Global\\），不得只在会话内生效。"""
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows-only mutex path")
+    def test_uses_global_namespace(self):
+        import ctypes
+
+        created = []
+
+        class FakeKernel:
+            def __init__(self):
+                self.CreateMutexW = Mock(side_effect=self._create)
+                self.CloseHandle = Mock()
+
+            def _create(self, _attrs, _initial, name):
+                created.append(name)
+                return 1234
+
+        fake = FakeKernel()
+        with patch.object(ctypes, "WinDLL", return_value=fake), patch.object(
+            ctypes, "get_last_error", return_value=0
+        ), patch.object(ctypes, "set_last_error"):
+            handle = guardian._acquire_single_instance()
+
+        self.assertEqual(handle, 1234)
+        self.assertEqual(created, ["Global\\NewAPIGuardian"])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows-only mutex path")
+    def test_already_exists_reports_duplicate(self):
+        import ctypes
+
+        fake = Mock()
+        fake.CreateMutexW = Mock(return_value=1234)
+        with patch.object(ctypes, "WinDLL", return_value=fake), patch.object(
+            ctypes, "get_last_error", return_value=183
+        ), patch.object(ctypes, "set_last_error"):
+            self.assertIsNone(guardian._acquire_single_instance())
+        fake.CloseHandle.assert_called_once_with(1234)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows-only mutex path")
+    def test_access_denied_treated_as_duplicate_not_local_fallback(self):
+        """Global 名字存在但 DACL 拒绝 → 按重复实例退出，绝不改跑 Local 绕过互斥"""
+        import ctypes
+
+        created = []
+
+        fake = Mock()
+        fake.CreateMutexW = Mock(side_effect=lambda _a, _i, name: created.append(name) or 0)
+        with patch.object(ctypes, "WinDLL", return_value=fake), patch.object(
+            ctypes, "get_last_error", return_value=5
+        ), patch.object(ctypes, "set_last_error"), patch.object(guardian.logger, "warning"):
+            self.assertIsNone(guardian._acquire_single_instance())
+
+        self.assertEqual(created, ["Global\\NewAPIGuardian"])
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows-only mutex path")
+    def test_missing_privilege_falls_back_to_local_and_logs_error(self):
+        import ctypes
+
+        created = []
+        errors = iter([1314, 0, 0])
+        handles = iter([0, 4321])
+
+        def _create(_attrs, _initial, name):
+            created.append(name)
+            return next(handles)
+
+        fake = Mock()
+        fake.CreateMutexW = Mock(side_effect=_create)
+        with patch.object(ctypes, "WinDLL", return_value=fake), patch.object(
+            ctypes, "get_last_error", side_effect=lambda: next(errors)
+        ), patch.object(ctypes, "set_last_error"), patch.object(
+            guardian.logger, "error"
+        ) as err:
+            handle = guardian._acquire_single_instance()
+
+        self.assertEqual(handle, 4321)
+        self.assertEqual(created, ["Global\\NewAPIGuardian", "Local\\NewAPIGuardian"])
+        err.assert_called()
+
+
+class StepIsolationTests(unittest.TestCase):
+    """2026-08-11 评审 P2-10：单步异常不得吞掉后续全部步骤。"""
+
+    @staticmethod
+    def _make_guardian():
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, 100, 200)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        g._maybe_daily_report = Mock()
+        return g
+
+    def test_failing_early_step_does_not_skip_later_steps(self):
+        g = self._make_guardian()
+        g.autofix.scan_error_channels.side_effect = RuntimeError("boom")
+
+        with patch.object(guardian.logger, "error") as err:
+            g._check_cycle()
+
+        err.assert_called()
+        # 后续步骤照常执行（原实现会全部丢失）
+        g.autofix.check_and_enable_recovered_channels.assert_called_once()
+        g.autofix.full_health_scan.assert_called_once()
+        g.autofix.export_metrics.assert_called_once()
+        g._maybe_daily_report.assert_called_once()
+
+    def test_failing_weight_step_leaves_metrics_export_with_safe_default(self):
+        """weight adjust 抛异常 → channels 保持 []，metrics 导出不得 NameError"""
+        g = self._make_guardian()
+        g.newapi.get_channels.side_effect = [RuntimeError("parse fail"), []]
+
+        with patch.object(guardian.logger, "error"):
+            g._check_cycle()
+
+        g.autofix.export_metrics.assert_called_once()
+        self.assertEqual(g.autofix.export_metrics.call_args.args[0], [])
+
+    def test_step_failure_alerts_with_step_name(self):
+        g = self._make_guardian()
+        g.alerts.should_alert.return_value = True
+        g.autofix.full_health_scan.side_effect = RuntimeError("scan boom")
+
+        with patch.object(guardian.logger, "error"):
+            g._check_cycle()
+
+        titles = [c.args[0] for c in g.telegram.send_alert.call_args_list]
+        self.assertIn("Guardian 步骤异常", titles)
+        keys = [c.args[0] for c in g.alerts.should_alert.call_args_list]
+        self.assertIn("step_full health scan", keys)
+
+    def test_every_step_refreshes_heartbeat(self):
+        """P2-9：每步执行前刷心跳，长周期不得被 watchdog 误判卡死"""
+        g = self._make_guardian()
+
+        with patch.object(guardian, "_write_heartbeat") as hb:
+            g._check_cycle()
+
+        # 步骤数远多于 1：证明不是只在 cycle 开头写一次
+        self.assertGreaterEqual(hb.call_count, 10)
+
+
+class RecoveryHeartbeatTests(unittest.TestCase):
+    """2026-08-11 评审 P2-9：恢复探测批次中途必须刷心跳。"""
+
+    def test_recovery_probes_refresh_heartbeat_each_attempt(self):
+        engine = make_engine(
+            {
+                "disabled_channels": [
+                    {
+                        "id": 91,
+                        "name": "recovering",
+                        "time": "2026-08-10T00:00:00",
+                        "manual": False,
+                        "recovery_failures": 0,
+                    }
+                ],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels = {91: {"id": 91, "name": "recovering", "status": 0}}
+        for _ in range(guardian.RECOVERY_TEST_COUNT):
+            engine.newapi.test_results.append((False, "timeout"))
+
+        with patch.object(guardian, "_write_heartbeat") as hb, patch.object(
+            guardian.time, "sleep"
+        ):
+            engine.check_and_enable_recovered_channels()
+
+        self.assertEqual(hb.call_count, guardian.RECOVERY_TEST_COUNT)
+
+
+class OutageAlertPersistenceTests(unittest.TestCase):
+    """2026-08-11 评审 P2-11：告警投递失败不得钉死"已告警"标记。"""
+
+    @staticmethod
+    def _make_guardian(state):
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (False, "down")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
+        g.newapi = Mock()
+        g.autofix = Mock()
+        g.autofix.state = state
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = True
+        g.telegram = Mock()
+        return g
+
+    def test_undelivered_alert_leaves_flag_unset_for_retry(self):
+        state = {"restart_counts": {}, "newapi_fail_streak": guardian.NEWAPI_FAIL_THRESHOLD - 1}
+        g = self._make_guardian(state)
+        g.autofix.restart_newapi_container.return_value = False
+
+        with patch.object(guardian.logger, "warning"):
+            g._check_cycle()
+
+        self.assertNotIn("newapi_outage_alerted", state)
+
+        # 下一轮仍会重试告警
+        g.autofix.restart_newapi_container.reset_mock()
+        with patch.object(guardian.logger, "warning"):
+            g._check_cycle()
+        g.autofix.restart_newapi_container.assert_called_once()
+
+    def test_delivered_alert_persists_flag_and_stops_repeating(self):
+        state = {"restart_counts": {}, "newapi_fail_streak": guardian.NEWAPI_FAIL_THRESHOLD - 1}
+        g = self._make_guardian(state)
+        g.autofix.restart_newapi_container.return_value = True
+
+        with patch.object(guardian.logger, "warning"):
+            g._check_cycle()
+
+        self.assertTrue(state["newapi_outage_alerted"])
+
+        g.autofix.restart_newapi_container.reset_mock()
+        with patch.object(guardian.logger, "warning"):
+            g._check_cycle()
+        g.autofix.restart_newapi_container.assert_not_called()
+
+
+class DegradeUpdateAtomicityTests(unittest.TestCase):
+    """2026-08-11 评审 P3-16：update 失败不得留下未落库的本地权重。"""
+
+    def test_failed_update_leaves_caller_channel_untouched(self):
+        engine = make_engine()
+        engine.newapi.update_channel = lambda _c: False
+        channel = {"id": 7, "name": "slow", "status": 1, "weight": 10}
+
+        self.assertFalse(engine.degrade_channel_weight(channel, "test"))
+        self.assertEqual(channel["weight"], 10)
+
+    def test_successful_update_writes_back_new_weight(self):
+        engine = make_engine()
+        channel = {"id": 7, "name": "slow", "status": 1, "weight": 10}
+
+        self.assertTrue(engine.degrade_channel_weight(channel, "test"))
+        self.assertEqual(channel["weight"], 5)
+        self.assertEqual(engine.newapi.updates[0]["weight"], 5)
+
+
+class RequestIdAttributionTests(unittest.TestCase):
+    """2026-08-11 评审 P3-17：无 channel_id 归属的日志不得贡献 request_id。"""
+
+    @staticmethod
+    def _engine_with_logs(logs):
+        engine = make_engine()
+        engine.newapi.get_logs = lambda *_a, **_kw: logs
+        return engine
+
+    def test_unattributed_log_is_not_credited_to_channel(self):
+        engine = self._engine_with_logs(
+            [{"channel_id": None, "content": "boom", "request_id": "req-other"}]
+        )
+        self.assertEqual(engine._error_request_ids(45, "boom"), "")
+
+    def test_matching_channel_log_still_yields_request_id(self):
+        engine = self._engine_with_logs(
+            [{"channel_id": 45, "content": "boom", "request_id": "req-45"}]
+        )
+        self.assertEqual(engine._error_request_ids(45, "boom"), "req-45")
+
+    def test_other_channel_log_is_filtered(self):
+        engine = self._engine_with_logs(
+            [{"channel_id": 73, "content": "boom", "request_id": "req-73"}]
+        )
+        self.assertEqual(engine._error_request_ids(45, "boom"), "")
 
 
 def tearDownModule():

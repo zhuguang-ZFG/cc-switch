@@ -72,15 +72,16 @@ class AdminAuthTests(unittest.TestCase):
         self.assertNotIn("/api/user/login", calls[0])
 
     def test_401_triggers_relogin(self):
-        """确定性鉴权失败 401 → 重新登录并返回新 token"""
+        """确定性鉴权失败 401 → 丢弃过期缓存、重新登录并返回新 token"""
         self._assert_relogin_on(401)
 
-    def test_403_keeps_cache_and_fails_run(self):
-        """403 权限问题（重登无用）→ 本次检查失败，但保留缓存、不重新登录"""
-        self._assert_cache_kept_on(403)
+    def test_403_drops_cache_and_fails_run(self):
+        """403 权限问题（重登无用）→ FAIL 降级，删除缓存防永久毒化、不重新登录"""
+        self._assert_validation_degraded(403, drop_cache=True)
 
     def _assert_relogin_on(self, check_status):
         calls = []
+        unlinked = []
 
         def fake_http(url, **kwargs):
             calls.append(url)
@@ -93,6 +94,10 @@ class AdminAuthTests(unittest.TestCase):
             patch.object(smoke, "read_json", fake_read_json()),
             patch.object(smoke, "http_json", fake_http),
             patch.object(
+                type(smoke.TOKEN_CACHE), "unlink",
+                lambda self_path, **kw: unlinked.append(str(self_path)) or None,
+            ),
+            patch.object(
                 type(smoke.TOKEN_CACHE), "write_text",
                 lambda self_path, text, **kw: writes.append(text) or len(text),
             ),
@@ -102,52 +107,75 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual((token, user_id), ("new-tok", "9"))
         self.assertEqual(len(calls), 2)
         self.assertIn("/api/user/login", calls[1])
+        self.assertTrue(unlinked, "401 应丢弃过期缓存再重新登录")
         self.assertTrue(writes, "登录成功后应回写 token 缓存")
 
     def test_429_keeps_cache_and_fails_run(self):
-        """429 限流 → 本次检查失败，但保留缓存、不重新登录"""
-        self._assert_cache_kept_on(429)
+        """429 限流 → FAIL 降级，保留缓存、不重新登录"""
+        self._assert_validation_degraded(429, drop_cache=False)
 
     def test_500_keeps_cache_and_fails_run(self):
-        """5xx 服务端故障 → 本次检查失败，但保留缓存、不重新登录"""
-        self._assert_cache_kept_on(500)
+        """5xx 服务端故障 → FAIL 降级，保留缓存、不重新登录"""
+        self._assert_validation_degraded(500, drop_cache=False)
 
-    def _assert_cache_kept_on(self, check_status):
+    def _assert_validation_degraded(self, check_status, *, drop_cache):
+        """非 200 缓存校验（403/429/5xx）→ FAIL 降级：不中断、不重新登录。
+
+        drop_cache=True（403）：删除缓存，下一轮重新登录，防缓存永久毒化；
+        drop_cache=False（429/5xx）：保留缓存，防限流抖动烧掉 session 上限。
+        """
         calls = []
+        unlinked = []
 
         def fake_http(url, **kwargs):
             calls.append(url)
             return check_status, {}
 
+        self.addCleanup(smoke.failures.clear)
         with (
             patch.object(smoke, "read_json", fake_read_json()),
             patch.object(smoke, "http_json", fake_http),
+            patch.object(
+                type(smoke.TOKEN_CACHE), "unlink",
+                lambda self_path, **kw: unlinked.append(str(self_path)) or None,
+            ),
             patch.object(type(smoke.TOKEN_CACHE), "write_text") as write,
         ):
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(smoke._AdminAuthUnavailable):
                 smoke.admin_auth()
 
         self.assertEqual(len(calls), 1, "不得发起登录请求")
+        self.assertIn("admin token auth", smoke.failures, "应记录显式 FAIL")
         write.assert_not_called()
+        if drop_cache:
+            self.assertTrue(unlinked, "403 应删除缓存，防旧 token 永久毒化")
+        else:
+            self.assertEqual(unlinked, [], "429/5xx 应保留缓存")
 
-    def test_network_error_keeps_cache_and_fails_run(self):
-        """网络异常（URLError）→ 向上抛出让本次检查 FAIL，不重新登录"""
+    def test_network_error_degrades_and_fails_run(self):
+        """网络异常（URLError）→ FAIL 降级，保留缓存、不重新登录、不中断"""
         calls = []
+        unlinked = []
 
         def fake_http(url, **kwargs):
             calls.append(url)
             raise urllib.error.URLError("connection refused")
 
+        self.addCleanup(smoke.failures.clear)
         with (
             patch.object(smoke, "read_json", fake_read_json()),
             patch.object(smoke, "http_json", fake_http),
-            patch.object(type(smoke.TOKEN_CACHE), "write_text") as write,
+            patch.object(
+                type(smoke.TOKEN_CACHE), "unlink",
+                lambda self_path, **kw: unlinked.append(str(self_path)) or None,
+            ),
         ):
-            with self.assertRaises(urllib.error.URLError):
+            with self.assertRaises(smoke._AdminAuthUnavailable):
                 smoke.admin_auth()
 
-        self.assertEqual(len(calls), 1)
-        write.assert_not_called()
+        self.assertEqual(len(calls), 1, "不得发起登录请求")
+        self.assertIn("admin token auth", smoke.failures, "应记录显式 FAIL")
+        self.assertEqual(unlinked, [], "网络抖动不得删除缓存")
 
     def test_login_failure_raises(self):
         """无缓存 + 登录被拒 → RuntimeError，不写缓存"""
@@ -432,6 +460,44 @@ class AdminAuthTests(unittest.TestCase):
                 ):
                     smoke.failures.clear()
                     self.assertEqual(smoke.main(), 1)
+
+    def test_main_403_on_cached_token_check_fails_but_continues(self):
+        """P2-13：缓存 token 校验遇 403 → 记录 FAIL，后续检查（多 key/冒烟）照常执行。"""
+        self.addCleanup(smoke.failures.clear)
+        urls = []
+
+        def fake_http(url, **kwargs):
+            urls.append(url)
+            if url.endswith("/api/status"):
+                return 200, {}
+            if "/api/channel/?p=0&page_size=1" in url:
+                return 403, {}
+            if "/v1/chat/completions" in url:
+                return 200, {"choices": [{"message": {"content": "OK"}}]}
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with (
+            patch.object(smoke, "http_json", fake_http),
+            patch.object(smoke, "read_json", fake_read_json()),
+            patch.object(
+                type(smoke.TOKEN_CACHE), "unlink",
+                lambda self_path, **kw: None,
+            ),
+            patch.object(smoke.socket, "create_connection"),
+            patch.object(smoke, "log"),
+        ):
+            smoke.failures.clear()
+            self.assertEqual(smoke.main(), 1)
+
+        self.assertIn("admin token auth", smoke.failures, "403 应产生显式 FAIL 检查")
+        self.assertFalse(
+            any("/api/option/" in u for u in urls),
+            "403 后不应继续调用依赖 admin token 的接口",
+        )
+        self.assertTrue(
+            any("/v1/chat/completions" in u for u in urls),
+            "403 后冒烟检查仍须执行",
+        )
 
 
 if __name__ == "__main__":

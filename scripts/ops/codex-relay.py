@@ -12,6 +12,7 @@ import copy
 import http.server
 import json
 import os
+import select
 import ssl
 import sys
 import threading
@@ -28,6 +29,7 @@ MAX_REQUEST_BYTES = int(os.environ.get("CODEX_RELAY_MAX_REQUEST_BYTES", str(2 * 
 MAX_CONCURRENT_REQUESTS = int(os.environ.get("CODEX_RELAY_MAX_CONCURRENCY", "16"))
 UPSTREAM_TIMEOUT = int(os.environ.get("CODEX_RELAY_UPSTREAM_TIMEOUT", "60"))
 SEMANTIC_TIMEOUT = int(os.environ.get("CODEX_RELAY_SEMANTIC_TIMEOUT", "60"))
+READ_POLL_TIMEOUT = int(os.environ.get("CODEX_RELAY_READ_POLL_TIMEOUT", "2"))
 LOG_ROTATE_BYTES = int(os.environ.get("CODEX_RELAY_LOG_ROTATE_BYTES", str(1024 * 1024)))
 DEFAULT_UPSTREAM = "https://api.zzzcoding.org/responses"
 DEFAULT_SECRET_NAME = "zzzcoding_codex_key"
@@ -298,6 +300,23 @@ def call_upstream(body: dict, session_id: str):
     return urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT, context=ssl.create_default_context())
 
 
+def _upstream_socket(upstream):
+    """Return the raw socket of an http.client response, or None.
+
+    http.client keeps the raw socket under response.fp (a BufferedReader
+    wrapping a SocketIO); walk the attribute chain defensively so mocked
+    responses (e.g. BytesIO in tests) are left untouched.
+    """
+    obj = getattr(upstream, "fp", None)
+    for _ in range(4):
+        if obj is None:
+            return None
+        if hasattr(obj, "settimeout"):
+            return obj
+        obj = getattr(obj, "raw", None) or getattr(obj, "_sock", None)
+    return None
+
+
 def parse_sse_line(line: str):
     line = line.strip()
     if not line or line.startswith(":") or not line.startswith("data:"):
@@ -337,6 +356,9 @@ def handle_chat(wfile, body: dict, stream: bool, start_stream=None) -> bytes:
         upstream = call_upstream(codex_body, session_id)
     except Exception as error:
         raise _upstream_error(error) from error
+    # Only streaming responses need the stall poll; non-stream reads keep the
+    # original blocking UPSTREAM_TIMEOUT behaviour.
+    upstream_sock = _upstream_socket(upstream) if stream else None
 
     response_id = f"chatcmpl-{uuid.uuid4().hex[:16]}"
     created = int(time.time())
@@ -362,11 +384,14 @@ def handle_chat(wfile, body: dict, stream: bool, start_stream=None) -> bytes:
         })
 
     def ensure_stream_started():
-        nonlocal stream_started
+        nonlocal stream_started, upstream_sock
         if not stream or stream_started:
             return
         start_stream()
         stream_started = True
+        # Semantic output has started; stop polling so a mid-stream stall is
+        # bounded by the original blocking read (UPSTREAM_TIMEOUT) as before.
+        upstream_sock = None
         emit_delta({"role": "assistant", "content": ""})
 
     def upsert_tool(index: int, item: dict) -> dict:
@@ -384,7 +409,33 @@ def handle_chat(wfile, body: dict, stream: bool, start_stream=None) -> bytes:
     try:
         try:
             while not completed:
-                chunk = upstream.read(4096)
+                if upstream_sock is not None:
+                    # Poll for readability before reading (select works on
+                    # socket fds on Windows; only non-socket fds are
+                    # unsupported) so a stalled upstream is detected at the
+                    # poll interval instead of blocking until UPSTREAM_TIMEOUT.
+                    ready, _, _ = select.select([upstream_sock], [], [], READ_POLL_TIMEOUT)
+                    if not ready:
+                        if stream and not stream_started and time.monotonic() > semantic_deadline:
+                            raise RelayError(504, "upstream produced no semantic output before deadline", "timeout_error")
+                        continue
+                    # http.client read(n) blocks until n bytes or EOF, so once
+                    # select reports data use read1() (single raw read) to get
+                    # just the bytes that are available.
+                    read1 = getattr(getattr(upstream, "fp", None), "read1", None)
+                    chunk = read1(4096) if callable(read1) else upstream.read(4096)
+                else:
+                    try:
+                        chunk = upstream.read(4096)
+                    except TimeoutError:
+                        # Fallback for transports that surface the stall as a
+                        # read exception (e.g. mocked responses in tests)
+                        # instead of a not-ready select; like the poll above.
+                        if not stream or stream_started:
+                            raise
+                        if time.monotonic() > semantic_deadline:
+                            raise RelayError(504, "upstream produced no semantic output before deadline", "timeout_error")
+                        continue
                 if not chunk:
                     break
                 if stream and not stream_started and time.monotonic() > semantic_deadline:

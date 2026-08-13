@@ -324,6 +324,22 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 TOKEN_CACHE = DEPLOY_DIR / ".admin-token-cache.json"
 
 
+def _drop_token_cache() -> None:
+    """删除缓存的 admin token（401 过期 / 403 权限问题都不应让旧 token 残留毒化）。"""
+    try:
+        TOKEN_CACHE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+class _AdminAuthUnavailable(Exception):
+    """缓存 admin token 校验失败（403/429/5xx/网络异常）时抛出的降级信号。
+
+    admin_auth 在抛出前已用 check() 记录 FAIL；main() 单独捕获本异常后跳过
+    依赖 admin API 的检查，多 key / 冒烟检查照常执行——不让巡检整体中断。
+    """
+
+
 def admin_auth() -> tuple[str, str]:
     """Admin API auth with token reuse.
 
@@ -331,8 +347,14 @@ def admin_auth() -> tuple[str, str]:
     concurrent sessions (HTTP 409 AUTH_SESSION_LIMIT) — the smoke runs on a
     schedule, so an uncached login per run exhausts the limit within a day.
     Reuse the cached token until the server rejects it with HTTP 401. Any
-    other non-200 response (403/429/5xx/network error) fails this run but keeps
-    the cache, so a permission issue or transient blip doesn't burn a session.
+    other non-200 validation outcome (403/429/5xx/network error) degrades to
+    an explicit FAIL check (recorded here) and raises _AdminAuthUnavailable
+    instead of a RuntimeError, so main() skips the admin-API checks but keeps
+    running multi-key and smoke checks. 401 drops the stale cache and refreshes
+    via a fresh login; 403 drops the cache too so a recovered permission
+    re-logins next run instead of poisoning the cache forever; 429/5xx/network
+    errors keep the cache (re-login on a transient blip would burn the
+    AUTH_SESSION_LIMIT quota).
     """
     try:
         cached = read_json(TOKEN_CACHE)
@@ -340,17 +362,36 @@ def admin_auth() -> tuple[str, str]:
     except (OSError, ValueError, KeyError):
         token = ""
     if token:
-        status, _ = http_json(
-            f"{NEWAPI_BASE}/api/channel/?p=0&page_size=1",
-            headers={"Authorization": f"Bearer {token}", "New-Api-User": user_id},
-        )
+        try:
+            status, _ = http_json(
+                f"{NEWAPI_BASE}/api/channel/?p=0&page_size=1",
+                headers={"Authorization": f"Bearer {token}", "New-Api-User": user_id},
+            )
+        except urllib.error.URLError as e:
+            # 网络异常：缓存 token 无法验证，保留缓存（抖动不烧 session），
+            # 降级为 FAIL 而非中断——多 key / 冒烟检查照常执行。
+            check("admin token auth", False,
+                  f"cached token check network error: {e}")
+            raise _AdminAuthUnavailable from None
         if status == 200:
             return token, user_id
-        if status != 401:
-            # 只对确定性鉴权失效(401)重新登录。403 是权限问题（重登无用），
-            # 429/5xx/抖动保留缓存——否则每次限流都会新建持久化 session，
-            # 打满 AUTH_SESSION_LIMIT。实测本 fork token 过期返回 401。
-            raise RuntimeError(f"cached token check returned HTTP {status}; cache kept")
+        if status == 401:
+            # 确定性鉴权失效(401)：丢弃缓存，走下方登录刷新（防旧 token 残留）。
+            _drop_token_cache()
+        elif status == 403:
+            # 403 是权限问题（本轮重登无用，且烧 AUTH_SESSION_LIMIT）。删除
+            # 缓存让下一轮重新登录——否则权限恢复后缓存 token 永久毒化，无人
+            # 干预则永远 FAIL。若权限真被收回，下轮登录失败会给出可操作报错。
+            _drop_token_cache()
+            check("admin token auth", False,
+                  "cached token rejected with HTTP 403; cache dropped, next run re-logins")
+            raise _AdminAuthUnavailable from None
+        else:
+            # 429/5xx/其他非 200：保留缓存（每次限流重登会打满
+            # AUTH_SESSION_LIMIT），本轮降级 FAIL，不中断后续检查。
+            check("admin token auth", False,
+                  f"cached token check returned HTTP {status}; cache kept")
+            raise _AdminAuthUnavailable from None
     creds = read_json(DEPLOY_DIR / "admin-credentials.json")
     _, login = http_json(
         f"{NEWAPI_BASE}/api/user/login", method="POST",
@@ -469,6 +510,10 @@ def main() -> int:
                     f"enabled_channels={len(serving)} min={minimum}"
                     f" ids={[c['id'] for c in serving]}",
                 )
+    except _AdminAuthUnavailable:
+        # admin_auth 已记录 FAIL（缓存 token 校验失败降级），跳过依赖 admin
+        # API 的检查；多 key / 冒烟检查在下方照常执行，本轮不中断。
+        pass
     except Exception as e:  # noqa: BLE001
         check("channels", False, f"admin api error: {e}")
 

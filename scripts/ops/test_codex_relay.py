@@ -3,8 +3,10 @@ import importlib.util
 import io
 import json
 import os
+import socket
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -46,6 +48,55 @@ def partial_then_failed_sse(message="upstream rejected request"):
     return io.BytesIO(b"".join(
         f"data: {json.dumps(event)}\n\n".encode("utf-8") for event in events
     ))
+
+
+class SocketStalledUpstream:
+    """Fake upstream backed by a real socketpair so select-driven polling works.
+
+    Mirrors the http.client response layout (fp.raw._sock). A background
+    thread delivers the SSE payload only after *delay* seconds; before that
+    the socket is not readable, so the relay's select poll fires instead of
+    the read blocking.
+    """
+
+    def __init__(self, payload, delay):
+        self._recv, self._send = socket.socketpair()
+        self._payload = payload
+        self._delay = delay
+        self.fp = _FakeResponseFP(self._recv)
+        threading.Thread(target=self._deliver, daemon=True).start()
+
+    def _deliver(self):
+        time.sleep(self._delay)
+        try:
+            self._send.sendall(self._payload)
+        except OSError:
+            pass
+        finally:
+            try:
+                self._send.close()
+            except OSError:
+                pass
+
+    def read(self, _size):
+        return self._payload
+
+    def close(self):
+        for sock in (self._recv, self._send):
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+class _FakeResponseFP:
+    def __init__(self, sock):
+        self.raw = _FakeResponseRaw(sock)
+
+
+class _FakeResponseRaw:
+    def __init__(self, sock):
+        self._sock = sock
 
 
 class RelayUnitTests(unittest.TestCase):
@@ -240,6 +291,40 @@ class RelayHTTPTests(unittest.TestCase):
         self.assertIn(b'"type": "upstream_error"', data)
         self.assertNotIn(b'"finish_reason": "stop"', data)
         self.assertEqual(data.count(b"data: [DONE]"), 1)
+
+    def test_stalled_read_hits_semantic_timeout_not_urlopen_fallback(self):
+        upstream = SocketStalledUpstream(b"", delay=3600)
+        with patch.object(relay, "call_upstream", return_value=upstream), \
+                patch.object(relay, "SEMANTIC_TIMEOUT", -1), \
+                patch.object(relay, "READ_POLL_TIMEOUT", 0.02):
+            started = time.monotonic()
+            response, data = self.request({
+                "model": "gpt-5.5",
+                "stream": True,
+                "messages": [{"role": "user", "content": "ping"}],
+            })
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(response.status, 504)
+        payload = json.loads(data)
+        self.assertEqual(payload["error"]["type"], "timeout_error")
+        # semantic-timeout branch, not the urlopen TimeoutError fallback
+        self.assertIn("no semantic output", payload["error"]["message"])
+        self.assertLess(elapsed, 5)
+
+    def test_stalled_read_recovers_before_semantic_deadline(self):
+        upstream = SocketStalledUpstream(completed_sse().getvalue(), delay=0.3)
+        with patch.object(relay, "call_upstream", return_value=upstream), \
+                patch.object(relay, "READ_POLL_TIMEOUT", 0.05):
+            response, data = self.request({
+                "model": "gpt-5.5",
+                "stream": True,
+                "messages": [{"role": "user", "content": "ping"}],
+            })
+
+        self.assertEqual(response.status, 200)
+        self.assertIn(b'"content": "PONG"', data)
+        self.assertTrue(data.endswith(b"data: [DONE]\n\n"))
 
 
 if __name__ == "__main__":
