@@ -263,6 +263,70 @@ class AdminAuthTests(unittest.TestCase):
             ["45:agentrouter=unmapped_aliases:zg-gpt-5.6-sol"],
         )
 
+    def test_ai168661_channel_posture_is_valid(self):
+        channels = []
+        for channel_id, expected in smoke.AI168661_CHANNEL_CONTRACTS.items():
+            channels.append(
+                {
+                    "id": channel_id,
+                    "name": expected["name"],
+                    "type": 1,
+                    "status": 1,
+                    "auto_ban": 1,
+                    "base_url": "https://ai.168661.xyz",
+                    "priority": expected["priority"],
+                    "weight": expected["weight"],
+                    "test_model": expected["test_model"],
+                    "models": ",".join(expected["models"]),
+                    "model_mapping": json.dumps(expected["mapping"]),
+                }
+            )
+
+        self.assertEqual(smoke.ai168661_channel_violations(channels), [])
+
+    def test_ai168661_channel_drift_and_missing_family_are_rejected(self):
+        expected39 = smoke.AI168661_CHANNEL_CONTRACTS[39]
+        expected78 = smoke.AI168661_CHANNEL_CONTRACTS[78]
+        channels = [
+            {
+                "id": 39,
+                "name": expected39["name"],
+                "type": 1,
+                "status": 2,
+                "auto_ban": 1,
+                "base_url": "https://ai.168661.xyz/v1",
+                "priority": expected39["priority"],
+                "weight": expected39["weight"],
+                "test_model": expected39["test_model"],
+                "models": ",".join((*expected39["models"], "grok-imagine-video")),
+                "model_mapping": json.dumps(expected39["mapping"]),
+            },
+            {
+                "id": 78,
+                "name": expected78["name"],
+                "type": 1,
+                "status": 1,
+                "auto_ban": 1,
+                "base_url": "https://ai.168661.xyz",
+                "priority": expected78["priority"],
+                "weight": expected78["weight"],
+                "test_model": expected78["test_model"],
+                "models": ",".join(expected78["models"]),
+                "model_mapping": "{}",
+            },
+        ]
+
+        violations = smoke.ai168661_channel_violations(channels)
+        self.assertEqual(len(violations), 3)
+        self.assertIn("status=2", violations[0])
+        self.assertIn("base_url=https://ai.168661.xyz/v1", violations[0])
+        self.assertIn("grok-imagine-video", violations[0])
+        self.assertEqual(
+            violations[1],
+            "78:ai-168661-deepseek-0731=model_mapping=drifted",
+        )
+        self.assertEqual(violations[2], "79:missing")
+
     def test_live_agentrouter_fallback_is_not_expected_disabled(self):
         channels = [
             {"id": 45, "name": "agentrouter", "status": 1},

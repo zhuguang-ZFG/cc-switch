@@ -83,6 +83,55 @@ ANYROUTER_CLAUDE_MAPPING = {
     "zg-agent-claude-opus-4-8": "claude-opus-4-8",
 }
 
+# ai.168661 uses one key per model family. Keep those credentials in separate
+# channels so a revoked family key cannot silently poison unrelated models.
+# NewAPI's OpenAI channel appends /v1 itself, so base_url must remain the host
+# root even though direct upstream probes use https://ai.168661.xyz/v1.
+AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
+    39: {
+        "name": "ai-168661-grok",
+        "models": (
+            "grok-4.20-0309-non-reasoning",
+            "grok-4.20-0309-reasoning",
+            "grok-4.20-multi-agent-0309",
+            "grok-4.3",
+            "grok-4.5",
+            "grok-4.6",
+            "grok-build-0.1",
+            "grok-chat-fast",
+            "grok-composer-2.5-fast",
+            "zg-grok-4.5",
+        ),
+        "mapping": {"zg-grok-4.5": "grok-4.5"},
+        "test_model": "grok-4.5",
+        "priority": 55,
+        "weight": 10,
+    },
+    78: {
+        "name": "ai-168661-deepseek-0731",
+        "models": (
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-0731",
+            "zg-deepseek-v4-flash-0731",
+        ),
+        "mapping": {
+            "deepseek-v4-flash-0731": "deepseek-v4-flash",
+            "zg-deepseek-v4-flash-0731": "deepseek-v4-flash",
+        },
+        "test_model": "deepseek-v4-flash",
+        "priority": 50,
+        "weight": 5,
+    },
+    79: {
+        "name": "ai-168661-hy3",
+        "models": ("hy3", "zg-hy3"),
+        "mapping": {"zg-hy3": "hy3"},
+        "test_model": "hy3",
+        "priority": 50,
+        "weight": 5,
+    },
+}
+
 # Channels disabled by local automation due to upstream degradation (NOT config
 # breakage). Distinct from KNOWN_BROKEN: these are expected to auto-recover via
 # AutomaticEnableChannelEnabled once their scheduled channel test passes again,
@@ -364,6 +413,54 @@ def channel_policy_violations(channels: list[dict]) -> list[str]:
         if unmapped:
             violations.append(
                 f"{channel['id']}:{channel.get('name', '')}=unmapped_aliases:{','.join(unmapped)}"
+            )
+    return violations
+
+
+def ai168661_channel_violations(channels: list[dict]) -> list[str]:
+    """Pin the three independently authenticated ai.168661 channel families."""
+    by_id = {channel.get("id"): channel for channel in channels}
+    violations: list[str] = []
+    for channel_id, expected in AI168661_CHANNEL_CONTRACTS.items():
+        channel = by_id.get(channel_id)
+        if channel is None:
+            violations.append(f"{channel_id}:missing")
+            continue
+
+        reasons: list[str] = []
+        for field in ("name", "test_model", "priority", "weight"):
+            if channel.get(field) != expected[field]:
+                reasons.append(f"{field}={channel.get(field)}")
+        if channel.get("type") != 1:
+            reasons.append(f"type={channel.get('type')}")
+        if channel.get("status") != 1:
+            reasons.append(f"status={channel.get('status')}")
+        if channel.get("auto_ban") not in (1, True):
+            reasons.append(f"auto_ban={channel.get('auto_ban')}")
+        if channel.get("base_url") != "https://ai.168661.xyz":
+            reasons.append(f"base_url={channel.get('base_url')}")
+
+        models = {
+            model.strip()
+            for model in str(channel.get("models") or "").split(",")
+            if model.strip()
+        }
+        expected_models = set(expected["models"])
+        if models != expected_models:
+            reasons.append(
+                "models="
+                f"missing:{sorted(expected_models - models)},"
+                f"extra:{sorted(models - expected_models)}"
+            )
+        try:
+            mapping = json.loads(str(channel.get("model_mapping") or "{}"))
+        except (TypeError, ValueError):
+            mapping = None
+        if mapping != expected["mapping"]:
+            reasons.append("model_mapping=drifted")
+        if reasons:
+            violations.append(
+                f"{channel_id}:{channel.get('name', '')}=" + ",".join(reasons)
             )
     return violations
 
@@ -666,6 +763,12 @@ def main() -> int:
                 "channel model isolation",
                 not policy_violations,
                 f"violations={policy_violations or 'none'}",
+            )
+            ai168661_violations = ai168661_channel_violations(items)
+            check(
+                "ai.168661 channel posture",
+                not ai168661_violations,
+                f"violations={ai168661_violations or 'none'}",
             )
             disable_violations = expected_disabled_violations(items)
             check(
