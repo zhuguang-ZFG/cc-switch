@@ -22,6 +22,7 @@ Run:  python scripts/ops/newapi-local-smoke.py
 from __future__ import annotations
 
 import json
+import re
 import socket
 import sqlite3
 import sys
@@ -93,6 +94,7 @@ NEWAPI_DB = DEPLOY_DIR / "new-api.db"
 
 REQUIRED_OPTIONS: dict[str, str] = {
     "AutomaticEnableChannelEnabled": "true",
+    "channel_affinity_setting.enabled": "true",
     # 08-03 防放大策略固化（docs/ops/omp-model-config-review-2026-08-03.md）：
     # 403/401/402/502 触发自动禁用；403 余额错误必穿透。
     # 上游参考：QuantumNous/new-api#1457/#1609 —— auto-disable 依赖状态码/关键词
@@ -101,6 +103,32 @@ REQUIRED_OPTIONS: dict[str, str] = {
     # 重试全失败），429 透传交客户端退避+回退链；重试仅覆盖瞬时类状态码。
     "AutomaticDisableStatusCodes": "401,402,403,502",
     "AutomaticRetryStatusCodes": "408,500-503",
+}
+
+# Each sticky-routing rule must cover both the canonical model id and the
+# zg-* aliases exposed to OMP/Cursor. Missing alias coverage silently disables
+# affinity before model_mapping runs, reducing prompt-cache locality.
+AFFINITY_REQUIRED_MODELS: dict[str, tuple[str, ...]] = {
+    "codex cli trace": ("gpt-5.6-sol", "zg-gpt-5.6-sol"),
+    "glm trace": ("glm-5.2", "zg-glm-5.2"),
+    "grok trace": ("grok-4.5", "zg-grok-4.5"),
+    "deepseek trace": ("deepseek-v4-pro", "zg-deepseek-v4-pro"),
+    "longcat trace": ("LongCat-2.0", "zg-longcat-2.0"),
+    "qwen trace": ("qwen3.8-max", "zg-qwen3.8-max"),
+    "claude trace": ("claude-opus-5", "zg-claude-opus-5"),
+}
+
+# NewAPI channel PUT rebuilds abilities and can reset model-level routing
+# posture. These rows are the deliberate DeepSeek pool/diagnostic selectors.
+CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
+    (42, "deepseek-v4-flash"): (50, 5),
+    (42, "deepseek-v4-pro"): (50, 5),
+    (42, "deepseek-official-v4-flash"): (50, 5),
+    (42, "deepseek-official-v4-pro"): (50, 5),
+    (48, "deepseek-v4-flash"): (51, 20),
+    (48, "deepseek-v4-pro"): (51, 20),
+    (48, "opencode-go"): (51, 20),
+    (48, "opencode-go-pro"): (51, 20),
 }
 
 
@@ -118,6 +146,118 @@ def option_policy_violations(options: object) -> list[str]:
         for key, expected in REQUIRED_OPTIONS.items()
         if str(by_key.get(key, "missing")).strip().lower() != expected
     ]
+
+
+def affinity_rule_violations(options: object) -> list[str]:
+    """Return sticky-routing rules that miss canonical or zg-* model ids."""
+    if not isinstance(options, list):
+        return ["channel_affinity_setting.rules=missing"]
+    raw = next(
+        (
+            item.get("value")
+            for item in options
+            if isinstance(item, dict)
+            and item.get("key") == "channel_affinity_setting.rules"
+        ),
+        None,
+    )
+    try:
+        rules = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return ["channel_affinity_setting.rules=invalid-json"]
+    if not isinstance(rules, list):
+        return ["channel_affinity_setting.rules=invalid-shape"]
+
+    by_name = {
+        rule.get("name"): rule
+        for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("name"), str)
+    }
+    violations: list[str] = []
+    for name, required_models in AFFINITY_REQUIRED_MODELS.items():
+        rule = by_name.get(name)
+        if rule is None:
+            violations.append(f"{name}=missing")
+            continue
+        patterns = rule.get("model_regex")
+        if isinstance(patterns, str):
+            patterns = [patterns]
+        if not isinstance(patterns, list) or not all(
+            isinstance(pattern, str) for pattern in patterns
+        ):
+            violations.append(f"{name}=invalid-model-regex")
+            continue
+        try:
+            compiled = [re.compile(pattern) for pattern in patterns]
+        except re.error:
+            violations.append(f"{name}=invalid-model-regex")
+            continue
+        missing = [
+            model
+            for model in required_models
+            if not any(pattern.search(model) for pattern in compiled)
+        ]
+        if missing:
+            violations.append(f"{name}=missing:{','.join(missing)}")
+    return violations
+
+
+def critical_ability_posture_violations(rows: object) -> list[str]:
+    """Validate critical ability rows after channel model edits."""
+    if not isinstance(rows, list):
+        return ["abilities=invalid-shape"]
+    actual: dict[tuple[int, str], list[tuple[int, int, int]]] = {}
+    for row in rows:
+        if not isinstance(row, tuple) or len(row) != 5:
+            return ["abilities=invalid-row"]
+        channel_id, model, enabled, priority, weight = row
+        if isinstance(channel_id, int) and isinstance(model, str):
+            actual.setdefault((channel_id, model), []).append(
+                (enabled, priority, weight)
+            )
+
+    violations: list[str] = []
+    for key, expected in CRITICAL_ABILITY_POSTURES.items():
+        channel_id, model = key
+        values = actual.get(key)
+        if not values:
+            violations.append(f"{channel_id}:{model}=missing")
+            continue
+        expected_priority, expected_weight = expected
+        drifted = [
+            value
+            for value in values
+            if value != (1, expected_priority, expected_weight)
+        ]
+        if drifted:
+            violations.append(
+                f"{channel_id}:{model}=expected:enabled=1,priority="
+                f"{expected_priority},weight={expected_weight};actual={drifted}"
+            )
+    return violations
+
+
+def ability_posture_violations() -> list[str]:
+    """Read critical abilities from NewAPI SQLite without exposing channels."""
+    try:
+        con = sqlite3.connect(f"file:{NEWAPI_DB.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        return [f"db-open-failed={e}"]
+    try:
+        channel_ids = sorted({channel_id for channel_id, _ in CRITICAL_ABILITY_POSTURES})
+        placeholders = ",".join("?" for _ in channel_ids)
+        rows = list(
+            con.execute(
+                "SELECT channel_id, model, enabled, priority, weight "
+                f"FROM abilities WHERE channel_id IN ({placeholders})",
+                channel_ids,
+            )
+        )
+        return critical_ability_posture_violations(rows)
+    except sqlite3.Error as e:
+        return [f"db-read-failed={e}"]
+    finally:
+        con.close()
 
 
 def fallback_posture_violations(channels: list[dict]) -> list[str]:
@@ -436,6 +576,12 @@ def main() -> int:
             option_status == 200 and not option_violations,
             f"HTTP {option_status} violations={option_violations or 'none'}",
         )
+        affinity_violations = affinity_rule_violations(option_body.get("data"))
+        check(
+            "channel affinity aliases",
+            option_status == 200 and not affinity_violations,
+            f"HTTP {option_status} violations={affinity_violations or 'none'}",
+        )
         status, ch = http_json(
             f"{NEWAPI_BASE}/api/channel/?p=0&page_size=200",
             headers=headers,
@@ -524,6 +670,12 @@ def main() -> int:
         "multi-key pool health",
         not mk_violations,
         f"violations={mk_violations or 'none'}",
+    )
+    ability_violations = ability_posture_violations()
+    check(
+        "critical ability posture",
+        not ability_violations,
+        f"violations={ability_violations or 'none'}",
     )
 
     # 4. real cheap completions

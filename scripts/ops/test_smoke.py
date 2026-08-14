@@ -6,6 +6,8 @@ admin_auth 的全部 HTTP/文件交互都经模块级 http_json/read_json，测�
 """
 import ast
 import importlib.util
+import json
+import re
 import sys
 import unittest
 import urllib.error
@@ -405,6 +407,7 @@ class AdminAuthTests(unittest.TestCase):
             smoke.option_policy_violations(
                 [
                     {"key": "AutomaticEnableChannelEnabled", "value": "true"},
+                    {"key": "channel_affinity_setting.enabled", "value": "true"},
                     {"key": "AutomaticDisableStatusCodes", "value": "401,402,403,502"},
                     {"key": "AutomaticRetryStatusCodes", "value": "408,500-503"},
                 ]
@@ -415,6 +418,7 @@ class AdminAuthTests(unittest.TestCase):
             smoke.option_policy_violations(
                 [
                     {"key": "AutomaticEnableChannelEnabled", "value": "false"},
+                    {"key": "channel_affinity_setting.enabled", "value": "true"},
                     {"key": "AutomaticDisableStatusCodes", "value": "401,402,403,502"},
                     {"key": "AutomaticRetryStatusCodes", "value": "408,500-503"},
                 ]
@@ -425,8 +429,81 @@ class AdminAuthTests(unittest.TestCase):
             smoke.option_policy_violations([]),
             [
                 "AutomaticEnableChannelEnabled=missing",
+                "channel_affinity_setting.enabled=missing",
                 "AutomaticDisableStatusCodes=missing",
                 "AutomaticRetryStatusCodes=missing",
+            ],
+        )
+
+    def test_affinity_rules_cover_canonical_and_zg_alias_models(self):
+        rules = [
+            {
+                "name": name,
+                "model_regex": [
+                    "^(?:"
+                    + "|".join(re.escape(model) for model in models)
+                    + ")$"
+                ],
+            }
+            for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
+        ]
+        options = [
+            {
+                "key": "channel_affinity_setting.rules",
+                "value": json.dumps(rules),
+            }
+        ]
+
+        self.assertEqual(smoke.affinity_rule_violations(options), [])
+
+    def test_affinity_rules_reject_missing_zg_alias_and_invalid_regex(self):
+        rules = [
+            {
+                "name": name,
+                "model_regex": [
+                    "^gpt-.*$" if name == "codex cli trace" else
+                    "[" if name == "glm trace" else
+                    "^(?:" + "|".join(re.escape(model) for model in models) + ")$"
+                ],
+            }
+            for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
+        ]
+        options = [
+            {
+                "key": "channel_affinity_setting.rules",
+                "value": json.dumps(rules),
+            }
+        ]
+
+        self.assertEqual(
+            smoke.affinity_rule_violations(options),
+            [
+                "codex cli trace=missing:zg-gpt-5.6-sol",
+                "glm trace=invalid-model-regex",
+            ],
+        )
+
+    def test_critical_ability_postures_detect_missing_and_reset_rows(self):
+        rows = [
+            (channel_id, model, 1, priority, weight)
+            for (channel_id, model), (priority, weight)
+            in smoke.CRITICAL_ABILITY_POSTURES.items()
+        ]
+        self.assertEqual(smoke.critical_ability_posture_violations(rows), [])
+
+        rows = [row for row in rows if row[:2] != (42, "deepseek-v4-pro")]
+        rows = [
+            (48, "deepseek-v4-pro", 1, 50, 20)
+            if row[:2] == (48, "deepseek-v4-pro")
+            else row
+            for row in rows
+        ]
+        self.assertEqual(
+            smoke.critical_ability_posture_violations(rows),
+            [
+                "42:deepseek-v4-pro=missing",
+                "48:deepseek-v4-pro=expected:enabled=1,priority=51,weight=20;"
+                "actual=[(1, 50, 20)]",
             ],
         )
 

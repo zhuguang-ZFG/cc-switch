@@ -10,6 +10,7 @@ NewAPI 渠道健康、关键日志大小、磁盘余量。
 """
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -62,6 +63,79 @@ def fresh_json(path: Path, stale_sec: int) -> tuple[bool, dict]:
         return False, {}
 
 
+def relay_owner_violations(processes: object, listeners: object) -> list[str]:
+    """Require one codex-relay process and matching listener per relay port."""
+    if not isinstance(processes, list) or not isinstance(listeners, list):
+        return ["relay ownership query returned invalid shape"]
+    violations: list[str] = []
+    for port in (15999, 16000):
+        matches = []
+        for process in processes:
+            if not isinstance(process, dict):
+                continue
+            command = str(process.get("CommandLine") or "")
+            if (
+                re.search(r"(?i)(?:^|[\\/])codex-relay\.py(?:\s|$)", command)
+                and re.search(rf"(?:^|\s)--port(?:=|\s+){port}(?:\s|$)", command)
+            ):
+                matches.append(process)
+        if len(matches) != 1:
+            violations.append(f"port {port}: relay_processes={len(matches)} expected=1")
+            continue
+        try:
+            process_id = int(matches[0]["ProcessId"])
+        except (KeyError, TypeError, ValueError):
+            violations.append(f"port {port}: relay process has invalid pid")
+            continue
+        listener_pids = {
+            int(listener["OwningProcess"])
+            for listener in listeners
+            if isinstance(listener, dict)
+            and listener.get("LocalPort") == port
+            and listener.get("OwningProcess") is not None
+        }
+        if listener_pids != {process_id}:
+            violations.append(
+                f"port {port}: process_pid={process_id} listener_pids="
+                f"{sorted(listener_pids)}"
+            )
+    return violations
+
+
+def query_relay_owner_violations() -> list[str]:
+    """Read Windows relay processes/listeners without exposing command lines."""
+    command = (
+        "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); "
+        "$p=@(Get-CimInstance Win32_Process | "
+        "Where-Object { $_.CommandLine -match 'codex-relay\\.py' } | "
+        "Select-Object ProcessId,CommandLine); "
+        "$l=@(Get-NetTCPConnection -State Listen -LocalPort 15999,16000 "
+        "-ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess); "
+        "@{processes=$p;listeners=$l} | ConvertTo-Json -Depth 4 -Compress"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return [f"relay ownership query failed rc={result.returncode}"]
+        payload = json.loads(result.stdout)
+        processes = payload.get("processes", [])
+        listeners = payload.get("listeners", [])
+        if isinstance(processes, dict):
+            processes = [processes]
+        if isinstance(listeners, dict):
+            listeners = [listeners]
+        return relay_owner_violations(processes, listeners)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError) as e:
+        return [f"relay ownership query error: {type(e).__name__}: {e}"]
+
+
 def main() -> int:
     # ── NewAPI 与网关 ─────────────────────────────────────────────
     st = http_status("http://127.0.0.1:3002/api/status")
@@ -78,6 +152,12 @@ def main() -> int:
     }
     for name, (p, h) in proxies.items():
         check(name, port_open(p, h), f"{h}:{p}")
+    relay_violations = query_relay_owner_violations()
+    check(
+        "codex relay 单实例归属",
+        not relay_violations,
+        f"violations={relay_violations or 'none'}",
+    )
 
     # ── guardian / supervisor / watchdog ───────────────────────────
     g_fresh, g_data = fresh_json(GUARDIAN / "heartbeat.json", 180)

@@ -15,7 +15,7 @@ FORBIDDEN_CRITICAL_CANDIDATES = {
     "agentrouter/claude-opus-5",
     "agentrouter/claude-opus-4-8",
 }
-ALLOWED_CODEBUDDY_MODELS = {"hy3-preview-agent", "gpt-5.6-sol"}
+REMOVED_LOCAL_PROVIDERS = {"codebuddy"}
 _THINKING_SUFFIXES = frozenset(("minimal", "low", "medium", "high", "xhigh", "max", "auto"))
 
 
@@ -431,6 +431,8 @@ class OmpRouteGateTests(unittest.TestCase):
             ["omp", "models"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             shell=False,
             env=env,
@@ -499,15 +501,12 @@ class OmpRouteGateTests(unittest.TestCase):
                     f"{provider} Claude models must stay Claude during context recovery",
                 )
 
-    def test_opus5_gateway_window_stays_under_upstream_rejection_zone(self):
-        """zg-newapi-anthropic/claude-opus-5 的 contextWindow 必须低于上游实测拒绝区。
+    def test_opus5_gateway_window_matches_official_capability(self):
+        """Opus 5 的模型元数据必须表达官方 200k 上下文能力。
 
-        2026-08-09 实测：~602KB/69 消息真实请求在 claude 三渠道（3/9/45）全部
-        确定性 400；557KB 截断版与 604KB 低 token 填充版均被接受，拒绝由
-        token 总量触发，上限约 130k。NewAPI 把上游 400 包装成
-        bad_response_status_code，OMP 无法归类为 context-overflow，不触发
-        压缩/提升/fallback，会话直接卡死。窗口定为 110000（85% 阈值 93.5k，
-        单轮边界跳变余量充足）；回归 170000 会重新越过上游上限。
+        2026-08-09 曾在 Kiro/NewAPI 聚合链路观察到约 130k-140k token 的
+        确定性 400。那是链路承载风险，不是模型能力；不得用降低 contextWindow
+        的方式把链路限制伪装成官方模型限制。该风险保留在运维文档和链路监控中。
         """
         text = MODELS_FILE.read_text(encoding="utf-8")
         registrations = _parse_model_registrations(text)
@@ -516,38 +515,38 @@ class OmpRouteGateTests(unittest.TestCase):
         self.assertIsNotNone(opus5, "zg-newapi-anthropic/claude-opus-5 must be registered")
         window = opus5["contextWindow"]
         self.assertIsNotNone(window, "claude-opus-5 contextWindow must be explicit")
-        self.assertLessEqual(
+        self.assertEqual(
             window,
-            110000,
-            f"claude-opus-5 contextWindow {window} exceeds the probed upstream safe ceiling; "
-            "requests past ~130k tokens are hard-400ed by all claude channels (2026-08-09 probe)",
+            200000,
+            f"claude-opus-5 contextWindow {window} must match the official 200k capability; "
+            "route-specific upstream limits belong in operational health policy",
         )
 
 
 
-    def test_codebuddy_fallbacks_use_only_hy3_and_sol(self):
+    def test_removed_local_providers_are_not_registered_or_routed(self):
         chains = _fallback_chain_entries(CONFIG_FILE.read_text(encoding="utf-8"))
+        registrations = _parse_model_registrations(
+            MODELS_FILE.read_text(encoding="utf-8")
+        )
+        self.assertTrue(
+            REMOVED_LOCAL_PROVIDERS.isdisjoint(registrations),
+            f"removed providers remain registered: "
+            f"{sorted(REMOVED_LOCAL_PROVIDERS & set(registrations))}",
+        )
         for chain, candidates in chains.items():
-            codebuddy_models = {
-                candidate.split("/", 1)[1]
+            removed = {
+                candidate.split("/", 1)[0]
                 for candidate in candidates
-                if candidate.startswith("codebuddy/")
+                if "/" in candidate
+                and candidate.split("/", 1)[0] in REMOVED_LOCAL_PROVIDERS
             }
             with self.subTest(chain=chain):
-                self.assertTrue(
-                    codebuddy_models <= ALLOWED_CODEBUDDY_MODELS,
-                    f"{chain} contains unsupported CodeBuddy candidates: {sorted(codebuddy_models)}",
+                self.assertEqual(
+                    removed,
+                    set(),
+                    f"{chain} routes through removed providers: {sorted(removed)}",
                 )
-
-    def test_codebuddy_registers_only_hy3_and_sol(self):
-        text = MODELS_FILE.read_text(encoding="utf-8")
-        codebuddy_block = text.split("  codebuddy:\n", 1)[1].split("\n  agentrouter:\n", 1)[0]
-        registered = {
-            line.split(":", 1)[1].strip()
-            for line in codebuddy_block.splitlines()
-            if line.strip().startswith("- id:")
-        }
-        self.assertEqual(registered, ALLOWED_CODEBUDDY_MODELS)
 
     def test_qwen38_max_registration_matches_channel_contract(self):
         """aliyun-qwen38 必须按官方 1M/128K reasoning+vision 能力注册。"""
@@ -569,7 +568,13 @@ class OmpRouteGateTests(unittest.TestCase):
 
     def test_omp_can_resolve_registered_models(self):
         self.assertEqual(self.omp_models_rc, 0, self.omp_models_stderr)
-        for provider in ("zg-newapi", "zg-newapi-anthropic", "codebuddy", "longcat"):
+        for provider in (
+            "zg-newapi",
+            "zg-newapi-anthropic",
+            "agentrouter",
+            "longcat",
+            "anyrouter",
+        ):
             self.assertIn(f"{provider} (", self.omp_models_output)
 
     def test_parse_disabled_providers_extracts_global_list(self):
@@ -908,7 +913,7 @@ class OmpRouteGateTests(unittest.TestCase):
     def test_live_models_registrations_parse_expected_providers(self):
         parsed = _parse_model_registrations(MODELS_FILE.read_text(encoding="utf-8"))
         self.assertTrue(
-            {"zg-newapi", "zg-newapi-anthropic", "codebuddy", "agentrouter", "longcat"}
+            {"zg-newapi", "zg-newapi-anthropic", "agentrouter", "longcat", "anyrouter"}
             <= set(parsed),
             sorted(parsed),
         )
