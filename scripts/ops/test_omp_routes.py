@@ -483,6 +483,19 @@ class OmpRouteGateTests(unittest.TestCase):
                     fallback_models,
                     f"{role} fallback repeats primary model {primary}: {candidates}",
                 )
+
+    def test_unhealthy_anyrouter_is_not_an_automatic_fallback(self):
+        chains = _fallback_chain_entries(CONFIG_FILE.read_text(encoding="utf-8"))
+        routed = [
+            chain
+            for chain, candidates in chains.items()
+            if any(candidate.startswith("anyrouter/") for candidate in candidates)
+        ]
+        self.assertEqual(
+            routed,
+            [],
+            f"AnyRouter is upstream-429 and must remain manual-canary only: {routed}",
+        )
     def test_anthropic_provider_uses_semantic_ttft_gateway(self):
         text = MODELS_FILE.read_text(encoding="utf-8")
         block = _top_level_mapping_block(text, "zg-newapi-anthropic")

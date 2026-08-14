@@ -278,7 +278,7 @@ class AdminAuthTests(unittest.TestCase):
             ],
         )
 
-    def test_agentrouter_sol_fallback_posture_is_valid(self):
+    def test_fallback_posture_is_valid(self):
         channels = [
             {
                 "id": 45,
@@ -354,16 +354,17 @@ class AdminAuthTests(unittest.TestCase):
             ["45:agentrouter=priority=50,weight=10"],
         )
 
-    def test_anyrouter_sol_fallback_posture_is_registered(self):
+    def test_anyrouter_claude_only_recovery_contract(self):
         channels = [
             {
                 "id": 72,
                 "name": "anyrouter",
                 "status": 1,
                 "priority": 40,
-                "weight": 5,
-                "models": "gpt-5.6-sol,zg-gpt-5.6-sol",
-                "model_mapping": '{"zg-gpt-5.6-sol":"gpt-5.6-sol"}',
+                "weight": 2,
+                "test_model": smoke.ANYROUTER_TEST_MODEL,
+                "models": ",".join(smoke.ANYROUTER_CLAUDE_MODELS),
+                "model_mapping": json.dumps(smoke.ANYROUTER_CLAUDE_MAPPING),
             },
             {
                 "id": 45,
@@ -377,7 +378,7 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual(smoke.fallback_posture_violations(channels), [])
         self.assertEqual(smoke.channel_policy_violations(channels), [])
 
-    def test_anyrouter_primary_drift_rejected_and_claude_allowed(self):
+    def test_anyrouter_sol_or_missing_test_model_is_rejected(self):
         channels = [
             {
                 "id": 72,
@@ -385,7 +386,9 @@ class AdminAuthTests(unittest.TestCase):
                 "status": 1,
                 "priority": 50,
                 "weight": 5,
+                "test_model": None,
                 "models": "gpt-5.6-sol,claude-opus-5",
+                "model_mapping": "{}",
             },
             {
                 "id": 45,
@@ -400,7 +403,16 @@ class AdminAuthTests(unittest.TestCase):
             smoke.fallback_posture_violations(channels),
             ["72:anyrouter=priority=50"],
         )
-        self.assertEqual(smoke.channel_policy_violations(channels), [])
+        self.assertEqual(
+            smoke.channel_policy_violations(channels),
+            [
+                "72:anyrouter=claude_only:missing=['claude-opus-4-8', "
+                "'zg-agent-claude-opus-4-8', 'zg-agent-claude-opus-5', "
+                "'zg-claude-opus-5'],extra=['gpt-5.6-sol']",
+                "72:anyrouter=test_model=None",
+                "72:anyrouter=model_mapping=drifted",
+            ],
+        )
 
     def test_option_policy_requires_automatic_channel_recovery(self):
         self.assertEqual(
@@ -408,6 +420,7 @@ class AdminAuthTests(unittest.TestCase):
                 [
                     {"key": "AutomaticEnableChannelEnabled", "value": "true"},
                     {"key": "channel_affinity_setting.enabled", "value": "true"},
+                    {"key": "RetryTimes", "value": "1"},
                     {"key": "AutomaticDisableStatusCodes", "value": "401,402,403,502"},
                     {"key": "AutomaticRetryStatusCodes", "value": "408,500-503"},
                 ]
@@ -419,6 +432,7 @@ class AdminAuthTests(unittest.TestCase):
                 [
                     {"key": "AutomaticEnableChannelEnabled", "value": "false"},
                     {"key": "channel_affinity_setting.enabled", "value": "true"},
+                    {"key": "RetryTimes", "value": "1"},
                     {"key": "AutomaticDisableStatusCodes", "value": "401,402,403,502"},
                     {"key": "AutomaticRetryStatusCodes", "value": "408,500-503"},
                 ]
@@ -430,6 +444,7 @@ class AdminAuthTests(unittest.TestCase):
             [
                 "AutomaticEnableChannelEnabled=missing",
                 "channel_affinity_setting.enabled=missing",
+                "RetryTimes=missing",
                 "AutomaticDisableStatusCodes=missing",
                 "AutomaticRetryStatusCodes=missing",
             ],

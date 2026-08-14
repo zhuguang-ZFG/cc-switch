@@ -1,0 +1,5 @@
+retry:
+  maxRetries: 1
+  modelFallback: false
+providers:
+  streamFirstEventTimeoutSeconds: 180

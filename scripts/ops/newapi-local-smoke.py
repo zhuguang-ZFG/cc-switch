@@ -50,10 +50,10 @@ SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 # relay + aggregate smoke passes. Channel 45 remains a live fallback.
 KNOWN_BROKEN_CHANNELS: set[int] = {2, 9, 18, 20, 57, 62, 63, 64, 65, 70, 71, 73, 74}  # 9/18: linxi 同账号余额耗尽（2026-08-10 403 insufficient balance），禁用+weight 0 双锁，被未知调用方回捞过一次；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中（73 于 08-10 15:06 被重新启用且未同步本契约，冒烟会持续 FAIL 直至 codex-relay 修复完成并更新本集合）
 
-# Model isolation is channel-specific. AgentRouter (ch45) and AnyRouter (ch72)
-# serve Sol AND Claude at their fallback tiers (Claude re-enabled 2026-08-07:
-# anyrouter gate fingerprint fixed, upstream 429 = transient load). CodeBuddy
-# (ch44) keeps its Sol exclusion contract.
+# Model isolation is channel-specific. AgentRouter (ch45) serves Sol and Claude.
+# AnyRouter ch72 became Claude-only on 2026-08-14 so an overloaded Sol recovery
+# probe cannot keep independent Claude capacity disabled. CodeBuddy (ch44) keeps
+# its Sol exclusion contract.
 CHANNEL_MODEL_EXCLUSIONS: dict[int, set[str]] = {
     44: {"gpt-5.6-sol", "zg-wb-gpt-5.6-sol"},
 }
@@ -65,6 +65,24 @@ FALLBACK_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     72: {"priority": 40, "max_weight": 5},
 }
 
+# Keep AnyRouter Claude recovery independent from its overloaded Responses/Sol
+# surface. NewAPI uses test_model (or the first model when unset) for channel
+# recovery, so mixing Sol first previously kept healthy Claude capacity disabled.
+ANYROUTER_CHANNEL_ID = 72
+ANYROUTER_TEST_MODEL = "claude-opus-5"
+ANYROUTER_CLAUDE_MODELS = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "zg-claude-opus-5",
+    "zg-agent-claude-opus-5",
+    "zg-agent-claude-opus-4-8",
+)
+ANYROUTER_CLAUDE_MAPPING = {
+    "zg-claude-opus-5": "claude-opus-5",
+    "zg-agent-claude-opus-5": "claude-opus-5",
+    "zg-agent-claude-opus-4-8": "claude-opus-4-8",
+}
+
 # Channels disabled by local automation due to upstream degradation (NOT config
 # breakage). Distinct from KNOWN_BROKEN: these are expected to auto-recover via
 # AutomaticEnableChannelEnabled once their scheduled channel test passes again,
@@ -72,13 +90,13 @@ FALLBACK_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
 # Attribution: ch3 disabled 2026-08-10 12:04 (baibei upstream 502 for hours,
 # Guardian had already degraded its weight 24→12 at 09:06); ch45 disabled 22:05
 # (agentrouter upstream 429/503 flapping; channel carries auto_ban=1); ch72
-# disabled 2026-08-09 00:10 by Guardian (anyrouter upstream gpt-5.6-sol
-# overload, 500 "负载已经达到上限"; 100+ recovery probes failed through
-# 2026-08-13 — Guardian keeps retrying, re-enable is automatic on recovery).
+# disabled 2026-08-09 00:10 by Guardian. After the Claude-only split, the
+# claude-opus-5 recovery probe still returns upstream 429; Guardian keeps
+# retrying with bounded backoff and re-enable remains automatic on recovery.
 DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
     3: "baibei upstream 502; disabled 2026-08-10 12:04 by local automation",
     45: "agentrouter upstream flapping; disabled 2026-08-10 22:05 by local automation",
-    72: "anyrouter upstream sol overload; disabled 2026-08-09 00:10 by Guardian",
+    72: "anyrouter Claude upstream 429; disabled 2026-08-09 00:10 by Guardian",
 }
 
 # Critical models that must never lose their last enabled channel. Value is the
@@ -95,6 +113,7 @@ NEWAPI_DB = DEPLOY_DIR / "new-api.db"
 REQUIRED_OPTIONS: dict[str, str] = {
     "AutomaticEnableChannelEnabled": "true",
     "channel_affinity_setting.enabled": "true",
+    "RetryTimes": "1",
     # 08-03 防放大策略固化（docs/ops/omp-model-config-review-2026-08-03.md）：
     # 403/401/402/502 触发自动禁用；403 余额错误必穿透。
     # 上游参考：QuantumNous/new-api#1457/#1609 —— auto-disable 依赖状态码/关键词
@@ -318,6 +337,25 @@ def channel_policy_violations(channels: list[dict]) -> list[str]:
             mapping = {}
         if not isinstance(mapping, dict):
             mapping = {}
+        if channel.get("id") == ANYROUTER_CHANNEL_ID:
+            models = {
+                model.strip()
+                for model in str(channel.get("models") or "").split(",")
+                if model.strip()
+            }
+            expected_models = set(ANYROUTER_CLAUDE_MODELS)
+            if models != expected_models:
+                missing = sorted(expected_models - models)
+                extra = sorted(models - expected_models)
+                violations.append(
+                    f"72:anyrouter=claude_only:missing={missing},extra={extra}"
+                )
+            if channel.get("test_model") != ANYROUTER_TEST_MODEL:
+                violations.append(
+                    f"72:anyrouter=test_model={channel.get('test_model')}"
+                )
+            if mapping != ANYROUTER_CLAUDE_MAPPING:
+                violations.append("72:anyrouter=model_mapping=drifted")
         unmapped = sorted(
             m.strip()
             for m in str(channel.get("models") or "").split(",")
