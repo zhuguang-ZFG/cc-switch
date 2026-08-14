@@ -49,3 +49,11 @@
 - agnes 定位不变：免费池 haiku 档/兜底，不进 Opus/Sonnet 链（`docs/patches/agnes-haiku-newapi.md` non-goals 继续有效）。
 - ch68 依赖本机 agnes-relay（`100.83.32.95:9460`）在线且已登录；ch69 直连 `api.agnes-ai.cn` 为快渠。
 - `omp models` 已识别 3 个新条目（images=yes）。
+
+## 7. 同日 NewAPI 审计与配价补洞（追加）
+
+全量审计（17 enabled / 15 manual-disabled / 2 auto-banned 渠道；7 天 24755 条消费、0 条 type=5 错误日志）：
+
+- **配价缺口修复**：`opencode-go-pro`、`dots-3-note-prev` ModelRatio/CompletionRatio 全缺、`qwen3.8-max` 缺 CompletionRatio——前两个分别在 deepseek-v4-pro fallback 第一跳和 vision 兜底链上，触发即 `price not configured` 硬错误。已补 0.5/2（与 deepseek-v4-pro 等 sibling 一致），`opencode-go-pro` 实测 200（上游映射 deepseek-v4-pro）。
+- **孤儿 abilities（18 模型无活渠道，未清理）**：gpt-5.5、glm-5.2、zg-glm-5.2、claude-opus-5-max/xhigh、zg-claude-opus-5、welfare-codex-gpt-5.6-sol 等。glm-5.2 已核实 7 天零流量（Claude Code sonnet 链路不再经过），属卫生问题非生产风险；清理为破坏性操作，待决策。
+- ch2/ch70 status=3 由 guardian 恢复队列管理，不干预。
