@@ -57,3 +57,22 @@
 - **配价缺口修复**：`opencode-go-pro`、`dots-3-note-prev` ModelRatio/CompletionRatio 全缺、`qwen3.8-max` 缺 CompletionRatio——前两个分别在 deepseek-v4-pro fallback 第一跳和 vision 兜底链上，触发即 `price not configured` 硬错误。已补 0.5/2（与 deepseek-v4-pro 等 sibling 一致），`opencode-go-pro` 实测 200（上游映射 deepseek-v4-pro）。
 - **孤儿 abilities 已清理**：18 个无活渠道模型（gpt-5.5、glm-5.2、zg-glm-5.2、cline-free/glm-5.2、claude-opus-5-max/xhigh、zg-claude-opus-5、zg-agent-claude-opus-5/4-8、welfare-codex-gpt-5.6-sol、codex-auto-review、gpt-image-2、gpt-5.4、gpt-5.6、gpt-5.6-terra、deepseek/deepseek-v4-flash、poolside/laguna-s-2.1:free、stepfun/step-3.7-flash）共 25 行已删除，abilities 114→89，剩 47 个活模型、零孤儿。删除前行快照：`~/.omp/guardian/task-backups/orphan-abilities-before-cleanup-20260814.json`；渠道重启用后 `/api/channel/fix` 可重建。glm-5.2 已核实 7 天零流量（Claude Code sonnet 链路不再经过）。验证：`deepseek-v4-flash` 200 正常、`gpt-5.5` 返回干净 `model_not_found`。
 - ch2/ch70 status=3 由 guardian 恢复队列管理，不干预。
+
+## 8. OMP advisor 启用（强模型审查弱模型，追加）
+
+调研"OMP 强带弱"机制后的启用记录。OMP 内置两套：advisor（强模型旁听主会话、逐 turn 审查注入建议）与 prewalk（子代理强模型探路、首次 edit/write 移交 smol 执行）。本次只开 advisor，prewalk 留作反向杠杆后续单独评估（同时开会互相干扰观察数据）。
+
+变更（`~/.omp/agent/config.yml`，备份 `config.yml.20260814-advisor-on.bak`）：
+
+| 键 | 值 |
+|----|----|
+| `modelRoles.advisor` | `zg-newapi-anthropic/claude-opus-5:high`（新增角色键） |
+| `advisor.enabled` | `true` |
+| `advisor.syncBacklog` | `off`（默认，主模型不被迫等待 advisor） |
+| `advisor.immuneTurns` | `3`（默认，一次打断后 3 轮内转非打断旁注） |
+
+验证：无头会话 `omp -p --no-tools "Reply with exactly: ok"`（k3，14s）→ 会话目录生成 `__advisor.jsonl`，advisor 收到完整回合记录，opus-5 审查结论"无需干预"。机制闭环确认。
+
+定位与预期：advisor 是**事后审查**（防"错了没人发现"），不是能力转移；`syncBacklog=off` 下建议可能迟到。代价是 slow 档流量约翻倍（每 turn 一次 opus 审查）。观察期重点：`__advisor.jsonl` 实际干预频率——若长期"无需干预"占多数，降级为 `task.agentAdvisor = {"task":"@slow"}` 只审查 task 子代理。回滚：`omp config set advisor.enabled false`。
+
+生效范围：仅新开会话携带 advisor runtime；已在运行的会话不受影响。
