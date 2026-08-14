@@ -55,5 +55,5 @@
 全量审计（17 enabled / 15 manual-disabled / 2 auto-banned 渠道；7 天 24755 条消费、0 条 type=5 错误日志）：
 
 - **配价缺口修复**：`opencode-go-pro`、`dots-3-note-prev` ModelRatio/CompletionRatio 全缺、`qwen3.8-max` 缺 CompletionRatio——前两个分别在 deepseek-v4-pro fallback 第一跳和 vision 兜底链上，触发即 `price not configured` 硬错误。已补 0.5/2（与 deepseek-v4-pro 等 sibling 一致），`opencode-go-pro` 实测 200（上游映射 deepseek-v4-pro）。
-- **孤儿 abilities（18 模型无活渠道，未清理）**：gpt-5.5、glm-5.2、zg-glm-5.2、claude-opus-5-max/xhigh、zg-claude-opus-5、welfare-codex-gpt-5.6-sol 等。glm-5.2 已核实 7 天零流量（Claude Code sonnet 链路不再经过），属卫生问题非生产风险；清理为破坏性操作，待决策。
+- **孤儿 abilities 已清理**：18 个无活渠道模型（gpt-5.5、glm-5.2、zg-glm-5.2、cline-free/glm-5.2、claude-opus-5-max/xhigh、zg-claude-opus-5、zg-agent-claude-opus-5/4-8、welfare-codex-gpt-5.6-sol、codex-auto-review、gpt-image-2、gpt-5.4、gpt-5.6、gpt-5.6-terra、deepseek/deepseek-v4-flash、poolside/laguna-s-2.1:free、stepfun/step-3.7-flash）共 25 行已删除，abilities 114→89，剩 47 个活模型、零孤儿。删除前行快照：`~/.omp/guardian/task-backups/orphan-abilities-before-cleanup-20260814.json`；渠道重启用后 `/api/channel/fix` 可重建。glm-5.2 已核实 7 天零流量（Claude Code sonnet 链路不再经过）。验证：`deepseek-v4-flash` 200 正常、`gpt-5.5` 返回干净 `model_not_found`。
 - ch2/ch70 status=3 由 guardian 恢复队列管理，不干预。
