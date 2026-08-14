@@ -1,6 +1,12 @@
 # claude-opus-5 上游真实上限探测 + 会话卡死根因修复（2026-08-09 下午）
 
-**Status:** 已生效（models.yml 改动需 OMP 重启加载；运行中的 OMP 仍按旧窗口 170k 计数）
+> **Superseded configuration decision (2026-08-14):** This document remains the
+> historical evidence for a Kiro/NewAPI aggregate-route failure around 130k-140k
+> tokens. It no longer defines OMP model capability metadata. Per the official
+> model capability, `zg-newapi-anthropic/claude-opus-5.contextWindow` is restored
+> to `200000`; route-specific limits are tracked as operational risk.
+
+**Status:** 历史链路证据；110k 配置决策已于 2026-08-14 被官方能力 200k 配置取代
 **Scope:** `~/.omp/agent/models.yml`、`scripts/ops/test_omp_routes.py`
 
 ## 1. 问题
