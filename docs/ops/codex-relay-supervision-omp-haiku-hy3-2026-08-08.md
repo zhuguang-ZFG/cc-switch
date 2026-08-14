@@ -623,11 +623,25 @@ deepseek-v4-flash 原在 ch42（官方直连 api.deepseek.com，w5）与 ch48（
 
 - `qwen3.8-max` 近 24h 158 请求 / 45M prompt tokens——非 OMP 角色（疑 Kimi Code 等其他工具），若为付费模型是最大单项成本，建议排查来源
 
+## 28. relay 监听单实例加固（2026-08-14）
+
+Windows 的 `SO_REUSEADDR` 语义允许第二个进程绑定已监听端口，可能形成流量随机落入不同 relay 的影子监听器。`BoundedThreadingHTTPServer.allow_reuse_address` 现按平台设置：Windows 为 `false`，确保重复实例启动时立即失败；POSIX 保持 `true`，保留服务停止后的快速重绑能力。回归测试同时覆盖平台策略、存活端口二次绑定失败、关闭后重绑成功，以及 supervisor 的进程匹配和单实例 mutex 行为。
+
+仓库脚本已同步到 `~/.omp/guardian/codex-relay-15999/codex-relay.py` 和 `~/.omp/guardian/codex-relay-16000/codex-relay.py`。两份运行时副本与仓库文件的 SHA-256 均为 `1E13B9EC315D2160E9EB07525D6A5CBF50C7A5B6AA9DA0C96B6077483F1A97EE`；滚动重启后，15999 由 PID 8064 切换至 12316，16000 由 PID 29068 切换至 23944。两个端口的重复绑定实测均返回 Windows errno `10048`，且新监听进程的命令行和运行时哈希均已核对。
+
+回滚文件分别位于对应运行时目录：
+
+```text
+codex-relay.py.bak-20260814-170111-exclusive-bind
+```
+
+回滚时应逐端口停止当前 relay、恢复该端口的备份、核对恢复文件哈希，再由 supervisor 拉起并验证唯一进程和监听 PID；不得同时恢复已停用的 relay 计划任务。
+
 ## 待办
 
 1. **commit/tiny 首触发复核**：非 agent 角色无法探针验证；首次触发时查 NewAPI consume log（commit 应显示 `claude-haiku-4-5 → agnes-2.0-flash`、tiny 应显示 `hy3-preview-agent`）。
 2. **reviewer/security-reviewer 已还原 @slow**（2026-08-08 下午，claude-opus-5 429 实测恢复后还原；agentrouter/gpt-5.6-sol 覆盖已移除）。
-3. 计划任务（LogonTrigger）登录时仍会拉起 pythonw relay，与 supervisor 管理的 python.exe 双实例共存（Windows SO_REUSEADDR 双绑，无冲突）；如需单一管理源，可停两个计划任务让 supervisor 全权接管（未执行，保持现状）。
+3. **relay 双实例风险已解决**：两个 relay 计划任务保持停用，由 supervisor 单一管理；Windows 监听已禁用地址复用，重复绑定以 errno `10048` 明确失败（见 §28）。
 4. **ch73/74 relay 渠道类型（OpenAI vs Responses）**：relay 只接受 /v1/responses，NewAPI 按 OpenAI 类型发 chat/completions 探测 → 405 阻碍渠道自动恢复；当前两渠道均禁用且上游有真实问题（zzzcoding 405），待上游恢复后若 NewAPI 支持 Responses 渠道类型再调整。
 
 ## 相关文件

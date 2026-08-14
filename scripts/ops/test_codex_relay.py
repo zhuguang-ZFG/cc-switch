@@ -1,9 +1,11 @@
+import errno
 import http.client
 import importlib.util
 import io
 import json
 import os
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -325,6 +327,52 @@ class RelayHTTPTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn(b'"content": "PONG"', data)
         self.assertTrue(data.endswith(b"data: [DONE]\n\n"))
+
+
+class RelayListenerExclusivityTests(unittest.TestCase):
+    """A second relay on a live port must fail loudly, not shadow-bind.
+
+    Windows SO_REUSEADDR (HTTPServer's default) lets a second process bind a
+    port that is already LISTENing, so duplicate relays split traffic
+    non-deterministically instead of the loser exiting.
+    """
+
+    def test_address_reuse_is_disabled_only_on_windows(self):
+        self.assertEqual(
+            relay.BoundedThreadingHTTPServer.allow_reuse_address,
+            sys.platform != "win32",
+        )
+
+    def test_second_bind_on_live_port_is_refused(self):
+        first = relay.BoundedThreadingHTTPServer(("127.0.0.1", 0), relay.Handler, max_workers=1)
+        thread = threading.Thread(target=first.serve_forever, daemon=True)
+        thread.start()
+        port = first.server_address[1]
+        try:
+            with self.assertRaises(OSError) as caught:
+                relay.BoundedThreadingHTTPServer(("127.0.0.1", port), relay.Handler, max_workers=1)
+            self.assertEqual(caught.exception.errno, errno.EADDRINUSE)
+        finally:
+            first.shutdown()
+            first.server_close()
+            thread.join(timeout=2)
+
+    def test_rebind_after_shutdown_succeeds(self):
+        """Exclusive binding must not break supervisor kill-then-restart."""
+        first = relay.BoundedThreadingHTTPServer(("127.0.0.1", 0), relay.Handler, max_workers=1)
+        thread = threading.Thread(target=first.serve_forever, daemon=True)
+        thread.start()
+        port = first.server_address[1]
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        connection.request("GET", "/healthz")
+        connection.getresponse().read()
+        connection.close()
+        first.shutdown()
+        first.server_close()
+        thread.join(timeout=2)
+
+        second = relay.BoundedThreadingHTTPServer(("127.0.0.1", port), relay.Handler, max_workers=1)
+        second.server_close()
 
 
 if __name__ == "__main__":

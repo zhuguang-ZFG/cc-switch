@@ -652,6 +652,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 class BoundedThreadingHTTPServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 32
+    # Windows SO_REUSEADDR allows a second process to bind an already-listening
+    # port, creating a shadow listener. POSIX does not have that behavior and
+    # still benefits from HTTPServer's normal fast-rebind semantics.
+    allow_reuse_address = sys.platform != "win32"
 
     def __init__(self, server_address, handler_class, max_workers=MAX_CONCURRENT_REQUESTS):
         super().__init__(server_address, handler_class)
