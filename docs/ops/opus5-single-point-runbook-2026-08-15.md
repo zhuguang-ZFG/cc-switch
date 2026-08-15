@@ -1,4 +1,4 @@
-# claude-opus-5 单点（ch76 sotamodel）恢复预案（2026-08-15）
+# claude-opus-5 渠道故障恢复预案（2026-08-15）——ch76+ch75 双渠道聚合，残余风险为双渠道同宕
 
 ## 风险陈述
 
@@ -35,7 +35,9 @@ sqlite3 ~/.new-api-local/new-api.db "update channels set status=1 where id=57"
 curl -X POST http://127.0.0.1:3002/api/channel/fix -H "Authorization: <admin token>" -H "New-Api-User: 1"
 ```
 
-改 DB 前先备份：`cp new-api.db new-api.db.bak-<ts>-opus57`（已有同名惯例）。
+改 DB 前先备份（**禁热 `cp`**：WAL 模式下会丢 `-wal` 中未 checkpoint 的事务，快照撕裂且不自知）：
+`sqlite3 ~/.new-api-local/new-api.db ".backup 'new-api.db.bak-<ts>-opus57'"`（已有同名惯例），
+备后对新库跑 `PRAGMA integrity_check` 确认可用。
 
 ## 亲和行为与 TTL 配置
 
@@ -45,14 +47,19 @@ curl -X POST http://127.0.0.1:3002/api/channel/fix -H "Authorization: <admin tok
 **TTL（2026-08-15 21:05 调整）**：`default_ttl_seconds` 600→**60**，`claude trace` 规则 TTL 同步降至 60s。
 效果：每 60s 会话亲和过期，新会话按 weight 竞争（ch76:ch75 ≈ 20:8 ≈ 71%:29%），实现双渠道分流。
 代价：prompt cache 热窗口缩短，60s 后新 session 首轮 cache miss 概率上升。
-如 cache ratio 明显下降可调回：`update options set value='300' where key='channel_affinity_setting.default_ttl_seconds'` + 规则 ttl_seconds 同步 + PUT 热加载。
+如 cache ratio 明显下降：回退 TTL，步骤见「回退」节。
 
 亲和规则 `claude trace` 覆盖 `^(?:zg-agent-claude-.*|claude-.*|zg-claude-.*)$`（2026-08-15 21:04 修复），多渠道并存期无需手动调整规则。
 
 ## 验证
 
-1. 日常验证（双渠道分流）：发 2 批 claude-opus-5 请求，间隔 >60s；consume 日志出现 `channel_id=75` 和 `channel_id=76` 交替命中。
-2. ch76 故障模拟：DB `status=2 where id=76` + `/api/channel/fix`；等待亲和 TTL(60s) 过期后发请求；consume 日志 `channel_id=75`。恢复后 `status=1` + fix。
+1. 日常验证（双渠道分流）：取 5 分钟窗口 consume 日志按 `channel_id` 计数，样本 ≥20 且
+   `channel_id=75` 与 `76` 均出现、比例大致符合 weight 20:8（约 71%/29%）。
+   **注意**：仅发 2 批请求不足为证——20:8 权重下两次采样同时覆盖两渠道的概率仅约 41%，
+   样本不足会造成 ~59% 的假性失败误判。
+2. ch76 故障模拟（**低流量窗口执行**；先 `POST /api/channel/test/75` 确认 ch75 健康、
+   预置好恢复命令再动手）：DB `status=2 where id=76` + `/api/channel/fix`；
+   等待亲和 TTL(60s) 过期后发请求；consume 日志 `channel_id=75`。恢复后 `status=1` + fix。
 3. ch57 启用验证（仅 ch75 也宕时执行）：`POST /api/channel/test/57` 通过；发请求确认 `channel_id=57` 且 `channel_affinity.rule_name="claude trace"`。
 4. 探针形状：urllib POST 3002，勿用 curl（3002/3003 对 curl 一律 text/plain 400，生产客户端不受影响）。
 
@@ -60,4 +67,7 @@ curl -X POST http://127.0.0.1:3002/api/channel/fix -H "Authorization: <admin tok
 
 **ch76 临时 disable 后恢复**：`update channels set status=1 where id=76` + `/api/channel/fix`；ch75 继续活跃，双渠道自动恢复并行。
 
-**TTL 回退**（cache ratio 明显下降时）：`update options set value='300' where key='channel_affinity_setting.default_ttl_seconds'`；同步更新 `claude trace` 规则 `ttl_seconds=300`；`PUT /api/option/` 热加载两次（先 default_ttl，再 rules）。
+**TTL 回退**（cache ratio 明显下降时）：首选恢复原值 **600**（原设初衷为覆盖 Anthropic 5 分钟
+缓存窗，见 ops-stack-review-2026-08-11）；如需折中可用 300。
+`update options set value='600' where key='channel_affinity_setting.default_ttl_seconds'`；
+同步更新 `claude trace` 规则 `ttl_seconds=600`；`PUT /api/option/` 热加载两次（先 default_ttl，再 rules）。
