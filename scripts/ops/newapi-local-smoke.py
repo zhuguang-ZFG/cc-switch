@@ -50,10 +50,10 @@ SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 # relay + aggregate smoke passes. Channel 45 remains a live fallback.
 KNOWN_BROKEN_CHANNELS: set[int] = {2, 9, 18, 20, 57, 62, 63, 64, 65, 70, 71, 73, 74}  # 9/18: linxi 同账号余额耗尽（2026-08-10 403 insufficient balance），禁用+weight 0 双锁，被未知调用方回捞过一次；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中（73 于 08-10 15:06 被重新启用且未同步本契约，冒烟会持续 FAIL 直至 codex-relay 修复完成并更新本集合）
 
-# Model isolation is channel-specific. AgentRouter (ch45) serves Sol and Claude.
-# AnyRouter ch72 became Claude-only on 2026-08-14 so an overloaded Sol recovery
-# probe cannot keep independent Claude capacity disabled. CodeBuddy (ch44) keeps
-# its Sol exclusion contract.
+# Model isolation is channel-specific. AgentRouter (ch45) serves Sol only
+# (Claude moved to AnyRouter ch72 on 2026-08-14 so an overloaded Sol recovery
+# probe cannot keep independent Claude capacity disabled). CodeBuddy (ch44)
+# keeps its Sol exclusion contract.
 CHANNEL_MODEL_EXCLUSIONS: dict[int, set[str]] = {
     44: {"gpt-5.6-sol", "zg-wb-gpt-5.6-sol"},
 }
@@ -239,6 +239,9 @@ CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
     (48, "deepseek-v4-pro"): (51, 20),
     (48, "opencode-go"): (51, 20),
     (48, "opencode-go-pro"): (51, 20),
+    (45, "gpt-5.6-sol"): (40, 5),
+    (45, "zg-gpt-5.6-sol"): (40, 5),
+    (45, "zg-agent-gpt-5.6-sol"): (40, 5),
     (83, "gpt-5.6-sol"): (50, 5),
     (83, "zg-gpt-5.6-sol"): (50, 5),
     (83, "zg-agent-gpt-5.6-sol"): (50, 5),

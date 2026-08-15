@@ -140,7 +140,7 @@ class OmpContextUpdateTests(unittest.TestCase):
 
 
 class MuyuanSolPrimaryTests(unittest.TestCase):
-    def test_build_update_only_promotes_muyuan_sol(self) -> None:
+    def test_build_update_sets_target_tier_and_preserves_key(self) -> None:
         original = {
             "id": 83,
             "name": "muyuan-sol",
@@ -154,7 +154,7 @@ class MuyuanSolPrimaryTests(unittest.TestCase):
             "auto_ban": 1,
         }
 
-        updated = muyuan_sol.build_update(original)
+        updated = muyuan_sol.build_update(original, 50, 5)
 
         self.assertNotIn("status", updated)
         self.assertEqual(updated["key"], "opaque-secret")
@@ -163,13 +163,21 @@ class MuyuanSolPrimaryTests(unittest.TestCase):
         self.assertEqual(updated["models"], original["models"])
         self.assertEqual(updated["model_mapping"], original["model_mapping"])
 
-    def test_build_update_rejects_wrong_channel_or_masked_key(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "id 83"):
-            muyuan_sol.build_update({"id": 45, "name": "agentrouter", "key": "x"})
-        with self.assertRaisesRegex(RuntimeError, "empty or masked"):
-            muyuan_sol.build_update({"id": 83, "name": "muyuan-sol", "key": "***"})
+        demoted = muyuan_sol.build_update(
+            {"id": 45, "name": "agentrouter", "key": "opaque-secret"}, 40, 5
+        )
+        self.assertEqual(demoted["priority"], 40)
+        self.assertEqual(demoted["weight"], 5)
 
-    def test_hydrate_channel_key_reads_only_channel_83(self) -> None:
+    def test_build_update_rejects_masked_or_missing_key(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "empty or masked"):
+            muyuan_sol.build_update(
+                {"id": 83, "name": "muyuan-sol", "key": "***"}, 50, 5
+            )
+        with self.assertRaisesRegex(RuntimeError, "missing id or name"):
+            muyuan_sol.build_update({"key": "opaque-secret"}, 50, 5)
+
+    def test_hydrate_channel_key_reads_by_channel_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "new-api.db"
             con = sqlite3.connect(db_path)
@@ -184,10 +192,20 @@ class MuyuanSolPrimaryTests(unittest.TestCase):
                 NEWAPI_DB = db_path
 
             hydrated = muyuan_sol.hydrate_channel_key(
-                {"id": 83, "name": "muyuan-sol", "key": "sk-***"}, FakeSmoke
+                {"id": 83, "name": "muyuan-sol", "key": "sk-***"}, FakeSmoke, 83
             )
 
             self.assertEqual(hydrated["key"], "opaque-secret")
+
+    def test_verify_abilities_enforces_sol_tier(self) -> None:
+        ok_rows = [
+            ("gpt-5.6-sol", 1, 40, 5),
+            ("zg-gpt-5.6-sol", 1, 40, 5),
+            ("zg-agent-gpt-5.6-sol", 1, 40, 5),
+        ]
+        self.assertTrue(muyuan_sol.verify_abilities(ok_rows, 40, 5))
+        drifted = [("gpt-5.6-sol", 1, 51, 5)]
+        self.assertFalse(muyuan_sol.verify_abilities(drifted, 40, 5))
 
 
 class AnyRouterSplitTests(unittest.TestCase):

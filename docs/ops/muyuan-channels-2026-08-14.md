@@ -114,3 +114,24 @@ OMP 默认流量会先吃一次长 stall；ch45 的 content-blocked 误杀仍是
 **恢复（2026-08-15 23:37 起）**：上游 UA 限制解除。直连 200（3.5s，`OK.`）；
 admin 渠道测试 200（2.3s）；OMP 端到端 200 且 consume 日志直接归因 ch83
 （32k tokens / 11s，未走 ch45）。ch83 保持 p50/w5 主渠道。
+
+## 追加（2026-08-16 00:10）：修复 ch45 未降级缺陷 + muyuan 再次 503
+
+复核 Sol 路由时发现「升主」并未真正生效：`update_muyuan_sol_primary.py` 只把
+ch83 升到 p50，**从未把 ch45 从原主层 p51 降回 p40**。ch45(51) 持续压过
+ch83(50)，Sol 流量仍优先 agentrouter。文档此前「ch45 保持 p40/w5 兜底不动」
+的说法不实——ch45 一直是 51。smoke 的 `fallback channel posture` 门禁正确 FAIL
+（`45:agentrouter=priority=51`）。
+
+修复：脚本重写为「双渠道 posture 执行器」——ch83→p50 主 + ch45→p40 兜底，渠道级
+与 ability 级（三个 Sol 选择器）双侧落位，dry-run/整库备份/回读验证/失败回滚齐备。
+smoke 的 `CRITICAL_ABILITY_POSTURES` 补入 ch45 三行 Sol 能力（40/5），防止
+channel PUT 重建 abilities 时把 ch45 能力级又漂回主层。应用后备份
+`new-api-before-sol-posture-20260816-000830.db`，smoke 全绿。
+
+落点复核（00:08–00:10）：聚合 `gpt-5.6-sol` 请求 `admin_info.use_channel=["83","45"]`
+——NewAPI 已按正确顺序先试 ch83、失败后回退 ch45。此时 ch83 再次返回
+`503 No available channel for model gpt-5.6-sol ... (distributor)`（与 23:08 同类，
+muyuan.do 上游 Sol 池又空）；ch45 兜底 200 正常承接。结论：**本地路由已正确
+（muyuan 主、agentrouter 兜底），当前是 muyuan.do 上游 Sol 池再次劣化**，与
+23:30 所述波动一致，非本地配置问题。

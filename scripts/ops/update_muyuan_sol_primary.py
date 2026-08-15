@@ -1,55 +1,76 @@
-"""Promote the verified muyuan.do Sol channel above AgentRouter."""
+"""Enforce the Sol routing posture across both channels.
+
+Promotes ch83 muyuan-sol to primary (priority 50 / weight 5) and demotes
+ch45 agentrouter to fallback (priority 40 / weight 5), at both the channel
+and ability level, so Sol traffic prefers muyuan and only falls back to
+agentrouter when muyuan is disabled.
+
+The promotion alone is not enough: agentrouter keeps its old primary priority
+(51) until it is explicitly demoted, and NewAPI routes by the higher
+model-level priority. This script applies both sides atomically so the
+"muyuan primary" decision is actually in effect.
+
+Run: python3 scripts/ops/update_muyuan_sol_primary.py [--apply]
+"""
 from __future__ import annotations
 
 import argparse
 import importlib.util
-import json
 import sqlite3
 import time
 from pathlib import Path
 
 
-CHANNEL_ID = 83
-TARGET_PRIORITY = 50
-TARGET_WEIGHT = 5
+# (channel_id, expected_name, priority, weight, role)
+TARGETS: tuple[tuple[int, str, int, int, str], ...] = (
+    (83, "muyuan-sol", 50, 5, "primary"),
+    (45, "agentrouter", 40, 5, "fallback"),
+)
+SOL_MODELS: tuple[str, ...] = (
+    "gpt-5.6-sol",
+    "zg-gpt-5.6-sol",
+    "zg-agent-gpt-5.6-sol",
+)
 
 
 def load_smoke():
     path = Path(__file__).with_name("newapi-local-smoke.py")
-    spec = importlib.util.spec_from_file_location("newapi_local_smoke_muyuan", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("cannot load newapi-local-smoke.py")
+    spec = importlib.util.spec_from_file_location(
+        "newapi_local_smoke_for_updater", path
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def build_update(channel: dict) -> dict:
-    if channel.get("id") != CHANNEL_ID or channel.get("name") != "muyuan-sol":
-        raise RuntimeError("expected channel id 83 named muyuan-sol")
+def build_update(channel: dict, priority: int, weight: int) -> dict:
+    """Return a PUT payload that sets priority/weight and preserves the key."""
+    if channel.get("id") is None or channel.get("name") is None:
+        raise RuntimeError("channel payload missing id or name")
     key = channel.get("key")
     if not isinstance(key, str) or not key or "*" in key:
         raise RuntimeError("channel key is empty or masked")
     updated = {name: value for name, value in channel.items() if name != "status"}
-    updated["priority"] = TARGET_PRIORITY
-    updated["weight"] = TARGET_WEIGHT
+    updated["priority"] = priority
+    updated["weight"] = weight
     return updated
 
-def hydrate_channel_key(channel: dict, smoke) -> dict:
+
+def hydrate_channel_key(channel: dict, smoke, channel_id: int) -> dict:
+    """Unmask a channel key from the local SSOT when the API redacts it."""
     key = channel.get("key")
     if isinstance(key, str) and key.strip() and "*" not in key:
         return channel
     con = sqlite3.connect(f"file:{Path(smoke.NEWAPI_DB).as_posix()}?mode=ro", uri=True)
     try:
         row = con.execute(
-            "SELECT key FROM channels WHERE id = ?",
-            (CHANNEL_ID,),
+            "SELECT key FROM channels WHERE id = ?", (channel_id,)
         ).fetchone()
     finally:
         con.close()
     actual = row[0] if row else None
     if not isinstance(actual, str) or not actual.strip():
-        raise RuntimeError("channel key unavailable in local SSOT")
+        raise RuntimeError(f"channel {channel_id} key unavailable in local SSOT")
     return {**channel, "key": actual}
 
 
@@ -66,32 +87,31 @@ def backup_database(source_path: Path, destination: Path) -> None:
         source.close()
 
 
-def read_ability_rows(db_path: Path) -> list[tuple[str, int, int, int]]:
+def read_ability_rows(db_path: Path, channel_id: int) -> list[tuple[str, int, int, int]]:
     with sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True) as con:
         return list(
             con.execute(
                 "SELECT model, enabled, priority, weight FROM abilities "
                 "WHERE channel_id = ? ORDER BY model",
-                (CHANNEL_ID,),
+                (channel_id,),
             )
         )
 
 
-def verify(channel: object, ability_rows: list[tuple[str, int, int, int]], smoke) -> bool:
-    if not isinstance(channel, dict):
-        return False
-    if smoke.muyuan_sol_primary_violations([channel]):
-        return False
-    expected_models = set(smoke.MUYUAN_SOL_PRIMARY_CONTRACT["models"])
+def verify_abilities(
+    rows: list[tuple[str, int, int, int]], priority: int, weight: int
+) -> bool:
+    """Confirm each Sol selector on the channel sits at the expected tier."""
     actual = {
-        model: (enabled, priority, weight)
-        for model, enabled, priority, weight in ability_rows
-        if model in expected_models
+        model: (enabled, prio, w)
+        for model, enabled, prio, w in rows
+        if model in SOL_MODELS
     }
-    return actual == {
-        model: (1, TARGET_PRIORITY, TARGET_WEIGHT)
-        for model in expected_models
+    expected = {
+        model: (1, priority, weight)
+        for model in SOL_MODELS
     }
+    return actual == expected
 
 
 def main() -> int:
@@ -102,72 +122,127 @@ def main() -> int:
     smoke = load_smoke()
     token, user_id = smoke.admin_auth()
     headers = {"Authorization": f"Bearer {token}", "New-Api-User": str(user_id)}
-    status, body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/api/channel/{CHANNEL_ID}", headers=headers
-    )
-    channel = body.get("data") if isinstance(body, dict) else None
-    if status != 200 or not isinstance(channel, dict):
-        print(f"channel read failed: HTTP {status}")
-        return 1
-    try:
-        channel = hydrate_channel_key(channel, smoke)
-        updated = build_update(channel)
-    except RuntimeError as error:
-        print(error)
-        return 1
 
-    print(
-        f"current=priority:{channel.get('priority')},weight:{channel.get('weight')} "
-        f"proposed=priority:{TARGET_PRIORITY},weight:{TARGET_WEIGHT}"
-    )
-    if channel.get("priority") == TARGET_PRIORITY and channel.get("weight") == TARGET_WEIGHT:
-        rows = read_ability_rows(Path(smoke.NEWAPI_DB))
-        if verify(channel, rows, smoke):
-            print("already configured")
-            return 0
+    channels: dict[int, dict] = {}
+    for channel_id, _, _, _, _ in TARGETS:
+        status, body = smoke.http_json(
+            f"{smoke.NEWAPI_BASE}/api/channel/{channel_id}", headers=headers
+        )
+        channel = body.get("data") if isinstance(body, dict) else None
+        if status != 200 or not isinstance(channel, dict):
+            print(f"channel {channel_id} read failed: HTTP {status}")
+            return 1
+        channels[channel_id] = channel
+
+    updates: dict[int, dict] = {}
+    originals: dict[int, dict] = {}
+    for channel_id, expected_name, priority, weight, role in TARGETS:
+        channel = channels[channel_id]
+        if channel.get("name") != expected_name:
+            print(
+                f"channel {channel_id} expected name {expected_name!r}, "
+                f"got {channel.get('name')!r}"
+            )
+            return 1
+        channel = hydrate_channel_key(channel, smoke, channel_id)
+        originals[channel_id] = channel
+        updates[channel_id] = build_update(channel, priority, weight)
+        print(
+            f"ch{channel_id} {role}: priority {channel.get('priority')}→{priority}, "
+            f"weight {channel.get('weight')}→{weight}"
+        )
+
+    already_ok = True
+    for channel_id, _, priority, weight, _ in TARGETS:
+        channel = channels[channel_id]
+        rows = read_ability_rows(Path(smoke.NEWAPI_DB), channel_id)
+        channel_ok = (
+            channel.get("priority") == priority
+            and channel.get("weight") == weight
+        )
+        ability_ok = verify_abilities(rows, priority, weight)
+        if not (channel_ok and ability_ok):
+            already_ok = False
+        print(
+            f"ch{channel_id} current channel_ok={channel_ok} ability_ok={ability_ok}"
+        )
+
+    if already_ok:
+        print("already configured")
+        return 0
     if not args.apply:
         print("dry-run: no changes made")
         return 0
 
     backup_dir = Path(smoke.DEPLOY_DIR) / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    backup = backup_dir / f"new-api-before-muyuan-sol-primary-{time.strftime('%Y%m%d-%H%M%S')}.db"
+    backup = backup_dir / f"new-api-before-sol-posture-{time.strftime('%Y%m%d-%H%M%S')}.db"
     backup_database(Path(smoke.NEWAPI_DB), backup)
 
-    put_status, put_body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/api/channel/",
-        method="PUT",
-        body=updated,
-        headers=headers,
-    )
-    if put_status != 200 or not isinstance(put_body, dict) or not put_body.get("success"):
-        print(f"update failed: HTTP {put_status}; backup={backup.name}")
-        return 1
+    for channel_id in updates:
+        put_status, put_body = smoke.http_json(
+            f"{smoke.NEWAPI_BASE}/api/channel/",
+            method="PUT",
+            body=updates[channel_id],
+            headers=headers,
+        )
+        if put_status != 200 or not isinstance(put_body, dict) or not put_body.get("success"):
+            print(f"update ch{channel_id} failed: HTTP {put_status}; backup={backup.name}")
+            rollback(channels, originals, smoke, headers, channel_id)
+            return 1
 
-    verify_status, verify_body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/api/channel/{CHANNEL_ID}", headers=headers
-    )
-    verified = verify_body.get("data") if isinstance(verify_body, dict) else None
-    rows = read_ability_rows(Path(smoke.NEWAPI_DB))
-    ok = verify_status == 200 and verify(verified, rows, smoke)
-    print(f"backup={backup.name} verified={ok}")
-    if ok:
+    verified = True
+    for channel_id, _, priority, weight, _ in TARGETS:
+        verify_status, verify_body = smoke.http_json(
+            f"{smoke.NEWAPI_BASE}/api/channel/{channel_id}", headers=headers
+        )
+        verified_channel = verify_body.get("data") if isinstance(verify_body, dict) else None
+        rows = read_ability_rows(Path(smoke.NEWAPI_DB), channel_id)
+        channel_ok = (
+            verify_status == 200
+            and isinstance(verified_channel, dict)
+            and verified_channel.get("priority") == priority
+            and verified_channel.get("weight") == weight
+        )
+        ability_ok = verify_abilities(rows, priority, weight)
+        print(f"ch{channel_id} verified channel_ok={channel_ok} ability_ok={ability_ok}")
+        if not (channel_ok and ability_ok):
+            verified = False
+
+    if verified:
+        print(f"backup={backup.name} verified=True")
         return 0
 
-    rollback = {name: value for name, value in channel.items() if name != "status"}
-    rollback_status, rollback_body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/api/channel/",
-        method="PUT",
-        body=rollback,
-        headers=headers,
-    )
-    rollback_ok = (
-        rollback_status == 200
-        and isinstance(rollback_body, dict)
-        and bool(rollback_body.get("success"))
-    )
-    print(f"verification failed; rollback_ok={rollback_ok}")
+    print(f"verification failed; rolling back; backup={backup.name}")
+    rollback_ok = rollback(channels, originals, smoke, headers, None)
+    print(f"rollback_ok={rollback_ok}")
     return 1
+
+
+def rollback(
+    channels: dict[int, dict],
+    originals: dict[int, dict],
+    smoke,
+    headers,
+    skip_id: int | None,
+) -> bool:
+    """Restore every original channel payload (skipping one already restored)."""
+    ok = True
+    for channel_id, original in originals.items():
+        if channel_id == skip_id:
+            continue
+        rb_status, rb_body = smoke.http_json(
+            f"{smoke.NEWAPI_BASE}/api/channel/",
+            method="PUT",
+            body=original,
+            headers=headers,
+        )
+        ok = ok and (
+            rb_status == 200
+            and isinstance(rb_body, dict)
+            and bool(rb_body.get("success"))
+        )
+    return ok
 
 
 if __name__ == "__main__":
