@@ -7,21 +7,6 @@
 08-14 00:23 上游连续 402 "Budget pool quota has been exhausted"，首个 key 失败即中止，
 3 key 池形同虚设。
 
-**修复**（备份 `agentrouter-proxy.py.bak-20260815-quota-retry`）：
-
-- 429 直接判 retryable（冷却换 key）；
-- 402/403 **仅当响应体含额度关键词**（quota/exhausted/insufficient/budget/rate limit/额度/余额）
-  才冷却换 key——认证类 403（invalid key）保持快速失败，不错误轮换放大；
-- 500 "sensitive words detected"（上游内容过滤误杀）**不重试**，避免 NewAPI 预扣费放大。
-
-**验证**：单元 9/9（含真实观测的 402 body、403 auth、500 敏感词）；kill 后 proxies-supervisor
-30s 内自愈（新 PID）；直连 8788 `claude-opus-5`/`claude-opus-4-8`/`gpt-5.6-sol` 全部 200；
-OMP 端到端 `agentrouter/claude-opus-5` 与 `agentrouter/claude-opus-4-8` 均返回预期 token
-（后者 69s 偏慢，上游质量非配置问题）。
-
-**ch45 未动**：NewAPI ch45 当前仅挂 3 个 sol 模型（08-14 孤儿清理的既定决策），
-OMP 直连路径已通；恢复 ch45 Opus（含 Cursor `zg-agent-claude-opus-*` 别名）属路由策略
-变更，未授权不执行。
 
 ## 2. OMP config 变更
 
@@ -95,3 +80,48 @@ key 有效但无消费权限，**未接入**任何配置。
 
 - 本会话 models.yml 明文 key 经读取出现在传输中，按泄露处理：建议轮换 OMP `zg-newapi` 与
   `agentrouter` 两个 provider key，及 0v0 key（若不使用则吊销）。
+
+## 10. 闲置模型上岗（2026-08-15 晚）
+
+**商汤 sensenova-6.7-flash-lite**：
+- 实测为 reasoning 模型（`reasoning` 字段），`models.yml` 补 `reasoning: true`
+  （无标记时 OMP 侧 content 解析为空）。
+- 时延实测：足量 max_tokens 下琐碎 prompt ~3s；max_tokens 过小会被思考吃光致 content 空
+  （64/1024 均不够，≥4096 正常）。`enable_thinking=false` / `reasoning_effort=low` 上游均忽略。
+- 上岗位置（全链尾，平时零流量）：`zg-newapi/deepseek-v4-flash` 链（tiny）、
+  `zg-newapi/claude-haiku-4-5` 链（commit）、`smol` 角色链——免费池 429 时的吸收层。
+
+**其他闲置模型审计 + 上岗**（canary 全过，全部链尾）：
+
+| 模型 | canary | 上岗位置 |
+|---|---|---|
+| mercury-2 (ch61) | 200 / 539ms | `smol` 链尾 |
+| agnes-2.5-pro-alpha (ch68/69) | 200 / 3.2s | `vision` 链尾（image 已声明） |
+| intern-s2-preview (ch66/67) | 200 / 682ms | `plan` 链尾 |
+
+**保持闲置（如实记录）**：
+- `gpt-5.5`：全部 carrier abilities enabled=0（ch2/30/70 封禁、ch82 随 7758 池干），条目保留待恢复。
+- `zai-glm-5-2`：ch81 配置与 ability 正常，**muyuan 自身 NewAPI 池对该模型无渠道**（503 distributor），自愈型。
+- `qwen3.8-max`：周配额耗尽（§5-P3）。
+- `kimi-for-coding`：contextPromotion 源模型，机制内在用。
+- `gpt-5.6-sol`：reviewer/security-reviewer agents frontmatter 在用（agentrouter 路径）；
+  OMP 链按 §2 门禁不进。
+
+验证：route gate 33/33 OK；OMP 端到端 `sensenova-6.7-flash-lite` 正确返回。
+备份：`models.yml.20260815-sensenova-reasoning.bak`、`config.yml.20260815-sensenova-chains.bak`。
+**修复**（备份 `agentrouter-proxy.py.bak-20260815-quota-retry`）：
+
+- 429 直接判 retryable（冷却换 key）；
+- 402/403 **仅当响应体含额度关键词**（quota/exhausted/insufficient/budget/rate limit/额度/余额）
+  才冷却换 key——认证类 403（invalid key）保持快速失败，不错误轮换放大；
+- 500 "sensitive words detected"（上游内容过滤误杀）**不重试**，避免 NewAPI 预扣费放大。
+
+**验证**：单元 9/9（含真实观测的 402 body、403 auth、500 敏感词）；kill 后 proxies-supervisor
+30s 内自愈（新 PID）；直连 8788 `claude-opus-5`/`claude-opus-4-8`/`gpt-5.6-sol` 全部 200；
+OMP 端到端 `agentrouter/claude-opus-5` 与 `agentrouter/claude-opus-4-8` 均返回预期 token
+（后者 69s 偏慢，上游质量非配置问题）。
+
+**ch45 未动**：NewAPI ch45 当前仅挂 3 个 sol 模型（08-14 孤儿清理的既定决策），
+OMP 直连路径已通；恢复 ch45 Opus（含 Cursor `zg-agent-claude-opus-*` 别名）属路由策略
+变更，未授权不执行。
+
