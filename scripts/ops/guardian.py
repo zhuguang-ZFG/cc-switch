@@ -290,15 +290,25 @@ def _write_heartbeat() -> None:
     Guardian。因此提为模块级函数，供长耗时步骤中途刷新。
     写失败只影响存活信号，绝不抛出打断自愈逻辑。
     """
-    try:
-        hb_tmp = HEARTBEAT_FILE.with_suffix(".json.tmp")
-        hb_tmp.write_text(json.dumps({
-            "ts": datetime.now().isoformat(),
-            "pid": os.getpid(),
-        }), encoding="utf-8")
-        os.replace(hb_tmp, HEARTBEAT_FILE)
-    except OSError as hb_err:
-        logger.error(f"Heartbeat write failed: {hb_err}")
+    payload = json.dumps({
+        "ts": datetime.now().isoformat(),
+        "pid": os.getpid(),
+    })
+    # WinError 5 间歇失败（AV/索引临时锁 tmp 文件）：唯一 tmp 名 + 短退避重试，
+    # 全部失败才记日志，保持"绝不抛出打断自愈"契约。
+    last_err: OSError | None = None
+    for attempt in range(3):
+        try:
+            hb_tmp = HEARTBEAT_FILE.with_name(
+                f"{HEARTBEAT_FILE.name}.{os.getpid()}.{attempt}.tmp"
+            )
+            hb_tmp.write_text(payload, encoding="utf-8")
+            os.replace(hb_tmp, HEARTBEAT_FILE)
+            return
+        except OSError as hb_err:
+            last_err = hb_err
+            time.sleep(0.2 * (attempt + 1))
+    logger.error(f"Heartbeat write failed after 3 attempts: {last_err}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

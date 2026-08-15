@@ -1925,7 +1925,7 @@ class ProxyRestartTests(unittest.TestCase):
         self.assertGreaterEqual(len(replaces), 1)
         self.assertGreaterEqual(len(writes), 1)
         self.assertTrue(replaces[0][2].endswith("heartbeat.json"))
-        self.assertTrue(replaces[0][1].endswith("heartbeat.json.tmp"))
+        self.assertRegex(replaces[0][1], r"heartbeat\.json\.\d+\.\d+\.tmp$")  # 重试版唯一 tmp 名
         write_idx = calls.index(writes[0])
         replace_idx = calls.index(replaces[0])
         self.assertLess(write_idx, replace_idx)  # tmp 写入先于原子替换
@@ -1955,6 +1955,27 @@ class ProxyRestartTests(unittest.TestCase):
 
         err.assert_called()
         g._check_cycle.assert_called()
+
+    def test_heartbeat_retry_succeeds_after_transient_replace_failure(self):
+        """WinError 5 瞬时失败：换唯一 tmp 名重试，第二次成功且不记错误日志"""
+        attempts = []
+
+        def flaky_replace(src, dst):
+            attempts.append(str(src))
+            if len(attempts) == 1:
+                raise OSError("sharing violation")
+
+        with (
+            patch.object(guardian.Path, "write_text"),
+            patch.object(guardian.os, "replace", side_effect=flaky_replace),
+            patch.object(guardian.logger, "error") as err,
+            patch.object(guardian.time, "sleep"),
+        ):
+            guardian._write_heartbeat()
+
+        self.assertEqual(len(attempts), 2)
+        self.assertNotEqual(attempts[0], attempts[1])  # 每次尝试换不同 tmp 名
+        err.assert_not_called()
 
 
     def test_state_corrupt_backed_up_not_silent(self):
