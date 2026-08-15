@@ -71,7 +71,7 @@ OMP 实证探针（`omp -p --model`）：`OMP_GPT55_OK`（~31s 含启动）、`O
 | models | `gpt-5.6-sol,zg-gpt-5.6-sol,zg-agent-gpt-5.6-sol` |
 | model_mapping | 两个 `zg-*` 别名 → `gpt-5.6-sol`（复制 ch45 姿势） |
 | header_override | `{"User-Agent":"codex_cli_rs/0.42.0"}`（**必需**——sol 与 gpt-5.5 同族 UA 白名单，Go 默认 UA 直连 403 `channel:client_restricted`，实测复证） |
-| priority / weight | **40 / 2**——与 ch45 agentrouter（p40/w5）同层，真聚合分流 ≈ 71%/29%；非 p50 新主层 |
+| priority / weight | **50 / 5**（2026-08-15 22:33 起，用户裁定 muyuan 为 Sol 主渠道；ch45 agentrouter 保持 40/5 兜底） |
 | test_model | `gpt-5.6-sol`（显式，避免 ch72 式空 test_model 恢复探针歧义） |
 | status / auto_ban | 1 / 1 |
 
@@ -83,3 +83,34 @@ OMP 实证探针（`omp -p --model`）：`OMP_GPT55_OK`（~31s 含启动）、`O
 `new-api.db.bak-20260815-213926-muyuan-sol`（integrity ok）。
 
 注意：consume 日志 ch83 行 `channel_name` 为 NULL（fork 记录行为，不影响计费/归因）。
+
+## 追加（2026-08-15 23:30）：ch83 升主 + 上游故障证据
+
+用户裁定 Sol 以 muyuan.do 为主后，ch83 经 `scripts/ops/update_muyuan_sol_primary.py`
+升至 p50/w5（channel + abilities 双验证，整库快照
+`new-api-before-muyuan-sol-primary-20260815-223321.db`，integrity ok）。
+ch45 agentrouter 保持 p40/w5 兜底不动。
+
+升级后 muyuan 上游 Sol 池在约一小时内劣化（均为 muyuan 侧证据，非本机配置）：
+
+| 时间 | 请求形态 | 结果 |
+|------|----------|------|
+| 22:34/22:35 | OMP 真实流量 | Cloudflare 504 Gateway time-out ×2（~61s） |
+| 23:08 | admin 渠道测试 | 503 `No available channel ... (distributor)`——Sol 池当时无可用上游 |
+| 23:22/23:26/23:30 | 真实流量 + admin 测试 + 直连探针 | 403 `channel:client_restricted (detected: codex_cli_rs/0.42.0)` |
+
+直连 UA 矩阵（key 不落盘，内存读取）：codex_cli_rs/0.42.0 → 403 client_restricted；
+无自定义 UA → Cloudflare 1010；claude-cli/2.0.0 → 403 client_restricted。
+**此前"仅 codex_cli_rs 放行"的 UA 白名单已失效**，新允许客户端未知，暂无 header_override 可修。
+
+当前行为（23:30 实证）：请求先打 ch83（1s 快速 403）→ NewAPI 重试至 ch45 →
+HTTP 200（8.7s），OMP 端到端返回正常。ch83 auto_ban=1 且 403 在自动禁用码内，
+连续失败后 NewAPI 会自动禁用、Guardian 恢复队列接管，上游恢复后按 p50/w5 回主层
+（smoke 契约允许 auto_ban 降级但锁定层级）。
+
+风险挂账：若 muyuan 池部分恢复为"慢而不死"，504 需要 ~60s 才触发跨渠道重试，
+OMP 默认流量会先吃一次长 stall；ch45 的 content-blocked 误杀仍是间歇性已知问题，两层同时坏时请求会失败，需要继续观察 muyuan 池恢复情况。
+
+**恢复（2026-08-15 23:37 起）**：上游 UA 限制解除。直连 200（3.5s，`OK.`）；
+admin 渠道测试 200（2.3s）；OMP 端到端 200 且 consume 日志直接归因 ch83
+（32k tokens / 11s，未走 ch45）。ch83 保持 p50/w5 主渠道。

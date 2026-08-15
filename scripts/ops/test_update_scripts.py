@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,9 @@ newapi_retry = load(
 )
 anyrouter_timeout = load(
     "update_anyrouter_timeout_budget_for_tests", "update_anyrouter_timeout_budget.py"
+)
+muyuan_sol = load(
+    "update_muyuan_sol_primary_for_tests", "update_muyuan_sol_primary.py"
 )
 
 
@@ -133,6 +137,57 @@ class OmpContextUpdateTests(unittest.TestCase):
             omp_context.context_window_line(
                 duplicate, "zg-newapi-anthropic", "claude-opus-5"
             )
+
+
+class MuyuanSolPrimaryTests(unittest.TestCase):
+    def test_build_update_only_promotes_muyuan_sol(self) -> None:
+        original = {
+            "id": 83,
+            "name": "muyuan-sol",
+            "status": 1,
+            "key": "opaque-secret",
+            "models": "gpt-5.6-sol,zg-gpt-5.6-sol,zg-agent-gpt-5.6-sol",
+            "model_mapping": '{"zg-gpt-5.6-sol":"gpt-5.6-sol"}',
+            "test_model": "gpt-5.6-sol",
+            "priority": 40,
+            "weight": 2,
+            "auto_ban": 1,
+        }
+
+        updated = muyuan_sol.build_update(original)
+
+        self.assertNotIn("status", updated)
+        self.assertEqual(updated["key"], "opaque-secret")
+        self.assertEqual(updated["priority"], 50)
+        self.assertEqual(updated["weight"], 5)
+        self.assertEqual(updated["models"], original["models"])
+        self.assertEqual(updated["model_mapping"], original["model_mapping"])
+
+    def test_build_update_rejects_wrong_channel_or_masked_key(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "id 83"):
+            muyuan_sol.build_update({"id": 45, "name": "agentrouter", "key": "x"})
+        with self.assertRaisesRegex(RuntimeError, "empty or masked"):
+            muyuan_sol.build_update({"id": 83, "name": "muyuan-sol", "key": "***"})
+
+    def test_hydrate_channel_key_reads_only_channel_83(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "new-api.db"
+            con = sqlite3.connect(db_path)
+            try:
+                con.execute("CREATE TABLE channels (id INTEGER PRIMARY KEY, key TEXT)")
+                con.execute("INSERT INTO channels VALUES (83, 'opaque-secret')")
+                con.commit()
+            finally:
+                con.close()
+
+            class FakeSmoke:
+                NEWAPI_DB = db_path
+
+            hydrated = muyuan_sol.hydrate_channel_key(
+                {"id": 83, "name": "muyuan-sol", "key": "sk-***"}, FakeSmoke
+            )
+
+            self.assertEqual(hydrated["key"], "opaque-secret")
 
 
 class AnyRouterSplitTests(unittest.TestCase):

@@ -75,9 +75,9 @@ Guardian 依赖以下 NewAPI 设置（已通过 API 配置）：
 | `AutomaticDisableStatusCodes` | `401,402,403,502` | 自动禁用的 HTTP 状态码 |
 | `AutomaticDisableKeywords` | 余额不足, INSUFFICIENT_BALANCE, credit balance, ... | 自动禁用的错误关键词 |
 | `AutomaticEnableChannelEnabled` | `true` | NewAPI 可自动启用；Guardian 会重新验证并在不稳定时禁用 |
-| `AutomaticRetryStatusCodes` | `100-199,300-399,409-499,500-504,505-599` | 明确排除无意义的 402 池内重试 |
+| `AutomaticRetryStatusCodes` | `408,500-503` | 仅重试瞬时超时/服务端错误；认证、余额和 429 交给客户端退避/OMP 回退，避免嵌套放大 |
 | `ChannelDisableThreshold` | `3` | NewAPI 连续失败阈值 |
-| `RetryTimes` | `2` | 请求重试次数 |
+| `RetryTimes` | `1` | NewAPI 内层最多重试一次，避免与 OMP fallback 叠乘 |
 
 本机关闭 NewAPI 内置定时渠道测试以控制探测成本，因此 Guardian 每轮会把 `status=3 && auto_ban=1` 的渠道同步到自身恢复队列。同步不立即启用：先等待至少 5 分钟，再执行 3 次探测、至少 2 次通过、恢复权重和 10 分钟稳定性回滚。手工 `status=2`、`auto_ban=0` 以及明确隔离的 2/62/63/64/65 不进入自动恢复。
 

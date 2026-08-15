@@ -82,6 +82,45 @@ ANYROUTER_CLAUDE_MAPPING = {
     "zg-agent-claude-opus-5": "claude-opus-5",
     "zg-agent-claude-opus-4-8": "claude-opus-4-8",
 }
+MUYUAN_SOL_CHANNEL_ID = 83
+MUYUAN_SOL_PRIMARY_CONTRACT: dict[str, object] = {
+    "name": "muyuan-sol",
+    "type": 1,
+    "status": 1,
+    "auto_ban": 1,
+    "base_url": "https://muyuan.do",
+    "priority": 50,
+    "weight": 5,
+    "test_model": "gpt-5.6-sol",
+    "models": (
+        "gpt-5.6-sol",
+        "zg-gpt-5.6-sol",
+        "zg-agent-gpt-5.6-sol",
+    ),
+    "mapping": {
+        "zg-gpt-5.6-sol": "gpt-5.6-sol",
+        "zg-agent-gpt-5.6-sol": "gpt-5.6-sol",
+    },
+    "header_override": {"User-Agent": "codex_cli_rs/0.42.0"},
+}
+TEAMOROUTER_CHANNEL_ID = 84
+TEAMOROUTER_FREE_CONTRACT: dict[str, object] = {
+    "name": "teamorouter-deepseek-free",
+    "type": 1,
+    "status": 1,
+    "auto_ban": 1,
+    "base_url": "https://api.teamorouter.com",
+    "priority": 40,
+    "weight": 5,
+    "test_model": "deepseek-v4-flash",
+    "models": ("deepseek-v4-flash", "deepseek-v4-pro"),
+    "mapping": {
+        "deepseek-v4-flash": "deepseek-v4-flash-free",
+        "deepseek-v4-pro": "deepseek-v4-pro-free",
+    },
+}
+
+
 
 # ai.168661 uses one key per model family. Keep those credentials in separate
 # channels so a revoked family key cannot silently poison unrelated models.
@@ -106,6 +145,7 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
         "test_model": "grok-4.5",
         "priority": 55,
         "weight": 10,
+        "status": 2,
     },
     78: {
         "name": "ai-168661-deepseek-0731",
@@ -121,6 +161,7 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
         "test_model": "deepseek-v4-flash",
         "priority": 50,
         "weight": 5,
+        "status": 2,
     },
     79: {
         "name": "ai-168661-hy3",
@@ -129,6 +170,7 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
         "test_model": "hy3",
         "priority": 50,
         "weight": 5,
+        "status": 2,
     },
 }
 
@@ -197,6 +239,11 @@ CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
     (48, "deepseek-v4-pro"): (51, 20),
     (48, "opencode-go"): (51, 20),
     (48, "opencode-go-pro"): (51, 20),
+    (83, "gpt-5.6-sol"): (50, 5),
+    (83, "zg-gpt-5.6-sol"): (50, 5),
+    (83, "zg-agent-gpt-5.6-sol"): (50, 5),
+    (84, "deepseek-v4-flash"): (40, 5),
+    (84, "deepseek-v4-pro"): (40, 5),
 }
 
 
@@ -328,6 +375,107 @@ def ability_posture_violations() -> list[str]:
         con.close()
 
 
+def muyuan_sol_primary_violations(channels: list[dict]) -> list[str]:
+    """Pin muyuan.do above AgentRouter for every exposed Sol selector.
+
+    An auto_ban disable (upstream outage) is accepted like other degraded
+    postures; priority/weight are still enforced so the channel re-enters as
+    the Sol primary after Guardian's recovery loop.
+    """
+    channel = next(
+        (item for item in channels if item.get("id") == MUYUAN_SOL_CHANNEL_ID),
+        None,
+    )
+    if channel is None:
+        return [f"{MUYUAN_SOL_CHANNEL_ID}:missing"]
+
+    expected = MUYUAN_SOL_PRIMARY_CONTRACT
+    reasons: list[str] = []
+    degraded = channel.get("status") != 1 and channel.get("auto_ban") in (1, True)
+    for field in ("name", "type", "auto_ban", "base_url",
+                  "priority", "weight", "test_model"):
+        if channel.get(field) != expected[field]:
+            reasons.append(f"{field}={channel.get(field)}")
+    if channel.get("status") != expected["status"] and not degraded:
+        reasons.append(f"status={channel.get('status')}")
+
+    models = {
+        model.strip()
+        for model in str(channel.get("models") or "").split(",")
+        if model.strip()
+    }
+    expected_models = set(expected["models"])
+    if models != expected_models:
+        reasons.append(
+            "models="
+            f"missing:{sorted(expected_models - models)},"
+            f"extra:{sorted(models - expected_models)}"
+        )
+
+    for field, expected_value in (
+        ("model_mapping", expected["mapping"]),
+        ("header_override", expected["header_override"]),
+    ):
+        try:
+            actual = json.loads(str(channel.get(field) or "{}"))
+        except (TypeError, ValueError):
+            actual = None
+        if actual != expected_value:
+            reasons.append(f"{field}=drifted")
+
+    return (
+        [f"{MUYUAN_SOL_CHANNEL_ID}:{channel.get('name', '')}=" + ",".join(reasons)]
+        if reasons else []
+    )
+
+def teamorouter_free_violations(channels: list[dict]) -> list[str]:
+    """Pin the teamorouter free tier as a bounded DeepSeek fallback channel.
+
+    An auto_ban disable during upstream free-tier outages is accepted; the
+    priority/weight tier is still enforced so the channel re-enters as a
+    p40 fallback below the ch42/ch48 primaries.
+    """
+    channel = next(
+        (item for item in channels if item.get("id") == TEAMOROUTER_CHANNEL_ID),
+        None,
+    )
+    if channel is None:
+        return [f"{TEAMOROUTER_CHANNEL_ID}:missing"]
+
+    expected = TEAMOROUTER_FREE_CONTRACT
+    reasons: list[str] = []
+    degraded = channel.get("status") != 1 and channel.get("auto_ban") in (1, True)
+    for field in ("name", "type", "auto_ban", "base_url",
+                  "priority", "weight", "test_model"):
+        if channel.get(field) != expected[field]:
+            reasons.append(f"{field}={channel.get(field)}")
+    if channel.get("status") != expected["status"] and not degraded:
+        reasons.append(f"status={channel.get('status')}")
+
+    models = {
+        model.strip()
+        for model in str(channel.get("models") or "").split(",")
+        if model.strip()
+    }
+    expected_models = set(expected["models"])
+    if models != expected_models:
+        reasons.append(
+            "models="
+            f"missing:{sorted(expected_models - models)},"
+            f"extra:{sorted(models - expected_models)}"
+        )
+    try:
+        mapping = json.loads(str(channel.get("model_mapping") or "{}"))
+    except (TypeError, ValueError):
+        mapping = None
+    if mapping != expected["mapping"]:
+        reasons.append("model_mapping=drifted")
+
+    return (
+        [f"{TEAMOROUTER_CHANNEL_ID}:{channel.get('name', '')}=" + ",".join(reasons)]
+        if reasons else []
+    )
+
 def fallback_posture_violations(channels: list[dict]) -> list[str]:
     """Return fallback channels that are disabled or drifted into a primary tier.
 
@@ -433,7 +581,7 @@ def ai168661_channel_violations(channels: list[dict]) -> list[str]:
                 reasons.append(f"{field}={channel.get(field)}")
         if channel.get("type") != 1:
             reasons.append(f"type={channel.get('type')}")
-        if channel.get("status") != 1:
+        if channel.get("status") != expected["status"]:
             reasons.append(f"status={channel.get('status')}")
         if channel.get("auto_ban") not in (1, True):
             reasons.append(f"auto_ban={channel.get('auto_ban')}")
@@ -769,6 +917,18 @@ def main() -> int:
                 "ai.168661 channel posture",
                 not ai168661_violations,
                 f"violations={ai168661_violations or 'none'}",
+            )
+            muyuan_violations = muyuan_sol_primary_violations(items)
+            check(
+                "muyuan Sol primary posture",
+                not muyuan_violations,
+                f"violations={muyuan_violations or 'none'}",
+            )
+            teamo_violations = teamorouter_free_violations(items)
+            check(
+                "teamorouter free fallback posture",
+                not teamo_violations,
+                f"violations={teamo_violations or 'none'}",
             )
             disable_violations = expected_disabled_violations(items)
             check(

@@ -271,7 +271,7 @@ class AdminAuthTests(unittest.TestCase):
                     "id": channel_id,
                     "name": expected["name"],
                     "type": 1,
-                    "status": 1,
+                    "status": expected["status"],
                     "auto_ban": 1,
                     "base_url": "https://ai.168661.xyz",
                     "priority": expected["priority"],
@@ -318,13 +318,11 @@ class AdminAuthTests(unittest.TestCase):
 
         violations = smoke.ai168661_channel_violations(channels)
         self.assertEqual(len(violations), 3)
-        self.assertIn("status=2", violations[0])
+        self.assertNotIn("status=2", violations[0])
         self.assertIn("base_url=https://ai.168661.xyz/v1", violations[0])
         self.assertIn("grok-imagine-video", violations[0])
-        self.assertEqual(
-            violations[1],
-            "78:ai-168661-deepseek-0731=model_mapping=drifted",
-        )
+        self.assertIn("status=1", violations[1])
+        self.assertIn("model_mapping=drifted", violations[1])
         self.assertEqual(violations[2], "79:missing")
 
     def test_live_agentrouter_fallback_is_not_expected_disabled(self):
@@ -341,6 +339,105 @@ class AdminAuthTests(unittest.TestCase):
                 "74:sharedchat-codex-sol=re-entered service",
             ],
         )
+
+    def test_muyuan_sol_primary_channel_contract(self):
+        expected = smoke.MUYUAN_SOL_PRIMARY_CONTRACT
+        channel = {
+            "id": 83,
+            "name": expected["name"],
+            "type": expected["type"],
+            "status": expected["status"],
+            "auto_ban": expected["auto_ban"],
+            "base_url": expected["base_url"],
+            "priority": expected["priority"],
+            "weight": expected["weight"],
+            "test_model": expected["test_model"],
+            "models": ",".join(expected["models"]),
+            "model_mapping": json.dumps(expected["mapping"]),
+            "header_override": json.dumps(expected["header_override"]),
+        }
+        self.assertEqual(smoke.muyuan_sol_primary_violations([channel]), [])
+        channel["priority"] = 40
+        channel["weight"] = 2
+        self.assertEqual(
+            smoke.muyuan_sol_primary_violations([channel]),
+            ["83:muyuan-sol=priority=40,weight=2"],
+        )
+
+    def test_muyuan_sol_auto_ban_outage_is_accepted_but_tier_locked(self):
+        expected = smoke.MUYUAN_SOL_PRIMARY_CONTRACT
+        channel = {
+            "id": 83,
+            "name": expected["name"],
+            "type": expected["type"],
+            "status": 3,
+            "auto_ban": 1,
+            "base_url": expected["base_url"],
+            "priority": expected["priority"],
+            "weight": expected["weight"],
+            "test_model": expected["test_model"],
+            "models": ",".join(expected["models"]),
+            "model_mapping": json.dumps(expected["mapping"]),
+            "header_override": json.dumps(expected["header_override"]),
+        }
+
+        self.assertEqual(smoke.muyuan_sol_primary_violations([channel]), [])
+        channel["priority"] = 40
+        self.assertEqual(
+            smoke.muyuan_sol_primary_violations([channel]),
+            ["83:muyuan-sol=priority=40"],
+        )
+        channel["priority"] = 50
+        channel["auto_ban"] = 0
+        self.assertEqual(
+            smoke.muyuan_sol_primary_violations([channel]),
+            ["83:muyuan-sol=auto_ban=0,status=3"],
+        )
+    def test_teamorouter_free_fallback_contract(self):
+        expected = smoke.TEAMOROUTER_FREE_CONTRACT
+        channel = {
+            "id": 84,
+            "name": expected["name"],
+            "type": expected["type"],
+            "status": expected["status"],
+            "auto_ban": expected["auto_ban"],
+            "base_url": expected["base_url"],
+            "priority": expected["priority"],
+            "weight": expected["weight"],
+            "test_model": expected["test_model"],
+            "models": ",".join(expected["models"]),
+            "model_mapping": json.dumps(expected["mapping"]),
+        }
+
+        self.assertEqual(smoke.teamorouter_free_violations([channel]), [])
+
+    def test_teamorouter_drift_and_auto_ban_posture(self):
+        expected = smoke.TEAMOROUTER_FREE_CONTRACT
+        channel = {
+            "id": 84,
+            "name": expected["name"],
+            "type": expected["type"],
+            "status": 3,
+            "auto_ban": 1,
+            "base_url": expected["base_url"],
+            "priority": expected["priority"],
+            "weight": expected["weight"],
+            "test_model": expected["test_model"],
+            "models": ",".join(expected["models"]),
+            "model_mapping": json.dumps(expected["mapping"]),
+        }
+
+        self.assertEqual(smoke.teamorouter_free_violations([channel]), [])
+        channel["priority"] = 50
+        self.assertEqual(
+            smoke.teamorouter_free_violations([channel]),
+            ["84:teamorouter-deepseek-free=priority=50"],
+        )
+        self.assertEqual(
+            smoke.teamorouter_free_violations([]),
+            ["84:missing"],
+        )
+
 
     def test_fallback_posture_is_valid(self):
         channels = [

@@ -65,3 +65,24 @@ pro 以池名 `zg-newapi/deepseek-v4-pro` 编入旗舰角色回退链（与 opus
 - DB：`~/.new-api-local/backups/new-api.db.bak-20260813-deepseek-v4-pro`（57,458,688 B，改前）
 - OMP：`~/.omp/agent/models.yml.20260813-deepseek-v4-pro.bak`
 - 渠道级回滚：PUT 移除本次新增 models/mapping 条目（或还原本渠道 DB 行）；OMP 回滚：还原 models.yml 备份。
+
+## 追加（2026-08-15）：ch84 `teamorouter-deepseek-free`——免费层兜底
+
+用户提供 teamorounter key（仅存 NewAPI 渠道配置，不落文档/仓库）。直连实测
+`deepseek-v4-flash-free` / `deepseek-v4-pro-free` 均 200 且有真实内容输出
+（reasoning 模型，max_tokens=8 时 content 为空——与 sensenova 同类，预算给足
+即正常；OMP 侧经聚合调用不受直接暴露影响）。
+
+| 项 | ch84 |
+|----|------|
+| type / base_url | 1（OpenAI）/ `https://api.teamorouter.com`（根路径） |
+| models | `deepseek-v4-flash,deepseek-v4-pro`（仅聚合名，不直接暴露 -free id，避开新 id 配价） |
+| model_mapping | 两个聚合名 → 对应 `-free` 上游 |
+| priority / weight | 40 / 5——低于 ch42（50）/ch48（51）主层，仅在主池失效时承接 |
+| test_model | `deepseek-v4-flash`（经 mapping 实测上游路径） |
+
+验证：创建 `POST /api/channel/` `{"mode":"single","channel":{...}}`（fork 契约复用）；
+abilities 双行 `enabled=1, 40/5`；admin 渠道测试 200；聚合 `deepseek-v4-flash`
+请求仍落 ch48（主层不受影响）；创建前整库快照
+`new-api-before-teamorouter-20260815-234706.db`（integrity ok）。smoke 新增
+`teamorouter free fallback posture` 门禁（允许 auto_ban 降级，锁定 p40/w5 层级）。
