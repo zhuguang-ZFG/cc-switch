@@ -153,6 +153,8 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 | `~/.omp/guardian/start.bat` | Guardian 手动/调试用启动脚本（带退出码 75 外的 10s 重试循环；生产入口为计划任务） |
 | `~/.omp/guardian/apply-secrets-restart.ps1` | 改 secrets.json 后重启 Guardian + Supervisor（可选 bounce 指定代理）；必须使用，否则旧配置回弹 |
 | `~/.omp/guardian/supervisor-status.json` | supervisor 心跳（ts + pid + bind_host + restarts_today） |
+| `~/.omp/guardian/anyrouter-window-canary.py` | anyrouter Claude 池开窗哨兵：计划任务 `AnyRouter Window Canary` 每 30min 触发一次（即跑即退），haiku/16 tokens 探测 8789 桥，仅 closed→open 跳变发 Telegram。门禁 test_omp_routes.py:487 禁止自动挂链，开窗后人工显式选用 |
+| `~/.omp/guardian/anyrouter-canary-state.json` | 哨兵状态（上次 open/closed + 细节），防重复告警 |
 | `~/.omp/guardian/proxies-supervisor.log` | supervisor 运行日志 |
 | Startup `LocalAIProxies-Supervisor.lnk` | supervisor 唯一活跃启动入口（同名计划任务 Disabled） |
 | `~/.omp/guardian/heartbeat.json` | 心跳（Guardian.run() 每轮原子写 ts+pid） |

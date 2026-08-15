@@ -61,7 +61,16 @@ OMP `models.yml` 摘除 `deepseek-v4-flash-0731`、`hy3` 两条目
 - 社区方案评估：签到脚本 `millylee/anyrouter-check-in`（1.3k star，GitHub Actions 每 6h、
   $25/天/账号，支持 anyrouter+agentrouter）只续额度**不解 429**；源码审查未见外传，
   凭据走 GitHub Environment secrets。⚠️ 勿用 `shindouhiro/anyrouter` fork（仓库内提交 `.env`）。
-- 未部署任何自动探活（需用户逐条授权：周期消耗余额、读 Telegram 凭据、注册计划任务）。
+- ~~未部署任何自动探活（需用户逐条授权）~~ → 当晚已获授权并部署，见下条。
+- **窗口哨兵已部署（20:23，用户授权）**：`~/.omp/guardian/anyrouter-window-canary.py`
+  （镜像 `scripts/ops/`），计划任务 `AnyRouter Window Canary` 每 30min 一次性触发，
+  探测 8789 桥 `claude-haiku-4-5-20251001`（16 tokens，单次 <$0.001，429 不计费），
+  仅 closed→open 跳变发 Telegram；开窗后按门禁约束人工显式选用
+  `anyrouter/claude-opus-5` / `anyrouter/claude-opus-4-8`。
+- 当晚会战复测（~20:18）：Claude 全池仍 429、gpt-5.6-sol 仍 500、
+  gemini-2.5-pro/gpt-5-codex 404 "当前 API 不支持所选模型"；余额接口被 WAF
+  JS 挑战拦截（非 401），无法核查；429 body 为上游过载转发而非配额语义。
+  首跑实测：exit 0、state=closed、无误报。
 
 ## 7. 0v0.club key 探测（用户提供）
 
