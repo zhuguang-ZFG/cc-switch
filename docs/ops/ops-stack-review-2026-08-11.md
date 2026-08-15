@@ -67,6 +67,6 @@
 
 **验证**（NewAPI stdout 日志 admin_info.channel_affinity）：探针 `metadata.user_id=affinity-probe-20260811` ×7 → 全部钉 ch76；生产 Claude Code 流量按会话分流（fp `cfdfb57b`→ch78、`669d26a8`→ch76、`8d76904b`→ch78），每会话稳定单渠道。
 
-~~**遗留缺口**：其余 6 条规则的 model_regex 不含 `zg-` 前缀~~ **已关闭（2026-08-15 复核）**：7 条规则实测全部含 zg- 交替（如 codex `^(?:gpt-.*|zg-gpt-.*|welfare-codex-gpt-.*)$`），缺口已被修复但文档未更新。匹配时机实测澄清：生产形状探针 `zg-gpt-5.6-sol` ×2 走 ch45，admin_info 无 `channel_affinity` 块——单渠道模型亲和不介入（无可粘目标）；且 abilities 全表核查**所有 zg- 模型在任意组均单渠道**，缺口结构上无影响，zg- 模型日后转多渠道时正则已就位。当日非 zg- 亲和正常 firing（claude/deepseek 312 次）。另注：本机 3002/3003 对 curl 请求一律 text/plain 400（urllib/生产客户端正常），探针须用 urllib 形状。
+~~**遗留缺口**：其余 6 条规则的 model_regex 不含 `zg-` 前缀~~ **部分关闭（2026-08-15 复核）**：7 条规则中，`zg-gpt-.*` / `zg-glm-.*` / `zg-grok-.*` / `zg-deepseek-.*` / `zg-[Ll]ong[Cc]at-.*` / `zg-qwen.*` / `zg-claude-.*` 交替均已就位，**但 `zg-agent-gpt-.*` 和 `zg-agent-claude-.*` 前缀在 2026-08-15 当日仍未覆盖**（DB instr() 扫描确认 0 命中）。匹配时机实测澄清：生产探针 `zg-gpt-5.6-sol` ×2 走 ch45，admin_info 无 `channel_affinity` 块——单渠道模型亲和不介入；abilities 全表核查所有 zg- 模型在任意组均单渠道，故当日无实际漏配。**已修复（2026-08-15 21:04）**：codex 规则加 `zg-agent-gpt-.*` 交替，claude 规则加 `zg-agent-claude-.*` 交替，DB 直写 + `PUT /api/option/` 热加载（HTTP 200）。另注：本机 3002/3003 对 curl 请求一律 text/plain 400，探针须用 urllib 形状。
 
 回滚：`PUT /api/option/` 把 `channel_affinity_setting.rules` 写回不含 claude trace 的 6 条版本。

@@ -42,8 +42,7 @@ curl -X POST http://127.0.0.1:3002/api/channel/fix -H "Authorization: <admin tok
 
 `channel_affinity_setting.keep_on_channel_disabled=false`：ch76 禁用/不可用时
 亲和自动释放，新启用渠道立即接管；ch76 恢复并 re-enable 后亲和自动回钉。
-**不要**为多渠道并存期调整亲和规则——zg- 前缀已于规则内覆盖（2026-08-15 实测，
-见 ops-stack-review-2026-08-11.md 遗留缺口关闭备注）。
+**不要**为多渠道并存期调整亲和规则——`claude trace` 规则覆盖 `^(?:zg-agent-claude-.*|claude-.*|zg-claude-.*)$`（2026-08-15 21:04 修复后），ch57/ch76 并存时 claude-opus-5 请求均命中规则，亲和自动钉住首次响应渠道。
 
 ## 验证
 
