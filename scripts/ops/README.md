@@ -94,9 +94,27 @@ Guardian 依赖以下 NewAPI 设置（已通过 API 配置）：
   "newapi_user": "1",
   "telegram_token": "...",
   "telegram_allowed_users": "5345665818",
-  "codebuddy_api_key": "..."
+  "codebuddy_api_key": "...",
+  "agentrouter_proxy_key": "...",
+  "anyrouter_proxy_key": "...",
+  "local_proxy_bind_host": "0.0.0.0"
 }
 ```
+
+⚠️ `guardian.py` 与 `proxies-supervisor.py` 都在**进程启动时**把 secrets 读成模块级常量
+（含 `local_proxy_bind_host` 与各代理 key）。改 `secrets.json` 后必须重启两个看护进程，
+否则 watchdog 自愈会用旧值回弹（2026-08-15 agentrouter 8788 只绑 Tailscale 事故，
+见 `docs/ops/agentrouter-bind-host-fix-2026-08-15.md`）。用脚本一次完成：
+
+```powershell
+# 看护级配置（bind host 等）：代理进程不动
+powershell -NoProfile -ExecutionPolicy Bypass -File ~\.omp\guardian\apply-secrets-restart.ps1
+# 代理 key/env 变更：连代理一起 bounce（supervisor 立即用新 env 拉起）
+... -Proxy agentrouter
+```
+
+`local_proxy_bind_host` 默认 `0.0.0.0`：本机客户端走 loopback、NewAPI 经 Tailscale
+地址访问本地代理，二者都要服务；改为具体网卡地址会让另一侧全部连接拒绝。
 
 `telegram_allowed_users` 为逗号分隔的 Telegram 用户 ID 白名单；未配置时仅接受私聊 owner
 （`from.id == chat.id`），群组成员命令一律拒绝。
@@ -109,6 +127,10 @@ python guardian.py
 ```
 
 Windows 以 `NewAPI Guardian` 计划任务作为 Guardian 的规范启动入口，以 `NewAPI Guardian Watchdog` 计划任务常驻 `watchdog.ps1`。watchdog 仅在心跳超过 180 秒且精确核验心跳 PID 后终止卡死实例，再通过 Guardian 计划任务重新拉起。watchdog 进程使用命名互斥，计划任务采用 `IgnoreNew`、允许电池供电运行且电源切换时不中止，重启尝试有 5 分钟退避；旧 Startup 入口即使重复触发也会立即退出。
+
+本地代理看护 `proxies-supervisor.py` 的活跃入口是 Startup 的 `LocalAIProxies-Supervisor.lnk`
+（conhost --headless + `start-proxies-supervisor.bat`）；同名计划任务为 Disabled 遗留。
+watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale 180s → 精确核验 PID 后拉起）。
 
 ## Telegram 命令
 
@@ -125,13 +147,20 @@ Windows 以 `NewAPI Guardian` 计划任务作为 Guardian 的规范启动入口�
 | 文件 | 说明 |
 |---|---|
 | `~/.omp/guardian/guardian.py` | 主程序 |
-| `~/.omp/guardian/secrets.json` | 本机密钥配置，不应提交版本库 |
+| `~/.omp/guardian/secrets.json` | 本机密钥配置，不应提交版本库；改后须跑 apply-secrets-restart.ps1 |
+| `~/.omp/guardian/proxies-supervisor.py` | 本地代理端口看护（8788/8789/3003/15721/15999/16000），每轮写 supervisor-status.json 心跳 |
+| `~/.omp/guardian/start-proxies-supervisor.bat` | supervisor 启动脚本（Startup lnk 目标） |
+| `~/.omp/guardian/start.bat` | Guardian 手动/调试用启动脚本（带退出码 75 外的 10s 重试循环；生产入口为计划任务） |
+| `~/.omp/guardian/apply-secrets-restart.ps1` | 改 secrets.json 后重启 Guardian + Supervisor（可选 bounce 指定代理）；必须使用，否则旧配置回弹 |
+| `~/.omp/guardian/supervisor-status.json` | supervisor 心跳（ts + pid + bind_host + restarts_today） |
+| `~/.omp/guardian/proxies-supervisor.log` | supervisor 运行日志 |
+| Startup `LocalAIProxies-Supervisor.lnk` | supervisor 唯一活跃启动入口（同名计划任务 Disabled） |
+| `~/.omp/guardian/heartbeat.json` | 心跳（Guardian.run() 每轮原子写 ts+pid） |
 | `~/.omp/guardian/guardian.log` | 日志（RotatingFileHandler, 5MB × 5） |
 | `~/.omp/guardian/state.json` | 状态（禁用/降权/加入/权重历史） |
 | `~/.omp/guardian/metrics.json` | 指标导出 |
 | 计划任务 `NewAPI Guardian` | Guardian 唯一规范启动/恢复入口 |
 | 计划任务 `NewAPI Guardian Watchdog` | 登录触发，单实例常驻；自身失败最多重启 3 次、间隔 1 分钟；电池供电不停止 |
-| `~/.omp/guardian/heartbeat.json` | 心跳（Guardian.run() 每轮原子写 ts+pid） |
 | `~/.omp/guardian/watchdog.ps1` | Guardian watchdog：心跳超 180s 后精确核验并终止卡死进程，通过 `NewAPI Guardian` 计划任务拉起；重启退避 5 分钟 |
 | `~/.omp/guardian/watchdog.log` | watchdog 运行日志 |
 

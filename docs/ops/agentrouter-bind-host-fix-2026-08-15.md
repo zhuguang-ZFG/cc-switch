@@ -42,7 +42,7 @@
 
 ## 5. 交付：`apply-secrets-restart.ps1`
 
-位置 `~/.omp/guardian/apply-secrets-restart.ps1`。今后改 `secrets.json` 后跑一次：
+位置 `~/.omp/guardian/apply-secrets-restart.ps1`（仓库镜像 `scripts/ops/apply-secrets-restart.ps1`）。今后改 `secrets.json` 后跑一次：
 
 ```powershell
 # 看护级配置（bind host 等）：代理进程不动
