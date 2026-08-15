@@ -59,3 +59,27 @@ OMP 实证探针（`omp -p --model`）：`OMP_GPT55_OK`（~31s 含启动）、`O
 - 管理 API token 缓存已过期轮换一次（`AUTH_TOKEN_EXPIRED` → 重新 login 写回 `.admin-token-cache.json`）。
 - `admin-credentials.json` / `client-token.json` 带 UTF-8 BOM，脚本读取需 strip（本次 bun 脚本已处理）。
 - bun:sqlite 不支持 `VACUUM INTO`（syntax error）；DB 快照用 `Database.serialize()`。
+
+## 追加（2026-08-15）：ch83 `muyuan-sol`——sol 聚合第二渠道
+
+用户提供第三把 key（key C，不落盘），上游可见 `glm-5.2, gpt-5.5, gpt-5.6-terra, gpt-5.6-sol`。
+本次仅接入 sol（terra/glm 留作后续聚合候选）：
+
+| 项 | ch83 `muyuan-sol` |
+|----|-------------------|
+| type / base_url | 1（OpenAI）/ `https://muyuan.do`（根路径） |
+| models | `gpt-5.6-sol,zg-gpt-5.6-sol,zg-agent-gpt-5.6-sol` |
+| model_mapping | 两个 `zg-*` 别名 → `gpt-5.6-sol`（复制 ch45 姿势） |
+| header_override | `{"User-Agent":"codex_cli_rs/0.42.0"}`（**必需**——sol 与 gpt-5.5 同族 UA 白名单，Go 默认 UA 直连 403 `channel:client_restricted`，实测复证） |
+| priority / weight | **40 / 2**——与 ch45 agentrouter（p40/w5）同层，真聚合分流 ≈ 71%/29%；非 p50 新主层 |
+| test_model | `gpt-5.6-sol`（显式，避免 ch72 式空 test_model 恢复探针歧义） |
+| status / auto_ban | 1 / 1 |
+
+背景：sol 池经 08-14 孤儿清理后单钉 ch45（centos 系欠费、7758 上游 503、WorkBuddy 403、vyceai 站方禁模，见当日评审记录）。ch83 使 sol 恢复双渠道。
+
+验证：admin 渠道测试 200/3.6s（证明 header_override 经 NewAPI 出站生效）；网关 e2e
+`gpt-5.6-sol` 200/2.8s `MUYUAN_SOL_OK`；consume 日志归因 ch83。创建走
+`POST /api/channel/`（fork 仅 PUT 坏，POST 正常）；改库前 `.backup` 快照
+`new-api.db.bak-20260815-213926-muyuan-sol`（integrity ok）。
+
+注意：consume 日志 ch83 行 `channel_name` 为 NULL（fork 记录行为，不影响计费/归因）。
