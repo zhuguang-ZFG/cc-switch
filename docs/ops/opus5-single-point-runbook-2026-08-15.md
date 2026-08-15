@@ -2,9 +2,9 @@
 
 ## 风险陈述
 
-`claude-opus-5`（Claude Code 主链路 + OMP slow 链首）default 组**唯一可用渠道 = ch76 sotamodel**
-（abilities 实测：ch3/9/18/57/72/75 全部 enabled=0）。亲和规则 `claude trace` 把会话钉在 ch76
-（prompt caching 收益来源），ch76 宕机即全链路无可用渠道。
+`claude-opus-5`（Claude Code 主链路 + OMP slow 链首）default 组**活跃渠道 = ch76 sotamodel（weight=20）+ ch75 tabitoken（weight=8）**，均 status=1、enabled=1（2026-08-15 21:05 ch75 启用）。亲和 TTL=60s（同日从 600s 降低），过期后新会话在 ch76/ch75 按约 71%/29% 重新竞争，实现双渠道分流聚合。
+
+**单点风险仍存在**：ch76/ch75 同时宕机 → 无可用渠道；ch76 alone 宕机时 ch75 自动接管（keep_on_channel_disabled=false）。
 
 既有缓冲：OMP slow 链 fallback `claude-opus-4-8 → k3 → deepseek-v4-pro`（模型降档不中断）；
 Claude Code 直连流量无此缓冲，是本预案的主要保护对象。
@@ -17,9 +17,8 @@ Claude Code 直连流量无此缓冲，是本预案的主要保护对象。
 
 ## 止血决策树
 
-1. **首选 ch57（gorouter）**。启用前先探活：`POST /api/channel/test/57`
-   （管理 API，admin token + New-Api-User 头）。测试不过 → 转 2。
-2. **次选 ch75（tabitoken）**。2026-08-10 遗留"未全面评估"，启用后需观察首轮错误率。
+1. **ch75（tabitoken）已常驻活跃**（2026-08-15 21:05 起 status=1，weight=8，日常承载约 29% 流量）；ch76 宕机时亲和自动释放，ch75 即接管——**通常无需手动操作**。
+2. **ch57（gorouter）冷备**。ch75 也不可用时：启用前先探活 `POST /api/channel/test/57`，测试通过再执行下方启用步骤。
 3. **ch72（anyrouter）仅在窗口开启时考虑**——窗口哨兵（`AnyRouter Window Canary`
    计划任务）的 Telegram 告警为准；429 池期勿动。
 4. **零变更兜底**：不动 NewAPI，OMP 流量由 fallback 链吸收；Claude Code 用户
@@ -38,22 +37,27 @@ curl -X POST http://127.0.0.1:3002/api/channel/fix -H "Authorization: <admin tok
 
 改 DB 前先备份：`cp new-api.db new-api.db.bak-<ts>-opus57`（已有同名惯例）。
 
-## 亲和行为（无需手工干预）
+## 亲和行为与 TTL 配置
 
 `channel_affinity_setting.keep_on_channel_disabled=false`：ch76 禁用/不可用时
-亲和自动释放，新启用渠道立即接管；ch76 恢复并 re-enable 后亲和自动回钉。
-**不要**为多渠道并存期调整亲和规则——`claude trace` 规则覆盖 `^(?:zg-agent-claude-.*|claude-.*|zg-claude-.*)$`（2026-08-15 21:04 修复后），ch57/ch76 并存时 claude-opus-5 请求均命中规则，亲和自动钉住首次响应渠道。
+亲和自动释放，ch75 立即接管；ch76 恢复 re-enable 后亲和重新钉住最先响应的渠道。
+
+**TTL（2026-08-15 21:05 调整）**：`default_ttl_seconds` 600→**60**，`claude trace` 规则 TTL 同步降至 60s。
+效果：每 60s 会话亲和过期，新会话按 weight 竞争（ch76:ch75 ≈ 20:8 ≈ 71%:29%），实现双渠道分流。
+代价：prompt cache 热窗口缩短，60s 后新 session 首轮 cache miss 概率上升。
+如 cache ratio 明显下降可调回：`update options set value='300' where key='channel_affinity_setting.default_ttl_seconds'` + 规则 ttl_seconds 同步 + PUT 热加载。
+
+亲和规则 `claude trace` 覆盖 `^(?:zg-agent-claude-.*|claude-.*|zg-claude-.*)$`（2026-08-15 21:04 修复），多渠道并存期无需手动调整规则。
 
 ## 验证
 
-1. `POST /api/channel/test/57` 通过；
-2. 生产形状探针（urllib，勿用 curl——本机 3002/3003 对 curl 请求一律 400，
-   2026-08-15 实测，原因未查但生产客户端不受影响）发 claude-opus-5，
-   consume 日志 `channel_id=57` 且 `channel_affinity.rule_name="claude trace"`；
-3. guardian 下一周期 critical-models 告警解除。
+1. 日常验证（双渠道分流）：发 2 批 claude-opus-5 请求，间隔 >60s；consume 日志出现 `channel_id=75` 和 `channel_id=76` 交替命中。
+2. ch76 故障模拟：DB `status=2 where id=76` + `/api/channel/fix`；等待亲和 TTL(60s) 过期后发请求；consume 日志 `channel_id=75`。恢复后 `status=1` + fix。
+3. ch57 启用验证（仅 ch75 也宕时执行）：`POST /api/channel/test/57` 通过；发请求确认 `channel_id=57` 且 `channel_affinity.rule_name="claude trace"`。
+4. 探针形状：urllib POST 3002，勿用 curl（3002/3003 对 curl 一律 text/plain 400，生产客户端不受影响）。
 
 ## 回退
 
-ch76 恢复：`update channels set status=1 where id=76` + `/api/channel/fix` +
-测试通过后 `status=2 where id=57`（或保留双渠道并行，权重 ch76=20 vs ch57=3
-天然主从）+ 再一次 `/api/channel/fix`。亲和自动回钉 ch76。
+**ch76 临时 disable 后恢复**：`update channels set status=1 where id=76` + `/api/channel/fix`；ch75 继续活跃，双渠道自动恢复并行。
+
+**TTL 回退**（cache ratio 明显下降时）：`update options set value='300' where key='channel_affinity_setting.default_ttl_seconds'`；同步更新 `claude trace` 规则 `ttl_seconds=300`；`PUT /api/option/` 热加载两次（先 default_ttl，再 rules）。
