@@ -4,6 +4,12 @@
 
 `claude-opus-5`（Claude Code 主链路 + OMP slow 链首）default 组**活跃渠道 = ch76 sotamodel（weight=20）+ ch75 tabitoken（weight=8）**，均 status=1、enabled=1（2026-08-15 21:05 ch75 启用）。亲和 TTL=60s（同日从 600s 降低），过期后新会话在 ch76/ch75 按约 71%/29% 重新竞争，实现双渠道分流聚合。
 
+`zg-claude-opus-5`（OMP 主链路实际模型名，亲和规则覆盖 `zg-claude-*`）同日 21:34 同步聚合到
+ch75：ability（default/zg-claude-opus-5/ch75/enabled=1/pri50/w8）INSERT + ch75 `models` 追加别名；
+ch75 `model_mapping` 的 `zg-claude-opus-5→claude-opus-5` 原本已存在，无需改动。变更前
+`.backup` 快照 `new-api.db.bak-20260815-213358-zgopus5-ch75`（integrity ok），`/api/channel/fix`
+热加载 36/36 成功，探针经网关 200（落 ch76，符合 w20:w8 概率）。
+
 **单点风险仍存在**：ch76/ch75 同时宕机 → 无可用渠道；ch76 alone 宕机时 ch75 自动接管（keep_on_channel_disabled=false）。
 
 既有缓冲：OMP slow 链 fallback `claude-opus-4-8 → k3 → deepseek-v4-pro`（模型降档不中断）；
