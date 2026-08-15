@@ -155,6 +155,7 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 | `~/.omp/guardian/supervisor-status.json` | supervisor 心跳（ts + pid + bind_host + restarts_today） |
 | `~/.omp/guardian/anyrouter-window-canary.py` | anyrouter Claude 池开窗哨兵：计划任务 `AnyRouter Window Canary` 每 30min 触发一次（即跑即退），haiku/16 tokens 探测 8789 桥，仅 closed→open 跳变发 Telegram。门禁 test_omp_routes.py:487 禁止自动挂链，开窗后人工显式选用 |
 | `~/.omp/guardian/anyrouter-canary-state.json` | 哨兵状态（上次 open/closed + 细节），防重复告警 |
+| `~/.omp/agent/` | OMP 配置目录，**独立本地 git 仓**（2026-08-15 起，禁加 remote——models.yml 含明文 key）；改 config.yml/models.yml 后即 commit，取代 .bak 手工备份 |
 | `~/.omp/guardian/proxies-supervisor.log` | supervisor 运行日志 |
 | Startup `LocalAIProxies-Supervisor.lnk` | supervisor 唯一活跃启动入口（同名计划任务 Disabled） |
 | `~/.omp/guardian/heartbeat.json` | 心跳（Guardian.run() 每轮原子写 ts+pid） |
