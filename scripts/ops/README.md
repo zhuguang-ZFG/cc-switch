@@ -182,6 +182,7 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 - keep-alive 陷阱：404/GET 路径必须排干 Content-Length，否则残留 body 被解析成下一条请求行报 501
 - 渠道创建/验证脚本：`scripts/ops/add_mistral_glm_channel.py`（幂等，重跑仅回读验证）
 - ooioo 备用渠道脚本：`scripts/ops/add_ooioo_gpt56sol_channel.py`（ch87，priority 30，幂等；key 走 argv 不入仓，runbook 见 `docs/ops/ooioo-gpt56sol-channel-2026-08-16.md`）
+- runinfra qwen3-8-27b 渠道脚本：`scripts/ops/add_runinfra_qwen_channel.py`（ch88；上游硬拒 `prompt_cache_key`，已配 param_override delete 剥离，runbook 见 `docs/ops/runinfra-qwen-via-newapi-2026-08-16.md`；PUT 渠道会清 key 的坑见该文档）
 
 
 ## 安全
