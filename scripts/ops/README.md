@@ -148,7 +148,7 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 |---|---|
 | `~/.omp/guardian/guardian.py` | 主程序 |
 | `~/.omp/guardian/secrets.json` | 本机密钥配置，不应提交版本库；改后须跑 apply-secrets-restart.ps1 |
-| `~/.omp/guardian/proxies-supervisor.py` | 本地代理端口看护（8788/8789/3003/15721/15999/16000），每轮写 supervisor-status.json 心跳 |
+| `~/.omp/guardian/proxies-supervisor.py` | 本地代理端口看护（8788/8789/3003/15721/15999/16000/16001），每轮写 supervisor-status.json 心跳 |
 | `~/.omp/guardian/start-proxies-supervisor.bat` | supervisor 启动脚本（Startup lnk 目标） |
 | `~/.omp/guardian/start.bat` | Guardian 手动/调试用启动脚本（带退出码 75 外的 10s 重试循环；生产入口为计划任务） |
 | `~/.omp/guardian/apply-secrets-restart.ps1` | 改 secrets.json 后重启 Guardian + Supervisor（可选 bounce 指定代理）；必须使用，否则旧配置回弹 |
@@ -166,6 +166,22 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 | 计划任务 `NewAPI Guardian Watchdog` | 登录触发，单实例常驻；自身失败最多重启 3 次、间隔 1 分钟；电池供电不停止 |
 | `~/.omp/guardian/watchdog.ps1` | Guardian watchdog：心跳超 180s 后精确核验并终止卡死进程，通过 `NewAPI Guardian` 计划任务拉起；重启退避 5 分钟 |
 | `~/.omp/guardian/watchdog.log` | watchdog 运行日志 |
+| `~/.omp/guardian/mistral-relay-16001/mistral-conversations-relay.py` | OpenAI↔Mistral `/v1/conversations` 转换 relay（127.0.0.1:16001，源：`scripts/ops/mistral-conversations-relay.py`） |
+
+## 本地格式转换 relay
+
+`mistral-conversations-relay.py`（部署 `~/.omp/guardian/mistral-relay-16001/`，supervisor 条目
+`mistral-relay-16001`）：api.mistral.ai 的 `glm-5-2`/`zai-glm-5-2` 仅经私有 `/v1/conversations`
+提供（标准 `/v1/chat/completions` 恒 429），本 relay 在 127.0.0.1:16001 做 OpenAI↔conversations
+双向转换，供 NewAPI 渠道 **ch85**（type=1，base_url=`http://127.0.0.1:16001`——NewAPI 自拼
+`/v1/chat/completions`，base_url 不得带 `/v1`）。要点：
+
+- 上游真 key 在 `secrets.json[mistral_glm_key]`；relay 仅绑回环、不鉴权，渠道 key 为占位符
+- `stream:true` 直通上游 SSE（started/delta/done → OpenAI chunk）；上游流建立失败回退缓冲合成
+- tools/非文本多模态 fail-loud 400，不静默丢能力
+- keep-alive 陷阱：404/GET 路径必须排干 Content-Length，否则残留 body 被解析成下一条请求行报 501
+- 渠道创建/验证脚本：`scripts/ops/add_mistral_glm_channel.py`（幂等，重跑仅回读验证）
+
 
 ## 安全
 
