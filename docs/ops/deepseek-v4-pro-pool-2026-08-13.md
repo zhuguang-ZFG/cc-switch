@@ -86,3 +86,23 @@ abilities 双行 `enabled=1, 40/5`；admin 渠道测试 200；聚合 `deepseek-v
 请求仍落 ch48（主层不受影响）；创建前整库快照
 `new-api-before-teamorouter-20260815-234706.db`（integrity ok）。smoke 新增
 `teamorouter free fallback posture` 门禁（允许 auto_ban 降级，锁定 p40/w5 层级）。
+
+## 追加（2026-08-16）：极简模式效应与 Pro 的 OMP 挂载戒律
+
+社区对照实验（同机同模型同档位只换 Harness 模式）：标准 91 / PTC 92 /
+极简 99。根因实锤：DSH 官方仓库测试文件 "sends the exact RL prompt and
+schemas"——**V4 Pro(0813) RL 训练用的就是极简模式的 prompt+工具 schema**，
+首轮塞 20+ 陌生工具会显著劣化（对自家格式过拟合）。**V4 Flash 无此问题**
+（各 Harness 下稳定 90–95）。两阶段插件 `dsh-anchored-standard`
+（github.com/xiaobright/dsh-anchored-standard）首轮锚定极简格式、首次工具
+调用后恢复全工具，98.5 分追平极简——OMP 无此插件机制。
+
+戒律：
+- OMP 工具重角色（task/plan/smol 等带工具 inventory 的位）**禁止挂 V4 Pro**；
+  Flash 免疫可任意挂（2026-08-16 起 task=deepseek-v4-flash:max）。
+- 若需 Pro 峰值做 agentic 执行：走最小工具集自定义子代理（tools 只留
+  终端/读文件级），不要直接绑进标准角色。
+- 纯 Q&A/无工具调用不受此效应影响（本机 A/B 实测：裸调用 vs 2.5KB 重
+  system prompt，CRT+24点 8/8 全对、时延/token 无差异）——效应特指
+  **首轮工具 schema**，不是 system prompt 轻重。
+
