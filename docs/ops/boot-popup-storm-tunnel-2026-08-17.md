@@ -108,3 +108,8 @@ next reboot; popup-hunt.log + a manual look at the desktop will confirm.
   `D:\Users\cc-switch`. These are the spawn-dense paths behind the
   spawn→AV-scan stutter spikes. spike-catch.log will confirm whether
   HipsMain/HrASMain stop appearing in spike offender lists.
+
+Trust zone added by user ~01:25 and **verified effective**: 30-process spawn
+burst from `D:\Users\cc-switch` moved Huorong CPU only 1.07% → 1.56%
+(previously each spawn triggered a scan). Behavioral proof, not config-read
+(self-defense blocks that anyway).
