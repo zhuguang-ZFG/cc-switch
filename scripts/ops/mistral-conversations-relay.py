@@ -16,9 +16,10 @@ binding, bounded workers, key from ~/.omp/guardian/secrets.json (never in
 repo/logs), log-file rotation.
 
 Known limitations (v1, deliberate):
-- stream:true is served by buffering the upstream non-stream response and
-  synthesizing SSE chunks (kiro_guard's original pattern). TTFT reflects
-  full upstream latency.
+- stream:true relays upstream SSE deltas live (conversation.response.started/
+  message.output.delta/conversation.response.done -> OpenAI chunks); if the
+  upstream stream cannot be opened it falls back to buffered + synthesized
+  SSE, never worse than the original contract.
 - tools/function-calling payloads are NOT translated; requests carrying
   tools are rejected with 400 so callers fail loud instead of silently
   losing capabilities.
@@ -248,6 +249,99 @@ def call_upstream(conv_req: dict) -> dict:
     except ValueError:
         raise RelayError(502, "upstream returned invalid JSON", "upstream_unavailable") from None
 
+def _openai_chunk(cid: str, created: int, model: str, delta: dict,
+                  finish=None, usage=None) -> bytes:
+    c = {
+        "id": cid, "object": "chat.completion.chunk",
+        "created": created, "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+    if usage:
+        c["usage"] = usage
+    return f"data: {json.dumps(c, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def open_upstream_stream(conv_req: dict):
+    """Open a streaming /v1/conversations request. Raises RelayError before
+    any byte is delivered, so callers can still fall back to buffered mode."""
+    conv_req = dict(conv_req, stream=True)
+    data = json.dumps(conv_req, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        UPSTREAM, data=data, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Authorization": f"Bearer {KEY}",
+            "User-Agent": "mistral-conversations-relay/1.0",
+        },
+    )
+    try:
+        return urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8")[:300]
+        except Exception:  # noqa: BLE001
+            detail = ""
+        raise RelayError(e.code, f"upstream HTTP {e.code}: {detail}", "upstream_error") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise RelayError(502, f"upstream unreachable: {type(e).__name__}", "upstream_unavailable") from None
+
+
+def iter_openai_sse(resp, requested_model: str):
+    """Translate Mistral conversations SSE into OpenAI chat.completion chunks.
+
+    Event contract (probed 2026-08-16):
+      conversation.response.started -> role chunk
+      message.output.delta {content} -> content chunk
+      conversation.response.done {usage} -> finish chunk + [DONE]
+    Unknown events are skipped; stream end without a done event still emits
+    [DONE] so clients never hang.
+    """
+    cid = "chatcmpl-" + uuid.uuid4().hex[:24]
+    created = int(time.time())
+    sent_role = False
+    saw_done = False
+    event_type = ""
+    for raw_line in resp:
+        line = raw_line.decode("utf-8", "replace").rstrip("\r\n")
+        if not line:
+            continue
+        if line.startswith("event:"):
+            event_type = line[6:].strip()
+            continue
+        if not line.startswith("data:"):
+            continue
+        try:
+            data = json.loads(line[5:].strip())
+        except ValueError:
+            continue
+        if event_type == "conversation.response.started" and not sent_role:
+            sent_role = True
+            yield _openai_chunk(cid, created, requested_model,
+                                {"role": "assistant", "content": ""})
+        elif event_type == "message.output.delta":
+            content = data.get("content")
+            if isinstance(content, list):
+                content = "".join(
+                    str(c.get("text", "")) for c in content
+                    if isinstance(c, dict) and c.get("type") == "text"
+                )
+            if content:
+                if not sent_role:
+                    sent_role = True
+                    yield _openai_chunk(cid, created, requested_model,
+                                        {"role": "assistant", "content": ""})
+                yield _openai_chunk(cid, created, requested_model,
+                                    {"content": str(content)})
+        elif event_type == "conversation.response.done":
+            saw_done = True
+            usage = data.get("usage") or {}
+            yield _openai_chunk(cid, created, requested_model, {},
+                                finish="stop", usage=usage)
+    if not saw_done:
+        yield _openai_chunk(cid, created, requested_model, {}, finish="stop")
+    yield b"data: [DONE]\n\n"
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -315,30 +409,74 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             body = self._read_body()
             conv_req, requested_model = to_conversations_request(body)
+            if body.get("stream"):
+                self._handle_stream(conv_req, requested_model, started)
+                return
             conv = call_upstream(conv_req)
             completion = to_openai_response(conv, requested_model)
-            elapsed = time.time() - started
             usage = completion["usage"]
             log(
                 f"ok model={requested_model}->{conv_req['model']} "
-                f"tokens={usage['prompt_tokens']}+{usage['completion_tokens']} {elapsed:.1f}s"
+                f"tokens={usage['prompt_tokens']}+{usage['completion_tokens']} "
+                f"{time.time() - started:.1f}s"
             )
-            if body.get("stream"):
-                payload = sse_stream(completion)
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-            else:
-                self._send_json(200, completion)
+            self._send_json(200, completion)
+
         except RelayError as e:
             log(f"fail {e.status} {e.message[:200]}")
             self._send_json(e.status, e.payload())
         except Exception as e:  # noqa: BLE001 — relay must never hang a request
             log(f"fail 500 {type(e).__name__}: {e}")
             self._send_json(500, RelayError(500, f"relay internal error: {type(e).__name__}").payload())
+
+    def _handle_stream(self, conv_req: dict, requested_model: str, started: float):
+        """True streaming: relay upstream SSE deltas as they arrive.
+
+        Falls back to buffered+synthesized SSE only if the upstream stream
+        cannot be opened (RelayError raised before any byte was sent), so
+        behavior never regresses below the pre-2026-08-16 contract.
+        Connection is closed after [DONE] (no Content-Length on live SSE).
+        """
+        try:
+            resp = open_upstream_stream(conv_req)
+        except RelayError as e:
+            log(f"stream open failed ({e.status}), falling back to buffered: {e.message[:120]}")
+            conv = call_upstream(conv_req)
+            completion = to_openai_response(conv, requested_model)
+            payload = sse_stream(completion)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        first = True
+        try:
+            for chunk in iter_openai_sse(resp, requested_model):
+                if first:
+                    log(f"stream ttft model={requested_model} {time.time() - started:.1f}s")
+                    first = False
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            log("stream client disconnected")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            # mid-stream failure: SSE already started, close deterministically
+            log(f"stream upstream died mid-flight: {type(e).__name__}")
+            try:
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except OSError:
+                pass
+        finally:
+            resp.close()
 
 
 class BoundedThreadingHTTPServer(http.server.ThreadingHTTPServer):
