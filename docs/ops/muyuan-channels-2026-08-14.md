@@ -135,3 +135,31 @@ channel PUT 重建 abilities 时把 ch45 能力级又漂回主层。应用后备
 muyuan.do 上游 Sol 池又空）；ch45 兜底 200 正常承接。结论：**本地路由已正确
 （muyuan 主、agentrouter 兜底），当前是 muyuan.do 上游 Sol 池再次劣化**，与
 23:30 所述波动一致，非本地配置问题。
+
+## 追加（2026-08-16 00:35）：default 跨模型回退与运行态残留
+
+用户观察到的重复「路由」不是单一事件：
+
+- 00:27:39 与 00:32:13 的 OMP 会话事件均为
+  `agentrouter/gpt-5.6-sol -> zg-newapi/deepseek-v4-pro`，
+  `resolvedModelIsFallback=true`。触发错误是 agentrouter 上游
+  `500 sensitive_words_detected`，不是 NewAPI 的 ch83→ch45 渠道内重试。
+- `fallbackChains.default` 在 00:28:54 删除，但 00:27 已建立的
+  `fallbackRevertPolicy: cooldown-expiry` 运行态仍记住旧目标；00:31:37 回主时事件
+  `role=fallback`，随后 00:32:13 再次复用 DeepSeek。磁盘配置变更不会撤销已经解析进
+  当前会话的 fallback 状态。
+- 00:35:09 手动切换到 `zg-newapi/gpt-5.6-sol` 后，事件恢复为
+  `role=default, resolvedModelIsFallback=false`，旧 fallback 状态被清除。之后
+  00:45:00/00:45:24 两次 Sol 失败均直接返回 400，未再切 DeepSeek，证明删除链生效。
+
+00:45 两次硬失败是聚合池两层同时失败：ch83 分别出现 504/503；NewAPI 随后尝试
+ch45，agentrouter 返回 `400 content-blocked`。本地 NewAPI 选项
+`CheckSensitiveEnabled=false`、`CheckSensitiveOnPromptEnabled=false`，阻断来自 ch45
+上游且与请求内容有关（同时间窗另有 ch45 长请求成功）。00:53 后管理探针恢复：
+ch83 200/3.559s，ch45 200/4.982s；短探针成功不反证长会话内容仍可能被阻断。
+
+最终契约：`default=zg-newapi/gpt-5.6-sol:xhigh`，不得存在
+`fallbackChains.default`，也不得存在当前 default 精确 selector 的链。NewAPI 内部
+ch83→ch45 是同模型渠道重试，继续保留；两渠道耗尽后 OMP 必须硬错误，禁止跨模型
+切到 DeepSeek。修改此契约后，若当前会话已经进入 fallback 状态，必须显式切换模型
+（切走再切回）或启动新会话以清除旧运行态，不能只依赖磁盘配置热更新。
