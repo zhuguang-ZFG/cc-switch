@@ -89,3 +89,22 @@ never flash. After that filter:
 
 **Expected boot popup count after this round: ~0.** Definitive test is the
 next reboot; popup-hunt.log + a manual look at the desktop will confirm.
+
+## Round 3 (01:15): memory + AV-scan optimization (user-approved)
+
+- **Browser preload autolaunch removed**: HKCU Run entries
+  `GoogleChromeAutoLaunch_*` and `MicrosoftEdgeAutoLaunch_*` deleted
+  (~1.5GB RAM at boot; first browser open 1-2s slower). Original values
+  backed up to `~/.omp/guardian/removed-autolaunch-backup.txt` (restore =
+  re-add the Run values). Caveat: browsers re-create these if their internal
+  settings are toggled — permanent fix needs Chrome `chrome://settings/system`
+  "continue running background apps" OFF and Edge `edge://settings/system`
+  "startup boost" OFF. Running browser processes were NOT killed.
+- **Huorong trust-zone (manual step, user)**: no CLI exists (HRConfig is
+  GUI-only and self-defense blocks process kill/automation). Add folders via
+  火绒 → 菜单/防护中心 → 信任区 → 添加目录:
+  `C:\Users\zhugu\.bun`, `C:\Users\zhugu\.omp`, `C:\Users\zhugu\.claude`,
+  `C:\Users\zhugu\.new-api-local`, `C:\Users\zhugu\scoop\apps`,
+  `D:\Users\cc-switch`. These are the spawn-dense paths behind the
+  spawn→AV-scan stutter spikes. spike-catch.log will confirm whether
+  HipsMain/HrASMain stop appearing in spike offender lists.
