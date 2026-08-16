@@ -16,6 +16,9 @@ the test probe is a tiny request; the 504s only trigger on large payloads /
 long streams. Guardian therefore never auto-disables ch83 — this failure
 mode is invisible to health probes by design.
 
+Update 23:55: **ch90 t1qq (prio 20) added as last resort** — see
+`docs/ops/t1qq-sol-channel-2026-08-16.md`. Chain is now 83→45→87→90.
+
 ## Loss points
 
 1. **Billed empty streams** ×3 on ch83 (14:11, 21:40, 22:48): prompt
