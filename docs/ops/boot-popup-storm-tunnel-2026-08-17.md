@@ -1,4 +1,4 @@
-# Boot popup storm RCA + fixes (2026-08-17)
+# Boot popup storm RCA + fixes (2026-08-17, continued 01:05)
 
 ## Symptom
 
@@ -62,3 +62,30 @@ full 300s TTL. See `docs/ops/sol-chain-muyuan-degradation-2026-08-16.md`.
   stale forward first — that is the recurring failure mode after any local
   reboot (server-side TCP timeout lags minutes behind).
 - popup-hunt.log remains the ground truth for window flashes.
+
+## Round 2 (01:05): post-fix sweep + remaining boot flashers closed
+
+Post-fix hunter-log analysis (00:18–00:50, 689 entries) required splitting
+"process spawned" from "window shown": children of a console-owning parent
+(terminal OMP sessions, build tools) attach to the parent's console and
+never flash. After that filter:
+
+- 42× `conhost --headless powershell ... .new-api-local\watchdog.ps1`
+  (LocalNewAPI-Watchdog task, 1/min) — already headless, invisible. Not a
+  popup source despite the log volume.
+- MCP `.cmd`/`npx` chains (mcp-server-filesystem, rubber-duck, claude-mem,
+  fz_mcp_server) spawn under interactive terminal sessions → attach to the
+  terminal console → invisible in the normal workflow. Downgraded from
+  "popup source" to "log noise" (they only flash if a session is launched
+  detached, e.g. by a scheduler/GUI).
+- The two real remaining boot flashers — both `powershell -WindowStyle
+  Hidden` from consoleless parents, which creates-then-hides a console
+  (classic scheduled-task flash) — wrapped in `conhost --headless`:
+  1. Scheduled task **NewAPI Guardian Watchdog** action
+  2. Registry `HKCU\...\Run\Local NewAPI` (start.ps1)
+  Both take effect next logon. Wrapped watchdog launch verified working
+  (persistent 30s loop, duplicate-guard intact, guardian heartbeat fresh).
+- Clash Verge checked: `enable_silent_start: true` already — no window.
+
+**Expected boot popup count after this round: ~0.** Definitive test is the
+next reboot; popup-hunt.log + a manual look at the desktop will confirm.
