@@ -50,6 +50,10 @@ carrying real production traffic. Config-applied but organically unproven:
 the 5xx-failover pin switch (needs ch83 enabled + header-stage failure;
 watch `aff_ch` moving off ch83 after future 504 clusters). The mid-stream
 stall mode (step 1) still has no retry coverage by design.
+
+Decision (2026-08-17 00:26, user): **keep ch83 enabled** despite the live
+stall reproduction — accept one 60s stall per fresh conversation, then
+self-heal via pin migration. Revisit if stall frequency rises.
 ## Loss points
 
 1. **Billed empty streams** ×3 on ch83 (14:11, 21:40, 22:48): prompt
