@@ -292,7 +292,7 @@ class AdminAuthTests(unittest.TestCase):
                 "id": 39,
                 "name": expected39["name"],
                 "type": 1,
-                "status": 2,
+                "status": expected39["status"],
                 "auto_ban": 1,
                 "base_url": "https://ai.168661.xyz/v1",
                 "priority": expected39["priority"],

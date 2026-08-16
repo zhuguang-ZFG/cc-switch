@@ -147,7 +147,10 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
         "test_model": "grok-4.5",
         "priority": 55,
         "weight": 10,
-        "status": 2,
+        # 2026-08-16: grok family key revived upstream (Guardian recovery probe
+        # + direct /api/channel/test/39 both pass); ch39 is the ONLY channel
+        # serving grok models, so it must stay enabled. 78/79 keys still 401.
+        "status": 1,
     },
     78: {
         "name": "ai-168661-deepseek-0731",
