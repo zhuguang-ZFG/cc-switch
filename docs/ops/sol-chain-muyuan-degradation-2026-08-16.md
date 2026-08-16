@@ -19,6 +19,17 @@ mode is invisible to health probes by design.
 Update 23:55: **ch90 t1qq (prio 20) added as last resort** — see
 `docs/ops/t1qq-sol-channel-2026-08-16.md`. Chain is now 83→45→87→90.
 
+
+Update 2026-08-17 00:15: **`channel_affinity_setting.switch_on_success`
+flipped to true** (user-approved). Root-cause context: the "codex cli trace"
+affinity rule (model `gpt-.*`, key `prompt_cache_key`, TTL 300s) pinned every
+sol conversation to ch83; with switch_on_success=false a successful failover
+did NOT migrate the pin, so conversations were re-nailed to degrading ch83
+for the full TTL — the mechanism behind "muyuan 一挂就停止". After the flip,
+one successful retry moves the pin to the healthy channel. Global setting;
+all model families benefit. Watch: cache-hit rate on ch83 may dip after
+failovers (pins stay on backups until TTL even when ch83 recovers).
+
 ## Loss points
 
 1. **Billed empty streams** ×3 on ch83 (14:11, 21:40, 22:48): prompt
