@@ -183,6 +183,20 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 - 渠道创建/验证脚本：`scripts/ops/add_mistral_glm_channel.py`（幂等，重跑仅回读验证）
 - ooioo 备用渠道脚本：`scripts/ops/add_ooioo_gpt56sol_channel.py`（ch87，priority 30，幂等；key 走 argv 不入仓，runbook 见 `docs/ops/ooioo-gpt56sol-channel-2026-08-16.md`）
 - runinfra qwen3-8-27b 渠道脚本：`scripts/ops/add_runinfra_qwen_channel.py`（ch88；上游硬拒 `prompt_cache_key`，已配 param_override delete 剥离，runbook 见 `docs/ops/runinfra-qwen-via-newapi-2026-08-16.md`；PUT 渠道会清 key 的坑见该文档）
+- seeseed1ck hydrogel 渠道脚本：`scripts/ops/add_seeseed_hydrogel_channel.py`（ch89；GLM-5.3/grok-4.6/grok-chat-fast/mimo-v2.5，仅收录直连实测存活模型；param_override 删 `enable_thinking`——GLM-5.3 强制思考拒 `enable_thinking:false`，runbook 见 `docs/ops/seeseed-hydrogel-channel-2026-08-16.md`）
+- t1qq sol 兜底渠道脚本：`scripts/ops/add_t1qq_sol_channel.py`（ch90，双 key 轮询，priority 20 垫底；fork 多 key 三连坑——`multi_to_single` 创建仍不落 `is_multi_key`、PUT 会整体重生成 channel_info 冲掉 DB 修复、可用配方=完整 BLOB 直写+等 60s 缓存同步，runbook 见 `docs/ops/t1qq-sol-channel-2026-08-16.md`）
+
+## sol 链劣化与亲和迁移（2026-08-16/17）
+
+- ch83 muyuan 在载荷下持续 504/流停滞，小探针盲区 Guardian 不会禁用；`RetryTimes=1` 为刻意预算勿上调
+- 计费空流（prompt 计费 completion=0）无配置层重试覆盖；监控锚点见 `docs/ops/sol-chain-muyuan-degradation-2026-08-16.md`
+- 已开 `channel_affinity_setting.switch_on_success=true`：failover 成功后亲和钉迁移到健康渠道（修复前钉死 300s="muyuan 一挂就停"）；故障转移实测演练证据见该文档
+
+## 机器治理（2026-08-17，RCA 见 `docs/ops/boot-popup-storm-tunnel-2026-08-17.md`）
+
+- 开机弹窗：edge-tunnel vbs 死循环（VPS 残留转发占 3000）为最大源，已加 `conhost --headless`+指数退避；残余 powershell `-WindowStyle Hidden` 闪窗项全部改 `conhost --headless`
+- `~/spike_catcher.py`：CPU≥70% 尖峰自动采样凶手名单写 `~/spike-catch.log`（开机自启、单实例锁）；`~/popup_hunter.py` 记录控制台进程诞生链
+- Chrome/Edge 预加载自启已删（备份 `~/.omp/guardian/removed-autolaunch-backup.txt`）；火绒信任区含 .bun/.omp/.claude/.new-api-local/scoop\\apps/cc-switch，衍生爆发实测 AV CPU 不起跳
 
 
 ## 安全
