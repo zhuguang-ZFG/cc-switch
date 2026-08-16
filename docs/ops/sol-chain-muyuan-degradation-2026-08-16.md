@@ -30,6 +30,26 @@ one successful retry moves the pin to the healthy channel. Global setting;
 all model families benefit. Watch: cache-hit rate on ch83 may dip after
 failovers (pins stay on backups until TTL even when ch83 recovers).
 
+
+## Failover drill (2026-08-17 00:24, live proof)
+
+Drill: fixed `prompt_cache_key=drill-20260817`, tiny non-stream requests.
+
+1. Fresh key → ch83: **hung 60s, curl timeout, no consume record** — live
+   reproduction of the muyuan stall mode (ch83 was actively degraded).
+2. ch83 disabled (`POST /api/channel/83/status {"status":2}`) → same key:
+   **200 in 6s, served by ch45**; next request shows `aff_ch=45` (pin
+   migrated). Two real user requests (114K/115K prompt tokens) during the
+   window were carried by ch45 in 14-15s.
+3. ch83 re-enabled → same key: **200 in 4s, still ch45, aff_ch=45** — the
+   pin stayed on the healthy channel instead of snapping back to ch83
+   (pre-fix behavior would have re-nailed it).
+
+Proven: disabled-channel failover, pin migration, pin persistence, backups
+carrying real production traffic. Config-applied but organically unproven:
+the 5xx-failover pin switch (needs ch83 enabled + header-stage failure;
+watch `aff_ch` moving off ch83 after future 504 clusters). The mid-stream
+stall mode (step 1) still has no retry coverage by design.
 ## Loss points
 
 1. **Billed empty streams** ×3 on ch83 (14:11, 21:40, 22:48): prompt
