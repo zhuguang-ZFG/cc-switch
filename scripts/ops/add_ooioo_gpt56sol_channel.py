@@ -93,6 +93,9 @@ def main() -> int:
         backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         dst = backup_dir / f"new-api-before-{CHANNEL_NAME}-{stamp}.db"
+        if dst.exists():
+            print(f"FATAL: backup destination already exists: {dst} (refusing to overwrite)")
+            return 1
         src = sqlite3.connect(f"file:{Path(smoke.NEWAPI_DB).as_posix()}?mode=ro", uri=True, timeout=30)
         try:
             out = sqlite3.connect(str(dst), timeout=30)
@@ -136,6 +139,9 @@ def main() -> int:
     status, body = smoke.http_json(
         f"{smoke.NEWAPI_BASE}/api/channel/?p=0&page_size=200", headers=headers
     )
+    if status != 200 or not isinstance(body, dict):
+        print(f"FATAL: readback list failed HTTP {status}")
+        return 1
     rb_items = body.get("data") or []
     if isinstance(rb_items, dict):
         rb_items = rb_items.get("items") or []
@@ -149,19 +155,29 @@ def main() -> int:
     if new_id is None:
         print("FATAL: created channel not found on readback")
         return 1
-    ok = (
-        readback.get("base_url") == BASE_URL
-        and readback.get("models") == MODELS
-        and readback.get("type") == 1
-        and readback.get("status") == 1
-        and readback.get("priority") == PRIORITY
-    )
+    expected = {
+        "base_url": BASE_URL,
+        "models": MODELS,
+        "type": 1,
+        "status": 1,
+        "priority": PRIORITY,
+        "weight": WEIGHT,
+        "group": "default",
+    }
+    mismatch = {k: (readback.get(k), v) for k, v in expected.items() if readback.get(k) != v}
+    try:
+        mapping_match = json.loads(readback.get("model_mapping") or "null") == json.loads(MODEL_MAPPING)
+    except json.JSONDecodeError:
+        mapping_match = False
+    ok = (not mismatch) and mapping_match
     print(
         f"readback channel id={new_id} status={readback.get('status')} "
         f"type={readback.get('type')} base_url={readback.get('base_url')} "
         f"priority={readback.get('priority')} models={readback.get('models')} "
         f"key={mask(str(readback.get('key') or key))}"
     )
+    if mismatch or not mapping_match:
+        print(f"mismatch={mismatch} mapping_match={mapping_match}")
 
     # 5. readback: abilities rows for the models
     con = sqlite3.connect(f"file:{Path(smoke.NEWAPI_DB).as_posix()}?mode=ro", uri=True, timeout=30)
@@ -175,7 +191,12 @@ def main() -> int:
         )
     finally:
         con.close()
-    ab_ok = any(r[0] == "gpt-5.6-sol" and r[2] for r in rows)
+    expected_models = MODELS.split(",")
+    got = {r[0]: (r[1], r[2], r[3], r[4]) for r in rows}  # model -> (channel_id, enabled, priority, weight)
+    ab_ok = len(rows) == len(expected_models) and all(
+        m in got and got[m][0] == new_id and got[m][1] and got[m][2] == PRIORITY and got[m][3] == WEIGHT
+        for m in expected_models
+    )
     print(f"abilities rows for ch{new_id}: {[(r[0], r[1], 'enabled' if r[2] else 'disabled', r[3], r[4]) for r in rows]}")
 
     if not (ok and ab_ok):

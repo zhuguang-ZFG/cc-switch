@@ -69,6 +69,9 @@ POST /api/channel/88/status {"status": 2}   # disable channel
 ```
 
 Creation helper: `scripts/ops/add_runinfra_qwen_channel.py` (idempotent;
-key via argv). Note the helper does not set `param_override` — that was
-applied via API afterwards; re-running the helper will not clobber it
-(verify-only path), but a fresh create would need the override re-applied.
+key via argv). The helper includes `param_override` in the create payload
+and verifies it on readback (JSON-normalized compare), so a fresh create
+is usable immediately. Verify-only re-runs compare the full contract:
+base_url, models, type, status, priority, weight, group, param_override,
+and exact abilities rows. (The initial ch88 create predated the fix; the
+override was applied via API and the script now guards it.)

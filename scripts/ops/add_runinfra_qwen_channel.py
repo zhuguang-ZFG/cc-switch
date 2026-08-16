@@ -6,10 +6,10 @@ Why through NewAPI instead of a direct OMP provider: runinfra hard-400s any
 request carrying `prompt_cache_key` ("Hosted inference does not support the
 prompt_cache_key request field"), and OMP's chat/completions transport always
 injects that field (pi-ai applyOpenAIChatCompletionsPromptCachePolicy; no
-per-provider suppressor exists in the models.yml schema). NewAPI strips the
-field on relay (Go struct re-serialization), so routing via NewAPI makes the
-model usable from OMP. Verified 2026-08-16: ingress with prompt_cache_key
-returns 200 via k3; this channel's end-to-end test repeats the check.
+per-provider suppressor exists in the models.yml schema). NewAPI passes
+the field through to the upstream unchanged (verified: E2E via the channel
+without the override -> same 400), so the channel sets param_override to
+delete it pre-upstream, making the model usable from OMP.
 
 Follows the ch83/ch84/ch85/ch87 workflow contract:
 - dup check by name and (base_url, models) before creating
@@ -20,6 +20,7 @@ Follows the ch83/ch84/ch85/ch87 workflow contract:
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 import sys
 import time
@@ -41,6 +42,10 @@ MODELS = "qwen3-8-27b"
 # Only channel for this model; priority irrelevant but keep 0 (neutral).
 PRIORITY = 0
 WEIGHT = 1
+# Runinfra hard-400s prompt_cache_key; strip it pre-upstream (see runbook).
+PARAM_OVERRIDE = json.dumps(
+    {"operations": [{"path": "prompt_cache_key", "mode": "delete"}]}
+)
 
 
 def mask(key: str) -> str:
@@ -93,6 +98,9 @@ def main() -> int:
         backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         dst = backup_dir / f"new-api-before-{CHANNEL_NAME}-{stamp}.db"
+        if dst.exists():
+            print(f"FATAL: backup destination already exists: {dst} (refusing to overwrite)")
+            return 1
         src = sqlite3.connect(f"file:{Path(smoke.NEWAPI_DB).as_posix()}?mode=ro", uri=True, timeout=30)
         try:
             out = sqlite3.connect(str(dst), timeout=30)
@@ -113,6 +121,7 @@ def main() -> int:
                 "type": 1,  # OpenAI (/v1/chat/completions)
                 "key": key,
                 "base_url": BASE_URL,
+                "param_override": PARAM_OVERRIDE,
                 "models": MODELS,
                 "group": "default",
                 "model_mapping": "",
@@ -130,12 +139,12 @@ def main() -> int:
             return 1
         print("create accepted")
 
-    # 4. readback: channel row
-    new_id = None
-    readback = None
     status, body = smoke.http_json(
         f"{smoke.NEWAPI_BASE}/api/channel/?p=0&page_size=200", headers=headers
     )
+    if status != 200 or not isinstance(body, dict):
+        print(f"FATAL: readback list failed HTTP {status}")
+        return 1
     rb_items = body.get("data") or []
     if isinstance(rb_items, dict):
         rb_items = rb_items.get("items") or []
@@ -149,17 +158,28 @@ def main() -> int:
     if new_id is None:
         print("FATAL: created channel not found on readback")
         return 1
-    ok = (
-        readback.get("base_url") == BASE_URL
-        and readback.get("models") == MODELS
-        and readback.get("type") == 1
-        and readback.get("status") == 1
-    )
+    expected = {
+        "base_url": BASE_URL,
+        "models": MODELS,
+        "type": 1,
+        "status": 1,
+        "priority": PRIORITY,
+        "weight": WEIGHT,
+        "group": "default",
+    }
+    mismatch = {k: (readback.get(k), v) for k, v in expected.items() if readback.get(k) != v}
+    try:
+        override_match = json.loads(readback.get("param_override") or "null") == json.loads(PARAM_OVERRIDE)
+    except json.JSONDecodeError:
+        override_match = False
+    ok = (not mismatch) and override_match
     print(
         f"readback channel id={new_id} status={readback.get('status')} "
         f"type={readback.get('type')} base_url={readback.get('base_url')} "
         f"models={readback.get('models')} key={mask(str(readback.get('key') or key))}"
     )
+    if mismatch or not override_match:
+        print(f"mismatch={mismatch} override_match={override_match}")
 
     # 5. readback: abilities row for the model
     con = sqlite3.connect(f"file:{Path(smoke.NEWAPI_DB).as_posix()}?mode=ro", uri=True, timeout=30)
@@ -173,7 +193,12 @@ def main() -> int:
         )
     finally:
         con.close()
-    ab_ok = any(r[0] == MODELS and r[2] for r in rows)
+    expected_models = MODELS.split(",")
+    got = {r[0]: (r[1], r[2], r[3], r[4]) for r in rows}  # model -> (channel_id, enabled, priority, weight)
+    ab_ok = len(rows) == len(expected_models) and all(
+        m in got and got[m][0] == new_id and got[m][1] and got[m][2] == PRIORITY and got[m][3] == WEIGHT
+        for m in expected_models
+    )
     print(f"abilities rows for ch{new_id}: {[(r[0], r[1], 'enabled' if r[2] else 'disabled', r[3], r[4]) for r in rows]}")
 
     if not (ok and ab_ok):
