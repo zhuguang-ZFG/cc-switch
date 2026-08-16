@@ -446,6 +446,22 @@ class OmpRouteGateTests(unittest.TestCase):
         self.assertIn("  modelFallback: true", text)
         self.assertIn("  fallbackRevertPolicy: cooldown-expiry", text)
 
+    def test_default_role_has_no_model_fallback_chain(self):
+        """default 可使用聚合渠道重试，但不得切换到另一个模型。"""
+        text = CONFIG_FILE.read_text(encoding="utf-8")
+        roles = _model_role_entries(text)
+        chains = _fallback_chain_entries(text)
+        self.assertIn("default", roles, "modelRoles.default must be configured")
+        primary = _base_selector(roles["default"])
+        configured = sorted({"default", primary} & set(chains))
+        self.assertEqual(
+            configured,
+            [],
+            "default must hard-fail after its provider/pool is exhausted; "
+            f"remove model fallback chains {configured}",
+        )
+
+
     def test_critical_chains_exclude_known_bad_agentrouter_claude(self):
         chains = _fallback_chain_entries(CONFIG_FILE.read_text(encoding="utf-8"))
         for role, candidates in chains.items():

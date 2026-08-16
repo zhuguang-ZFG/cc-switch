@@ -146,6 +146,19 @@ PROXIES = {
         "proc": "python.exe",
         "match": "codex-relay-16000[\\\\/]codex-relay\\.py",
     },
+    # mistral-conversations-relay：glm-5-2 仅经 Mistral /v1/conversations 提供，
+    # 本 relay 做 OpenAI chat/completions 格式转换，供 NewAPI 渠道使用（2026-08-16 加入）。
+    "mistral-relay-16001": {
+        "port": 16001,
+        "probe_host": "127.0.0.1",
+        "dir": "C:/Users/zhugu/.omp/guardian/mistral-relay-16001",
+        "cmd": [PYTHON, "C:/Users/zhugu/.omp/guardian/mistral-relay-16001/mistral-conversations-relay.py",
+                "--port", "16001",
+                "--log-file", "C:/Users/zhugu/.omp/guardian/mistral-relay.log"],
+        "env": {"MISTRAL_RELAY_SECRET_NAME": "mistral_glm_key"},
+        "proc": "python.exe",
+        "match": "mistral-relay-16001[\\\\/]mistral-conversations-relay\\.py",
+    },
 }
 
 PROXIES["anyrouter"] = {

@@ -41,6 +41,8 @@ PROXY_PORTS: dict[str, tuple[str, int]] = {
     "anyrouter": ("127.0.0.1", 8789),
     "codex-relay": ("127.0.0.1", 15999),
     "sharedchat-codex-relay": ("127.0.0.1", 16000),
+    # mistral-conversations-relay: OpenAI -> Mistral /v1/conversations (glm-5-2)
+    "mistral-relay": ("127.0.0.1", 16001),
 }
 SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
 

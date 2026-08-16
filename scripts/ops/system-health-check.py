@@ -149,6 +149,7 @@ def main() -> int:
         "anyrouter 8789": (8789, "127.0.0.1"),
         "codex-relay 15999": (15999, "127.0.0.1"),
         "codex-relay 16000": (16000, "127.0.0.1"),
+        "mistral-relay 16001": (16001, "127.0.0.1"),
     }
     for name, (p, h) in proxies.items():
         check(name, port_open(p, h), f"{h}:{p}")
