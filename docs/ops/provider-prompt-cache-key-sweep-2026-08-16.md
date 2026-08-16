@@ -15,16 +15,14 @@ prompt_cache_key`). Swept every **direct** provider in
 
 ## fengwind 502 (2026-08-16, 21:3x window)
 
-`https://api.fengwind.com` returned Cloudflare 502 (origin HTML error page)
-on every probe, `prompt_cache_key` present or absent — gateway-side outage,
-not a client defect. Corroborating: NewAPI ch20 `fengwind-gpt56sol` had
-already been auto-disabled by Guardian (status=2) in the same window.
-
 Impact while down: OMP `fallbackChains` entries pointing at fengwind
 (deepseek-v4 chains, smol chain, `zai-glm-5-2`) fail through to the next
-candidate — controlled degradation, no silent drop. No chain edits made on
-a transient outage; recheck when the gateway recovers, and only then
-prune if it is permanently gone.
+candidate — controlled degradation, no silent drop. Follow-up (same day,
+glm5.2 review): `zg-newapi/zai-glm-5-2` chain now leads with
+`mistral-official/glm-5-2` ahead of the dead fengwind entry. No chains
+removed; prune fengwind entries only if the outage is confirmed permanent.
+Corroborating: NewAPI ch20 `fengwind-gpt56sol` had already been
+auto-disabled by Guardian (status=2) in the same window.
 
 ## Verification-shape rule (lesson)
 
