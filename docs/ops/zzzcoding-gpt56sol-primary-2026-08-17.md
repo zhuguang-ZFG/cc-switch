@@ -135,3 +135,33 @@ three ability rows at p50 instead of p55, plus an unrelated live
 `gpt-5.6-luna` 403. Repository/route/Guardian tests remained 249/249 green;
 the retained ch45 snapshot was 80,527,360 bytes and passed
 `PRAGMA integrity_check`.
+
+## Hermes background K3 diagnosis and Agnes cutover (2026-08-17 21:31-21:43 CST)
+
+Repeated K3 traffic after the fallback edit was not evidence that the Sol
+route had fallen back. Process inspection showed the active chain
+`omp.exe -> pi-coding-agent -> pi-hermes-memory -> pi-coding-agent`, with the
+Hermes child explicitly launched as `--model zg-newapi/k3 --thinking off`.
+The independent cause was
+`~/.pi/agent/hermes-memory-config.json:llmModelOverride=zg-newapi/k3`.
+
+This override is separate from both OMP `modelRoles` and `retry.fallbackChains`.
+It covers background review, correction save, session flush, and memory
+consolidation. The default review cadence is every 10 turns or 15 tool calls.
+Rapid `failures.md` recovery/retired writes confirmed active memory work, but
+recovery-file count alone is not an LLM-request count.
+
+The override was changed to `zg-newapi/agnes-2.5-flash` with thinking disabled.
+Agnes was selected over `dots-3-note-prev` because Agnes is the registered
+free/fast pool and passed an isolated OMP no-tools probe with exact output
+`HERMES_AGNES_OK` in 6.6 seconds; the XiaoHongShu/Dots ch77 route had recent
+repeated 429 evidence and was not suitable for recurring background work.
+
+Only `llmModelOverride` changed. The JSON parsed successfully after the edit,
+and the verified rollback copy is
+`~/.pi/agent/hermes-memory-config.json.20260817-2142-before-agnes.bak` (166
+bytes, SHA-256 identical to the pre-change source). The extension loads this
+configuration once at OMP startup, so the already-running interactive OMP
+session retained its K3 child until a normal OMP restart. It was not forcibly
+terminated. OMP roles that explicitly select K3 remain unchanged and may
+still generate intentional foreground K3 traffic.
