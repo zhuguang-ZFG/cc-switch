@@ -99,7 +99,8 @@ def read_ability_rows(db_path: Path, channel_id: int) -> list[tuple[str, int, in
 
 
 def verify_abilities(
-    rows: list[tuple[str, int, int, int]], priority: int, weight: int
+    rows: list[tuple[str, int, int, int]], priority: int, weight: int,
+    *, enabled: int = 1,
 ) -> bool:
     """Confirm each Sol selector on the channel sits at the expected tier."""
     actual = {
@@ -108,7 +109,7 @@ def verify_abilities(
         if model in SOL_MODELS
     }
     expected = {
-        model: (1, priority, weight)
+        model: (enabled, priority, weight)
         for model in SOL_MODELS
     }
     return actual == expected
@@ -160,7 +161,10 @@ def main() -> int:
             channel.get("priority") == priority
             and channel.get("weight") == weight
         )
-        ability_ok = verify_abilities(rows, priority, weight)
+        expected_enabled = 1 if channel.get("status") == 1 else 0
+        ability_ok = verify_abilities(
+            rows, priority, weight, enabled=expected_enabled
+        )
         if not (channel_ok and ability_ok):
             already_ok = False
         print(
@@ -204,7 +208,15 @@ def main() -> int:
             and verified_channel.get("priority") == priority
             and verified_channel.get("weight") == weight
         )
-        ability_ok = verify_abilities(rows, priority, weight)
+        expected_enabled = (
+            1
+            if isinstance(verified_channel, dict)
+            and verified_channel.get("status") == 1
+            else 0
+        )
+        ability_ok = verify_abilities(
+            rows, priority, weight, enabled=expected_enabled
+        )
         print(f"ch{channel_id} verified channel_ok={channel_ok} ability_ok={ability_ok}")
         if not (channel_ok and ability_ok):
             verified = False

@@ -18,4 +18,6 @@ if not exist "%PYTHON%" (
 )
 
 "%PYTHON%" "%CD%\scripts\ops\newapi-local-smoke.py" %* >> "%LOG%" 2>&1
-exit /b %ERRORLEVEL%
+set "SMOKE_EXIT=%ERRORLEVEL%"
+"%PYTHON%" "%CD%\scripts\ops\newapi-smoke-alert.py" --exit-code %SMOKE_EXIT% >> "%LOG%" 2>&1
+exit /b %SMOKE_EXIT%

@@ -36,6 +36,9 @@ anyrouter_timeout = load(
 muyuan_sol = load(
     "update_muyuan_sol_primary_for_tests", "update_muyuan_sol_primary.py"
 )
+quarantine = load(
+    "quarantine_newapi_channels_for_tests", "quarantine_newapi_channels.py"
+)
 
 
 class AffinityUpdateTests(unittest.TestCase):
@@ -55,7 +58,15 @@ class AffinityUpdateTests(unittest.TestCase):
 
     def test_retry_budget_matches_smoke_contract(self) -> None:
         self.assertEqual(newapi_retry.TARGET_RETRY_TIMES, "1")
+        self.assertEqual(newapi_retry.TARGET_RETRY_STATUS_CODES, "408,500-503")
+        self.assertEqual(newapi_retry.TARGET_AUTOMATIC_DISABLE, "false")
         self.assertEqual(smoke.REQUIRED_OPTIONS["RetryTimes"], "1")
+        self.assertEqual(
+            smoke.REQUIRED_OPTIONS["AutomaticRetryStatusCodes"], "408,500-503"
+        )
+        self.assertEqual(
+            smoke.REQUIRED_OPTIONS["AutomaticDisableChannelEnabled"], "false"
+        )
 
 
 class NewApiRetryBudgetTests(unittest.TestCase):
@@ -75,14 +86,38 @@ class NewApiRetryBudgetTests(unittest.TestCase):
                 def http_json(_url, **kwargs):
                     calls.append(kwargs.get("body"))
                     if len(calls) == 1:
-                        return 200, {"data": [{"key": "RetryTimes", "value": "3"}]}
-                    if len(calls) == 2:
+                        return 200, {
+                            "data": [
+                                {"key": "RetryTimes", "value": "3"},
+                                {
+                                    "key": "AutomaticRetryStatusCodes",
+                                    "value": "408,429,500-504",
+                                },
+                                {
+                                    "key": "AutomaticDisableChannelEnabled",
+                                    "value": "<nil>",
+                                },
+                            ]
+                        }
+                    if len(calls) in (2, 3, 4):
                         return 200, {"success": True}
-                    if len(calls) == 3:
+                    if len(calls) == 5:
                         return 500, {}
-                    if len(calls) == 4:
+                    if len(calls) in (6, 7, 8):
                         return 200, {"success": True}
-                    return 200, {"data": [{"key": "RetryTimes", "value": "3"}]}
+                    return 200, {
+                        "data": [
+                            {"key": "RetryTimes", "value": "3"},
+                            {
+                                "key": "AutomaticRetryStatusCodes",
+                                "value": "408,429,500-504",
+                            },
+                            {
+                                "key": "AutomaticDisableChannelEnabled",
+                                "value": "<nil>",
+                            },
+                        ]
+                    }
 
             with (
                 patch.object(newapi_retry, "load_smoke", return_value=FakeSmoke),
@@ -91,8 +126,82 @@ class NewApiRetryBudgetTests(unittest.TestCase):
                 self.assertEqual(newapi_retry.main(), 1)
 
             self.assertEqual(calls[1], {"key": "RetryTimes", "value": "1"})
-            self.assertEqual(calls[3], {"key": "RetryTimes", "value": "3"})
-            self.assertIsNone(calls[4])
+            self.assertEqual(
+                calls[2],
+                {"key": "AutomaticRetryStatusCodes", "value": "408,500-503"},
+            )
+            self.assertEqual(
+                calls[3],
+                {"key": "AutomaticDisableChannelEnabled", "value": "false"},
+            )
+            self.assertEqual(calls[5], {"key": "RetryTimes", "value": "3"})
+            self.assertEqual(
+                calls[6],
+                {
+                    "key": "AutomaticRetryStatusCodes",
+                    "value": "408,429,500-504",
+                },
+            )
+            self.assertEqual(
+                calls[7],
+                {"key": "AutomaticDisableChannelEnabled", "value": "<nil>"},
+            )
+            self.assertIsNone(calls[8])
+
+
+class QuarantineChannelTests(unittest.TestCase):
+    def test_zero_weight_channel_does_not_replay_masked_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            calls: list[tuple[str, str, dict | None]] = []
+
+            class FakeSmoke:
+                NEWAPI_BASE = "http://127.0.0.1:3002"
+                DEPLOY_DIR = Path(temp_dir)
+
+                @staticmethod
+                def admin_auth():
+                    return "redacted", 1
+
+                @staticmethod
+                def http_json(url, **kwargs):
+                    method = kwargs.get("method", "GET")
+                    calls.append((method, url, kwargs.get("body")))
+                    if method == "GET" and url.endswith("/api/channel/57"):
+                        reads = sum(
+                            1
+                            for called_method, called_url, _ in calls
+                            if called_method == "GET"
+                            and called_url.endswith("/api/channel/57")
+                        )
+                        return 200, {
+                            "data": {
+                                "id": 57,
+                                "name": "gorouter",
+                                "key": "sk-***masked***",
+                                "status": 1 if reads == 1 else 2,
+                                "weight": 0,
+                            }
+                        }
+                    if method == "POST" and url.endswith("/status"):
+                        return 200, {"success": True}
+                    raise AssertionError(f"unexpected call: {method} {url}")
+
+            with (
+                patch.object(quarantine, "load_smoke", return_value=FakeSmoke),
+                patch.object(
+                    sys,
+                    "argv",
+                    ["quarantine_newapi_channels.py", "57", "--apply"],
+                ),
+            ):
+                self.assertEqual(quarantine.main(), 0)
+
+            self.assertFalse(
+                any(
+                    method == "PUT" and url.endswith("/api/channel/")
+                    for method, url, _ in calls
+                )
+            )
 
 
 class OmpContextUpdateTests(unittest.TestCase):

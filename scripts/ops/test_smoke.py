@@ -39,6 +39,14 @@ def fake_read_json(cache=CACHE):
 
 
 class AdminAuthTests(unittest.TestCase):
+    def test_pool_capacity_excludes_zero_weight_channels(self):
+        channels = [
+            {"id": 1, "status": 1, "weight": 0, "models": "critical"},
+            {"id": 2, "status": 1, "weight": 5, "models": "critical,other"},
+            {"id": 3, "status": 2, "weight": 5, "models": "critical"},
+        ]
+        self.assertEqual(smoke.serving_channel_ids(channels, "critical"), [2])
+
     def test_quarantine_policy_matches_guardian_recovery_exclusions(self):
         guardian_tree = ast.parse(
             Path(__file__).with_name("guardian.py").read_text(encoding="utf-8")
@@ -317,13 +325,12 @@ class AdminAuthTests(unittest.TestCase):
         ]
 
         violations = smoke.ai168661_channel_violations(channels)
-        self.assertEqual(len(violations), 3)
+        self.assertEqual(len(violations), 2)
         self.assertNotIn("status=2", violations[0])
         self.assertIn("base_url=https://ai.168661.xyz/v1", violations[0])
         self.assertIn("grok-imagine-video", violations[0])
         self.assertIn("status=1", violations[1])
         self.assertIn("model_mapping=drifted", violations[1])
-        self.assertEqual(violations[2], "79:missing")
 
     def test_live_agentrouter_fallback_is_not_expected_disabled(self):
         channels = [
@@ -435,7 +442,7 @@ class AdminAuthTests(unittest.TestCase):
         )
         self.assertEqual(
             smoke.teamorouter_free_violations([]),
-            ["84:missing"],
+            [],
         )
 
 
@@ -580,6 +587,7 @@ class AdminAuthTests(unittest.TestCase):
             smoke.option_policy_violations(
                 [
                     {"key": "AutomaticEnableChannelEnabled", "value": "true"},
+                    {"key": "AutomaticDisableChannelEnabled", "value": "false"},
                     {"key": "channel_affinity_setting.enabled", "value": "true"},
                     {"key": "RetryTimes", "value": "1"},
                     {"key": "AutomaticDisableStatusCodes", "value": "401,402,403,502"},
@@ -592,6 +600,7 @@ class AdminAuthTests(unittest.TestCase):
             smoke.option_policy_violations(
                 [
                     {"key": "AutomaticEnableChannelEnabled", "value": "false"},
+                    {"key": "AutomaticDisableChannelEnabled", "value": "false"},
                     {"key": "channel_affinity_setting.enabled", "value": "true"},
                     {"key": "RetryTimes", "value": "1"},
                     {"key": "AutomaticDisableStatusCodes", "value": "401,402,403,502"},
@@ -604,6 +613,7 @@ class AdminAuthTests(unittest.TestCase):
             smoke.option_policy_violations([]),
             [
                 "AutomaticEnableChannelEnabled=missing",
+                "AutomaticDisableChannelEnabled=missing",
                 "channel_affinity_setting.enabled=missing",
                 "RetryTimes=missing",
                 "AutomaticDisableStatusCodes=missing",
@@ -681,6 +691,17 @@ class AdminAuthTests(unittest.TestCase):
                 "48:deepseek-v4-pro=expected:enabled=1,priority=51,weight=20;"
                 "actual=[(1, 50, 20)]",
             ],
+        )
+
+    def test_critical_ability_posture_accepts_disabled_auto_ban_rows(self):
+        rows = [
+            (channel_id, model, 0 if channel_id == 83 else 1, priority, weight)
+            for (channel_id, model), (priority, weight)
+            in smoke.CRITICAL_ABILITY_POSTURES.items()
+        ]
+        self.assertEqual(
+            smoke.critical_ability_posture_violations(rows, {83}),
+            [],
         )
 
     def test_main_fails_on_invalid_channels_response(self):

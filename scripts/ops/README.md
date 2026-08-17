@@ -75,11 +75,14 @@ Guardian 依赖以下 NewAPI 设置（已通过 API 配置）：
 | `AutomaticDisableStatusCodes` | `401,402,403,502` | 自动禁用的 HTTP 状态码 |
 | `AutomaticDisableKeywords` | 余额不足, INSUFFICIENT_BALANCE, credit balance, ... | 自动禁用的错误关键词 |
 | `AutomaticEnableChannelEnabled` | `true` | NewAPI 可自动启用；Guardian 会重新验证并在不稳定时禁用 |
+| `AutomaticDisableChannelEnabled` | `false` | 本机由 Guardian 统一负责主动隔离；显式关闭，禁止保留歧义值 `<nil>` |
 | `AutomaticRetryStatusCodes` | `408,500-503` | 仅重试瞬时超时/服务端错误；认证、余额和 429 交给客户端退避/OMP 回退，避免嵌套放大 |
-| `ChannelDisableThreshold` | `3` | NewAPI 连续失败阈值 |
+| `ChannelDisableThreshold` | `90` | NewAPI 自动测试的慢响应阈值（秒），不是连续失败次数 |
 | `RetryTimes` | `1` | NewAPI 内层最多重试一次，避免与 OMP fallback 叠乘 |
 
 本机关闭 NewAPI 内置定时渠道测试以控制探测成本，因此 Guardian 每轮会把 `status=3 && auto_ban=1` 的渠道同步到自身恢复队列。同步不立即启用：先等待至少 5 分钟，再执行 3 次探测、至少 2 次通过、恢复权重和 10 分钟稳定性回滚。手工 `status=2`、`auto_ban=0` 以及明确隔离的 2/62/63/64/65 不进入自动恢复。
+
+计划任务 `CCSwitch-NewAPI-DX-Ops` 每轮运行 `newapi-local-smoke.py`。`newapi-smoke-alert.py` 在首次失败和失败后的首次恢复时发送一次 Telegram 告警；投递失败不落状态，下一轮继续尝试，避免“任务一直红但无人知道”。容量门禁只计算 `status=1 && weight>0` 的真实可路由渠道。
 
 ## 安装
 

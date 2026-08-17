@@ -106,6 +106,10 @@ MUYUAN_SOL_PRIMARY_CONTRACT: dict[str, object] = {
     "header_override": {"User-Agent": "codex_cli_rs/0.42.0"},
 }
 TEAMOROUTER_CHANNEL_ID = 84
+# The free-tier credential exhausted its quota and the channel was retired on
+# 2026-08-17. Preserve the shape contract for a future re-import, but do not
+# require a dead credential row to remain in the live database.
+TEAMOROUTER_RETIRED = True
 TEAMOROUTER_FREE_CONTRACT: dict[str, object] = {
     "name": "teamorouter-deepseek-free",
     "type": 1,
@@ -147,10 +151,9 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
         "test_model": "grok-4.5",
         "priority": 55,
         "weight": 10,
-        # 2026-08-16: grok family key revived upstream (Guardian recovery probe
-        # + direct /api/channel/test/39 both pass); ch39 is the ONLY channel
-        # serving grok models, so it must stay enabled. 78/79 keys still 401.
-        "status": 1,
+        # The temporary 2026-08-16 revival regressed to INVALID_API_KEY.
+        # Keep the recovery point quarantined and do not expose Grok in OMP.
+        "status": 2,
     },
     78: {
         "name": "ai-168661-deepseek-0731",
@@ -164,15 +167,6 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
             "zg-deepseek-v4-flash-0731": "deepseek-v4-flash",
         },
         "test_model": "deepseek-v4-flash",
-        "priority": 50,
-        "weight": 5,
-        "status": 2,
-    },
-    79: {
-        "name": "ai-168661-hy3",
-        "models": ("hy3", "zg-hy3"),
-        "mapping": {"zg-hy3": "hy3"},
-        "test_model": "hy3",
         "priority": 50,
         "weight": 5,
         "status": 2,
@@ -208,6 +202,9 @@ NEWAPI_DB = DEPLOY_DIR / "new-api.db"
 
 REQUIRED_OPTIONS: dict[str, str] = {
     "AutomaticEnableChannelEnabled": "true",
+    # Guardian owns disable/recovery locally; keep NewAPI's built-in scheduled
+    # disable switch explicit instead of the ambiguous literal `<nil>`.
+    "AutomaticDisableChannelEnabled": "false",
     "channel_affinity_setting.enabled": "true",
     "RetryTimes": "1",
     # 08-03 防放大策略固化（docs/ops/omp-model-config-review-2026-08-03.md）：
@@ -250,8 +247,6 @@ CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
     (83, "gpt-5.6-sol"): (50, 5),
     (83, "zg-gpt-5.6-sol"): (50, 5),
     (83, "zg-agent-gpt-5.6-sol"): (50, 5),
-    (84, "deepseek-v4-flash"): (40, 5),
-    (84, "deepseek-v4-pro"): (40, 5),
 }
 
 
@@ -325,7 +320,9 @@ def affinity_rule_violations(options: object) -> list[str]:
     return violations
 
 
-def critical_ability_posture_violations(rows: object) -> list[str]:
+def critical_ability_posture_violations(
+    rows: object, disabled_channel_ids: set[int] | None = None
+) -> list[str]:
     """Validate critical ability rows after channel model edits."""
     if not isinstance(rows, list):
         return ["abilities=invalid-shape"]
@@ -339,6 +336,7 @@ def critical_ability_posture_violations(rows: object) -> list[str]:
                 (enabled, priority, weight)
             )
 
+    disabled_channel_ids = disabled_channel_ids or set()
     violations: list[str] = []
     for key, expected in CRITICAL_ABILITY_POSTURES.items():
         channel_id, model = key
@@ -347,14 +345,15 @@ def critical_ability_posture_violations(rows: object) -> list[str]:
             violations.append(f"{channel_id}:{model}=missing")
             continue
         expected_priority, expected_weight = expected
+        expected_enabled = 0 if channel_id in disabled_channel_ids else 1
         drifted = [
             value
             for value in values
-            if value != (1, expected_priority, expected_weight)
+            if value != (expected_enabled, expected_priority, expected_weight)
         ]
         if drifted:
             violations.append(
-                f"{channel_id}:{model}=expected:enabled=1,priority="
+                f"{channel_id}:{model}=expected:enabled={expected_enabled},priority="
                 f"{expected_priority},weight={expected_weight};actual={drifted}"
             )
     return violations
@@ -376,7 +375,15 @@ def ability_posture_violations() -> list[str]:
                 channel_ids,
             )
         )
-        return critical_ability_posture_violations(rows)
+        disabled_channel_ids = {
+            row[0]
+            for row in con.execute(
+                "SELECT id FROM channels "
+                f"WHERE id IN ({placeholders}) AND status != 1 AND auto_ban = 1",
+                channel_ids,
+            )
+        }
+        return critical_ability_posture_violations(rows, disabled_channel_ids)
     except sqlite3.Error as e:
         return [f"db-read-failed={e}"]
     finally:
@@ -448,7 +455,7 @@ def teamorouter_free_violations(channels: list[dict]) -> list[str]:
         None,
     )
     if channel is None:
-        return [f"{TEAMOROUTER_CHANNEL_ID}:missing"]
+        return [] if TEAMOROUTER_RETIRED else [f"{TEAMOROUTER_CHANNEL_ID}:missing"]
 
     expected = TEAMOROUTER_FREE_CONTRACT
     reasons: list[str] = []
@@ -840,6 +847,26 @@ def admin_auth() -> tuple[str, str]:
     return token, user_id
 
 
+def serving_channel_ids(channels: list[dict], model: str) -> list[int]:
+    """Return routable channel ids for a model.
+
+    NewAPI treats ``weight=0`` as deliberately non-routable, even when the
+    row remains ``status=1``. Excluding those rows prevents false capacity.
+    """
+    return [
+        channel["id"]
+        for channel in channels
+        if channel.get("status") == 1
+        and isinstance(channel.get("weight"), (int, float))
+        and channel.get("weight", 0) > 0
+        and model
+        in {
+            item.strip()
+            for item in str(channel.get("models") or "").split(",")
+        }
+    ]
+
+
 def main() -> int:
     # 1. NewAPI status
     status, _ = http_json(f"{NEWAPI_BASE}/api/status", timeout=8)
@@ -953,17 +980,12 @@ def main() -> int:
             # 池冗余：关键模型不得失去最后一个启用渠道（0 = "503 No available
             # channel" 前置检测；2026-08-10 凌晨 opus 池曾退化到单渠道 ch75）。
             for model, minimum in MIN_ENABLED_CRITICAL_MODELS.items():
-                serving = [
-                    c for c in items
-                    if c.get("status") == 1 and model in {
-                        m.strip() for m in str(c.get("models") or "").split(",")
-                    }
-                ]
+                serving_ids = serving_channel_ids(items, model)
                 check(
                     f"pool capacity {model}",
-                    len(serving) >= minimum,
-                    f"enabled_channels={len(serving)} min={minimum}"
-                    f" ids={[c['id'] for c in serving]}",
+                    len(serving_ids) >= minimum,
+                    f"enabled_channels={len(serving_ids)} min={minimum}"
+                    f" ids={serving_ids}",
                 )
     except _AdminAuthUnavailable:
         # admin_auth 已记录 FAIL（缓存 token 校验失败降级），跳过依赖 admin

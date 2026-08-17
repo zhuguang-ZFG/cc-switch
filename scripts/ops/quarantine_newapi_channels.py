@@ -72,18 +72,22 @@ def main() -> int:
             failed = True
             continue
 
-        updated = {key: value for key, value in channel.items() if key != "status"}
-        updated["weight"] = 0
-        status, body = smoke.http_json(
-            f"{smoke.NEWAPI_BASE}/api/channel/",
-            method="PUT",
-            body=updated,
-            headers=headers,
-        )
-        if status != 200 or not isinstance(body, dict) or not body.get("success"):
-            print(f"channel {channel_id}: weight lock failed HTTP {status}")
-            failed = True
-            continue
+        # Avoid a full channel PUT when the weight lock already exists. Admin
+        # GET responses may redact keys; replaying a masked key can corrupt an
+        # otherwise valid channel merely to persist the same weight value.
+        if channel.get("weight") != 0:
+            updated = {key: value for key, value in channel.items() if key != "status"}
+            updated["weight"] = 0
+            status, body = smoke.http_json(
+                f"{smoke.NEWAPI_BASE}/api/channel/",
+                method="PUT",
+                body=updated,
+                headers=headers,
+            )
+            if status != 200 or not isinstance(body, dict) or not body.get("success"):
+                print(f"channel {channel_id}: weight lock failed HTTP {status}")
+                failed = True
+                continue
 
         verify_status, verify_body = smoke.http_json(
             f"{smoke.NEWAPI_BASE}/api/channel/{channel_id}", headers=headers

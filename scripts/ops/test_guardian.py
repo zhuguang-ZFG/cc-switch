@@ -2765,6 +2765,11 @@ class KeywordBoundaryTests(unittest.TestCase):
         self.assertTrue(guardian._is_transient_rate_limit("HTTP 429 too many requests"))
         self.assertTrue(guardian._is_transient_rate_limit("rate limit exceeded"))
 
+    def test_quota_exhausted_429_is_hard_failure(self):
+        msg = "HTTP 429 quota exhausted: insufficient_quota"
+        self.assertFalse(guardian._is_transient_rate_limit(msg))
+        self.assertEqual(guardian._matched_disable_keyword(msg), "quota")
+
     def test_error_scan_ignores_channel_whose_only_402_is_in_request_id(self):
         """端到端：错误扫描不得因 request_id 含 402 而禁用健康渠道"""
         engine = make_engine({"weight_history": {}, "degraded_channels": {}, "disabled_channels": []})

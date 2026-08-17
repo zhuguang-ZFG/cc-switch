@@ -219,6 +219,11 @@ TRANSIENT_RATE_LIMIT_MARKERS = ("429", "rate limit", "rate_limit", "too many req
 
 def _is_transient_rate_limit(message: str) -> bool:
     """429 / rate limit / too many requests → 瞬态限流，非渠道故障。"""
+    # Providers use 429 for both temporary burst limiting and exhausted
+    # account quota. Hard-error markers must win, otherwise an exhausted
+    # channel is skipped forever and repeatedly probed.
+    if _matched_disable_keyword(message):
+        return False
     return any(
         _matches_code_or_text(message, marker)
         for marker in TRANSIENT_RATE_LIMIT_MARKERS

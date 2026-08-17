@@ -9,6 +9,8 @@ from pathlib import Path
 
 
 TARGET_RETRY_TIMES = "1"
+TARGET_RETRY_STATUS_CODES = "408,500-503"
+TARGET_AUTOMATIC_DISABLE = "false"
 
 
 def option_value(options: object, key: str) -> object | None:
@@ -49,12 +51,17 @@ def main() -> int:
     if status != 200 or not isinstance(options, list):
         print(f"option read failed: HTTP {status}")
         return 1
-    current = option_value(options, "RetryTimes")
-    print(f"current={current} proposed={TARGET_RETRY_TIMES}")
-    if current is None:
-        print("RetryTimes is missing; refusing to create a rollback without an original value")
+    targets = {
+        "RetryTimes": TARGET_RETRY_TIMES,
+        "AutomaticRetryStatusCodes": TARGET_RETRY_STATUS_CODES,
+        "AutomaticDisableChannelEnabled": TARGET_AUTOMATIC_DISABLE,
+    }
+    originals = {key: option_value(options, key) for key in targets}
+    print(f"current={originals} proposed={targets}")
+    if any(value is None for value in originals.values()):
+        print("required retry option missing; refusing incomplete rollback")
         return 1
-    if current == TARGET_RETRY_TIMES:
+    if originals == targets:
         print("already configured")
         return 0
     if not args.apply:
@@ -65,40 +72,36 @@ def main() -> int:
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup = backup_dir / f"newapi-retry-budget-{time.strftime('%Y%m%d-%H%M%S')}.json"
     backup.write_text(
-        json.dumps({"RetryTimes": current}, ensure_ascii=False, indent=2),
+        json.dumps(originals, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    put_status, put_body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/api/option/",
-        method="PUT",
-        body={"key": "RetryTimes", "value": TARGET_RETRY_TIMES},
-        headers=headers,
-    )
-    if put_status != 200 or not isinstance(put_body, dict) or not put_body.get("success"):
-        print(f"update failed: HTTP {put_status}; backup={backup.name}")
-        return 1
+    for key, value in targets.items():
+        put_status, put_body = smoke.http_json(
+            f"{smoke.NEWAPI_BASE}/api/option/",
+            method="PUT",
+            body={"key": key, "value": value},
+            headers=headers,
+        )
+        if (
+            put_status != 200
+            or not isinstance(put_body, dict)
+            or not put_body.get("success")
+        ):
+            print(f"update {key} failed: HTTP {put_status}; backup={backup.name}")
+            restore_options(smoke, headers, originals)
+            return 1
 
     verify_status, verify_body = smoke.http_json(
         f"{smoke.NEWAPI_BASE}/api/option/", headers=headers
     )
     verified_options = verify_body.get("data") if isinstance(verify_body, dict) else None
-    verified = option_value(verified_options, "RetryTimes")
-    ok = verify_status == 200 and verified == TARGET_RETRY_TIMES
+    verified = {key: option_value(verified_options, key) for key in targets}
+    ok = verify_status == 200 and verified == targets
     print(f"backup={backup.name} verified={verified} ok={ok}")
     if ok:
         return 0
 
-    rollback_status, rollback_body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/api/option/",
-        method="PUT",
-        body={"key": "RetryTimes", "value": current},
-        headers=headers,
-    )
-    rollback_ok = (
-        rollback_status == 200
-        and isinstance(rollback_body, dict)
-        and bool(rollback_body.get("success"))
-    )
+    rollback_ok = restore_options(smoke, headers, originals)
     if rollback_ok:
         rollback_verify_status, rollback_verify_body = smoke.http_json(
             f"{smoke.NEWAPI_BASE}/api/option/", headers=headers
@@ -110,10 +113,27 @@ def main() -> int:
         )
         rollback_ok = (
             rollback_verify_status == 200
-            and option_value(rollback_options, "RetryTimes") == current
+            and all(
+                option_value(rollback_options, key) == value
+                for key, value in originals.items()
+            )
         )
     print(f"verification failed; rollback_ok={rollback_ok}")
     return 1
+
+
+def restore_options(smoke, headers: dict[str, str], originals: dict[str, object]) -> bool:
+    """Best-effort restore of every retry option changed by this tool."""
+    ok = True
+    for key, value in originals.items():
+        status, body = smoke.http_json(
+            f"{smoke.NEWAPI_BASE}/api/option/",
+            method="PUT",
+            body={"key": key, "value": value},
+            headers=headers,
+        )
+        ok = ok and status == 200 and isinstance(body, dict) and bool(body.get("success"))
+    return ok
 
 
 if __name__ == "__main__":
