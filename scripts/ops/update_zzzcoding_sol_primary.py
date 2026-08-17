@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Enforce zzzcoding primary and jianzhile backup for the Sol pool.
+"""Enforce the bounded zzzcoding, jianzhile, and muyuan Sol posture.
 
 The default mode is read-only. ``--apply`` creates an integrity-checked online
 SQLite snapshot, updates only channel/ability priority and weight, waits for
 NewAPI's channel cache, and probes ch92 through streaming Responses. Any
-failure restores both channel tiers and their ability rows.
+failure restores all three channel tiers and their ability rows.
 """
 
 from __future__ import annotations
@@ -21,7 +21,8 @@ SMOKE_PATH = Path(__file__).with_name("newapi-local-smoke.py")
 CACHE_SYNC_SECONDS = 75
 TARGETS: tuple[tuple[int, str, int, int, str], ...] = (
     (92, "zzzcoding-gpt-5.6-sol", 60, 15, "primary"),
-    (91, "jianzhile-gpt-5.6-sol", 50, 5, "backup"),
+    (91, "jianzhile-gpt-5.6-sol", 55, 5, "strict backup"),
+    (83, "muyuan-sol", 50, 5, "disabled recovery tier"),
 )
 EXPECTED_MODELS: dict[int, frozenset[str]] = {
     92: frozenset(
@@ -40,6 +41,18 @@ EXPECTED_MODELS: dict[int, frozenset[str]] = {
             "jianzhile-codex-gpt-5.6-sol",
         }
     ),
+    83: frozenset(
+        {
+            "gpt-5.6-sol",
+            "zg-gpt-5.6-sol",
+            "zg-agent-gpt-5.6-sol",
+        }
+    ),
+}
+MANAGEMENT_MODELS: dict[int, str] = {
+    92: "zzzcoding-codex-gpt-5.6-sol",
+    91: "jianzhile-codex-gpt-5.6-sol",
+    45: "gpt-5.6-sol",
 }
 
 
@@ -64,13 +77,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def online_backup(db_path: Path) -> Path:
+def online_backup(
+    db_path: Path, prefix: str = "new-api-before-zzzcoding-sol-posture"
+) -> Path:
     backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    destination = backup_dir / (
-        "new-api-before-zzzcoding-sol-posture-"
-        f"{time.strftime('%Y%m%d-%H%M%S')}.db"
-    )
+    destination = backup_dir / f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}.db"
     if destination.exists():
         raise RuntimeError(f"backup already exists: {destination}")
     with closing(
@@ -173,18 +185,23 @@ def verify_targets(connection: sqlite3.Connection) -> None:
             raise RuntimeError(f"ch{channel_id} ability posture mismatch")
 
 
-def management_probe(smoke, headers: dict[str, str]) -> None:
-    path = (
-        "/api/channel/test/92?model=zzzcoding-codex-gpt-5.6-sol"
-        "&endpoint_type=openai-response&stream=true"
-    )
+def management_probe(
+    smoke, headers: dict[str, str], channel_id: int = 92
+) -> None:
+    model = MANAGEMENT_MODELS.get(channel_id)
+    if model is None:
+        raise RuntimeError(f"no management probe contract for ch{channel_id}")
+    path = f"/api/channel/test/{channel_id}?model={model}"
+    if channel_id in (91, 92):
+        path += "&endpoint_type=openai-response&stream=true"
     status, body = smoke.http_json(
         f"{smoke.NEWAPI_BASE}{path}", headers=headers, timeout=65
     )
     if status != 200 or not isinstance(body, dict) or not body.get("success"):
         message = body.get("message") if isinstance(body, dict) else None
         raise RuntimeError(
-            f"ch92 streaming Responses probe failed: HTTP {status} message={message!r}"
+            f"ch{channel_id} management probe failed: "
+            f"HTTP {status} message={message!r}"
         )
 
 
@@ -213,6 +230,10 @@ def main() -> int:
         "Authorization": f"Bearer {token}",
         "New-Api-User": str(user_id),
     }
+    for channel_id in (92, 91):
+        for _ in range(2):
+            management_probe(smoke, headers, channel_id)
+    print("preflight ok: ch92/ch91 forced management probes 2/2 each")
     backup = online_backup(db_path)
     print(f"backup ok: {backup.name} ({backup.stat().st_size} bytes, integrity=ok)")
 
@@ -236,7 +257,8 @@ def main() -> int:
             verify_targets(connection)
         print(
             "OK: ch92 zzzcoding primary 60/15; "
-            f"ch91 jianzhile backup 50/5; backup={backup.name}"
+            "ch91 jianzhile strict backup 55/5; "
+            f"ch83 muyuan recovery 50/5 status preserved; backup={backup.name}"
         )
         return 0
     except Exception:
@@ -248,7 +270,7 @@ def main() -> int:
                 if restored != original:
                     raise RuntimeError("rollback readback differs from original state")
                 print(
-                    f"rollback restored both tiers; waiting {CACHE_SYNC_SECONDS}s "
+                    f"rollback restored all tiers; waiting {CACHE_SYNC_SECONDS}s "
                     "for channel cache"
                 )
                 time.sleep(CACHE_SYNC_SECONDS)

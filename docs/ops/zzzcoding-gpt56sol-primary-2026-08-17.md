@@ -4,8 +4,9 @@
 
 `https://api.zzzcoding.org` is NewAPI ch92 `zzzcoding-gpt-5.6-sol` and is the
 Sol primary at priority 60 / weight 15. ch91 `jianzhile-gpt-5.6-sol` is the
-direct backup at priority 50 / weight 5. The channel and all four ability rows
-use the same posture.
+strict direct backup at priority 55 / weight 5. ch83 `muyuan-sol` retains
+priority 50 / weight 5 and its existing status. Each channel and its ability
+rows use the same posture.
 
 The API key is stored only in NewAPI. Do not place it in repository files,
 command arguments, logs, or runbooks.
@@ -37,7 +38,7 @@ The posture updater is read-only unless `--apply` is present. It validates the
 exact ch91/ch92 identities and BLOB `channel_info`, creates an online SQLite
 snapshot with `PRAGMA integrity_check`, atomically changes only channel and
 ability priority/weight, preserves status and secrets, waits 75 seconds for
-the NewAPI cache, and restores both tiers on any failure.
+the NewAPI cache, and restores all three tiers on any failure.
 
 Rollback artifacts retained under `~/.new-api-local/backups/`:
 
@@ -64,3 +65,73 @@ At 2026-08-17 19:53 CST, the read-only verifier reported:
 The subsequent full `newapi-local-smoke.py` run reported `ALL OK`, including
 Sol primary posture, critical ability posture, proxy listeners, and real
 `sensenova-6.7-flash-lite` / `gpt-5.6-luna` model requests.
+
+## Hardening follow-up (2026-08-17 20:43-21:02 CST)
+
+Credential rotation remained explicitly deferred. No key was printed, copied
+to the repository, or included in telemetry.
+
+Completed production changes:
+
+- Removed only `fallbackChains.zg-newapi/k3` from OMP while preserving
+  `modelRoles.default=zg-newapi/k3:high` and role-specific chains. Backup:
+  `config.yml.20260817-204309-before-default-fallback.bak` (3350 bytes).
+  `omp models` and all 34 OMP route tests passed afterward.
+- Rechecked ch45 with two NewAPI management probes and exact OMP direct text
+  `AGENTROUTER-THIRD-OK`, then enabled it at p40/w5. Rollback snapshot:
+  `new-api-before-zzzcoding-sol-posture-20260817-204443.db` (the shared backup
+  helper still used its old filename prefix for this first rollout).
+- Registered `OMP Sol Semantic Monitor` every 30 minutes with
+  `MultipleInstances=IgnoreNew`, `ExecutionTimeLimit=PT5M`, `RestartCount=0`,
+  and no channel mutation/restart path. The first live record was HTTP 200,
+  exact semantic text, positive usage, and `channel_id=92`. Runtime source
+  hashes matched the repository; registration backup directory:
+  `~/.omp/guardian/task-backups/sol-monitor-20260817-204613-864`.
+
+Final ch92 context evidence used server-returned usage rather than body size:
+
+| Shape | Returned `prompt_tokens` | Result | TTFT | Total | Log/channel |
+| --- | ---: | --- | ---: | ---: | --- |
+| plain | 200012 | HTTP 200, semantic, `[DONE]` | 7272 ms | 10065 ms | 86120 / 92 |
+| plain | 280012 | HTTP 200, semantic, `[DONE]` | 7822 ms | 8901 ms | 86122 / 92 |
+| plain | 340012 | HTTP 200, semantic, `[DONE]` | 26308 ms | 26418 ms | 86124 / 92 |
+| plain | 380012 | HTTP 200, semantic, `[DONE]` | 13052 ms | 13486 ms | 86127 / 92 |
+| plain | 396012 | HTTP 200, semantic, `[DONE]` | 10957 ms | 11317 ms | 86128 / 92 |
+| one tool | 364130 | HTTP 200, semantic, `[DONE]` | 7786 ms | 8026 ms | 86131 / 92 |
+| one tool | 396130 | HTTP 200, semantic, `[DONE]` | 9078 ms | 9541 ms | 86133 / 92 |
+
+The first calibration used request-size tolerance too loosely and produced a
+400348-token probe. It succeeded, but was discarded as the acceptance run
+because it consumed the intended 400k margin. The final calibration above was
+within roughly 130 tokens of each target. OMP `contextWindow: 400000` remains
+unchanged.
+
+### Deferred by live upstream health
+
+ch91 remained enabled at its pre-change p50/w5 posture. Four independent
+forced management preflights across the rollout window returned distributor
+503 (`No available channel for model gpt-5.6-sol under group GPT`). The 200k
+forced-alias campaign likewise returned 503 before usage was produced.
+
+Therefore the p55 promotion and ch92-disable failover drill were not executed.
+`update_zzzcoding_sol_primary.py --apply` now requires ch92 and ch91 to pass
+two forced management probes each before it writes anything. Once ch91
+recovers, run:
+
+```powershell
+python3 scripts/ops/drill_sol_failover.py --preflight
+python3 scripts/ops/update_zzzcoding_sol_primary.py --apply
+python3 scripts/ops/drill_sol_failover.py --apply
+python3 scripts/ops/verify_zzzcoding_sol_primary.py
+```
+
+Until then, `verify_zzzcoding_sol_primary.py --allow-pending-posture` verifies
+ch92 without pretending the p55 migration has completed.
+
+Final live smoke passed NewAPI status, all proxy listeners, option/affinity
+policy, channel isolation, ch45 fallback posture, critical pool capacity, and
+multi-key health. It exited nonzero for the expected pending ch91 channel and
+three ability rows at p50 instead of p55, plus an unrelated live
+`gpt-5.6-luna` 403. Repository/route/Guardian tests remained 249/249 green;
+the retained ch45 snapshot was 80,527,360 bytes and passed
+`PRAGMA integrity_check`.

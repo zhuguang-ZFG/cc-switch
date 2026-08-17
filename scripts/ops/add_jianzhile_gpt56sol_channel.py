@@ -5,7 +5,7 @@ gateway (https://jianzhile.vip) as the direct backup to zzzcoding.
 jianzhile.vip is a NewAPI fork relay exposing exactly one model
 (`gpt-5.6-sol`) through Codex-shaped `/v1/responses`. NewAPI's channel-local
 Chat-to-Responses policy lets OMP keep using its standard Chat Completions
-provider while type=1 ch91 talks Responses upstream. Its priority 50 / weight 5
+provider while type=1 ch91 talks Responses upstream. Its priority 55 / weight 5
 posture keeps it directly behind the zzzcoding primary at priority 60.
 
 History: this gateway deterministically 403'd on 2026-08-13 (see
@@ -65,7 +65,7 @@ MODEL_MAPPING = json.dumps(
 HEADER_OVERRIDE_JSON = json.dumps(HEADER_OVERRIDE, separators=(",", ":"), sort_keys=True)
 PARAM_OVERRIDE_JSON = json.dumps(PARAM_OVERRIDE, separators=(",", ":"), sort_keys=True)
 # User-selected direct backup tier, immediately below zzzcoding.
-PRIORITY = 50
+PRIORITY = 55
 WEIGHT = 5
 
 # Fork multi-key contract (docs/ops/tabitoken-channel-2026-08-09.md,

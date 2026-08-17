@@ -428,11 +428,12 @@ class ZzzcodingSolPrimaryPostureTests(unittest.TestCase):
                 "enabled INTEGER, priority INTEGER, weight INTEGER)"
             )
             for channel_id, name, priority, weight, _ in zzzcoding_posture.TARGETS:
-                old_priority = 50 if channel_id == 92 else 60
-                old_weight = 5 if channel_id == 92 else 15
+                old_priority = {92: 50, 91: 60, 83: 40}[channel_id]
+                old_weight = {92: 5, 91: 15, 83: 2}[channel_id]
+                status = 2 if channel_id == 83 else 1
                 connection.execute(
-                    "INSERT INTO channels VALUES (?, ?, 1, ?, ?, ?)",
-                    (channel_id, name, old_priority, old_weight, marker),
+                    "INSERT INTO channels VALUES (?, ?, ?, ?, ?, ?)",
+                    (channel_id, name, status, old_priority, old_weight, marker),
                 )
                 for model in zzzcoding_posture.EXPECTED_MODELS[channel_id]:
                     connection.execute(
@@ -455,6 +456,12 @@ class ZzzcodingSolPrimaryPostureTests(unittest.TestCase):
                         "SELECT channel_info FROM channels WHERE id=92"
                     ).fetchone(),
                     (marker,),
+                )
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT status FROM channels WHERE id=83"
+                    ).fetchone(),
+                    (2,),
                 )
                 zzzcoding_posture.restore_state(connection, original)
                 self.assertEqual(zzzcoding_posture.read_state(connection), original)

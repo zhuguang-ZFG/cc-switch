@@ -10,7 +10,7 @@ disabled, and only then enables it.
 The user-selected routing posture is:
 
   ch92 zzzcoding  priority 60 / weight 15  primary
-  ch91 jianzhile  priority 50 / weight 5   backup
+  ch91 jianzhile  priority 55 / weight 5   strict backup
 
 Run without --apply for a read-only plan. The API key is never printed.
 """
@@ -58,7 +58,7 @@ MODEL_PATTERNS = [
 ]
 PEER_ID = 91
 PEER_NAME = "jianzhile-gpt-5.6-sol"
-PEER_PRIORITY = 50
+PEER_PRIORITY = 55
 PEER_WEIGHT = 5
 PRIORITY = 60
 WEIGHT = 15
