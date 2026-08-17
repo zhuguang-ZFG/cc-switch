@@ -95,3 +95,13 @@ OMP 中 luna 接替 V4Flash 的全部角色位。上游管理端实测（`GET /a
   改动前备份配置同样违反——非本次引入，k3 链服务 plan/bigctx/designer，去留待用户决策）。
 - 记忆库已整理：project 90%（4529/5000）、failure 87%（8752/10000），本次变更与 CF 1010
   quirk 均已落盘。
+
+## 第三阶段：NewAPI↔OMP 模型盘点（2026-08-17 18:1x，用户问「有些模型没配置到omp中」）
+
+- 全量 diff：22 个 NewAPI enabled 模型不在 OMP，其中 15 个为**故意不接**（zg-* 别名、
+  claude OpenAI 兼容重复、haiku 日期/1M 变体、LongCat/agnes/intern 直连或 anthropic 网关已有）。
+- ch89 seeseed 复扫：grok-4.6/grok-chat-fast 活；GLM-5.3 上游 401（本 key 在 free 组、模型仅
+  default 组）、mimo-v2.5 上游下架——已从 ch89 摘除（备份 channels-89-20260817-181629.json）。
+- OMP models.yml 新增 `zg-newapi/grok-4.6`（262k/32k reasoning）与 `zg-newapi/grok-chat-fast`
+  （131k/16k），规格为保守声明。k3-256k/kimi-for-coding-highspeed/opus-thinking 变体属冗余未接。
+- 验证：relay 两 grok 200；newapi-local-smoke 全量 ALL OK。

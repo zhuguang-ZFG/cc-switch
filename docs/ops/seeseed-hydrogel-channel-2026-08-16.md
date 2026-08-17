@@ -30,7 +30,9 @@ risk. Re-sweep before adding any of them later.
 
 - type=1 (OpenAI), base_url=`https://api-yi-hydrogel.seeseed1ck.icu` — no
   `/v1` suffix (NewAPI appends `/v1/chat/completions` itself)
-- models: `GLM-5.3,grok-4.6,grok-chat-fast,mimo-v2.5`
+- models: `grok-4.6,grok-chat-fast`（2026-08-17 复扫后收缩：GLM-5.3 上游对本 key
+  401——pricing 显示其 enable_groups 仅 default，本 key 在 free 组；mimo-v2.5 上游
+  distributor 无渠道、pricing 已下架。备份 `channels-89-20260817-181629.json`）
 - **param_override**: `{"operations":[{"path":"enable_thinking","mode":"delete"}]}`
   — GLM-5.3 is always-thinking and 400s on `enable_thinking:false`
   ("该模型始终思考，不支持关闭思考"). OMP's wire shape includes
@@ -79,6 +81,14 @@ DB snapshot before channel creation:
 - If deepseek-v4-pro/flash recover upstream, they would become a fourth
   backup for the k3 fallback chain (current live pool: ch48 prio 51,
   ch42 prio 50, ch84 prio 40 — see `docs/ops/deepseek-v4-pro-pool-2026-08-13.md`).
+
+## 2026-08-17 复扫与 OMP 接入
+
+- 复扫：grok-4.6 / grok-chat-fast 经 NewAPI relay 200；GLM-5.3 上游 401 Invalid
+  token（组权限），mimo-v2.5 上游 503 distributor 无渠道——两者从 ch89 摘除。
+- OMP models.yml 新增 `zg-newapi/grok-4.6`（reasoning，262k/32k，保守声明）与
+  `zg-newapi/grok-chat-fast`（131k/16k）；规格为保守值，上游无元数据可查。
+- 待上游恢复后重新扫活再考虑回挂 GLM-5.3/mimo-v2.5。
 
 ## Related
 
