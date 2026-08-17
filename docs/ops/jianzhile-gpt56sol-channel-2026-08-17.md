@@ -48,6 +48,10 @@ Priority ladder after this change:
   `zg-gpt-5.6-sol` alias success (2.8s, proves model_mapping).
 - No E2E through `127.0.0.1:3002` claimed: sol traffic still routes to
   ch83/ch45 first by priority; ch91 engages only when 83/45/87/90 all fail.
+- OMP production wire shape probe: plain `/v1/chat/completions` +
+  `prompt_cache_key` (the field OMP injects unconditionally) → HTTP 200,
+  2.7s. **No Codex masquerade needed**: no UA spoofing, no `instructions`/
+  `store` fields, no param_override on the channel.
 - Idempotent re-run of the creation script: verify-only path (dup-check by
   name short-circuits to readback).
 
