@@ -78,6 +78,32 @@ Priority ladder after this change:
 - Single model: no model-level failover within the channel (key-level
   polling only). Per-key upstream death degrades to the surviving key.
 
+## Incident: downstream 403 recurrence (2026-08-17 12:54)
+
+~15 minutes after the multi-key conversion verified clean, the relay's
+downstream started refusing again — the same `bad_response_status_code`
+403 shape as the 2026-08-13 refusal:
+
+- key1 (`...P6fx`): deterministic 403, ~1.0s
+- key2 (`...MwB7`): 429 `Too many pending requests` ×2, then same 403 —
+  the 429 phase suggests a shared congested/dying downstream, not per-key
+  quota
+- `/v1/models` still 200 for both keys: auth valid, model listed — the
+  refusal is strictly at completion time (identical to the 08-13 profile)
+
+**Guardian auto_ban disabled ch91 (status=2) on its own** — no manual
+action taken. channel_info (multi-key BLOB) intact; `polling_index=1`
+shows both keys had been exercised before the ban.
+
+Re-enable checklist (when the provider fixes their downstream):
+
+1. Direct probe both keys — must return 200 with content, twice in a row,
+   minutes apart (a single 200 is not enough: this gateway flipped from
+   healthy to 403 within 15 minutes on 2026-08-17):
+   `curl -s https://jianzhile.vip/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"Say OK"}],"max_tokens":16}'`
+2. `POST /api/channel/91/status {"status": 1}`
+3. Admin channel test ×2, confirm `multi_key_polling_index` advances.
+
 ## Rollback
 
 ```powershell
