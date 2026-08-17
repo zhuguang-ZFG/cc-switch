@@ -512,6 +512,25 @@ class OmpRouteGateTests(unittest.TestCase):
             [],
             f"AnyRouter is upstream-429 and must remain manual-canary only: {routed}",
         )
+
+    def test_untrusted_sotamodel_is_not_an_automatic_role_or_fallback(self):
+        text = CONFIG_FILE.read_text(encoding="utf-8")
+        roles = _model_role_entries(text)
+        chains = _fallback_chain_entries(text)
+        routed_roles = sorted(
+            role for role, model in roles.items() if model.startswith("sotamodel")
+        )
+        routed_chains = sorted(
+            chain
+            for chain, candidates in chains.items()
+            if any(candidate.startswith("sotamodel") for candidate in candidates)
+        )
+        self.assertEqual(
+            (routed_roles, routed_chains),
+            ([], []),
+            "sotamodel is an untrusted manual canary and must not enter OMP routing",
+        )
+
     def test_anthropic_provider_uses_semantic_ttft_gateway(self):
         text = MODELS_FILE.read_text(encoding="utf-8")
         block = _top_level_mapping_block(text, "zg-newapi-anthropic")

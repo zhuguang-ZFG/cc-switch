@@ -219,6 +219,24 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 - NewAPI Channel.Update() → UpdateAbilities(nil): abilities 表自动同步证据
 - OpenClaw WatchDog: https://clawhub.ai/abdullah4ai/openclaw-watchdog
 
+## Untrusted provider conformance canary
+
+`probe_untrusted_openai_provider.py` is a default-dry-run, serial compatibility
+probe for APIs with unverifiable model names. It reads the key only from an
+environment variable and emits no prompt/response bodies. The live suite
+checks catalog ids, JSON versus SSE behavior, response-model mismatches,
+alias collapse, usage/cache accounting, and one required tool call. It never
+creates a NewAPI channel or edits OMP. The separately managed
+`sotamodel-canary` OMP provider is manual-only; its 1M context and 128K output
+metadata are permissive client test limits, not verified upstream capability.
+`test_omp_routes.py` keeps `sotamodel*` out of roles and automatic fallbacks. See
+`docs/ops/untrusted-openai-provider-canary.md`.
+
+```powershell
+python3 scripts/ops/probe_untrusted_openai_provider.py
+python3 scripts/ops/probe_untrusted_openai_provider.py --run
+```
+
 ## OMP unexpected-stop guard
 
 `omp-unexpected-stop-guard.js` uses OMP's supported `session_stop` extension event to resume a main-agent turn that explicitly promises immediate work but ends without a tool call. It is deterministic, supports Chinese and English promises, rejects completion/question/blocker language, and caps a continuation chain at three turns.
