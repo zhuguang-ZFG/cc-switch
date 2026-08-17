@@ -3,8 +3,9 @@
 gateway (https://jianzhile.vip) as a last-resort multi-key backup.
 
 jianzhile.vip is a NewAPI fork relay exposing exactly one model
-(`gpt-5.6-sol`) over standard /v1/chat/completions, so no relay is needed —
-this is a standard type=1 channel. Priority 10 places it below the whole
+(`gpt-5.6-sol`) through Codex-shaped `/v1/responses`. NewAPI's channel-local
+Chat-to-Responses policy lets OMP keep using its standard Chat Completions
+provider while type=1 ch91 talks Responses upstream. Priority 10 places it below the whole
 existing sol ladder (muyuan-sol ch83 prio 50, agentrouter ch45 prio 40,
 ooioo ch87 prio 30, t1qq ch90 prio 20), making it the fifth-line backup.
 
@@ -34,6 +35,12 @@ import sys
 import time
 from pathlib import Path
 
+from fix_jianzhile_codex_channel import (
+    CODEX_MODEL,
+    HEADER_OVERRIDE,
+    PARAM_OVERRIDE,
+)
+
 SMOKE_PATH = Path(__file__).with_name("newapi-local-smoke.py")
 
 
@@ -47,11 +54,17 @@ def load_smoke():
 
 
 CHANNEL_NAME = "jianzhile-gpt-5.6-sol"
-BASE_URL = "https://jianzhile.vip"  # NewAPI appends /v1/chat/completions itself
-MODELS = "gpt-5.6-sol,zg-gpt-5.6-sol,zg-agent-gpt-5.6-sol"
+BASE_URL = "https://jianzhile.vip"  # NewAPI appends the request-specific API path.
+MODELS = f"gpt-5.6-sol,zg-gpt-5.6-sol,zg-agent-gpt-5.6-sol,{CODEX_MODEL}"
 MODEL_MAPPING = json.dumps(
-    {"zg-gpt-5.6-sol": "gpt-5.6-sol", "zg-agent-gpt-5.6-sol": "gpt-5.6-sol"}
+    {
+        "zg-gpt-5.6-sol": "gpt-5.6-sol",
+        "zg-agent-gpt-5.6-sol": "gpt-5.6-sol",
+        CODEX_MODEL: "gpt-5.6-sol",
+    }
 )
+HEADER_OVERRIDE_JSON = json.dumps(HEADER_OVERRIDE, separators=(",", ":"), sort_keys=True)
+PARAM_OVERRIDE_JSON = json.dumps(PARAM_OVERRIDE, separators=(",", ":"), sort_keys=True)
 # Last-resort tier: below muyuan-sol (50), agentrouter (40), ooioo (30), t1qq (20).
 PRIORITY = 10
 WEIGHT = 5
@@ -169,15 +182,19 @@ def main() -> int:
             "mode": "multi_to_single",
             "channel": {
                 "name": CHANNEL_NAME,
-                "type": 1,  # OpenAI (/v1/chat/completions)
+                "type": 1,  # OpenAI-compatible; real Codex uses /v1/responses.
                 "key": key_field,
                 "base_url": BASE_URL,
                 "models": MODELS,
                 "group": "default",
                 "model_mapping": MODEL_MAPPING,
+                "header_override": HEADER_OVERRIDE_JSON,
+                "param_override": PARAM_OVERRIDE_JSON,
+                "test_model": CODEX_MODEL,
                 "priority": PRIORITY,
                 "weight": WEIGHT,
                 "status": 1,
+                "auto_ban": 1,
             },
         }
         status, body = smoke.http_json(
@@ -268,13 +285,23 @@ def main() -> int:
         "priority": PRIORITY,
         "weight": WEIGHT,
         "group": "default",
+        "auto_ban": 1,
+        "test_model": CODEX_MODEL,
     }
     mismatch = {k: (readback.get(k), v) for k, v in expected.items() if readback.get(k) != v}
     try:
         mapping_match = json.loads(readback.get("model_mapping") or "null") == json.loads(MODEL_MAPPING)
     except json.JSONDecodeError:
         mapping_match = False
-    ok = (not mismatch) and mapping_match
+    try:
+        header_match = json.loads(readback.get("header_override") or "null") == HEADER_OVERRIDE
+    except json.JSONDecodeError:
+        header_match = False
+    try:
+        param_match = json.loads(readback.get("param_override") or "null") == PARAM_OVERRIDE
+    except json.JSONDecodeError:
+        param_match = False
+    ok = (not mismatch) and mapping_match and header_match and param_match
     rb_key = str(readback.get("key") or "")
     print(
         f"readback channel id={new_id} status={readback.get('status')} "
@@ -282,8 +309,11 @@ def main() -> int:
         f"priority={readback.get('priority')} models={readback.get('models')} "
         f"key_lines={rb_key.count(chr(10)) + 1 if rb_key else 0} (api redacts keys)"
     )
-    if mismatch or not mapping_match:
-        print(f"mismatch={mismatch} mapping_match={mapping_match}")
+    if mismatch or not mapping_match or not header_match or not param_match:
+        print(
+            f"mismatch={mismatch} mapping_match={mapping_match} "
+            f"header_match={header_match} param_match={param_match}"
+        )
 
     # 5. readback: abilities rows for the models
     con = sqlite3.connect(f"file:{Path(smoke.NEWAPI_DB).as_posix()}?mode=ro", uri=True, timeout=30)

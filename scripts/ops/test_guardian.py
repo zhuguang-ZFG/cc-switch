@@ -635,6 +635,31 @@ class RetryPolicyTests(unittest.TestCase):
         self.assertEqual(updates, [])
 
 
+class ChannelTestProfileTests(unittest.TestCase):
+    def test_jianzhile_uses_streaming_responses_probe(self):
+        client = guardian.NewAPIClient("https://example.invalid", "token", "1")
+        client._request = Mock(return_value={"success": True})
+
+        self.assertEqual(client.test_channel(91, timeout=22), (True, "测试通过"))
+
+        client._request.assert_called_once_with(
+            "GET",
+            "/api/channel/test/91?model=jianzhile-codex-gpt-5.6-sol"
+            "&endpoint_type=openai-response&stream=true",
+            timeout=22,
+        )
+
+    def test_normal_channel_keeps_default_probe(self):
+        client = guardian.NewAPIClient("https://example.invalid", "token", "1")
+        client._request = Mock(return_value={"success": True})
+
+        self.assertEqual(client.test_channel(7), (True, "测试通过"))
+
+        client._request.assert_called_once_with(
+            "GET", "/api/channel/test/7", timeout=guardian.TEST_CHANNEL_TIMEOUT
+        )
+
+
 class WeightAdjustmentTests(unittest.TestCase):
     def test_records_each_newapi_test_result_once(self):
         engine = make_engine()

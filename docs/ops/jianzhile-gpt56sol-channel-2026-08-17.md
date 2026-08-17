@@ -28,13 +28,28 @@ Priority ladder after this change:
 ## Channel parameters
 
 - type=1 (OpenAI), base_url=`https://jianzhile.vip` — no `/v1` suffix
-  (NewAPI appends `/v1/chat/completions` itself)
-- models: `gpt-5.6-sol,zg-gpt-5.6-sol,zg-agent-gpt-5.6-sol`
+  (NewAPI appends the request-specific path, including `/v1/responses`)
+- models: `gpt-5.6-sol,zg-gpt-5.6-sol,zg-agent-gpt-5.6-sol,jianzhile-codex-gpt-5.6-sol`
 - model_mapping: `zg-gpt-5.6-sol`/`zg-agent-gpt-5.6-sol` → `gpt-5.6-sol`
   (same alias set as ch83/ch45/ch87/ch90)
+- `jianzhile-codex-gpt-5.6-sol` → `gpt-5.6-sol` is the isolated
+  Responses-only E2E alias.
 - **2 keys, multi-key polling** (keys passed via argv; not stored in repo)
-- priority 10, weight 5, group `default`, status 1
-  idempotent; re-run performs dup-check + readback verification only
+- priority 10, weight 5, group `default`, status 1, `auto_ban=1`
+- `test_model=jianzhile-codex-gpt-5.6-sol`, so a channel test resolves the
+  Responses-compatible alias instead of the generic Chat model. The upstream
+  still requires `stream=true`; Guardian supplies the explicit endpoint and
+  stream query parameters.
+- `header_override` passes safe incoming headers with `"*"` and explicitly
+  pins the verified Codex 0.147 fallback envelope. A conditional
+  `param_override` passes dynamic Codex headers when the request is from
+  `codex_exec`; OMP requests use the deterministic fallback values.
+  `Accept` is deliberately not pinned: fixing it to `text/event-stream`
+  makes a non-stream Responses probe receive SSE and fail JSON parsing.
+- NewAPI `global.chat_completions_to_responses_policy` includes ch91 and the
+  four sol aliases. This converts OMP's normal Chat Completions request to
+  `/v1/responses` only after the router selects ch91.
+- idempotent; re-run performs dup-check + readback verification only
 
 ## Verification evidence (2026-08-17)
 
@@ -44,16 +59,25 @@ Priority ladder after this change:
 - Upstream direct probe `POST /v1/chat/completions` model `gpt-5.6-sol`
   (`max_tokens 16`): HTTP 200, 3.5s, normal completion — the 2026-08-13
   deterministic 403 is gone.
-- Create readback: ch91 type=1 status=1 priority=10 weight=5; abilities rows
-  for all three models enabled at 10/5.
-- NewAPI admin channel test: `gpt-5.6-sol` success (2.7s);
-  `zg-gpt-5.6-sol` alias success (2.8s, proves model_mapping).
-- No E2E through `127.0.0.1:3002` claimed: sol traffic still routes to
-  ch83/ch45 first by priority; ch91 engages only when 83/45/87/90 all fail.
-- OMP production wire shape probe: plain `/v1/chat/completions` +
-  `prompt_cache_key` (the field OMP injects unconditionally) → HTTP 200,
-  2.7s. **No Codex masquerade needed**: no UA spoofing, no `instructions`/
-  `store` fields, no param_override on the channel.
+- Create readback: ch91 type=1 status=1 priority=10 weight=5; all four
+  ability rows enabled at 10/5.
+- NewAPI's default non-stream admin test is not a valid health probe: after
+  reaching Responses it receives an SSE body and reports a 500 JSON parse
+  error. Explicit `endpoint_type=openai-response&stream=true` succeeds
+  (2.497s). A manual test of `gpt-5.6-sol` with the endpoint left blank instead
+  exercises Chat Completions and can return the upstream 403.
+- Direct OMP-shaped Chat Completions through `127.0.0.1:3002` returned HTTP
+  200 SSE (`OMP - CHAT - OK`) after channel-local conversion.
+- Forced OMP command `zg-newapi/jianzhile-codex-gpt-5.6-sol` returned
+  `OMP-CH91-STREAM-OK`; NewAPI log 84676 records ch91, the dedicated alias,
+  38,914 prompt tokens, 12 completion tokens, and 11s completion time. The
+  normal aggregate
+  `zg-newapi/gpt-5.6-sol` also returned `OMP-AGG-OK`, but correctly selected
+  higher-priority ch87 in that run, so it is not evidence that every aggregate
+  request uses ch91.
+- The deployed Guardian Responses+stream profile passed 3/3 bounded probes
+  after one earlier transient `do request failed`; the transient is retained
+  as upstream stability evidence, not hidden as protocol success.
 - Idempotent re-run of the creation script: verify-only path (dup-check by
   name short-circuits to readback).
 
@@ -72,9 +96,12 @@ Priority ladder after this change:
 
 ## Risk notes
 
-- This gateway 403'd hard for days in the past; treat it as flaky. Guardian
-  auto_ban will quarantine it on repeat failure — that is the intended
-  behavior and does not pollute the pool at priority 10.
+- The upstream validates a Codex-shaped Responses envelope. A generic Chat
+  probe sent directly to the upstream can still return 403, but OMP traffic is
+  converted when it actually routes through ch91. Guardian's ch91 profile
+  explicitly requests Responses with `stream=true`, so the channel remains
+  eligible for real auto-ban/recovery governance without relying on the
+  incompatible generic probe.
 - Single model: no model-level failover within the channel (key-level
   polling only). Per-key upstream death degrades to the surviving key.
 
@@ -104,6 +131,51 @@ Re-enable checklist (when the provider fixes their downstream):
 2. `POST /api/channel/91/status {"status": 1}`
 3. Admin channel test ×2, confirm `multi_key_polling_index` advances.
 
+## Root-cause correction and fix (2026-08-17 13:45)
+
+The 12:54 conclusion above was incomplete. The provider was not simply down:
+the same key returned 200 when a real Codex 0.147 request was forwarded
+unchanged, but returned 403 through NewAPI.
+
+Wire capture found the exact difference:
+
+- NewAPI preserved the complete Responses body, including `input`, `tools`,
+  `reasoning`, `prompt_cache_key`, and `client_metadata`.
+- Static `User-Agent` and `Originator` overrides were applied correctly.
+- NewAPI's normal outbound header setup dropped the dynamic Codex fingerprint:
+  `Session-Id`, `Thread-Id`, `X-Client-Request-Id`,
+  `X-Codex-Turn-Metadata`, `X-Codex-Beta-Features`,
+  `X-Codex-Window-Id`, and `X-Openai-Internal-Codex-Responses-Lite`.
+- Adding only `X-Client-Request-Id` still returned 403. The upstream validates
+  the complete client envelope, not one header or the key alone.
+
+The fix is channel-local and does not modify CC Switch or NewAPI binaries:
+
+1. `header_override` now contains `"*": ""`, which invokes NewAPI's safe
+   client-header passthrough, plus explicit Codex UA/Originator pins. Unsafe
+   authentication/host/hop-by-hop headers remain filtered by NewAPI.
+2. Added isolated alias `jianzhile-codex-gpt-5.6-sol` so an E2E Codex probe
+   can select ch91 without changing the four higher-priority sol channels.
+3. Enabled NewAPI's channel-local Chat→Responses policy for ch91 and the sol
+   aliases; kept `auto_ban=1`, set `test_model` to the dedicated alias, and
+   gave Guardian a ch91-specific Responses+stream test profile.
+4. Added a conditional `param_override` for dynamic Codex headers while
+   retaining deterministic fallback headers for OMP/admin requests.
+5. `scripts/ops/fix_jianzhile_codex_channel.py` applies the repair with an
+   online backup and verifies that the multi-key `channel_info` BLOB is
+   byte-for-byte unchanged.
+
+Production verification through `127.0.0.1:3002/v1/responses`:
+
+- Codex 0.147 → NewAPI → ch91 → jianzhile returned
+  `CH91-NEWAPI-OK` and `CH91-SECOND-OK` in two consecutive streaming calls.
+- NewAPI logs `84475` and `84480` both record ch91, the isolated alias,
+  positive prompt/completion usage, and 4s/3s completion time.
+- `multi_key_polling_index` advanced `0 → 1`, proving both stored keys were
+  exercised; `multi_key_status_list` remained empty.
+- A plain Chat request sent directly to `jianzhile.vip` remains unsupported;
+  the supported OMP path is Chat → NewAPI ch91 conversion → Responses.
+
 ## Rollback
 
 ```powershell
@@ -117,6 +189,17 @@ DB snapshot before channel creation:
 Snapshot before the multi-key recreate:
 `~/.new-api-local/backups/new-api-before-jianzhile-gpt-5.6-sol-20260817-123750.db`
 (78,614,528 bytes).
+
+Snapshot before the final stream/non-stream header correction:
+`~/.new-api-local/backups/new-api-before-ch91-codex-pass-20260817-145654.db`
+(79,036,416 bytes, `integrity_check=ok`). Earlier repair snapshots are
+`new-api-before-ch91-codex-pass-20260817-143956.db` and
+`new-api-before-ch91-codex-pass-20260817-142441.db`.
+
+The live OMP model file backup is
+`~/.omp/agent/models.yml.20260817-143448-jianzhile-ch91.bak`; the latest
+runtime Guardian backup is
+`~/.omp/guardian/guardian.py.bak-20260817-1508-ch91-stream`.
 
 ## Related
 

@@ -134,6 +134,16 @@ RECOVERY_TEST_COUNT = 3  # 恢复验证测试次数
 RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 # 明确隔离且不应自动恢复的本地渠道；与 newapi-local-smoke.py 策略保持一致。
 AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 9, 18, 20, 57, 62, 63, 64, 65, 70, 71, 73, 74}  # 9: linxi-k40 余额耗尽双锁（2026-08-10，auto_ban=0 不会被导入，入集仅为三处同步一致性）；18: linxi-k40-opus5-backup 恢复测试持续超时（2026-08-09）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；57: gorouter 余额不足（$0.05<预扣$0.30）；70: vip-j3gb-gpt 上游 15 次恢复失败；71: hugai-claude-opus5 上游网关 routing group 坏（非本机配置）；73: zzzcoding-codex-relay 上游 405 真死（2026-08-08）；74: sharedchat-codex-sol 同源禁用
+# ch91's upstream only implements the streaming Codex Responses wire shape
+# reliably. Keep it under normal health/recovery governance, but make every
+# Guardian probe exercise the same protocol as OMP instead of the admin API's
+# generic non-stream test.
+CHANNEL_TEST_PATH_OVERRIDES = {
+    91: (
+        "/api/channel/test/91?model=jianzhile-codex-gpt-5.6-sol"
+        "&endpoint_type=openai-response&stream=true"
+    ),
+}
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）
 WEIGHT_DEGRADE_COOLDOWN_MIN = 5  # 降权最小间隔（分钟）— 自愈节流独立于告警冷却
@@ -661,7 +671,10 @@ class NewAPIClient:
     def test_channel(self, channel_id: int, timeout: int = TEST_CHANNEL_TIMEOUT) -> Tuple[bool, str]:
         """测试渠道（发送真实请求）— 独立短超时，避免死渠道阻塞主循环"""
         try:
-            result = self._request("GET", f"/api/channel/test/{channel_id}", timeout=timeout)
+            path = CHANNEL_TEST_PATH_OVERRIDES.get(
+                channel_id, f"/api/channel/test/{channel_id}"
+            )
+            result = self._request("GET", path, timeout=timeout)
             if result and result.get("success"):
                 return True, "测试通过"
             return False, result.get("message", "测试失败") if result else "无响应"
