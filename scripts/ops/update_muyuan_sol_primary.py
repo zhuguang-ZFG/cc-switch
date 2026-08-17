@@ -1,4 +1,4 @@
-"""Enforce the Sol routing posture across both channels.
+"""Retired compatibility helpers for the former muyuan-primary posture.
 
 Promotes ch83 muyuan-sol to primary (priority 50 / weight 5) and demotes
 ch45 agentrouter to fallback (priority 40 / weight 5), at both the channel
@@ -10,7 +10,8 @@ The promotion alone is not enough: agentrouter keeps its old primary priority
 model-level priority. This script applies both sides atomically so the
 "muyuan primary" decision is actually in effect.
 
-Run: python3 scripts/ops/update_muyuan_sol_primary.py [--apply]
+The live policy now uses zzzcoding as the Sol primary. Running this old
+entry point must never silently restore the superseded routing decision.
 """
 from __future__ import annotations
 
@@ -116,6 +117,14 @@ def verify_abilities(
 
 
 def main() -> int:
+    print(
+        "retired: muyuan is no longer the Sol primary; use "
+        "scripts/ops/update_zzzcoding_sol_primary.py"
+    )
+    return 2
+
+
+def retired_main_for_reference() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()

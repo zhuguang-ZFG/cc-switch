@@ -347,9 +347,15 @@ class AdminAuthTests(unittest.TestCase):
             ],
         )
 
-    def test_muyuan_sol_primary_channel_contract(self):
-        expected = smoke.MUYUAN_SOL_PRIMARY_CONTRACT
-        channel = {
+    def sol_posture_channels(self):
+        channels = []
+        for channel_id, expected in (
+            (91, smoke.JIANZHILE_SOL_BACKUP_CONTRACT),
+            (92, smoke.ZZZCODING_SOL_PRIMARY_CONTRACT),
+        ):
+            channels.append({"id": channel_id, **expected})
+        expected = smoke.MUYUAN_SOL_FALLBACK_CONTRACT
+        channels.append({
             "id": 83,
             "name": expected["name"],
             "type": expected["type"],
@@ -362,43 +368,32 @@ class AdminAuthTests(unittest.TestCase):
             "models": ",".join(expected["models"]),
             "model_mapping": json.dumps(expected["mapping"]),
             "header_override": json.dumps(expected["header_override"]),
-        }
-        self.assertEqual(smoke.muyuan_sol_primary_violations([channel]), [])
-        channel["priority"] = 40
-        channel["weight"] = 2
+        })
+        return channels
+
+    def test_zzzcoding_sol_primary_channel_contract(self):
+        channels = self.sol_posture_channels()
+        self.assertEqual(smoke.sol_primary_posture_violations(channels), [])
+        channels[0]["priority"] = 26
+        channels[1]["weight"] = 5
         self.assertEqual(
-            smoke.muyuan_sol_primary_violations([channel]),
-            ["83:muyuan-sol=priority=40,weight=2"],
+            smoke.sol_primary_posture_violations(channels),
+            [
+                "91:jianzhile-gpt-5.6-sol=priority=26",
+                "92:zzzcoding-gpt-5.6-sol=weight=5",
+            ],
         )
 
-    def test_muyuan_sol_auto_ban_outage_is_accepted_but_tier_locked(self):
-        expected = smoke.MUYUAN_SOL_PRIMARY_CONTRACT
-        channel = {
-            "id": 83,
-            "name": expected["name"],
-            "type": expected["type"],
-            "status": 3,
-            "auto_ban": 1,
-            "base_url": expected["base_url"],
-            "priority": expected["priority"],
-            "weight": expected["weight"],
-            "test_model": expected["test_model"],
-            "models": ",".join(expected["models"]),
-            "model_mapping": json.dumps(expected["mapping"]),
-            "header_override": json.dumps(expected["header_override"]),
-        }
-
-        self.assertEqual(smoke.muyuan_sol_primary_violations([channel]), [])
-        channel["priority"] = 40
+    def test_sol_auto_ban_outage_is_accepted_but_tier_locked(self):
+        channels = self.sol_posture_channels()
+        channels[0]["status"] = 3
+        channels[1]["status"] = 2
+        channels[2]["status"] = 3
+        self.assertEqual(smoke.sol_primary_posture_violations(channels), [])
+        channels[0]["auto_ban"] = 0
         self.assertEqual(
-            smoke.muyuan_sol_primary_violations([channel]),
-            ["83:muyuan-sol=priority=40"],
-        )
-        channel["priority"] = 50
-        channel["auto_ban"] = 0
-        self.assertEqual(
-            smoke.muyuan_sol_primary_violations([channel]),
-            ["83:muyuan-sol=auto_ban=0,status=3"],
+            smoke.sol_primary_posture_violations(channels),
+            ["91:jianzhile-gpt-5.6-sol=auto_ban=0,status=3"],
         )
     def test_teamorouter_free_fallback_contract(self):
         expected = smoke.TEAMOROUTER_FREE_CONTRACT

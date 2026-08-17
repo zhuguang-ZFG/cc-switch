@@ -143,6 +143,10 @@ CHANNEL_TEST_PATH_OVERRIDES = {
         "/api/channel/test/91?model=jianzhile-codex-gpt-5.6-sol"
         "&endpoint_type=openai-response&stream=true"
     ),
+    92: (
+        "/api/channel/test/92?model=zzzcoding-codex-gpt-5.6-sol"
+        "&endpoint_type=openai-response&stream=true"
+    ),
 }
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）

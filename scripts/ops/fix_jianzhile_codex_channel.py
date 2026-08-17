@@ -23,7 +23,7 @@ CHANNEL_NAME = "jianzhile-gpt-5.6-sol"
 BASE_URL = "https://jianzhile.vip"
 CODEX_MODEL = "jianzhile-codex-gpt-5.6-sol"
 UPSTREAM_MODEL = "gpt-5.6-sol"
-PRIORITY = 10
+PRIORITY = 50
 WEIGHT = 5
 DEFAULT_DB = Path.home() / ".new-api-local" / "new-api.db"
 CHAT_RESPONSES_OPTION = "global.chat_completions_to_responses_policy"
@@ -181,7 +181,9 @@ def desired_values(row: sqlite3.Row) -> tuple[str, str, str, str]:
     )
 
 
-def desired_chat_responses_policy(current: str) -> str:
+def merge_chat_responses_policy(
+    current: str, channel_id: int, model_patterns: list[str]
+) -> str:
     try:
         policy = json.loads(current)
     except json.JSONDecodeError as error:
@@ -198,11 +200,17 @@ def desired_chat_responses_policy(current: str) -> str:
 
     policy["enabled"] = True
     policy["all_channels"] = False
-    policy["channel_ids"] = list(dict.fromkeys([*channel_ids, CHANNEL_ID]))
+    policy["channel_ids"] = list(dict.fromkeys([*channel_ids, channel_id]))
     policy["model_patterns"] = list(
-        dict.fromkeys([*patterns, *CHAT_RESPONSES_MODEL_PATTERNS])
+        dict.fromkeys([*patterns, *model_patterns])
     )
     return json.dumps(policy, separators=(",", ":"), sort_keys=True)
+
+
+def desired_chat_responses_policy(current: str) -> str:
+    return merge_chat_responses_policy(
+        current, CHANNEL_ID, CHAT_RESPONSES_MODEL_PATTERNS
+    )
 
 
 def main() -> int:

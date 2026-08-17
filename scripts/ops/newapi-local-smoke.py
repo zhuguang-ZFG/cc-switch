@@ -84,8 +84,30 @@ ANYROUTER_CLAUDE_MAPPING = {
     "zg-agent-claude-opus-5": "claude-opus-5",
     "zg-agent-claude-opus-4-8": "claude-opus-4-8",
 }
+JIANZHILE_SOL_CHANNEL_ID = 91
+JIANZHILE_SOL_BACKUP_CONTRACT: dict[str, object] = {
+    "name": "jianzhile-gpt-5.6-sol",
+    "type": 1,
+    "status": 1,
+    "auto_ban": 1,
+    "base_url": "https://jianzhile.vip",
+    "priority": 50,
+    "weight": 5,
+    "test_model": "jianzhile-codex-gpt-5.6-sol",
+}
+ZZZCODING_SOL_CHANNEL_ID = 92
+ZZZCODING_SOL_PRIMARY_CONTRACT: dict[str, object] = {
+    "name": "zzzcoding-gpt-5.6-sol",
+    "type": 1,
+    "status": 1,
+    "auto_ban": 1,
+    "base_url": "https://api.zzzcoding.org",
+    "priority": 60,
+    "weight": 15,
+    "test_model": "zzzcoding-codex-gpt-5.6-sol",
+}
 MUYUAN_SOL_CHANNEL_ID = 83
-MUYUAN_SOL_PRIMARY_CONTRACT: dict[str, object] = {
+MUYUAN_SOL_FALLBACK_CONTRACT: dict[str, object] = {
     "name": "muyuan-sol",
     "type": 1,
     "status": 1,
@@ -239,6 +261,12 @@ CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
     (83, "gpt-5.6-sol"): (50, 5),
     (83, "zg-gpt-5.6-sol"): (50, 5),
     (83, "zg-agent-gpt-5.6-sol"): (50, 5),
+    (91, "gpt-5.6-sol"): (50, 5),
+    (91, "zg-gpt-5.6-sol"): (50, 5),
+    (91, "zg-agent-gpt-5.6-sol"): (50, 5),
+    (92, "gpt-5.6-sol"): (60, 15),
+    (92, "zg-gpt-5.6-sol"): (60, 15),
+    (92, "zg-agent-gpt-5.6-sol"): (60, 15),
 }
 
 
@@ -382,12 +410,12 @@ def ability_posture_violations() -> list[str]:
         con.close()
 
 
-def muyuan_sol_primary_violations(channels: list[dict]) -> list[str]:
-    """Pin muyuan.do above AgentRouter for every exposed Sol selector.
+def muyuan_sol_fallback_violations(channels: list[dict]) -> list[str]:
+    """Keep muyuan.do at its bounded recovery tier for every Sol selector.
 
     An auto_ban disable (upstream outage) is accepted like other degraded
     postures; priority/weight are still enforced so the channel re-enters as
-    the Sol primary after Guardian's recovery loop.
+    its recovery tier after Guardian's recovery loop.
     """
     channel = next(
         (item for item in channels if item.get("id") == MUYUAN_SOL_CHANNEL_ID),
@@ -396,7 +424,7 @@ def muyuan_sol_primary_violations(channels: list[dict]) -> list[str]:
     if channel is None:
         return [f"{MUYUAN_SOL_CHANNEL_ID}:missing"]
 
-    expected = MUYUAN_SOL_PRIMARY_CONTRACT
+    expected = MUYUAN_SOL_FALLBACK_CONTRACT
     reasons: list[str] = []
     degraded = channel.get("status") != 1 and channel.get("auto_ban") in (1, True)
     for field in ("name", "type", "auto_ban", "base_url",
@@ -434,6 +462,38 @@ def muyuan_sol_primary_violations(channels: list[dict]) -> list[str]:
         [f"{MUYUAN_SOL_CHANNEL_ID}:{channel.get('name', '')}=" + ",".join(reasons)]
         if reasons else []
     )
+
+
+def sol_primary_posture_violations(channels: list[dict]) -> list[str]:
+    """Keep zzzcoding primary and both direct/recovery channels below it."""
+    by_id = {item.get("id"): item for item in channels}
+    violations: list[str] = []
+    for channel_id, expected in (
+        (JIANZHILE_SOL_CHANNEL_ID, JIANZHILE_SOL_BACKUP_CONTRACT),
+        (ZZZCODING_SOL_CHANNEL_ID, ZZZCODING_SOL_PRIMARY_CONTRACT),
+    ):
+        channel = by_id.get(channel_id)
+        if channel is None:
+            violations.append(f"{channel_id}:missing")
+            continue
+        reasons: list[str] = []
+        degraded = (
+            channel.get("status") != 1
+            and channel.get("auto_ban") in (1, True)
+        )
+        for field in (
+            "name", "type", "auto_ban", "base_url", "priority", "weight",
+            "test_model",
+        ):
+            if channel.get(field) != expected[field]:
+                reasons.append(f"{field}={channel.get(field)}")
+        if channel.get("status") != expected["status"] and not degraded:
+            reasons.append(f"status={channel.get('status')}")
+        if reasons:
+            violations.append(
+                f"{channel_id}:{channel.get('name', '')}=" + ",".join(reasons)
+            )
+    return [*violations, *muyuan_sol_fallback_violations(channels)]
 
 def teamorouter_free_violations(channels: list[dict]) -> list[str]:
     """Pin the teamorouter free tier as a bounded DeepSeek fallback channel.
@@ -945,11 +1005,11 @@ def main() -> int:
                 not ai168661_violations,
                 f"violations={ai168661_violations or 'none'}",
             )
-            muyuan_violations = muyuan_sol_primary_violations(items)
+            sol_violations = sol_primary_posture_violations(items)
             check(
-                "muyuan Sol primary posture",
-                not muyuan_violations,
-                f"violations={muyuan_violations or 'none'}",
+                "Sol primary posture",
+                not sol_violations,
+                f"violations={sol_violations or 'none'}",
             )
             teamo_violations = teamorouter_free_violations(items)
             check(

@@ -1,5 +1,9 @@
 # jianzhile gpt-5.6-sol fifth-line channel (2026-08-17)
 
+> Current posture (2026-08-17 19:50 CST): ch91 is now the p50/w5 direct
+> backup to ch92 zzzcoding p60/w15. The tables below preserve the original
+> admission-time history. See `zzzcoding-gpt56sol-primary-2026-08-17.md`.
+
 ## Scope
 
 The jianzhile gateway (`https://jianzhile.vip`, a NewAPI fork relay exposing

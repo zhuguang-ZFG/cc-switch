@@ -7,6 +7,7 @@ import sys
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,6 +36,18 @@ anyrouter_timeout = load(
 )
 muyuan_sol = load(
     "update_muyuan_sol_primary_for_tests", "update_muyuan_sol_primary.py"
+)
+fix_jianzhile = load(
+    "fix_jianzhile_codex_channel", "fix_jianzhile_codex_channel.py"
+)
+zzzcoding_sol = load(
+    "add_zzzcoding_sol_channel_for_tests", "add_zzzcoding_sol_channel.py"
+)
+zzzcoding_posture = load(
+    "update_zzzcoding_sol_primary_for_tests", "update_zzzcoding_sol_primary.py"
+)
+zzzcoding_verify = load(
+    "verify_zzzcoding_sol_primary_for_tests", "verify_zzzcoding_sol_primary.py"
 )
 quarantine = load(
     "quarantine_newapi_channels_for_tests", "quarantine_newapi_channels.py"
@@ -315,6 +328,159 @@ class MuyuanSolPrimaryTests(unittest.TestCase):
         self.assertTrue(muyuan_sol.verify_abilities(ok_rows, 40, 5))
         drifted = [("gpt-5.6-sol", 1, 51, 5)]
         self.assertFalse(muyuan_sol.verify_abilities(drifted, 40, 5))
+
+
+class ZzzcodingSolChannelTests(unittest.TestCase):
+    def test_channel_payload_is_disabled_until_responses_probe_passes(self) -> None:
+        payload = zzzcoding_sol.channel_payload("opaque-secret")
+
+        self.assertEqual(payload["status"], 2)
+        self.assertEqual(payload["auto_ban"], 1)
+        self.assertEqual(payload["priority"], 60)
+        self.assertEqual(payload["weight"], 15)
+        self.assertEqual(payload["test_model"], zzzcoding_sol.CODEX_MODEL)
+        self.assertEqual(
+            json.loads(payload["model_mapping"]), zzzcoding_sol.MODEL_MAPPING
+        )
+        self.assertIs(
+            json.loads(payload["param_override"])["parallel_tool_calls"], False
+        )
+
+    def test_existing_channel_refresh_preserves_key_and_forces_probe_shape(self) -> None:
+        original = {
+            "id": 92,
+            "name": zzzcoding_sol.CHANNEL_NAME,
+            "status": 2,
+            "key": "opaque-secret",
+            "priority": 10,
+            "weight": 1,
+        }
+
+        updated = zzzcoding_sol.desired_existing_channel(original)
+
+        self.assertNotIn("status", updated)
+        self.assertEqual(updated["key"], "opaque-secret")
+        self.assertEqual(updated["priority"], 60)
+        self.assertIs(
+            json.loads(updated["param_override"])["parallel_tool_calls"], False
+        )
+
+    def test_update_peer_preserves_channel_info_and_updates_abilities(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(db_path)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, "
+                    "priority INTEGER, weight INTEGER, channel_info BLOB)"
+                )
+                connection.execute(
+                    "CREATE TABLE abilities (channel_id INTEGER, priority INTEGER, "
+                    "weight INTEGER)"
+                )
+                marker = b'{"is_multi_key":true}'
+                connection.execute(
+                    "INSERT INTO channels VALUES (91, ?, 26, 15, ?)",
+                    (zzzcoding_sol.PEER_NAME, marker),
+                )
+                connection.execute("INSERT INTO abilities VALUES (91, 26, 15)")
+                connection.commit()
+
+                original = zzzcoding_sol.update_peer_posture(connection, 50, 5)
+                row = connection.execute(
+                    "SELECT priority, weight, channel_info FROM channels WHERE id=91"
+                ).fetchone()
+                ability = connection.execute(
+                    "SELECT priority, weight FROM abilities WHERE channel_id=91"
+                ).fetchone()
+
+            self.assertEqual(original, (26, 15))
+            self.assertEqual(row, (50, 5, marker))
+            self.assertEqual(ability, (50, 5))
+
+    def test_online_backup_is_integrity_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(db_path)) as connection:
+                connection.execute("CREATE TABLE marker (value TEXT)")
+                connection.execute("INSERT INTO marker VALUES ('ok')")
+                connection.commit()
+
+            backup = zzzcoding_sol.online_backup(db_path)
+            with closing(sqlite3.connect(backup)) as connection:
+                self.assertEqual(
+                    connection.execute("PRAGMA integrity_check").fetchone(), ("ok",)
+                )
+                self.assertEqual(
+                    connection.execute("SELECT value FROM marker").fetchone(), ("ok",)
+                )
+
+
+class ZzzcodingSolPrimaryPostureTests(unittest.TestCase):
+    def make_database(self, path: Path) -> bytes:
+        marker = b'{"is_multi_key":true}'
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute(
+                "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, "
+                "status INTEGER, priority INTEGER, weight INTEGER, channel_info BLOB)"
+            )
+            connection.execute(
+                "CREATE TABLE abilities (`group` TEXT, model TEXT, channel_id INTEGER, "
+                "enabled INTEGER, priority INTEGER, weight INTEGER)"
+            )
+            for channel_id, name, priority, weight, _ in zzzcoding_posture.TARGETS:
+                old_priority = 50 if channel_id == 92 else 60
+                old_weight = 5 if channel_id == 92 else 15
+                connection.execute(
+                    "INSERT INTO channels VALUES (?, ?, 1, ?, ?, ?)",
+                    (channel_id, name, old_priority, old_weight, marker),
+                )
+                for model in zzzcoding_posture.EXPECTED_MODELS[channel_id]:
+                    connection.execute(
+                        "INSERT INTO abilities VALUES ('default', ?, ?, 1, ?, ?)",
+                        (model, channel_id, old_priority, old_weight),
+                    )
+            connection.commit()
+        return marker
+
+    def test_write_and_restore_are_bounded_and_preserve_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "new-api.db"
+            marker = self.make_database(db_path)
+            with closing(sqlite3.connect(db_path)) as connection:
+                original = zzzcoding_posture.read_state(connection)
+                zzzcoding_posture.write_targets(connection)
+                zzzcoding_posture.verify_targets(connection)
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT channel_info FROM channels WHERE id=92"
+                    ).fetchone(),
+                    (marker,),
+                )
+                zzzcoding_posture.restore_state(connection, original)
+                self.assertEqual(zzzcoding_posture.read_state(connection), original)
+
+    def test_read_state_rejects_wrong_channel_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "new-api.db"
+            self.make_database(db_path)
+            with closing(sqlite3.connect(db_path)) as connection:
+                connection.execute("UPDATE channels SET name='wrong' WHERE id=92")
+                connection.commit()
+                with self.assertRaisesRegex(RuntimeError, "expected"):
+                    zzzcoding_posture.read_state(connection)
+
+    def test_chat_sse_parser_requires_semantic_text_done_and_usage(self) -> None:
+        payload = (
+            b'data: {"choices":[{"delta":{"content":"CH92-"}}]}\n\n'
+            b'data: {"choices":[{"delta":{"content":"PRIMARY-OK"}}]}\n\n'
+            b'data: {"choices":[],"usage":{"prompt_tokens":9,'
+            b'"completion_tokens":4}}\n\n'
+            b'data: [DONE]\n\n'
+        )
+        self.assertEqual(
+            zzzcoding_verify.parse_chat_sse(payload),
+            ("CH92-PRIMARY-OK", True, 9, 4),
+        )
 
 
 class AnyRouterSplitTests(unittest.TestCase):

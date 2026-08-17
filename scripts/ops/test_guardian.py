@@ -649,6 +649,19 @@ class ChannelTestProfileTests(unittest.TestCase):
             timeout=22,
         )
 
+    def test_zzzcoding_uses_streaming_responses_probe(self):
+        client = guardian.NewAPIClient("https://example.invalid", "token", "1")
+        client._request = Mock(return_value={"success": True})
+
+        self.assertEqual(client.test_channel(92, timeout=22), (True, "测试通过"))
+
+        client._request.assert_called_once_with(
+            "GET",
+            "/api/channel/test/92?model=zzzcoding-codex-gpt-5.6-sol"
+            "&endpoint_type=openai-response&stream=true",
+            timeout=22,
+        )
+
     def test_normal_channel_keeps_default_probe(self):
         client = guardian.NewAPIClient("https://example.invalid", "token", "1")
         client._request = Mock(return_value={"success": True})

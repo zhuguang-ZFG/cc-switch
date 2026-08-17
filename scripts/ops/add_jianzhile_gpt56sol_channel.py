@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """One-shot helper: create NewAPI channel for gpt-5.6-sol via the jianzhile
-gateway (https://jianzhile.vip) as a last-resort multi-key backup.
+gateway (https://jianzhile.vip) as the direct backup to zzzcoding.
 
 jianzhile.vip is a NewAPI fork relay exposing exactly one model
 (`gpt-5.6-sol`) through Codex-shaped `/v1/responses`. NewAPI's channel-local
 Chat-to-Responses policy lets OMP keep using its standard Chat Completions
-provider while type=1 ch91 talks Responses upstream. Priority 10 places it below the whole
-existing sol ladder (muyuan-sol ch83 prio 50, agentrouter ch45 prio 40,
-ooioo ch87 prio 30, t1qq ch90 prio 20), making it the fifth-line backup.
+provider while type=1 ch91 talks Responses upstream. Its priority 50 / weight 5
+posture keeps it directly behind the zzzcoding primary at priority 60.
 
 History: this gateway deterministically 403'd on 2026-08-13 (see
 docs/ops/jianzhile-channel-2026-08-13.md) and was refused then; the first
@@ -65,8 +64,8 @@ MODEL_MAPPING = json.dumps(
 )
 HEADER_OVERRIDE_JSON = json.dumps(HEADER_OVERRIDE, separators=(",", ":"), sort_keys=True)
 PARAM_OVERRIDE_JSON = json.dumps(PARAM_OVERRIDE, separators=(",", ":"), sort_keys=True)
-# Last-resort tier: below muyuan-sol (50), agentrouter (40), ooioo (30), t1qq (20).
-PRIORITY = 10
+# User-selected direct backup tier, immediately below zzzcoding.
+PRIORITY = 50
 WEIGHT = 5
 
 # Fork multi-key contract (docs/ops/tabitoken-channel-2026-08-09.md,
@@ -339,7 +338,7 @@ def main() -> int:
         print("VERIFY FAILED: channel or abilities readback mismatch")
         return 1
     print(f"OK: ch{new_id} {CHANNEL_NAME} live ({len(keys)} keys, multi-key polling), "
-          f"fifth-line sol backup at priority {PRIORITY}")
+          f"Sol backup channel at priority {PRIORITY}")
     return 0
 
 
