@@ -19,6 +19,11 @@ mode is invisible to health probes by design.
 Update 23:55: **ch90 t1qq (prio 20) added as last resort** — see
 `docs/ops/t1qq-sol-channel-2026-08-16.md`. Chain is now 83→45→87→90.
 
+Update 2026-08-17 12:20: **ch91 jianzhile (prio 10) added as fifth line** —
+same gateway refused on 2026-08-13 (deterministic 403), re-admitted after a
+new key passed the direct 200 probe. Chain is now 83→45→87→90→91. See
+`docs/ops/jianzhile-gpt56sol-channel-2026-08-17.md`.
+
 
 Update 2026-08-17 00:15: **`channel_affinity_setting.switch_on_success`
 flipped to true** (user-approved). Root-cause context: the "codex cli trace"

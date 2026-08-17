@@ -1,5 +1,7 @@
 # jianzhile.vip 渠道接入尝试（2026-08-13，未接入）
 
+> **已过时（2026-08-17）**：新 key 复测通过准入探针，该网关已作为 **ch91**（priority 10）接入。现行 runbook 见 `docs/ops/jianzhile-gpt56sol-channel-2026-08-17.md`；本文保留为拒入史与复测清单记录。
+
 用户提供 `https://jianzhile.vip` + 单 key，要求测试后加入本地 NewAPI（127.0.0.1:3002）。
 
 ## 结论：未接入
