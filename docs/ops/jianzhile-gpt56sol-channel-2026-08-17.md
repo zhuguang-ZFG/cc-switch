@@ -4,7 +4,10 @@
 
 The jianzhile gateway (`https://jianzhile.vip`, a NewAPI fork relay exposing
 exactly one model, `gpt-5.6-sol`) was aggregated into NewAPI as channel
-**ch91** `jianzhile-gpt-5.6-sol` with a fresh user-supplied key.
+**ch91** `jianzhile-gpt-5.6-sol` — a **2-key polling** channel. It went in
+single-key at 12:20 and was converted to multi-key at 12:37 the same day
+when a second key arrived (delete + `multi_to_single` recreate, id
+preserved at 91).
 
 This is a re-admission: the same gateway was **refused on 2026-08-13**
 (`jianzhile-channel-2026-08-13.md`) because `gpt-5.6-sol` deterministically
@@ -29,9 +32,8 @@ Priority ladder after this change:
 - models: `gpt-5.6-sol,zg-gpt-5.6-sol,zg-agent-gpt-5.6-sol`
 - model_mapping: `zg-gpt-5.6-sol`/`zg-agent-gpt-5.6-sol` → `gpt-5.6-sol`
   (same alias set as ch83/ch45/ch87/ch90)
-- single key passed via argv at creation time; not stored in this repo
+- **2 keys, multi-key polling** (keys passed via argv; not stored in repo)
 - priority 10, weight 5, group `default`, status 1
-- Creation helper: `scripts/ops/add_jianzhile_gpt56sol_channel.py` —
   idempotent; re-run performs dup-check + readback verification only
 
 ## Verification evidence (2026-08-17)
@@ -55,12 +57,26 @@ Priority ladder after this change:
 - Idempotent re-run of the creation script: verify-only path (dup-check by
   name short-circuits to readback).
 
+### Multi-key conversion (12:37)
+
+- Second key admission probe: `/v1/models` 200 (1.1s); chat/completions
+  with `prompt_cache_key` 200 (2.5s).
+- ch91 deleted and recreated via `multi_to_single` (id preserved at 91);
+  DB snapshot `new-api-before-jianzhile-gpt-5.6-sol-20260817-123750.db`.
+- Fork trap re-confirmed: even `multi_to_single` left
+  `multi_key_status_list: null` + `multi_key_mode: ""` — fixed by the
+  scripted DB BLOB write (no PUT), 75s `SyncChannelCache` wait.
+- Post-fix admin tests ×3 (1.5s/1.8s/1.4s, all success): DB
+  `multi_key_polling_index` advanced 0→1→0→1 — both keys exercised;
+  `zg-gpt-5.6-sol` alias also passes through multi-key.
+
 ## Risk notes
 
 - This gateway 403'd hard for days in the past; treat it as flaky. Guardian
   auto_ban will quarantine it on repeat failure — that is the intended
   behavior and does not pollute the pool at priority 10.
-- Single key, single model: no failover within the channel.
+- Single model: no model-level failover within the channel (key-level
+  polling only). Per-key upstream death degrades to the surviving key.
 
 ## Rollback
 
@@ -72,6 +88,9 @@ POST /api/channel/91/status {"status": 2}
 DB snapshot before channel creation:
 `~/.new-api-local/backups/new-api-before-jianzhile-gpt-5.6-sol-20260817-122045.db`
 (78,516,224 bytes).
+Snapshot before the multi-key recreate:
+`~/.new-api-local/backups/new-api-before-jianzhile-gpt-5.6-sol-20260817-123750.db`
+(78,614,528 bytes).
 
 ## Related
 
