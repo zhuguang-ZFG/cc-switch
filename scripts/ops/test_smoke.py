@@ -677,19 +677,19 @@ class AdminAuthTests(unittest.TestCase):
         ]
         self.assertEqual(smoke.critical_ability_posture_violations(rows), [])
 
-        rows = [row for row in rows if row[:2] != (42, "deepseek-v4-pro")]
+        rows = [row for row in rows if row[:2] != (45, "gpt-5.6-sol")]
         rows = [
-            (48, "deepseek-v4-pro", 1, 50, 20)
-            if row[:2] == (48, "deepseek-v4-pro")
+            (48, "gpt-5.6-luna", 1, 50, 20)
+            if row[:2] == (48, "gpt-5.6-luna")
             else row
             for row in rows
         ]
         self.assertEqual(
             smoke.critical_ability_posture_violations(rows),
             [
-                "42:deepseek-v4-pro=missing",
-                "48:deepseek-v4-pro=expected:enabled=1,priority=51,weight=20;"
+                "48:gpt-5.6-luna=expected:enabled=1,priority=51,weight=20;"
                 "actual=[(1, 50, 20)]",
+                "45:gpt-5.6-sol=missing",
             ],
         )
 

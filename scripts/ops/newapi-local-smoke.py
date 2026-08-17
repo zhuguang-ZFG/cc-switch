@@ -44,7 +44,7 @@ PROXY_PORTS: dict[str, tuple[str, int]] = {
     # mistral-conversations-relay: OpenAI -> Mistral /v1/conversations (glm-5-2)
     "mistral-relay": ("127.0.0.1", 16001),
 }
-SMOKE_MODELS = ["sensenova-6.7-flash-lite", "opencode-go"]
+SMOKE_MODELS = ["sensenova-6.7-flash-lite", "gpt-5.6-luna"]
 
 # Channels whose auto-disabled state is currently intentional. Channel 2 has
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
@@ -195,7 +195,6 @@ DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
 # Current capacity is reported in the check detail either way.
 MIN_ENABLED_CRITICAL_MODELS: dict[str, int] = {
     "claude-opus-5": 1,
-    "deepseek-v4-flash": 1,
 }
 
 NEWAPI_DB = DEPLOY_DIR / "new-api.db"
@@ -231,16 +230,9 @@ AFFINITY_REQUIRED_MODELS: dict[str, tuple[str, ...]] = {
 }
 
 # NewAPI channel PUT rebuilds abilities and can reset model-level routing
-# posture. These rows are the deliberate DeepSeek pool/diagnostic selectors.
+# posture. These rows are the deliberate pool/diagnostic selectors.
 CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
-    (42, "deepseek-v4-flash"): (50, 5),
-    (42, "deepseek-v4-pro"): (50, 5),
-    (42, "deepseek-official-v4-flash"): (50, 5),
-    (42, "deepseek-official-v4-pro"): (50, 5),
-    (48, "deepseek-v4-flash"): (51, 20),
-    (48, "deepseek-v4-pro"): (51, 20),
-    (48, "opencode-go"): (51, 20),
-    (48, "opencode-go-pro"): (51, 20),
+    (48, "gpt-5.6-luna"): (51, 20),
     (45, "gpt-5.6-sol"): (40, 5),
     (45, "zg-gpt-5.6-sol"): (40, 5),
     (45, "zg-agent-gpt-5.6-sol"): (40, 5),

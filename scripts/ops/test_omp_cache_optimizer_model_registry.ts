@@ -58,10 +58,10 @@ const registeredModels: Record<string, RegisteredModel> = {
     id: "hy3-preview-agent",
     name: "Hunyuan Hy3 (WorkBuddy)",
   },
-  "zg-newapi/opencode-go": {
-    provider: "zg-newapi",
-    id: "opencode-go",
-    name: "DeepSeek V4 Flash (opencode-go 独立)",
+  "fengwind/deepseek-v4-flash": {
+    provider: "fengwind",
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash (fengwind)",
   },
 };
 const modelRegistry = {
@@ -80,7 +80,7 @@ const routerModel = {
 const routedCases = [
   ["zg-newapi", "k3", "Kimi cache"],
   ["codebuddy", "hy3-preview-agent", "Hunyuan cache"],
-  ["zg-newapi", "opencode-go", "DS cache"],
+  ["fengwind", "deepseek-v4-flash", "DS cache"],
 ] as const;
 
 for (const [provider, id, expected] of routedCases) {
