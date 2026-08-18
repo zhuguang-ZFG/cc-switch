@@ -29,31 +29,69 @@ scripts/ops/omp-global-compaction-model.js
 Only models present in OMP's authenticated model list are eligible. DeepSeek
 remains the normal target. A failed automatic compaction cools that target for
 five minutes; the one-second reconciler then projects the next eligible target
-onto every model. The extension does not issue an immediate retry, restart OMP,
-or change the main model. Aborted, skipped, and user-cancelled compactions do
-not trigger a cooldown.
+onto every model. For a strict provider failure (explicit retryable HTTP status
+or transport failure), the extension schedules at most one managed backup
+`compact()` call after OMP's terminal event has unwound. It never restarts OMP
+or changes the main model. Aborted, skipped, user-cancelled, local validation,
+missing-model, and unknown failures do not trigger a cooldown or backup call.
+
+If every authenticated candidate is cooling, the extension clears only its own
+candidate bindings and cancels automatic compaction before provider traffic.
+It does not bypass cooldown or silently fall through to the selected main
+model. A manual user compaction remains outside this automatic fail-closed
+gate.
 
 This is deliberately not a remote health probe. It adds no idle traffic and no
 retry storm. A model that is absent from the authenticated registry is skipped;
-an upstream failure is learned only from OMP's real auto-compaction result.
+an upstream failure is learned only from OMP's real auto-compaction result. OMP
+core may perform its own bounded provider handling before that terminal event;
+`extensionRetries` reports only the extension's extra call, not the total number
+of upstream requests made inside OMP.
+
+## Upstream and community evidence (2026-08-18)
+
+- [Issue #4139](https://github.com/can1357/oh-my-pi/issues/4139) requests a
+  dedicated faster/larger-context compaction model so users do not manually
+  switch the main model before and after `/compact`.
+- [Issue #4146](https://github.com/can1357/oh-my-pi/issues/4146) records a
+  provider-native timeout followed by a local summary that took about eight
+  minutes. It supports explicit fail-fast/fallback observability rather than an
+  invisible unbounded wait.
+- [Issue #4823](https://github.com/can1357/oh-my-pi/issues/4823) records a
+  compaction timeout/fallback chain that still left the next request above the
+  model context window.
+- [PR #7489](https://github.com/can1357/oh-my-pi/pull/7489) applies a shared
+  single-flight lease to automatic fallback probes, matching this extension's
+  pending/running guards and bounded retry posture.
+- [PR #4689](https://github.com/can1357/oh-my-pi/pull/4689) proposes a global
+  `modelRoles.compaction` and fast-model routing. It remains open as of this
+  review, so the current OMP release still needs the runtime projection for
+  global/future-model coverage. Re-evaluate this extension after that upstream
+  contract ships and receives equivalent live proof.
 
 ## Model evidence (2026-08-18)
 
 | Route | Probe | Result |
 |---|---|---|
 | SenseNova DeepSeek V4 Flash, ch15 | 50,094 prompt tokens, streaming | HTTP 200, TTFT 3.121s, total 3.629s |
+| SenseNova DeepSeek V4 Flash, ch15 | approximately 300K prompt tier, streaming | HTTP 429 in 1.042s; tier campaign stopped |
 | SenseNova GLM 5.2, ch15 | same 50K request | HTTP 429 in 0.593s |
 | SenseNova GLM 5.2, ch15 | subsequent small request | HTTP 429 in 0.152s |
 | Mistral relay GLM 5.2, ch85 | two small OMP bench runs | average 13.98s |
+| Z.ai GLM 5.2 relay, ch85 | approximately 298.8K prompt tier, streaming | HTTP 200 in 26.431s but exact semantic response check failed; tier campaign stopped |
 | Official LongCat 2.0 | two small OMP bench runs | average 3.73s |
 
 The live NewAPI DB shows ch15's `glm-5.2` ability enabled, but enabled metadata
 is not proof of usable capacity. Its 429s match the earlier shared-TPM incident,
 so the selector is intentionally not exposed in the current OMP registry. The
 candidate remains in code so a later, explicitly authenticated model addition
-can inherit the policy without another extension edit. LongCat is fast enough
-for emergency use, but prior production review rejected it for general summary
-quality; it remains last.
+can inherit the policy without another extension edit. The approximately 300K
+probe was intentionally not repeated or binary-searched after the first 429.
+The ch85 result proves neither a context limit nor a reliable compaction
+summary, because its exact response contract failed; it is not treated as a
+passing tier. LongCat is fast enough for emergency use, but prior production
+review rejected it for general summary quality; it remains last. No registered
+context window was changed based on these incomplete boundaries.
 
 ## Image history
 
@@ -104,8 +142,11 @@ The extension emits structured background logs for:
 - failed, aborted, skipped, or stale compaction state.
 
 No normal notification is shown. `/compaction-status` is an opt-in command that
-shows the current target and last observed result without exposing transcript,
-summary, image, or credential content.
+shows extension revision `2026.08.18-r2`, current target, last result, managed
+retry state/count, and per-candidate availability, cooldown remaining, attempts,
+successes, failures, and retry attempts. Raw upstream error text is discarded;
+only a safe class and optional HTTP status are retained. Status and logs never
+expose transcript, summary, image, URL, header, or credential content.
 
 ## Validation
 
@@ -114,6 +155,11 @@ node --check scripts/ops/omp-global-compaction-model.js
 node --test scripts/ops/test_omp_global_compaction_model.js
 node --test scripts/ops/test_omp_global_compaction_deploy.js
 ```
+
+The runtime suite covers all-candidate cooldown, fail-closed cancellation,
+cooldown expiry, strict provider classification, one-success/one-failure backup
+paths, duplicate/concurrent suppression, main-model identity, and sensitive
+sentinel redaction.
 
 ## Deployment
 
@@ -126,8 +172,10 @@ stages the file beside the destination, verifies SHA-256 before and after the
 atomic replacement, and restores the previous file if deployment fails. Its
 `deployment.json` records both hashes and `restartPerformed=false`.
 
-Deployment does not restart OMP. Use `/reload` in a suitable session or allow
-the next normal process start to load the new extension.
+Deployment does not restart OMP. Use `/reload-plugins` in a suitable session or
+allow the next normal process start to load the new extension. Confirm the new
+revision with `/compaction-status`; a matching file hash alone does not prove
+the running session loaded it.
 
 Rollback uses the `previous.js` or `atomic-replace-backup.js` file in the
 reported backup directory. If that deployment recorded

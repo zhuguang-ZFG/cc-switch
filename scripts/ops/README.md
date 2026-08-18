@@ -258,13 +258,18 @@ Flash, a reserved SenseNova GLM 5.2 selector, Mistral-relay GLM 5.2, then
 official LongCat 2.0. It reconciles at
 session start, before each agent turn, before compaction, and once per second so
 models added or refreshed in a running OMP session inherit the policy without
-per-model maintenance. A real automatic-compaction failure cools the failed
-target for five minutes; no immediate retry or restart is issued.
+per-model maintenance. A strict provider failure cools the failed target for
+five minutes and may schedule one managed backup compaction against the next
+eligible candidate. Aborted, skipped, cancelled, local, and unknown failures do
+not retry. When all authenticated candidates are cooling, automatic compaction
+fails closed instead of bypassing cooldown or using the selected main model.
 
 Compaction state is written only to structured background logs. The optional
-`/compaction-status` command shows the last result. Image payloads remain
-excluded by OMP's text serializer; the extension records only an image-block
-count and never logs image data or URLs.
+`/compaction-status` command shows the extension revision, last result, managed
+retry state, and per-candidate availability/cooldown/counters. Raw upstream
+errors are reduced to a safe class and optional HTTP status. Image payloads
+remain excluded by OMP's text serializer; the extension records only an
+image-block count and never logs image data or URLs.
 
 The ch77 XiaoHongShu/Dots model passed live text, screenshot OCR, streaming,
 and 50K-input probes, but remains outside this compaction chain: ordinary OMP
@@ -285,7 +290,7 @@ Production copy: `~/.omp/agent/extensions/omp-global-compaction-model.js`.
 Deploy with `deploy-omp-global-compaction-model.ps1`; it backs up or records an
 absence marker, atomically replaces the extension, verifies SHA-256, and rolls
 back on failure. Keep the repository and production hashes identical. A
-running OMP process must execute `/reload` or restart normally before newly
+running OMP process must execute `/reload-plugins` or restart normally before newly
 deployed extension code is active; do not kill an active session merely to
 load it. Detailed evidence and rollback are in
 `docs/ops/omp-global-compaction-model.md`.

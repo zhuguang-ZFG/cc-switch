@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import globalCompactionModel, {
+  EXTENSION_REVISION,
   applyGlobalCompactionModel,
+  classifyCompactionFailure,
+  clearGlobalCompactionModel,
   countImageBlocks,
   createGlobalCompactionReconciler,
   formatCompactionStatus,
@@ -114,6 +117,26 @@ test("reports non-writable model metadata instead of silently succeeding", () =>
   assert.equal(result.updated, 0);
   assert.equal(result.failed.length, 1);
   assert.equal(result.failed[0].selector, "future/frozen");
+  assert.equal(result.failed[0].errorClass, "metadata-write-failed");
+});
+
+test("clears only bindings owned by the managed candidate policy", () => {
+  const managed = { provider: "future", id: "managed", compactionModel: TARGET };
+  const custom = {
+    provider: "future",
+    id: "custom",
+    compactionModel: "future/private-compactor",
+  };
+
+  const result = clearGlobalCompactionModel(
+    createContext([managed, custom]),
+    [TARGET],
+  );
+
+  assert.equal(managed.compactionModel, undefined);
+  assert.equal(custom.compactionModel, "future/private-compactor");
+  assert.equal(result.cleared, 1);
+  assert.equal(result.untouched, 1);
 });
 
 test("reconciles models added after session start", () => {
@@ -223,6 +246,7 @@ test("tracks compaction start, success, duration, and redacted image policy", ()
   assert.equal(logs[0].fields.imageBlocks, 1);
   assert.equal(JSON.stringify(logs).includes("not-logged"), false);
   assert.match(formatCompactionStatus(completed), /result=success/);
+  assert.match(formatCompactionStatus(completed), new RegExp(`rev=${EXTENSION_REVISION}`));
 });
 
 test("records auto-compaction failures without changing the main model", () => {
@@ -243,14 +267,18 @@ test("records auto-compaction failures without changing the main model", () => {
     ctx,
   );
   currentTime = 210;
-  const ended = reconciler.endAutoCompaction({
-    aborted: false,
-    skipped: false,
-    errorMessage: "upstream unavailable",
-  });
+  const ended = reconciler.endAutoCompaction(
+    {
+      aborted: false,
+      skipped: false,
+      errorMessage: "HTTP 503 upstream unavailable",
+    },
+    ctx,
+  );
 
   assert.equal(ended.result, "failed");
-  assert.equal(ended.error, "upstream unavailable");
+  assert.equal(ended.errorClass, "provider-http");
+  assert.equal(ended.errorStatus, 503);
   assert.equal(ended.durationMs, 200);
   assert.equal(ctx.model.provider, "agentrouter");
   assert.equal(ctx.model.id, "claude-opus-5");
@@ -260,6 +288,305 @@ test("records auto-compaction failures without changing the main model", () => {
   currentTime = 711;
   const recovered = reconciler.reconcile(ctx, "cooldown-expired");
   assert.equal(recovered.target, TARGET);
+});
+
+test("classifies only explicit provider failures as retryable", () => {
+  assert.deepEqual(classifyCompactionFailure("HTTP 429 rate limited"), {
+    kind: "provider-http",
+    status: 429,
+    retryable: true,
+  });
+  assert.deepEqual(classifyCompactionFailure("socket connection reset"), {
+    kind: "provider-transport",
+    retryable: true,
+  });
+  assert.deepEqual(classifyCompactionFailure("Nothing to compact (session too small)"), {
+    kind: "local",
+    retryable: false,
+  });
+  assert.deepEqual(classifyCompactionFailure("401 unauthorized"), {
+    kind: "local",
+    retryable: false,
+  });
+  assert.deepEqual(classifyCompactionFailure("upstream returned an invalid payload"), {
+    kind: "unknown",
+    retryable: false,
+  });
+  assert.deepEqual(classifyCompactionFailure("context window is 500 tokens"), {
+    kind: "unknown",
+    retryable: false,
+  });
+  assert.deepEqual(classifyCompactionFailure("503 Service Unavailable"), {
+    kind: "provider-http",
+    status: 503,
+    retryable: true,
+  });
+});
+
+test("fails closed when every authenticated candidate is cooling", () => {
+  let currentTime = 10;
+  const fallbackTarget = "zg-newapi/zai-glm-5-2";
+  const models = [
+    { provider: "agentrouter", id: "claude-opus-5" },
+    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    { provider: "zg-newapi", id: "zai-glm-5-2" },
+  ];
+  const ctx = createContext(models, models[0]);
+  const reconciler = createGlobalCompactionReconciler({
+    candidates: [TARGET, fallbackTarget],
+    now: () => currentTime,
+    failureCooldownMs: 500,
+    extensionRetryEnabled: false,
+  });
+
+  reconciler.beginAutoCompaction({ reason: "threshold" });
+  reconciler.beginCompaction({ preparation: { tokensBefore: 50_000 } }, ctx);
+  reconciler.endAutoCompaction(
+    { errorMessage: "HTTP 503 primary unavailable" },
+    ctx,
+  );
+  assert.ok(models.every((model) => model.compactionModel === fallbackTarget));
+
+  currentTime = 20;
+  reconciler.beginAutoCompaction({ reason: "threshold" });
+  reconciler.beginCompaction({ preparation: { tokensBefore: 50_000 } }, ctx);
+  const allCooling = reconciler.endAutoCompaction(
+    { errorMessage: "HTTP 503 fallback unavailable" },
+    ctx,
+  );
+
+  assert.equal(allCooling.target, undefined);
+  assert.ok(models.every((model) => model.compactionModel === undefined));
+  assert.ok(
+    allCooling.candidates
+      .filter((candidate) => candidate.available)
+      .every((candidate) => candidate.state === "cooldown"),
+  );
+
+  reconciler.beginAutoCompaction({ reason: "threshold" });
+  const blocked = reconciler.beginCompaction(
+    { preparation: { tokensBefore: 50_000 } },
+    ctx,
+  );
+  assert.equal(blocked.cancel, true);
+  assert.equal(blocked.result, "unavailable");
+
+  currentTime = 521;
+  const recovered = reconciler.reconcile(ctx, "cooldown-expired");
+  assert.equal(recovered.target, TARGET);
+  assert.ok(models.every((model) => model.compactionModel === TARGET));
+  assert.equal(ctx.model.provider, "agentrouter");
+  assert.equal(ctx.model.id, "claude-opus-5");
+});
+
+test("schedules one managed fallback attempt and records its success", async () => {
+  let currentTime = 100;
+  const fallbackTarget = "zg-newapi/zai-glm-5-2";
+  const timers = [];
+  let compactCalls = 0;
+  const models = [
+    { provider: "agentrouter", id: "claude-opus-5" },
+    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    { provider: "zg-newapi", id: "zai-glm-5-2" },
+  ];
+  let reconciler;
+  const ctx = {
+    ...createContext(models, models[0]),
+    setTimeout(callback, milliseconds) {
+      assert.equal(milliseconds, 50);
+      timers.push(callback);
+    },
+    async compact() {
+      compactCalls += 1;
+      currentTime = 200;
+      const started = reconciler.beginCompaction(
+        { preparation: { tokensBefore: 60_000 } },
+        ctx,
+      );
+      assert.equal(started.target, fallbackTarget);
+      currentTime = 260;
+      reconciler.completeCompaction({ compactionEntry: { tokensBefore: 60_000 } });
+    },
+  };
+  reconciler = createGlobalCompactionReconciler({
+    candidates: [TARGET, fallbackTarget],
+    now: () => currentTime,
+    failureCooldownMs: 500,
+  });
+
+  reconciler.beginAutoCompaction({ reason: "threshold" });
+  reconciler.beginCompaction({ preparation: { tokensBefore: 60_000 } }, ctx);
+  currentTime = 150;
+  const ended = reconciler.endAutoCompaction(
+    { errorMessage: "HTTP 503 primary unavailable" },
+    ctx,
+  );
+  reconciler.endAutoCompaction(
+    { errorMessage: "HTTP 503 duplicate terminal event" },
+    ctx,
+  );
+
+  assert.equal(ended.retryState, "pending");
+  assert.equal(timers.length, 1);
+  reconciler.beginAutoCompaction({ reason: "threshold" });
+  const concurrent = reconciler.beginCompaction(
+    { preparation: { tokensBefore: 60_000 } },
+    ctx,
+  );
+  assert.equal(concurrent.cancel, true);
+  assert.equal(concurrent.result, "retry-pending");
+  assert.equal(timers.length, 1);
+  await timers[0]();
+
+  const finalStatus = reconciler.getStatus();
+  const primary = finalStatus.candidates.find(
+    (candidate) => candidate.selector === TARGET,
+  );
+  const fallback = finalStatus.candidates.find(
+    (candidate) => candidate.selector === fallbackTarget,
+  );
+  assert.equal(compactCalls, 1);
+  assert.equal(finalStatus.result, "fallback-success");
+  assert.equal(finalStatus.retryState, "success");
+  assert.equal(finalStatus.extensionRetries, 1);
+  assert.equal(primary.failures, 1);
+  assert.equal(fallback.successes, 1);
+  assert.equal(fallback.retryAttempts, 1);
+  assert.equal(ctx.model.provider, "agentrouter");
+  assert.equal(ctx.model.id, "claude-opus-5");
+});
+
+test("a failed fallback is terminal and cannot schedule a second retry", async () => {
+  const fallbackTarget = "zg-newapi/zai-glm-5-2";
+  const timers = [];
+  const models = [
+    { provider: "agentrouter", id: "claude-opus-5" },
+    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    { provider: "zg-newapi", id: "zai-glm-5-2" },
+  ];
+  let reconciler;
+  const ctx = {
+    ...createContext(models, models[0]),
+    setTimeout(callback) {
+      timers.push(callback);
+    },
+    async compact() {
+      reconciler.beginCompaction(
+        { preparation: { tokensBefore: 60_000 } },
+        ctx,
+      );
+      throw new Error("HTTP 502 backup unavailable");
+    },
+  };
+  reconciler = createGlobalCompactionReconciler({
+    candidates: [TARGET, fallbackTarget],
+    now: () => 100,
+  });
+
+  reconciler.beginAutoCompaction({ reason: "threshold" });
+  reconciler.beginCompaction({ preparation: { tokensBefore: 60_000 } }, ctx);
+  reconciler.endAutoCompaction(
+    { errorMessage: "HTTP 503 primary unavailable" },
+    ctx,
+  );
+  await timers[0]();
+
+  const finalStatus = reconciler.getStatus();
+  assert.equal(timers.length, 1);
+  assert.equal(finalStatus.result, "fallback-failed");
+  assert.equal(finalStatus.extensionRetries, 1);
+  assert.ok(
+    finalStatus.candidates
+      .filter((candidate) => candidate.available)
+      .every((candidate) => candidate.state === "cooldown"),
+  );
+  assert.ok(models.every((model) => model.compactionModel === undefined));
+});
+
+test("aborted, skipped, and local failures neither cool nor retry", () => {
+  const cases = [
+    { aborted: true, errorMessage: "HTTP 503 ignored after abort" },
+    { skipped: true, errorMessage: "HTTP 503 ignored after skip" },
+    { errorMessage: "Nothing to compact (session too small)" },
+  ];
+
+  for (const event of cases) {
+    const timers = [];
+    const models = [
+      { provider: "agentrouter", id: "claude-opus-5" },
+      { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    ];
+    const ctx = {
+      ...createContext(models, models[0]),
+      setTimeout(callback) {
+        timers.push(callback);
+      },
+      async compact() {},
+    };
+    const reconciler = createGlobalCompactionReconciler();
+    reconciler.beginAutoCompaction({ reason: "threshold" });
+    reconciler.beginCompaction({ preparation: { tokensBefore: 50_000 } }, ctx);
+    const ended = reconciler.endAutoCompaction(event, ctx);
+    const primary = ended.candidates.find(
+      (candidate) => candidate.selector === TARGET,
+    );
+    assert.equal(timers.length, 0);
+    assert.equal(primary.failures, 0);
+    assert.equal(primary.cooldownRemainingMs, 0);
+  }
+});
+
+test("status and logs discard raw provider, transcript, URL, and credential text", () => {
+  const sentinel =
+    "HTTP 503 https://private.example/path sk-secret transcript-secret image-url-secret";
+  const logs = [];
+  const logger = {
+    error(message, fields) {
+      logs.push({ message, fields });
+    },
+    info(message, fields) {
+      logs.push({ message, fields });
+    },
+  };
+  const models = [
+    { provider: "agentrouter", id: "claude-opus-5" },
+    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+  ];
+  const ctx = createContext(models, models[0]);
+  const reconciler = createGlobalCompactionReconciler({
+    extensionRetryEnabled: false,
+  });
+
+  reconciler.beginAutoCompaction({ reason: "threshold" });
+  reconciler.beginCompaction(
+    {
+      preparation: {
+        tokensBefore: 50_000,
+        messagesToSummarize: [
+          {
+            content: [
+              { type: "text", text: "transcript-secret" },
+              { type: "image_url", image_url: "image-url-secret" },
+            ],
+          },
+        ],
+      },
+    },
+    ctx,
+    logger,
+  );
+  const ended = reconciler.endAutoCompaction(
+    { errorMessage: sentinel },
+    ctx,
+    logger,
+  );
+  const serialized = `${formatCompactionStatus(ended)} ${JSON.stringify(logs)}`;
+
+  assert.match(serialized, /provider-http/);
+  assert.equal(serialized.includes("private.example"), false);
+  assert.equal(serialized.includes("sk-secret"), false);
+  assert.equal(serialized.includes("transcript-secret"), false);
+  assert.equal(serialized.includes("image-url-secret"), false);
 });
 
 test("registers lifecycle handlers and the opt-in status command", () => {
@@ -280,6 +607,7 @@ test("registers lifecycle handlers and the opt-in status command", () => {
     [
       "session_start",
       "before_agent_start",
+      "auto_compaction_start",
       "session_before_compact",
       "session_compact",
       "auto_compaction_end",
