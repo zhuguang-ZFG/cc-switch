@@ -294,3 +294,20 @@ running OMP process must execute `/reload-plugins` or restart normally before ne
 deployed extension code is active; do not kill an active session merely to
 load it. Detailed evidence and rollback are in
 `docs/ops/omp-global-compaction-model.md`.
+
+## OMP SOTA escalation layer
+
+`omp-sota-escalation.js` discovers authenticated `omp-sota-*` model aliases
+and runs at most one ephemeral, read-only child OMP review for explicit,
+high-risk, complex, or repeated-tool-failure turns. It never switches the main
+model and never enters ordinary fallback or compaction routing. `/sota-status`
+reports only bounded operational state.
+
+NewAPI aliases are managed by
+`add_omp_sota_newapi_alias.py [--channel-id ID] [--base-model MODEL]
+[--apply|--remove --apply]`; the default is dry-run. OMP registration uses
+`add_omp_sota_model.mjs [--apply]`, and the independent production extension
+is deployed with `deploy-omp-sota-escalation.ps1`. See
+`docs/ops/omp-sota-escalation-layer.md` for the complete contract and rollback.
+`probe_omp_sota_alias.py [--run]` is the opt-in, eight-token semantic and log
+attribution check; it never prints the client key or raw error bodies.

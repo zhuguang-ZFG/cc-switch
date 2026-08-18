@@ -368,6 +368,56 @@ def validate_fallback_chains(
     return violations, warnings
 
 
+def validate_sota_upgrade_only(config_text: str, models_text: str) -> list[str]:
+    """Keep ``omp-sota-*`` registrations out of ordinary routing and compaction."""
+    violations: list[str] = []
+    roles = _model_role_entries(config_text)
+    chains = _fallback_chain_entries(config_text)
+    registrations = _parse_model_registrations(models_text)
+
+    def compaction_target(provider: str, model_id: str) -> str | None:
+        lines = _top_level_mapping_block(models_text, provider).splitlines()
+        marker = f"    - id: {model_id}"
+        try:
+            start = lines.index(marker)
+        except ValueError:
+            return None
+        for line in lines[start + 1 :]:
+            if line.startswith("    - id: "):
+                break
+            if line.startswith("      compactionModel:"):
+                return line.partition(":")[2].strip().strip("\"'") or None
+        return None
+
+    for role, selector in roles.items():
+        parsed = _parse_selector(_base_selector(selector))
+        if parsed and parsed[1].startswith("omp-sota-"):
+            violations.append(f"role {role} routes through SOTA alias {selector}")
+    for chain, candidates in chains.items():
+        for selector in candidates:
+            parsed = _parse_selector(_base_selector(selector))
+            if parsed and parsed[1].startswith("omp-sota-"):
+                violations.append(f"chain {chain} routes through SOTA alias {selector}")
+
+    for provider, models in registrations.items():
+        seen: set[str] = set()
+        for model in models:
+            model_id = str(model["id"])
+            if not model_id.startswith("omp-sota-"):
+                continue
+            if model_id in seen:
+                violations.append(f"duplicate SOTA registration {provider}/{model_id}")
+            seen.add(model_id)
+            if provider != "zg-newapi":
+                violations.append(f"SOTA alias must use zg-newapi, got {provider}/{model_id}")
+            compaction = compaction_target(provider, model_id)
+            if compaction != "zg-newapi/deepseek-v4-flash":
+                violations.append(
+                    f"{provider}/{model_id} compactionModel must remain DeepSeek Flash, got {compaction!r}"
+                )
+    return violations
+
+
 def _model_block(model_id: str, **fields: object) -> str:
     """构造 models.yml 单个模型条目文本（fixture 专用）。"""
     lines = [f"    - id: {model_id}"]
@@ -533,6 +583,32 @@ class OmpRouteGateTests(unittest.TestCase):
             ([], []),
             "sotamodel is an untrusted manual canary and must not enter OMP routing",
         )
+
+    def test_marked_sota_alias_is_upgrade_only_and_keeps_flash_compaction(self):
+        config = _config_yml(
+            {"default": ["zg-newapi/deepseek-v4-flash"]},
+            roles={"default": "zg-newapi/deepseek-v4-flash:max"},
+        )
+        models = _models_yml(
+            _model_block(
+                "omp-sota-claude-opus-5",
+                compactionModel="zg-newapi/deepseek-v4-flash",
+                contextWindow=200000,
+                maxTokens=128000,
+            )
+        )
+        self.assertEqual(validate_sota_upgrade_only(config, models), [])
+
+        routed_config = _config_yml(
+            {"default": ["zg-newapi/deepseek-v4-flash"]},
+            roles={"default": "zg-newapi/omp-sota-claude-opus-5:max"},
+        )
+        self.assertTrue(validate_sota_upgrade_only(routed_config, models))
+        wrong_compaction = models.replace(
+            "compactionModel: zg-newapi/deepseek-v4-flash",
+            "compactionModel: omp-sota-claude-opus-5",
+        )
+        self.assertTrue(validate_sota_upgrade_only(config, wrong_compaction))
 
     def test_anthropic_provider_uses_semantic_ttft_gateway(self):
         text = MODELS_FILE.read_text(encoding="utf-8")
@@ -973,6 +1049,19 @@ class OmpRouteGateTests(unittest.TestCase):
         qwen = next(model for model in parsed["zg-newapi"] if model["id"] == "qwen3.8-max")
         self.assertEqual(qwen["input"], ["text", "image"])
         self.assertNotIn("apiKey", repr(parsed))
+
+    def test_live_marked_sota_aliases_are_upgrade_only(self):
+        models_text = MODELS_FILE.read_text(encoding="utf-8")
+        violations = validate_sota_upgrade_only(
+            CONFIG_FILE.read_text(encoding="utf-8"), models_text
+        )
+        self.assertEqual(violations, [])
+        marked = [
+            model["id"]
+            for model in _parse_model_registrations(models_text).get("zg-newapi", [])
+            if str(model["id"]).startswith("omp-sota-")
+        ]
+        self.assertIn("omp-sota-claude-opus-5", marked)
 
 
 if __name__ == "__main__":
