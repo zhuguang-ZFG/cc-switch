@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -12,6 +14,7 @@ import globalExtension, {
   discoverSotaCandidates,
   formatHutujiGatePlan,
   formatSotaStatus,
+  readSotaReadiness,
   safeExecArgs,
 } from "./omp-sota-escalation.js";
 
@@ -31,6 +34,72 @@ test("discovers only marked SOTA aliases and deduplicates selectors", () => {
     ["zg-newapi/omp-sota-claude-opus-5"],
   );
   assert.equal(SOTA_ALIAS_PREFIX, "omp-sota-");
+});
+
+test("readiness filters unavailable and stale marked candidates", () => {
+  const models = [
+    { provider: "zg-newapi", id: "omp-sota-primary" },
+    { provider: "zg-newapi", id: "omp-sota-backup" },
+  ];
+  const readiness = {
+    ttlMs: 500,
+    candidates: {
+      "zg-newapi/omp-sota-primary": { status: "ready", checkedAt: 100 },
+      "zg-newapi/omp-sota-backup": {
+        status: "unavailable",
+        checkedAt: 100,
+      },
+    },
+  };
+  assert.deepEqual(
+    discoverSotaCandidates(models, SOTA_ALIAS_PREFIX, readiness, 200),
+    ["zg-newapi/omp-sota-primary"],
+  );
+  assert.deepEqual(
+    discoverSotaCandidates(models, SOTA_ALIAS_PREFIX, readiness, 601),
+    [],
+  );
+  const coordinator = createSotaEscalationCoordinator({ now: () => 200 });
+  coordinator.beginTurn("/sota", models, false, readiness);
+  const status = coordinator.getStatus();
+  assert.deepEqual(
+    status.candidates.map((candidate) => [candidate.selector, candidate.state]),
+    [
+      ["zg-newapi/omp-sota-primary", "ready"],
+      ["zg-newapi/omp-sota-backup", "unavailable"],
+    ],
+  );
+});
+
+test("readiness file parsing fails closed without exposing payload data", () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-sota-readiness-"));
+  try {
+    const path = join(root, "sota-readiness.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: 1,
+        ttlMs: 500,
+        candidates: {
+          "zg-newapi/omp-sota-primary": {
+            status: "ready",
+            checkedAt: 100,
+            channelId: 75,
+          },
+        },
+      }),
+    );
+    const readiness = readSotaReadiness(root);
+    assert.equal(readiness.ttlMs, 500);
+    assert.equal(
+      readiness.candidates["zg-newapi/omp-sota-primary"].status,
+      "ready",
+    );
+    writeFileSync(path, "not-json");
+    assert.deepEqual(readSotaReadiness(root), { candidates: {} });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("classifies explicit, rescue, high-risk, complexity, and normal signals", () => {
@@ -417,6 +486,58 @@ test("runs one automatic read-only child review at agent end", async () => {
   assert.equal(messages[0].customType, "sota-escalation-review");
   if (previousWriter === undefined) delete globalThis[writerSymbol];
   else globalThis[writerSymbol] = previousWriter;
+});
+
+test("second tool failure runs one immediate rescue and steers the current turn", async () => {
+  const handlers = new Map();
+  const timers = [];
+  const messages = [];
+  const execCalls = [];
+  const pi = {
+    logger: { info() {}, error() {} },
+    on(name, handler) {
+      handlers.set(name, handler);
+    },
+    registerCommand() {},
+    sendMessage(message, options) {
+      messages.push({ message, options });
+    },
+    async exec(command, args) {
+      execCalls.push([command, args]);
+      if (command === "git")
+        return { code: 0, stdout: "", stderr: "", killed: false };
+      return {
+        code: 0,
+        stdout: "severity: medium; retry with a narrower command",
+        stderr: "",
+        killed: false,
+      };
+    },
+  };
+  globalExtension(pi);
+  const ctx = {
+    cwd: process.cwd(),
+    models: { list: () => MODELS },
+    setTimeout(callback) {
+      timers.push(callback);
+    },
+  };
+  await handlers.get("before_agent_start")({ prompt: "continue" }, ctx);
+  await handlers.get("tool_result")({ toolName: "bash", isError: true }, ctx);
+  assert.equal(execCalls.some(([command]) => command === "omp"), false);
+  await handlers.get("tool_result")({ toolName: "bash", isError: true }, ctx);
+  assert.equal(execCalls.filter(([command]) => command === "omp").length, 1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].message.customType, "sota-escalation-review");
+  assert.deepEqual(messages[0].options, {
+    triggerTurn: false,
+    deliverAs: "steer",
+  });
+  await handlers.get("tool_result")({ toolName: "bash", isError: true }, ctx);
+  assert.equal(execCalls.filter(([command]) => command === "omp").length, 1);
+  await handlers.get("agent_end")({ willContinue: false }, ctx);
+  await timers[0]();
+  assert.equal(execCalls.filter(([command]) => command === "omp").length, 1);
 });
 
 test("hutuji high-risk path emits a gate plan and automatic SOTA review", async () => {

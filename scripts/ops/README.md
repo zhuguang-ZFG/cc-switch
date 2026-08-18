@@ -316,11 +316,13 @@ and rollback evidence.
 
 ## OMP SOTA escalation layer
 
-`omp-sota-escalation.js` discovers authenticated `omp-sota-*` model aliases
-and runs at most one ephemeral, read-only child OMP review for explicit,
-high-risk, complex, or repeated-tool-failure turns. It never switches the main
-model and never enters ordinary fallback or compaction routing. `/sota-status`
-reports only bounded operational state.
+`omp-sota-escalation.js` discovers readiness-verified `omp-sota-*` model
+aliases and runs at most one ephemeral, read-only child OMP review for
+explicit, high-risk, complex, or repeated-tool-failure turns. Failure number
+two triggers immediate rescue and steers the result into the current turn;
+terminal reviews may schedule one recursion-suppressed continuation. It never
+switches the main model and never enters ordinary fallback or compaction
+routing. `/sota-status` reports only bounded operational state.
 
 For the `hutuji` workspace, the same extension compares Git object hashes at
 turn start and terminal settle, then merges successful OMP `edit`/`write`
@@ -341,10 +343,15 @@ results from HIL/deployment evidence. Deploy both atomically with
 per-file backup/absence records, and rolls both files back on failure.
 
 NewAPI aliases are managed by
-`add_omp_sota_newapi_alias.py [--channel-id ID] [--base-model MODEL]
+`add_omp_sota_newapi_alias.py --channel-id ID [--base-model MODEL]
 [--apply|--remove --apply]`; the default is dry-run. OMP registration uses
 `add_omp_sota_model.mjs [--apply]`, and the independent production extension
 is deployed with `deploy-omp-sota-escalation.ps1`. See
 `docs/ops/omp-sota-escalation-layer.md` for the complete contract and rollback.
-`probe_omp_sota_alias.py [--run]` is the opt-in, eight-token semantic and log
-attribution check; it never prints the client key or raw error bodies.
+`probe_omp_sota_alias.py [--run] [--readiness-path PATH]` is the opt-in,
+eight-token semantic and log-attribution check; without `--channel-id` it
+prefers a dedicated `omp-sota-*` NewAPI channel over shared Opus pools. To
+create or refresh that isolated single-key channel, run
+`create-omp-sota-channel-secure.ps1`; it prompts locally, creates an online
+backup, probes while disabled, and enables only on success. The scripts write
+only bounded readiness metadata and never print keys or raw provider bodies.

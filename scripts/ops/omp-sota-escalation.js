@@ -1,12 +1,17 @@
-export const EXTENSION_REVISION = "2026.08.19-sota-r3";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+
+export const EXTENSION_REVISION = "2026.08.19-sota-r4";
 const ROUTE_WRITER_SYMBOL = Symbol.for("omp.modelRoutingTelemetry.writer");
 export const SOTA_ALIAS_PREFIX = "omp-sota-";
 
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_READINESS_TTL_MS = 15 * 60 * 1000;
 const MAX_PROMPT_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 12_000;
 const MAX_CHANGED_FILES = 40;
+const READINESS_FILENAME = "sota-readiness.json";
 
 const HIGH_RISK_PATTERN =
   /\b(auth(?:entication|orization)?|credentials?|secrets?|tokens?|security|permissions?|databases?|schemas?|migrations?|production|deploy(?:ment)?|rollbacks?|routing|fallbacks?|concurrency|locks?|releases?|payments?|billing)\b/i;
@@ -189,12 +194,57 @@ export function formatHutujiGatePlan(plan) {
   ].join(" ");
 }
 
-export function discoverSotaCandidates(models, prefix = SOTA_ALIAS_PREFIX) {
+export function readSotaReadiness(agentDir) {
+  if (!isAbsolute(String(agentDir ?? ""))) return undefined;
+  const path = join(agentDir, READINESS_FILENAME);
+  if (!existsSync(path)) return { candidates: {} };
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (!parsed || typeof parsed !== "object") return { candidates: {} };
+    const ttlMs = Number(parsed.ttlMs);
+    const candidates =
+      parsed.candidates && typeof parsed.candidates === "object"
+        ? parsed.candidates
+        : {};
+    return {
+      candidates,
+      ttlMs: Number.isFinite(ttlMs) ? ttlMs : DEFAULT_READINESS_TTL_MS,
+    };
+  } catch {
+    return { candidates: {} };
+  }
+}
+
+function readinessFor(readiness, selector, now = Date.now()) {
+  if (readiness === undefined) return { ready: true, reason: "unmanaged" };
+  const entry = readiness?.candidates?.[selector];
+  if (!entry || entry.status !== "ready")
+    return { ready: false, reason: "unavailable" };
+  const checkedAt = Number(entry.checkedAt);
+  const ttlMs = Number(readiness.ttlMs);
+  if (!Number.isFinite(checkedAt) || !Number.isFinite(ttlMs) || ttlMs <= 0)
+    return { ready: false, reason: "invalid-readiness" };
+  if (Math.max(0, now - checkedAt) > ttlMs)
+    return { ready: false, reason: "stale-readiness" };
+  return { ready: true, reason: "ready" };
+}
+
+export function discoverSotaCandidates(
+  models,
+  prefix = SOTA_ALIAS_PREFIX,
+  readiness,
+  now = Date.now(),
+) {
   const selectors = [];
   for (const model of Array.isArray(models) ? models : []) {
     if (typeof model?.id !== "string" || !model.id.startsWith(prefix)) continue;
     const selector = selectorOf(model);
-    if (selector && !selectors.includes(selector)) selectors.push(selector);
+    if (
+      selector &&
+      !selectors.includes(selector) &&
+      readinessFor(readiness, selector, now).ready
+    )
+      selectors.push(selector);
   }
   return selectors;
 }
@@ -239,16 +289,21 @@ function statusSnapshot(state, now) {
         Math.max(0, (state.cooldowns.get(selector) ?? 0) - current),
       ),
     ),
-    candidates: state.candidates.map((selector) => ({
-      selector,
-      available: true,
-      state:
-        (state.cooldowns.get(selector) ?? 0) > current ? "cooldown" : "ready",
-      cooldownRemainingMs: Math.max(
-        0,
-        (state.cooldowns.get(selector) ?? 0) - current,
-      ),
-    })),
+    candidates: state.discoveredCandidates.map((selector) => {
+      const readiness = readinessFor(state.readiness, selector, current);
+      return {
+        selector,
+        available: readiness.ready,
+        state: readiness.ready
+          ? (state.cooldowns.get(selector) ?? 0) > current
+            ? "cooldown"
+            : "ready"
+          : readiness.reason,
+        cooldownRemainingMs: readiness.ready
+          ? Math.max(0, (state.cooldowns.get(selector) ?? 0) - current)
+          : 0,
+      };
+    }),
   };
 }
 
@@ -289,7 +344,9 @@ export function createSotaEscalationCoordinator(options = {}) {
     failures: 0,
     extensionRuns: 0,
     cooldowns: new Map(),
+    discoveredCandidates: [],
     candidates: [],
+    readiness: undefined,
     prompt: "",
     explicit: false,
     toolFailures: 0,
@@ -300,8 +357,15 @@ export function createSotaEscalationCoordinator(options = {}) {
     durationMs: undefined,
   };
 
-  function refresh(models) {
-    state.candidates = discoverSotaCandidates(models);
+  function refresh(models, readiness = state.readiness) {
+    state.readiness = readiness;
+    state.discoveredCandidates = discoverSotaCandidates(models);
+    state.candidates = discoverSotaCandidates(
+      models,
+      SOTA_ALIAS_PREFIX,
+      readiness,
+      nowMs(now),
+    );
     if (state.target && !state.candidates.includes(state.target))
       state.target = undefined;
     for (const selector of state.cooldowns.keys()) {
@@ -311,7 +375,12 @@ export function createSotaEscalationCoordinator(options = {}) {
     return state.candidates.slice();
   }
 
-  function beginTurn(prompt, models, explicit = false) {
+  function beginTurn(
+    prompt,
+    models,
+    explicit = false,
+    readiness = state.readiness,
+  ) {
     state.phase = "idle";
     state.prompt = boundedText(prompt);
     state.explicit = explicit;
@@ -321,7 +390,7 @@ export function createSotaEscalationCoordinator(options = {}) {
     state.turnRuns = 0;
     state.retryState = "unused";
     state.signal = classifyEscalationSignal({ prompt, explicit });
-    refresh(models);
+    refresh(models, readiness);
     return { ...state.signal };
   }
 
@@ -353,16 +422,16 @@ export function createSotaEscalationCoordinator(options = {}) {
     return { ...state.signal };
   }
 
-  function chooseTarget(models) {
-    refresh(models);
+  function chooseTarget(models, readiness = state.readiness) {
+    refresh(models, readiness);
     const current = nowMs(now);
     return state.candidates.find(
       (selector) => (state.cooldowns.get(selector) ?? 0) <= current,
     );
   }
 
-  function start(models) {
-    refresh(models);
+  function start(models, readiness = state.readiness) {
+    refresh(models, readiness);
     if (state.signal.kind === "none") {
       state.retryState = "not-triggered";
       return { started: false, reason: state.retryState };
@@ -375,10 +444,14 @@ export function createSotaEscalationCoordinator(options = {}) {
       state.retryState = "budget-exhausted";
       return { started: false, reason: state.retryState };
     }
-    const target = chooseTarget(models);
+    const target = chooseTarget(models, readiness);
     if (!target) {
       state.retryState =
-        state.candidates.length > 0 ? "cooldown" : "unavailable";
+        state.candidates.length > 0
+          ? "cooldown"
+          : state.discoveredCandidates.length > 0
+            ? "unhealthy"
+            : "unavailable";
       return { started: false, reason: state.retryState };
     }
     state.phase = "running";
@@ -534,10 +607,13 @@ export default function sotaEscalationExtension(pi) {
   const coordinator = createSotaEscalationCoordinator();
   let currentPrompt = "";
   let currentModels = [];
+  let currentReadiness;
   let currentGatePlan = classifyHutujiGate();
   let turnBaseline = { files: [], hashes: {}, complete: false };
   let turnCwd = "";
   let mutationPaths = [];
+  let suppressCurrentTurn = false;
+  let suppressNextAutomaticTurn = false;
   const agentDir = typeof pi?.pi?.getAgentDir === "function" ? pi.pi.getAgentDir() : undefined;
   const emitRoute = event => {
     const writer = globalThis[ROUTE_WRITER_SYMBOL];
@@ -549,11 +625,31 @@ export default function sotaEscalationExtension(pi) {
     }
   };
 
+  function refreshReadiness() {
+    currentReadiness = readSotaReadiness(agentDir);
+    return currentReadiness;
+  }
+
   async function runEscalation(reason, ctx, logger, files, gatePlan) {
-    const started = coordinator.start(currentModels);
-    if (!started.started) return started;
+    const started = coordinator.start(currentModels, refreshReadiness());
+    if (!started.started) {
+      emitRoute({
+        revision: EXTENSION_REVISION,
+        route: "sota",
+        result: "skipped",
+        trigger: reason,
+        failureClass: started.reason,
+      });
+      return started;
+    }
     const target = started.target;
-    emitRoute({ revision: EXTENSION_REVISION, route: "sota", resolvedSelector: target, result: "started" });
+    emitRoute({
+      revision: EXTENSION_REVISION,
+      route: "sota",
+      resolvedSelector: target,
+      result: "started",
+      trigger: reason,
+    });
     try {
       const changedFiles = files ?? (await collectChangedFiles(pi, ctx.cwd));
       const result = await pi.exec(
@@ -575,14 +671,23 @@ export default function sotaEscalationExtension(pi) {
         retryable: !ok && !result.killed,
       });
       if (ok) {
+        const immediateRescue = reason === "rescue";
+        if (!immediateRescue) suppressNextAutomaticTurn = true;
         pi.sendMessage(
           {
             customType: "sota-escalation-review",
             content: boundedText(result.stdout, MAX_OUTPUT_CHARS),
             display: true,
-            details: { revision: EXTENSION_REVISION, target, reason },
+            details: {
+              revision: EXTENSION_REVISION,
+              target,
+              reason,
+              continuation: immediateRescue ? "steer" : "next-turn",
+            },
           },
-          { triggerTurn: false },
+          immediateRescue
+            ? { triggerTurn: false, deliverAs: "steer" }
+            : { triggerTurn: true, deliverAs: "nextTurn" },
         );
       }
       logger?.info?.("sota escalation completed", {
@@ -598,6 +703,7 @@ export default function sotaEscalationExtension(pi) {
         route: "sota",
         resolvedSelector: target,
         result: ok ? "success" : "failed",
+        trigger: reason,
         durationMs: Number.isFinite(status?.durationMs) ? status.durationMs : undefined,
         failureClass: ok ? undefined : result.killed === true ? "aborted" : "failed",
       });
@@ -615,6 +721,7 @@ export default function sotaEscalationExtension(pi) {
         route: "sota",
         resolvedSelector: target,
         result: "failed",
+        trigger: reason,
         failureClass: "local",
       });
       return status;
@@ -623,23 +730,41 @@ export default function sotaEscalationExtension(pi) {
 
   pi.on("session_start", (_event, ctx) => {
     currentModels = ctx.models.list();
-    coordinator.refresh(currentModels);
+    coordinator.refresh(currentModels, refreshReadiness());
   });
   pi.on("before_agent_start", async (event, ctx) => {
     currentPrompt = boundedText(event.prompt);
     currentModels = ctx.models.list();
-    coordinator.beginTurn(event.prompt, currentModels);
+    suppressCurrentTurn = suppressNextAutomaticTurn;
+    suppressNextAutomaticTurn = false;
+    coordinator.beginTurn(
+      event.prompt,
+      currentModels,
+      false,
+      refreshReadiness(),
+    );
     turnCwd = ctx.cwd;
     mutationPaths = [];
     turnBaseline = await collectChangedSnapshot(pi, ctx.cwd);
   });
-  pi.on("tool_result", (event) => {
-    coordinator.observeToolResult(event);
+  pi.on("tool_result", async (event, ctx) => {
+    const failures = coordinator.observeToolResult(event);
     const path = mutationPath(event, turnCwd);
     if (path) mutationPaths = mergeChangedFiles(mutationPaths, [path]);
+    if (suppressCurrentTurn || event?.isError !== true || failures !== 2) return;
+    const files = mergeChangedFiles(
+      await collectChangedFiles(pi, ctx.cwd),
+      mutationPaths,
+    );
+    const gatePlan = classifyHutujiGate({
+      cwd: ctx.cwd,
+      changedFiles: files,
+      grblRootAvailable: Boolean(process.env.GRBL_ROOT),
+    });
+    await runEscalation("rescue", ctx, pi.logger, files, gatePlan);
   });
   pi.on("agent_end", (event, ctx) => {
-    if (event?.willContinue === true) return;
+    if (event?.willContinue === true || suppressCurrentTurn) return;
     ctx.setTimeout(async () => {
       const currentSnapshot = await collectChangedSnapshot(pi, ctx.cwd);
       const files = mergeChangedFiles(
@@ -684,7 +809,12 @@ export default function sotaEscalationExtension(pi) {
     handler: async (args, ctx) => {
       currentPrompt = boundedText(args || "explicit review");
       currentModels = ctx.models.list();
-      coordinator.beginTurn(currentPrompt, currentModels, true);
+      coordinator.beginTurn(
+        currentPrompt,
+        currentModels,
+        true,
+        refreshReadiness(),
+      );
       await runEscalation("explicit", ctx, pi.logger);
     },
   };

@@ -22,7 +22,6 @@ from typing import Any, Callable
 
 SMOKE_PATH = Path(__file__).with_name("newapi-local-smoke.py")
 ALIAS_PREFIX = "omp-sota-"
-DEFAULT_CHANNEL_ID = 75
 DEFAULT_BASE_MODEL = "claude-opus-5"
 SAFE_MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -251,7 +250,12 @@ def apply_and_verify(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--channel-id", type=int, default=DEFAULT_CHANNEL_ID)
+    parser.add_argument(
+        "--channel-id",
+        type=int,
+        required=True,
+        help="existing enabled channel that independently hosts the SOTA key",
+    )
     parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
     parser.add_argument("--alias")
     parser.add_argument(

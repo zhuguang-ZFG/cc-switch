@@ -217,6 +217,7 @@ function normalizeRouteRecord(event) {
     "fallback",
     "result",
     "failureClass",
+    "trigger",
     "thresholdPercent",
     "thresholdTokens",
     "contextWindow",
@@ -241,7 +242,7 @@ function normalizeRouteRecord(event) {
       if (SAFE_RESULTS.has(value)) normalized.result = value;
     } else if (key === "fallback" && typeof value === "boolean") {
       normalized.fallback = value;
-    } else if (["revision", "role", "roleHash", "failureClass", "ownership"].includes(key)) {
+    } else if (["revision", "role", "roleHash", "failureClass", "trigger", "ownership"].includes(key)) {
       const atom = safeAtom(value);
       if (atom) normalized[key] = atom;
     }

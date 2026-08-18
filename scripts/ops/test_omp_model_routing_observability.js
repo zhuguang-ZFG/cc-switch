@@ -138,11 +138,13 @@ test("route normalization rejects arbitrary strings and URLs", () => {
       resolvedSelector: "https://private.example/token",
       result: "success\nsecret",
       failureClass: "raw provider error",
+      trigger: "rescue secret",
     });
     const serialized = readFileSync(path, "utf8");
     assert.equal(serialized.includes("secret"), false);
     assert.equal(serialized.includes("private.example"), false);
     assert.equal(readRouteEvents(path)[0].route, "task");
+    assert.equal(readRouteEvents(path)[0].trigger, undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
