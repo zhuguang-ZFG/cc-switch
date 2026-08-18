@@ -165,3 +165,18 @@ configuration once at OMP startup, so the already-running interactive OMP
 session retained its K3 child until a normal OMP restart. It was not forcibly
 terminated. OMP roles that explicitly select K3 remain unchanged and may
 still generate intentional foreground K3 traffic.
+
+## OMP extensibility hardening follow-up (2026-08-17 23:37 CST)
+
+The Hermes extension was subsequently upgraded from `0.9.5` to `0.9.6` after
+an online backup of its 151,875,584-byte session database passed
+`PRAGMA integrity_check`. The Agnes background-model override remains
+unchanged. OMP's default skill catalog was also reduced from 59 to 26 entries,
+project-root MCP discovery was disabled, and tool approval changed from
+`yolo` to `write`. No provider, model role, fallback chain, NewAPI channel, or
+credential changed in this follow-up.
+
+The existing OMP process was left running and requires a later normal restart
+to load the upgraded extension. Full configuration, verification, rollback,
+and upstream-issue details are recorded in
+[`omp-plugins-mcp-skills-hardening-2026-08-17.md`](./omp-plugins-mcp-skills-hardening-2026-08-17.md).
