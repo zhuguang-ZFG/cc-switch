@@ -303,6 +303,24 @@ high-risk, complex, or repeated-tool-failure turns. It never switches the main
 model and never enters ordinary fallback or compaction routing. `/sota-status`
 reports only bounded operational state.
 
+For the `hutuji` workspace, the same extension compares Git object hashes at
+turn start and terminal settle, then merges successful OMP `edit`/`write`
+paths so external firmware mutations remain visible. It classifies only files
+changed during that turn. Contract, gate, deploy, MCP transport, and G-code
+paths can trigger the bounded SOTA review even when the prompt omits risk
+words. A separate non-triggering message selects the required `docs`, `hub`,
+or `full` gate; `full` fails closed without `GRBL_ROOT`. The extension selects
+and reports the gate but does not execute hardware, firmware, deployment, or
+production work. `/hutuji-gate-status` shows the last plan.
+
+Repository-owned worker templates are under `omp-agents/`. Both the primary
+`hutuji-worker` and legacy `dsv4pro-worker` compatibility name resolve through
+`@task`, so later `modelRoles.task` changes propagate without another agent
+edit. Their contract preserves dirty worktrees and distinguishes software gate
+results from HIL/deployment evidence. Deploy both atomically with
+`deploy-omp-hutuji-workers.ps1`; the script validates role inheritance, creates
+per-file backup/absence records, and rolls both files back on failure.
+
 NewAPI aliases are managed by
 `add_omp_sota_newapi_alias.py [--channel-id ID] [--base-model MODEL]
 [--apply|--remove --apply]`; the default is dry-run. OMP registration uses

@@ -50,6 +50,59 @@ continues unchanged.
 failures, target, cooldowns, and candidate readiness without prompts, URLs,
 credentials, or raw provider errors.
 
+## hutuji project automation
+
+When the workspace basename is `hutuji`, the extension captures the dirty-file
+set and Git object hashes before the main turn, then captures them again at
+terminal settle. Only paths whose working-tree object changed during the turn
+are classified. Successful OMP `edit`/`write` result paths are merged into that
+delta so mutations in an external firmware repository remain visible even
+though Git collection runs from hutuji. Failed tool calls are not treated as
+mutations. This prevents an existing dirty tree from repeatedly invoking SOTA
+while still detecting another edit to an already-dirty file. Hash failure falls
+closed by treating the current changed-file set as new; file contents are never
+persisted or included in status output.
+
+The following paths are high-risk signals even when the user prompt is short:
+
+- `scripts/agent_gate.py`;
+- protocol, release-readiness, and agent gate/constraint contracts;
+- `deploy/**`;
+- MCP bitmap, bridge, configuration, G-code, SVG, and server boundaries;
+- paths under the external Grbl or xiaozhi firmware repositories.
+
+At settle, the same normalized path set selects a gate plan:
+
+- documentation-only changes -> `python scripts/agent_gate.py --profile docs`;
+- repository code/service changes -> `python scripts/agent_gate.py --profile hub`;
+- external Grbl changes -> hutuji `full` plus the separate fz `standard` gate.
+
+The `full` plan reports `available=false` when `GRBL_ROOT` is absent. Gate
+selection is automatic, but execution remains explicit: the extension never
+runs serial, HIL, firmware, deployment, or production commands. The plan is a
+non-triggering message and is also available through `/hutuji-gate-status`.
+
+Worker templates live in `scripts/ops/omp-agents/`. `hutuji-worker` is the
+primary project worker; `dsv4pro-worker` remains as a compatibility name. Both
+use `model: "@task"` rather than a concrete model id, so the current Luna task
+role and future task-role replacements are inherited automatically.
+
+Deploy the pair with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/ops/deploy-omp-hutuji-workers.ps1
+```
+
+The script validates both templates before touching the destination, records a
+hash-verified prior copy or absence marker for each file, replaces them
+atomically, and restores the pair on failure. Existing OMP sessions require
+`/reload` or a normal restart before updated agent definitions are visible.
+
+An xiaozhi firmware path is a SOTA risk signal, but it is not represented as a
+successful hutuji `full` gate: that repository separately requires host release
+tests, a selected board/variant build, and applicable hardware checks. The
+extension must not infer a variant or convert a build into HIL evidence.
+
 ## Separation from compaction
 
 Every marked OMP model keeps:
@@ -112,6 +165,7 @@ recovery path.
 ```powershell
 node --check scripts/ops/omp-sota-escalation.js
 node --test scripts/ops/test_omp_sota_escalation.js scripts/ops/test_add_omp_sota_model.mjs
+node --test scripts/ops/test_omp_hutuji_workers.mjs scripts/ops/test_omp_hutuji_worker_deploy.mjs
 node --test scripts/ops/test_omp_sota_deploy.js
 python -m unittest scripts.ops.test_add_omp_sota_newapi_alias scripts.ops.test_omp_routes
 pnpm typecheck
@@ -147,6 +201,21 @@ and a fresh NewAPI log row attributed to the marked model and expected channel.
 - The production extension SHA-256 matches the repository source. Deployment
   did not restart OMP; existing sessions need `/reload-plugins` or a normal
   restart to load it.
+- The hutuji worker pair was deployed from the repository with a verified
+  rollback directory at
+  `C:\Users\zhugu\.omp\agent\agent-backups\hutuji-workers-20260818-230359-4536`.
+  Both live hashes match their repository templates. The backup records that
+  `hutuji-worker` was previously absent and preserves the previous
+  `dsv4pro-worker` definition.
+- The final project-aware extension deployment created rollback directory
+  `C:\Users\zhugu\.omp\agent\extension-backups\omp-sota-escalation-20260818-232855-2880`.
+  Repository and live SHA-256 are both
+  `981C8FF2C84207E688D3FF4FE1231D9E45551AE395AD549A70E37977C6D54ACE`.
+- At deployment, OMP PID 16296 predated the final extension and PID 17136
+  started afterward. Final readback still finds PID 16296 active, so that
+  process needs `/reload-plugins` (or a normal restart) to load revision
+  `2026.08.18-sota-r2`; PID 17136 is no longer active. Neither process was
+  killed or force-restarted by the rollout.
 
 Upstream unit pricing was not independently verified. The alias inherits the
 channel's existing billing and must be monitored by marked-model usage in
