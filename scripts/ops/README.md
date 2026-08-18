@@ -266,6 +266,12 @@ Compaction state is written only to structured background logs. The optional
 excluded by OMP's text serializer; the extension records only an image-block
 count and never logs image data or URLs.
 
+The ch77 XiaoHongShu/Dots model passed live text, screenshot OCR, streaming,
+and 50K-input probes, but remains outside this compaction chain: ordinary OMP
+compaction strips image bytes before the model call, Dots is limited to a 128K
+window, and its 50K probe was about three times slower than SenseNova DeepSeek.
+Use it for vision tasks, not as a selector-only image-compaction workaround.
+
 Validation:
 
 ```powershell

@@ -63,6 +63,36 @@ reads, logs, hashes, or forwards their payloads. Logs include only the count and
 `imagePolicy=text-only-serialization`. This prevents a text-only compaction
 route from receiving binary image history or leaking image URLs.
 
+### XiaoHongShu/Dots evaluation (2026-08-18)
+
+`zg-newapi/dots-3-note-prev` on ch77 is a real multimodal model, not merely a
+text endpoint that tolerates image-shaped payloads. Current live evidence:
+
+| Probe | Result |
+|---|---|
+| Small streaming text | HTTP 200, exact `DOTS_TEXT_OK`, total 1.485s |
+| Repository screenshot (`main-en.png`) | HTTP 200, correctly read `CC Switch`, TTFT 1.059s, total 1.583s |
+| Approximately 50K text tokens | HTTP 200, TTFT 10.695s, total 10.999s |
+
+All three requests were attributed to ch77. This proves current text, image,
+OCR, streaming, and 50K-input behavior, but it does not make Dots a safe OMP
+compaction target:
+
+- OMP's normal compaction serializer removes image bytes before the selected
+  compaction model is called, so selecting Dots would not preserve visual
+  meaning by itself.
+- The registered Dots context window is 128K, which is below several active
+  main-model windows and can be smaller than the history presented at a late
+  compaction boundary.
+- The 50K request took about 11 seconds versus 3.629 seconds for SenseNova
+  DeepSeek V4 Flash in the same size class.
+
+Dots therefore remains a vision-role/manual image model and is not added to
+the background compaction candidates. Image-aware compaction would require a
+separate, tested pipeline that captions images before text serialization or
+returns a complete custom compaction result; changing the selector alone is
+not sufficient.
+
 ## Observability
 
 The extension emits structured background logs for:
