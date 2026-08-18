@@ -105,6 +105,11 @@ extension must not infer a variant or convert a build into HIL evidence.
 
 ## Separation from compaction
 
+When the routing observability extension is loaded, SOTA start/success/failure
+events use the same redacted JSONL route log as compaction and task/scout. The
+extension does not expose prompts or child output in that log; `/sota-status`
+remains the detailed SOTA state view.
+
 Every marked OMP model keeps:
 
 ```yaml

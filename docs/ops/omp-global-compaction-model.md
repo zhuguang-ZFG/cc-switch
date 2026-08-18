@@ -133,6 +133,14 @@ not sufficient.
 
 ## Observability
 
+When `omp-model-routing-observability.js` is loaded, compaction lifecycle events
+also append safe route records to
+`~/.omp/agent/logs/omp-model-routing.jsonl`. Records include the selected target,
+duration/result, and active model-specific threshold ownership; they never
+include summaries, transcript, URLs, or provider error text. See
+`docs/ops/omp-model-routing-observability.md` for the shared schema and
+`/model-routing-status` projection.
+
 The extension emits structured background logs for:
 
 - target reconciliation and target-unavailable state;
@@ -147,6 +155,16 @@ retry state/count, and per-candidate availability, cooldown remaining, attempts,
 successes, failures, and retry attempts. Raw upstream error text is discarded;
 only a safe class and optional HTTP status are retained. Status and logs never
 expose transcript, summary, image, URL, header, or credential content.
+
+### Adaptive threshold policy
+
+With native `compaction.thresholdPercent=-1` and
+`compaction.thresholdTokens=-1`, the extension applies a runtime token threshold
+from the active main model's context window: 70% through 272K, 78% through 400K,
+82% through 512K, and 85% above 512K. It recalculates on session start and before
+agent turns, so a manual model switch takes effect at the next agent boundary.
+An explicit user threshold takes precedence and is reported as
+`user-configured`; the main model and compaction candidate remain unchanged.
 
 ## Validation
 

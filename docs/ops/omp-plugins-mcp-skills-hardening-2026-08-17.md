@@ -140,6 +140,32 @@ but prompts before execution-tier tools such as shell, browser, evaluation,
 and task tools. A trusted one-off session can override this with
 `--approval-mode yolo`; the safer default remains persistent.
 
+For the trusted local OMP automation workflow, repeated Python `eval` and
+subagent `task` prompts are narrowed with:
+
+```yaml
+tools:
+  approvalMode: write
+  approval:
+    eval: allow
+    task: allow
+```
+
+This is preferable to persistent `yolo`: Python notebook-style evaluation and
+subagent dispatch become unattended, while `bash`, browser, and other exec-tier
+tools still require approval. Adding the ESP-IDF Python directory as an extra
+workspace root does not solve the screenshot case because the prompt is caused
+by the `eval` tool's exec tier, not read-path membership. Reset only this
+exception with `omp config reset tools.approval`.
+
+The 2026-08-19 change preserved
+`C:\Users\zhugu\.omp\agent\config.yml.before-eval-task-auto-20260819-005948.bak`
+with SHA-256
+`9EBE64F1598B2A561470021C34BFC20F199CA0DB66A69FD34199F8CBC31174B0`.
+A fresh isolated RPC process (temporary PID 23900) loaded `write` plus the two
+allow entries with zero extension errors. The older interactive PID 16296 was
+not restarted and may retain its in-memory settings until a normal restart.
+
 OMP `17.3.5` still has upstream limitations that this local setting cannot
 solve:
 
@@ -169,6 +195,9 @@ The following checks passed after all writes:
 - `omp config get mcp.enableProjectConfig --json`: `false`;
 - read-only effective MCP discovery: 10 entries, zero project sources;
 - `omp config get tools.approvalMode --json`: `write`;
+- `omp config get tools.approval --json`: only `eval=allow` and `task=allow`;
+- isolated RPC settings probe: the persisted `write` plus two-tool allowlist
+  loaded in a fresh process with zero extension errors;
 - live Hermes `sessions.db`: `PRAGMA quick_check = ok`;
 - the pre-existing OMP process remained responsive and was not terminated;
 - repository worktree was clean before this documentation update.

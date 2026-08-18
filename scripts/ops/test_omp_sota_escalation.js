@@ -202,7 +202,8 @@ test("does nothing for a normal turn and preserves main model identity", () => {
 });
 
 test("runs one explicit escalation and blocks concurrent duplicate runs", () => {
-  const coordinator = createSotaEscalationCoordinator({ now: () => 100 });
+  let current = 100;
+  const coordinator = createSotaEscalationCoordinator({ now: () => current });
   coordinator.beginTurn("review this", MODELS, true);
   const first = coordinator.start(MODELS);
   const second = coordinator.start(MODELS);
@@ -210,7 +211,10 @@ test("runs one explicit escalation and blocks concurrent duplicate runs", () => 
   assert.equal(first.target, "zg-newapi/omp-sota-claude-opus-5");
   assert.equal(second.started, false);
   assert.equal(second.reason, "running");
-  assert.equal(coordinator.complete({ ok: true }).retryState, "success");
+  current = 175;
+  const completed = coordinator.complete({ ok: true });
+  assert.equal(completed.retryState, "success");
+  assert.equal(completed.durationMs, 75);
   assert.equal(coordinator.getStatus().successes, 1);
   assert.equal(coordinator.start(MODELS).reason, "budget-exhausted");
 });
@@ -360,11 +364,17 @@ test("registers lifecycle handlers and status commands", () => {
 });
 
 test("runs one automatic read-only child review at agent end", async () => {
+  const writerSymbol = Symbol.for("omp.modelRoutingTelemetry.writer");
+  const previousWriter = globalThis[writerSymbol];
+  globalThis[writerSymbol] = () => {
+    throw new Error("telemetry unavailable");
+  };
   const handlers = new Map();
   const timers = [];
   const messages = [];
   const execCalls = [];
   const pi = {
+    pi: { getAgentDir: () => "agent-dir" },
     logger: { info() {}, error() {} },
     on(name, handler) {
       handlers.set(name, handler);
@@ -405,6 +415,8 @@ test("runs one automatic read-only child review at agent end", async () => {
   assert.equal(execCalls.at(-1)[1].includes("--tools"), true);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].customType, "sota-escalation-review");
+  if (previousWriter === undefined) delete globalThis[writerSymbol];
+  else globalThis[writerSymbol] = previousWriter;
 });
 
 test("hutuji high-risk path emits a gate plan and automatic SOTA review", async () => {

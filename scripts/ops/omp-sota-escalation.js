@@ -1,4 +1,5 @@
-export const EXTENSION_REVISION = "2026.08.18-sota-r2";
+export const EXTENSION_REVISION = "2026.08.19-sota-r3";
+const ROUTE_WRITER_SYMBOL = Symbol.for("omp.modelRoutingTelemetry.writer");
 export const SOTA_ALIAS_PREFIX = "omp-sota-";
 
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -231,6 +232,7 @@ function statusSnapshot(state, now) {
     successes: state.successes,
     failures: state.failures,
     extensionRuns: state.extensionRuns,
+    durationMs: state.durationMs,
     cooldownRemainingMs: Math.max(
       0,
       ...state.candidates.map((selector) =>
@@ -295,6 +297,7 @@ export function createSotaEscalationCoordinator(options = {}) {
     changedFiles: [],
     turnRuns: 0,
     runStartedAt: 0,
+    durationMs: undefined,
   };
 
   function refresh(models) {
@@ -385,11 +388,13 @@ export function createSotaEscalationCoordinator(options = {}) {
     state.extensionRuns += 1;
     state.turnRuns += 1;
     state.runStartedAt = nowMs(now);
+    state.durationMs = undefined;
     return { started: true, target, reason: state.signal.kind };
   }
 
   function complete(result = {}) {
     if (state.phase !== "running") return statusSnapshot(state, now);
+    state.durationMs = Math.max(0, nowMs(now) - state.runStartedAt);
     const ok = result.ok === true;
     state.phase = "idle";
     if (ok) {
@@ -533,11 +538,22 @@ export default function sotaEscalationExtension(pi) {
   let turnBaseline = { files: [], hashes: {}, complete: false };
   let turnCwd = "";
   let mutationPaths = [];
+  const agentDir = typeof pi?.pi?.getAgentDir === "function" ? pi.pi.getAgentDir() : undefined;
+  const emitRoute = event => {
+    const writer = globalThis[ROUTE_WRITER_SYMBOL];
+    if (typeof writer !== "function" || !agentDir) return false;
+    try {
+      return writer(event, agentDir) === true;
+    } catch {
+      return false;
+    }
+  };
 
   async function runEscalation(reason, ctx, logger, files, gatePlan) {
     const started = coordinator.start(currentModels);
     if (!started.started) return started;
     const target = started.target;
+    emitRoute({ revision: EXTENSION_REVISION, route: "sota", resolvedSelector: target, result: "started" });
     try {
       const changedFiles = files ?? (await collectChangedFiles(pi, ctx.cwd));
       const result = await pi.exec(
@@ -577,6 +593,14 @@ export default function sotaEscalationExtension(pi) {
         code: result.code,
         killed: result.killed === true,
       });
+      emitRoute({
+        revision: EXTENSION_REVISION,
+        route: "sota",
+        resolvedSelector: target,
+        result: ok ? "success" : "failed",
+        durationMs: Number.isFinite(status?.durationMs) ? status.durationMs : undefined,
+        failureClass: ok ? undefined : result.killed === true ? "aborted" : "failed",
+      });
       return status;
     } catch {
       const status = coordinator.complete({ ok: false, retryable: false });
@@ -585,6 +609,13 @@ export default function sotaEscalationExtension(pi) {
         target,
         reason,
         result: "terminal",
+      });
+      emitRoute({
+        revision: EXTENSION_REVISION,
+        route: "sota",
+        resolvedSelector: target,
+        result: "failed",
+        failureClass: "local",
       });
       return status;
     }

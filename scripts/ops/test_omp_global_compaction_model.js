@@ -8,11 +8,65 @@ import globalCompactionModel, {
   clearGlobalCompactionModel,
   countImageBlocks,
   createGlobalCompactionReconciler,
+  createCompactionThresholdManager,
   formatCompactionStatus,
+  resolveCompactionThresholdPolicy,
   resolveCompactionTarget,
 } from "./omp-global-compaction-model.js";
 
 const TARGET = "zg-newapi/deepseek-v4-flash";
+
+function createThresholdSettings() {
+  const values = {
+    "compaction.thresholdPercent": -1,
+    "compaction.thresholdTokens": -1,
+  };
+  const overrides = {};
+  return {
+    values,
+    overrides,
+    get(key) {
+      return overrides[key] ?? values[key];
+    },
+    override(key, value) {
+      overrides[key] = value;
+    },
+    clearOverride(key) {
+      delete overrides[key];
+    },
+  };
+}
+
+test("derives conservative thresholds from the active model context window", () => {
+  assert.equal(resolveCompactionThresholdPolicy({ contextWindow: 128000 }).thresholdPercent, 70);
+  assert.equal(resolveCompactionThresholdPolicy({ contextWindow: 272000 }).thresholdPercent, 70);
+  assert.equal(resolveCompactionThresholdPolicy({ contextWindow: 400000 }).thresholdPercent, 78);
+  assert.equal(resolveCompactionThresholdPolicy({ contextWindow: 512000 }).thresholdPercent, 82);
+  assert.equal(resolveCompactionThresholdPolicy({ contextWindow: 1000000 }).thresholdPercent, 85);
+  assert.equal(resolveCompactionThresholdPolicy({}).state, "unavailable");
+});
+
+test("manages legacy thresholds, follows model switches, and preserves explicit user values", () => {
+  const settings = createThresholdSettings();
+  const store = new WeakMap();
+  const manager = createCompactionThresholdManager(settings, { store });
+  const first = manager.reconcile({ provider: "p", id: "large", contextWindow: 1000000 }, "test");
+  assert.equal(first.ownership, "managed");
+  assert.equal(first.thresholdTokens, 850000);
+  assert.equal(settings.get("compaction.thresholdTokens"), 850000);
+
+  const reloaded = createCompactionThresholdManager(settings, { store });
+  const switched = reloaded.reconcile({ provider: "p", id: "small", contextWindow: 200000 }, "before_agent_start");
+  assert.equal(switched.thresholdPercent, 70);
+  assert.equal(switched.thresholdTokens, 140000);
+  assert.equal(settings.get("compaction.thresholdTokens"), 140000);
+
+  settings.values["compaction.thresholdTokens"] = 90000;
+  const explicit = reloaded.reconcile({ provider: "p", id: "small", contextWindow: 200000 }, "user_change");
+  assert.equal(explicit.ownership, "user-configured");
+  assert.equal(explicit.thresholdTokens, 90000);
+  assert.equal(settings.overrides["compaction.thresholdTokens"], undefined);
+});
 
 function createContext(models, current = models[0]) {
   return {
@@ -614,4 +668,34 @@ test("registers lifecycle handlers and the opt-in status command", () => {
     ],
   );
   assert.equal(commands[0].name, "compaction-status");
+});
+
+test("emits one success record when compaction completion is repeated", () => {
+  const writerSymbol = Symbol.for("omp.modelRoutingTelemetry.writer");
+  const previousWriter = globalThis[writerSymbol];
+  const records = [];
+  globalThis[writerSymbol] = event => {
+    records.push(event);
+    return true;
+  };
+  try {
+    const handlers = new Map();
+    const model = { provider: "zg-newapi", id: "main", contextWindow: 400000 };
+    const target = { provider: "zg-newapi", id: "deepseek-v4-flash", contextWindow: 1000000 };
+    globalCompactionModel({
+      pi: { settings: createThresholdSettings(), getAgentDir: () => "agent-dir" },
+      on(event, handler) { handlers.set(event, handler); },
+      registerCommand() {},
+      logger: { debug() {}, info() {}, error() {} },
+    });
+    const ctx = { ...createContext([model, target], model) };
+    handlers.get("session_start")({}, ctx);
+    handlers.get("session_before_compact")({ preparation: { tokensBefore: 100 } }, ctx);
+    handlers.get("session_compact")({ compactionEntry: { tokensBefore: 100 } });
+    handlers.get("session_compact")({ compactionEntry: { tokensBefore: 100 } });
+    assert.equal(records.filter(record => record.result === "success").length, 1);
+  } finally {
+    if (previousWriter === undefined) delete globalThis[writerSymbol];
+    else globalThis[writerSymbol] = previousWriter;
+  }
 });

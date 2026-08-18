@@ -1,4 +1,4 @@
-export const EXTENSION_REVISION = "2026.08.18-r2";
+export const EXTENSION_REVISION = "2026.08.19-r4";
 
 const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
   "zg-newapi/deepseek-v4-flash",
@@ -10,6 +10,10 @@ const DEFAULT_RECONCILE_INTERVAL_MS = 1000;
 const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
 const DEFAULT_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_RETRY_DELAY_MS = 50;
+const THRESHOLD_PERCENT_KEY = "compaction.thresholdPercent";
+const THRESHOLD_TOKENS_KEY = "compaction.thresholdTokens";
+const THRESHOLD_STATE_SYMBOL = Symbol.for("omp.compaction.threshold.states");
+const ROUTE_WRITER_SYMBOL = Symbol.for("omp.modelRoutingTelemetry.writer");
 
 const LOCAL_FAILURE_PATTERN =
   /\b(?:abort(?:ed)?|cancel(?:led|ed)?|already compacted|nothing to compact|session too small|no model selected|no available model|usable credentials|api key|required credentials|unauthori[sz]ed|forbidden|invalid (?:configuration|request|model)|compaction already in progress)\b/i;
@@ -32,6 +36,145 @@ function selectorOf(model) {
   if (!model || typeof model !== "object") return undefined;
   if (!model.provider || !model.id) return undefined;
   return `${model.provider}/${model.id}`;
+}
+
+export function resolveCompactionThresholdPolicy(model) {
+  const contextWindow = Number(model?.contextWindow);
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return {
+      state: "unavailable",
+      contextWindow: undefined,
+      thresholdPercent: undefined,
+      thresholdTokens: undefined,
+    };
+  }
+  const thresholdPercent =
+    contextWindow <= 272_000
+      ? 70
+      : contextWindow <= 400_000
+        ? 78
+        : contextWindow <= 512_000
+          ? 82
+          : 85;
+  return {
+    state: "managed",
+    contextWindow,
+    thresholdPercent,
+    thresholdTokens: Math.floor((contextWindow * thresholdPercent) / 100),
+  };
+}
+
+function thresholdStateStore() {
+  if (!(globalThis[THRESHOLD_STATE_SYMBOL] instanceof WeakMap)) {
+    globalThis[THRESHOLD_STATE_SYMBOL] = new WeakMap();
+  }
+  return globalThis[THRESHOLD_STATE_SYMBOL];
+}
+
+export function createCompactionThresholdManager(settings, options = {}) {
+  const store = options.store ?? thresholdStateStore();
+  let state = settings && store.get(settings);
+  if (!state) {
+    state = {
+      revision: EXTENSION_REVISION,
+      ownership: "uninitialized",
+      appliedTokens: undefined,
+      result: "not-run",
+      selector: undefined,
+      contextWindow: undefined,
+      thresholdPercent: undefined,
+      thresholdTokens: undefined,
+    };
+    if (settings) store.set(settings, state);
+  }
+
+  function setState(next) {
+    state = next;
+    if (settings) store.set(settings, state);
+  }
+
+  function snapshot() {
+    return { ...state };
+  }
+
+  function reconcile(model, reason = "unknown", logger) {
+    if (
+      !settings ||
+      typeof settings.get !== "function" ||
+      typeof settings.override !== "function" ||
+      typeof settings.clearOverride !== "function"
+    ) {
+      setState({
+        ...state,
+        ownership: "unsupported",
+        result: "settings-api-unavailable",
+        selector: selectorOf(model),
+      });
+      return snapshot();
+    }
+
+    const currentTokens = settings.get(THRESHOLD_TOKENS_KEY);
+    if (state.ownership === "managed" && currentTokens === state.appliedTokens) {
+      settings.clearOverride(THRESHOLD_TOKENS_KEY);
+    } else if (state.ownership === "managed" && currentTokens !== state.appliedTokens) {
+      setState({ ...state, ownership: "external-override", appliedTokens: undefined });
+    }
+
+    const basePercent = settings.get(THRESHOLD_PERCENT_KEY);
+    const baseTokens = settings.get(THRESHOLD_TOKENS_KEY);
+    const policy = resolveCompactionThresholdPolicy(model);
+    if (basePercent !== -1 || baseTokens !== -1) {
+      setState({
+        ...state,
+        ownership: "user-configured",
+        result: "explicit-setting-preserved",
+        selector: selectorOf(model),
+        contextWindow: policy.contextWindow,
+        thresholdPercent: basePercent,
+        thresholdTokens: baseTokens,
+        appliedTokens: undefined,
+      });
+      return snapshot();
+    }
+    if (policy.state !== "managed") {
+      setState({
+        ...state,
+        ownership: "unavailable",
+        result: "context-window-unavailable",
+        selector: selectorOf(model),
+        contextWindow: undefined,
+        thresholdPercent: undefined,
+        thresholdTokens: undefined,
+        appliedTokens: undefined,
+      });
+      return snapshot();
+    }
+
+    settings.override(THRESHOLD_TOKENS_KEY, policy.thresholdTokens);
+    setState({
+      ...state,
+      revision: EXTENSION_REVISION,
+      ownership: "managed",
+      result: "applied",
+      reason,
+      selector: selectorOf(model),
+      contextWindow: policy.contextWindow,
+      thresholdPercent: policy.thresholdPercent,
+      thresholdTokens: policy.thresholdTokens,
+      appliedTokens: policy.thresholdTokens,
+    });
+    logger?.debug?.("model-specific compaction threshold reconciled", {
+      revision: EXTENSION_REVISION,
+      reason,
+      selector: state.selector,
+      contextWindow: state.contextWindow,
+      thresholdPercent: state.thresholdPercent,
+      thresholdTokens: state.thresholdTokens,
+    });
+    return snapshot();
+  }
+
+  return { reconcile, getStatus: snapshot };
 }
 
 function normalizeCandidates(options) {
@@ -212,7 +355,10 @@ export function formatCompactionStatus(status) {
       return `${candidate.selector}{${cooldown},a=${candidate.attempts},s=${candidate.successes},f=${candidate.failures},r=${candidate.retryAttempts}}`;
     })
     .join(";");
-  return `rev=${status.revision ?? "unknown"} phase=${status.phase} target=${target}${result} retry=${status.retryState ?? "idle"} extensionRetries=${status.extensionRetries ?? 0}${duration}${tokens} images=${status.imageBlocks}${error} candidates=[${candidateText}]`;
+  const threshold = status.threshold
+    ? ` threshold=${status.threshold.ownership}:${status.threshold.thresholdTokens ?? "default"}@${status.threshold.thresholdPercent ?? "default"}%/${status.threshold.contextWindow ?? "unknown"}`
+    : "";
+  return `rev=${status.revision ?? "unknown"} phase=${status.phase} target=${target}${result} retry=${status.retryState ?? "idle"} extensionRetries=${status.extensionRetries ?? 0}${duration}${tokens} images=${status.imageBlocks}${error}${threshold} candidates=[${candidateText}]`;
 }
 
 export function createGlobalCompactionReconciler(options = {}) {
@@ -651,11 +797,25 @@ export function createGlobalCompactionReconciler(options = {}) {
 
 export default function globalCompactionModel(pi) {
   const reconciler = createGlobalCompactionReconciler();
+  const settings = pi?.pi?.settings;
+  const thresholdManager = createCompactionThresholdManager(settings);
+  const agentDir = typeof pi?.pi?.getAgentDir === "function" ? pi.pi.getAgentDir() : undefined;
+  const emitRoute = event => {
+    const writer = globalThis[ROUTE_WRITER_SYMBOL];
+    if (typeof writer !== "function" || !agentDir) return false;
+    try {
+      return writer(event, agentDir) === true;
+    } catch {
+      return false;
+    }
+  };
 
   pi.on("session_start", (_event, ctx) => {
+    thresholdManager.reconcile(ctx.model, "session_start", pi.logger);
     reconciler.start(ctx, pi.logger);
   });
   pi.on("before_agent_start", (_event, ctx) => {
+    thresholdManager.reconcile(ctx.model, "before_agent_start", pi.logger);
     reconciler.reconcile(ctx, "before_agent_start", pi.logger);
   });
   pi.on("auto_compaction_start", (event) => {
@@ -663,18 +823,56 @@ export default function globalCompactionModel(pi) {
   });
   pi.on("session_before_compact", (event, ctx) => {
     const started = reconciler.beginCompaction(event, ctx, pi.logger);
+    const threshold = thresholdManager.getStatus();
+    emitRoute({
+      revision: EXTENSION_REVISION,
+      route: "compaction",
+      resolvedSelector: started.target,
+      result: started.cancel ? "failed" : "started",
+      failureClass: started.cancel ? "unavailable" : undefined,
+      contextWindow: threshold.contextWindow,
+      thresholdPercent: threshold.thresholdPercent,
+      thresholdTokens: threshold.thresholdTokens,
+      ownership: threshold.ownership,
+    });
     return started.cancel ? { cancel: true } : undefined;
   });
   pi.on("session_compact", (event) => {
-    reconciler.completeCompaction(event, pi.logger);
+    const wasRunning = reconciler.getStatus().phase === "running";
+    const completed = reconciler.completeCompaction(event, pi.logger);
+    if (!wasRunning) return;
+    emitRoute({
+      revision: EXTENSION_REVISION,
+      route: "compaction",
+      resolvedSelector: completed.target,
+      result: "success",
+      durationMs: completed.durationMs,
+      fallback: completed.result === "fallback-success",
+    });
   });
   pi.on("auto_compaction_end", (event, ctx) => {
-    reconciler.endAutoCompaction(event, ctx, pi.logger);
+    const ended = reconciler.endAutoCompaction(event, ctx, pi.logger);
+    if (ended.result && ended.result !== "success" && ended.result !== "fallback-success") {
+      emitRoute({
+        revision: EXTENSION_REVISION,
+        route: "compaction",
+        resolvedSelector: ended.target,
+        result: "failed",
+        durationMs: ended.durationMs,
+        failureClass: ended.errorClass ?? ended.result,
+      });
+    }
   });
   pi.registerCommand?.("compaction-status", {
     description: "Show background compaction health and last result",
     handler: async (_args, ctx) => {
-      ctx.ui.notify(formatCompactionStatus(reconciler.getStatus()), "info");
+      ctx.ui.notify(
+        formatCompactionStatus({
+          ...reconciler.getStatus(),
+          threshold: thresholdManager.getStatus(),
+        }),
+        "info",
+      );
     },
   });
 }

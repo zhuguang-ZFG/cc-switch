@@ -295,6 +295,25 @@ deployed extension code is active; do not kill an active session merely to
 load it. Detailed evidence and rollback are in
 `docs/ops/omp-global-compaction-model.md`.
 
+## OMP model routing observability
+
+`omp-model-routing-observability.js` records bounded, redacted task/scout route
+events and validates effective `modelRoles` after an offline registry refresh.
+It shares `~/.omp/agent/logs/omp-model-routing.jsonl` with the compaction and
+SOTA extensions and exposes `/model-routing-status`, including refresh and role
+validation health; OMP's native resolved-model badge remains the per-task UI.
+Detached task dispatches record only normalized agent type and role hash, never
+prompt or assignment text.
+
+When native compaction thresholds remain `-1/-1`, the compaction extension uses
+the active main model's context window to select 70%, 78%, 82%, or 85%. A manual
+model switch is reconciled at the next `before_agent_start` boundary because OMP
+17.3.7 has no `model_select` extension event. Explicit user thresholds always
+win. Deploy the observability extension with
+`deploy-omp-model-routing-observability.ps1`; see
+`docs/ops/omp-model-routing-observability.md` for schema, validation, rollout,
+and rollback evidence.
+
 ## OMP SOTA escalation layer
 
 `omp-sota-escalation.js` discovers authenticated `omp-sota-*` model aliases
