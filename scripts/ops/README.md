@@ -252,20 +252,34 @@ Production copy: `~/.omp/agent/extensions/omp-unexpected-stop-guard.js`. See `do
 ## OMP global compaction model
 
 `omp-global-compaction-model.js` keeps the selected main model unchanged while
-projecting `zg-newapi/deepseek-v4-flash` onto every available model as its
-runtime `compactionModel`. It reconciles at session start, before each agent
-turn, before compaction, and once per second so models added or refreshed in a
-running OMP session inherit the policy without per-model maintenance.
+projecting an authenticated background target onto every available model as
+its runtime `compactionModel`. The ordered candidates are SenseNova DeepSeek V4
+Flash, a reserved SenseNova GLM 5.2 selector, Mistral-relay GLM 5.2, then
+official LongCat 2.0. It reconciles at
+session start, before each agent turn, before compaction, and once per second so
+models added or refreshed in a running OMP session inherit the policy without
+per-model maintenance. A real automatic-compaction failure cools the failed
+target for five minutes; no immediate retry or restart is issued.
+
+Compaction state is written only to structured background logs. The optional
+`/compaction-status` command shows the last result. Image payloads remain
+excluded by OMP's text serializer; the extension records only an image-block
+count and never logs image data or URLs.
 
 Validation:
 
 ```powershell
 node --check scripts/ops/omp-global-compaction-model.js
 node --test scripts/ops/test_omp_global_compaction_model.js
+node --test scripts/ops/test_omp_global_compaction_deploy.js
 py -m unittest scripts.ops.test_omp_routes
 ```
 
 Production copy: `~/.omp/agent/extensions/omp-global-compaction-model.js`.
-Keep the repository and production hashes identical. A running OMP process
-must execute `/reload` or restart normally before newly deployed extension
-code is active; do not kill an active session merely to load it.
+Deploy with `deploy-omp-global-compaction-model.ps1`; it backs up or records an
+absence marker, atomically replaces the extension, verifies SHA-256, and rolls
+back on failure. Keep the repository and production hashes identical. A
+running OMP process must execute `/reload` or restart normally before newly
+deployed extension code is active; do not kill an active session merely to
+load it. Detailed evidence and rollback are in
+`docs/ops/omp-global-compaction-model.md`.
