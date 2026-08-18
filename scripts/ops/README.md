@@ -248,3 +248,24 @@ node --test scripts/ops/test_omp_unexpected_stop_guard.js
 ```
 
 Production copy: `~/.omp/agent/extensions/omp-unexpected-stop-guard.js`. See `docs/ops/omp-unexpected-stop-guard.md` for deployment, reload, limitations, and rollback.
+
+## OMP global compaction model
+
+`omp-global-compaction-model.js` keeps the selected main model unchanged while
+projecting `zg-newapi/deepseek-v4-flash` onto every available model as its
+runtime `compactionModel`. It reconciles at session start, before each agent
+turn, before compaction, and once per second so models added or refreshed in a
+running OMP session inherit the policy without per-model maintenance.
+
+Validation:
+
+```powershell
+node --check scripts/ops/omp-global-compaction-model.js
+node --test scripts/ops/test_omp_global_compaction_model.js
+py -m unittest scripts.ops.test_omp_routes
+```
+
+Production copy: `~/.omp/agent/extensions/omp-global-compaction-model.js`.
+Keep the repository and production hashes identical. A running OMP process
+must execute `/reload` or restart normally before newly deployed extension
+code is active; do not kill an active session merely to load it.

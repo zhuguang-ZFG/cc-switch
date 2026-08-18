@@ -166,6 +166,7 @@ def _parse_model_registrations(text: str) -> dict[str, list[dict[str, object]]]:
                 model_id = stripped[len("- id:"):].strip().strip("\"'")
                 model = {
                     "id": model_id,
+                    "reasoning": None,
                     "supportsTools": None,
                     "input": None,
                     "contextWindow": None,
@@ -197,6 +198,8 @@ def _parse_model_registrations(text: str) -> dict[str, list[dict[str, object]]]:
                     input_items = []
             elif key == "supportsTools":
                 model["supportsTools"] = _parse_bool(value)
+            elif key == "reasoning":
+                model["reasoning"] = _parse_bool(value)
             elif key == "contextWindow":
                 model["contextWindow"] = _parse_int(value)
             elif key == "maxTokens":
@@ -598,19 +601,19 @@ class OmpRouteGateTests(unittest.TestCase):
 
     def test_qwen38_max_registration_matches_channel_contract(self):
         """aliyun-qwen38 必须按官方 1M/128K reasoning+vision 能力注册。"""
-        block = _top_level_mapping_block(MODELS_FILE.read_text(encoding="utf-8"), "zg-newapi")
-        expected = (
-            "    - id: qwen3.8-max\n"
-            "      name: Qwen 3.8 Max (Aliyun Token Plan ch31)\n"
-            "      reasoning: true\n"
-            "      input:\n"
-            "      - text\n"
-            "      - image\n"
-            "      contextWindow: 1000000\n"
-            "      maxTokens: 131072"
+        registrations = _registration_index(
+            _parse_model_registrations(MODELS_FILE.read_text(encoding="utf-8"))
         )
-        self.assertTrue(
-            expected in block,
+        self.assertEqual(
+            registrations.get("zg-newapi", {}).get("qwen3.8-max"),
+            {
+                "id": "qwen3.8-max",
+                "reasoning": True,
+                "supportsTools": None,
+                "input": ["text", "image"],
+                "contextWindow": 1_000_000,
+                "maxTokens": 131_072,
+            },
             "zg-newapi/qwen3.8-max registration is missing or has incorrect capabilities",
         )
 
