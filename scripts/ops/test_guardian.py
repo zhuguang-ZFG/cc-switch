@@ -26,6 +26,7 @@ class FakeNewAPI:
         self.channels = {}
         self.test_results = deque()
         self.test_calls = []
+        self.test_timeouts = []
         self.enable_calls = []
         self.disable_calls = []
 
@@ -40,6 +41,7 @@ class FakeNewAPI:
         return list(self.channels.values())
     def test_channel(self, channel_id, timeout=None):
         self.test_calls.append(channel_id)
+        self.test_timeouts.append(timeout)
         return self.test_results.popleft()
 
     def enable_channel(self, channel_id):
@@ -313,6 +315,28 @@ class TelegramCommandTests(unittest.TestCase):
 
 
 class FullHealthScanTests(unittest.TestCase):
+    def test_deadline_defers_unscanned_channels_without_skipping_rotation(self):
+        engine = make_engine()
+        engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
+        engine._full_scan_offset = 0
+        for channel_id in (45, 46, 47):
+            engine.newapi.channels[channel_id] = {
+                "id": channel_id,
+                "name": f"channel-{channel_id}",
+                "status": 1,
+                "weight": 5,
+                "priority": 40,
+                "models": "gpt-5.6-sol",
+            }
+            engine.newapi.test_results.append((True, "ok"))
+
+        with patch.object(guardian.time, "monotonic", side_effect=[100.0, 105.0]):
+            engine.full_health_scan(deadline=105.0)
+
+        self.assertEqual(engine.newapi.test_calls, [45])
+        self.assertEqual(engine.newapi.test_timeouts, [5])
+        self.assertEqual(engine._full_scan_offset, 1)
+
     def test_requires_three_soft_failures_before_degrading(self):
         engine = make_engine()
         engine._full_scan_offset = 0
@@ -1881,6 +1905,31 @@ class ProxyRestartTests(unittest.TestCase):
         g.autofix.check_and_enable_recovered_channels.assert_called_once()
         g.autofix.full_health_scan.assert_called_once()
         g._maybe_daily_report.assert_called_once()
+
+    def test_critical_maintenance_runs_before_budgeted_full_scan(self):
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.health = Mock()
+        g.health.check_newapi.return_value = (True, "ok")
+        g.health.check_local_proxy.return_value = (True, "ok", True)
+        g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
+        g.health.check_balance.return_value = (True, -1, -1)
+        g.newapi = Mock()
+        g.newapi.get_channels.return_value = []
+        g.autofix = Mock()
+        g.autofix.state = {"restart_counts": {}}
+        g.autofix.get_balance_trend.return_value = None
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = False
+        g.telegram = Mock()
+        order = []
+        g.autofix.periodic_ability_fix.side_effect = lambda: order.append("ability")
+        g.autofix.cleanup_stale_state.side_effect = lambda: order.append("cleanup")
+        g._maybe_daily_report = Mock(side_effect=lambda: order.append("report"))
+        g.autofix.full_health_scan.side_effect = lambda _deadline: order.append("scan")
+
+        g._check_cycle()
+
+        self.assertEqual(order, ["ability", "cleanup", "report", "scan"])
 
     def test_heartbeat_written_each_cycle(self):
         """run() 循环每轮写心跳文件"""

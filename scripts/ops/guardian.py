@@ -1710,7 +1710,7 @@ class AutoFixEngine:
 
     # ── 自循环维护（让系统无需人工干预持续运转） ──────────────────────────
 
-    def full_health_scan(self):
+    def full_health_scan(self, deadline: Optional[float] = None):
         """全量健康扫描：定期轮转探测启用渠道，捕获渐进退化
 
         补充 NewAPI 内置 30min 自动测试。每 FULL_SCAN_INTERVAL 周期触发，
@@ -1729,14 +1729,24 @@ class AutoFixEngine:
         # 轮转批次：每次触发测一批，偏移推进，多次触发覆盖全部渠道
         offset = self._full_scan_offset % n
         batch = (enabled[offset:] + enabled[:offset])[:FULL_SCAN_BATCH_SIZE]
-        self._full_scan_offset = (offset + FULL_SCAN_BATCH_SIZE) % n
 
         scanned = 0
         degraded = 0
         for channel in batch:
+            timeout = TEST_CHANNEL_TIMEOUT
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 1.0:
+                    logger.warning(
+                        "Full health scan budget exhausted after "
+                        f"{scanned}/{len(batch)} channels; remaining channels deferred"
+                    )
+                    break
+                timeout = max(1, min(TEST_CHANNEL_TIMEOUT, int(remaining)))
             channel_id = channel["id"]
-            test_ok, test_msg = self.newapi.test_channel(channel_id)
+            test_ok, test_msg = self.newapi.test_channel(channel_id, timeout=timeout)
             scanned += 1
+            self._full_scan_offset = (offset + scanned) % n
             if test_ok:
                 self._full_scan_failures.pop(channel_id, None)
                 continue
@@ -2434,12 +2444,15 @@ class Guardian:
         )
 
         # 10. 自循环维护（无需人工干预持续运转）
-        self._run_step("full health scan", self.autofix.full_health_scan)
         self._run_step("ability fix", self.autofix.periodic_ability_fix)
         self._run_step("state cleanup", self.autofix.cleanup_stale_state)
 
         # 11. 每日报告
         self._run_step("daily report", self._maybe_daily_report)
+        self._run_step(
+            "full health scan",
+            lambda: self.autofix.full_health_scan(self._cycle_deadline),
+        )
 
     def _check_channels_health(self, channels):
         """P1: 慢渠道检测 + 性能记录。
