@@ -353,5 +353,9 @@ eight-token semantic and log-attribution check; without `--channel-id` it
 prefers a dedicated `omp-sota-*` NewAPI channel over shared Opus pools. To
 create or refresh that isolated single-key channel, run
 `create-omp-sota-channel-secure.ps1`; it prompts locally, creates an online
-backup, probes while disabled, and enables only on success. The scripts write
+backup, configures the channel-local Clash proxy, probes while disabled, and
+enables only on success. `install-omp-sota-readiness-task.ps1` installs a
+non-overlapping ten-minute readiness refresh; each run tests only the isolated
+marked channel, enables it only after a management probe, and disables it on a
+strict semantic/log failure. The scripts write
 only bounded readiness metadata and never print keys or raw provider bodies.

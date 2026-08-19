@@ -26,6 +26,17 @@ BASE_MODEL = "claude-opus-5"
 MARKED_MODEL = "omp-sota-claude-opus-5"
 MODELS = f"{BASE_MODEL},{MARKED_MODEL}"
 MODEL_MAPPING = json.dumps({MARKED_MODEL: BASE_MODEL}, separators=(",", ":"))
+CHANNEL_SETTING = json.dumps(
+    {
+        "force_format": False,
+        "thinking_to_content": False,
+        "proxy": "http://127.0.0.1:7897",
+        "pass_through_body_enabled": False,
+        "system_prompt": "",
+        "system_prompt_override": False,
+    },
+    separators=(",", ":"),
+)
 
 
 def load_smoke() -> Any:
@@ -90,6 +101,7 @@ def payload(key: str, channel_id: int | None = None) -> dict[str, Any]:
         "models": MODELS,
         "group": "default",
         "model_mapping": MODEL_MAPPING,
+        "setting": CHANNEL_SETTING,
         "test_model": BASE_MODEL,
         "priority": 1,
         "weight": 1,

@@ -15,8 +15,10 @@ omp-sota-<base-model>
 The first registered route is `zg-newapi/omp-sota-claude-opus-5`. The marked
 alias is hosted by a dedicated single-key NewAPI channel named
 `omp-sota-sotamodel`; it is never appended to the multi-key `tabitoken` channel
-75. The marker identifies traffic; it is not an independent context,
-multimodal, pricing, or current-health claim.
+75. The channel uses the local Clash HTTP proxy at `127.0.0.1:7897` because
+direct TLS to the upstream is reset on this host. The marker identifies
+traffic; it is not an independent context, multimodal, pricing, or
+current-health claim.
 
 ## Runtime behavior
 
@@ -210,18 +212,37 @@ and a fresh NewAPI log row attributed to the marked model and expected channel.
 Failure updates readiness to `unavailable`, preventing repeated child calls to
 a known-broken route.
 
+Install the bounded Windows refresh after the isolated channel passes its first
+manual probe:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/ops/install-omp-sota-readiness-task.ps1
+```
+
+The task runs every ten minutes, ignores overlapping instances, and has a
+four-minute execution cap. It management-tests only the dedicated
+`omp-sota-*` channel, then runs the exact semantic/log probe. A strict failure
+marks readiness unavailable and disables that channel; it never mutates ch75.
+
 ## Live evidence (2026-08-19)
 
-- The dedicated single-key `omp-sota-sotamodel` channel was created as ch93,
-  with the marked alias mapped to `claude-opus-5`; it remains disabled because
-  its management probe returned upstream HTTP 429 `daily_free_credits_exhausted`.
+- The dedicated single-key `omp-sota-sotamodel` channel is ch93, with the
+  marked alias mapped to `claude-opus-5`. After upstream quota recovery, direct
+  TLS still failed on this host; adding only the channel-local Clash proxy
+  restored HTTP 200 without changing NewAPI globally.
 - The existing ch75 `tabitoken` channel remains a separate multi-key Opus pool;
   no SOTA key was added to it.
 - Enabled Opus 5 channels 3, 9, and 18 remain registered, but aggregate
   `claude-opus-5` and `claude-opus-5-thinking` probes returned HTTP 503 with
   `No available accounts`; no marked alias was migrated or enabled.
-- The current isolated marked semantic probe returned HTTP 503 while ch93 was
-  fail-closed disabled; readiness is `unavailable`.
+- The backed-up ch93 proxy update is
+  `new-api-before-omp-sota-ch93-proxy-20260819-122643.db`. Channel proxy
+  readback and management probe passed before enable.
+- The marked semantic probe returned exact `OMP-SOTA-OK` over HTTP 200 in
+  1.5s; a fresh NewAPI log attributed non-streaming positive usage to ch93 and
+  readiness became `ready`.
+- A separate real OMP invocation of
+  `zg-newapi/omp-sota-claude-opus-5` returned exact `OMP-SOTA-E2E-OK`.
 - Seven historical extension invocations (explicit, rescue, and high-risk)
   all exited with code 1; no successful SOTA review was observed.
 - `gpt-5.6-sol` passed an independent exact semantic probe, but it was not
