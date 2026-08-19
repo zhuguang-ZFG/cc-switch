@@ -44,7 +44,10 @@ PROXY_PORTS: dict[str, tuple[str, int]] = {
     # mistral-conversations-relay: OpenAI -> Mistral /v1/conversations (glm-5-2)
     "mistral-relay": ("127.0.0.1", 16001),
 }
-SMOKE_MODELS = ["sensenova-6.7-flash-lite", "gpt-5.6-luna"]
+SMOKE_PROBES: tuple[tuple[str, str], ...] = (
+    ("sensenova-6.7-flash-lite", "chat-completions"),
+    ("muse-spark-1.2-contributor", "responses"),
+)
 
 # Channels whose auto-disabled state is currently intentional. Channel 2 has
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
@@ -254,7 +257,7 @@ AFFINITY_REQUIRED_MODELS: dict[str, tuple[str, ...]] = {
 # NewAPI channel PUT rebuilds abilities and can reset model-level routing
 # posture. These rows are the deliberate pool/diagnostic selectors.
 CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
-    (48, "gpt-5.6-luna"): (51, 12),
+    (48, "muse-spark-1.2-contributor"): (51, 12),
     (45, "gpt-5.6-sol"): (40, 5),
     (45, "zg-gpt-5.6-sol"): (40, 5),
     (45, "zg-agent-gpt-5.6-sol"): (40, 5),
@@ -1065,13 +1068,29 @@ def main() -> int:
     try:
         tok = read_json(DEPLOY_DIR / "client-token.json")
         key = tok.get("api_key") or tok.get("key")
-        for model in SMOKE_MODELS:
+        for model, api in SMOKE_PROBES:
             t0 = time.time()
+            if api == "responses":
+                endpoint = f"{NEWAPI_BASE}/v1/responses"
+                body = {
+                    "model": model,
+                    "max_output_tokens": 512,
+                    "reasoning": {"effort": "low"},
+                    "input": "Reply only: OK.",
+                }
+            else:
+                endpoint = f"{NEWAPI_BASE}/v1/chat/completions"
+                body = {
+                    "model": model,
+                    "max_tokens": 8,
+                    "messages": [{"role": "user", "content": "Reply only: OK."}],
+                }
             status, resp = http_json(
-                f"{NEWAPI_BASE}/v1/chat/completions", method="POST", timeout=60,
+                endpoint,
+                method="POST",
+                timeout=60,
                 headers={"Authorization": f"Bearer {key}"},
-                body={"model": model, "max_tokens": 8,
-                      "messages": [{"role": "user", "content": "Reply only: OK."}]},
+                body=body,
             )
             ms = int((time.time() - t0) * 1000)
             content = ""
@@ -1079,7 +1098,11 @@ def main() -> int:
                 content = resp["choices"][0]["message"]["content"][:30]
             except Exception:
                 content = str(resp)[:80]
-            check(f"smoke {model}", status == 200, f"HTTP {status} {ms}ms {content!r}")
+            check(
+                f"smoke {model}",
+                status == 200,
+                f"api={api} HTTP {status} {ms}ms {content!r}",
+            )
     except Exception as e:  # noqa: BLE001
         check("smoke completions", False, f"{e}")
 

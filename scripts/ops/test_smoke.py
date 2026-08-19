@@ -674,15 +674,15 @@ class AdminAuthTests(unittest.TestCase):
 
         rows = [row for row in rows if row[:2] != (45, "gpt-5.6-sol")]
         rows = [
-            (48, "gpt-5.6-luna", 1, 50, 12)
-            if row[:2] == (48, "gpt-5.6-luna")
+            (48, "muse-spark-1.2-contributor", 1, 50, 12)
+            if row[:2] == (48, "muse-spark-1.2-contributor")
             else row
             for row in rows
         ]
         self.assertEqual(
             smoke.critical_ability_posture_violations(rows),
             [
-                "48:gpt-5.6-luna=expected:enabled=1,priority=51,weight=12;"
+                "48:muse-spark-1.2-contributor=expected:enabled=1,priority=51,weight=12;"
                 "actual=[(1, 50, 12)]",
                 "45:gpt-5.6-sol=missing",
             ],
@@ -719,6 +719,8 @@ class AdminAuthTests(unittest.TestCase):
                         return channel_status, channel_body
                     if "/v1/chat/completions" in url:
                         return 200, {"choices": [{"message": {"content": "OK"}}]}
+                    if "/v1/responses" in url:
+                        return 200, {"status": "completed", "output": []}
                     raise AssertionError(f"unexpected URL: {url}")
 
                 with (
@@ -743,6 +745,8 @@ class AdminAuthTests(unittest.TestCase):
                 return 403, {}
             if "/v1/chat/completions" in url:
                 return 200, {"choices": [{"message": {"content": "OK"}}]}
+            if "/v1/responses" in url:
+                return 200, {"status": "completed", "output": []}
             raise AssertionError(f"unexpected URL: {url}")
 
         with (
@@ -767,6 +771,7 @@ class AdminAuthTests(unittest.TestCase):
             any("/v1/chat/completions" in u for u in urls),
             "403 后冒烟检查仍须执行",
         )
+        self.assertTrue(any("/v1/responses" in u for u in urls))
 
 
 if __name__ == "__main__":

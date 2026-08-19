@@ -231,13 +231,15 @@ model evidence.
 
 Revision r5 disables retries and model fallback in every Canary child. With the
 corrected contract, Luna failed in 10,191 ms, Haiku genuinely completed the
-native read in 85,013 ms, and staged
-`zg-newapi/muse-spark-1.2-contributor:max` failed in 4,908 ms. Direct Muse
-Responses requests had returned HTTP 403 `DataPolicyError`; explicit user
-consent did not activate the OpenCode account. The staged route was therefore
-rolled back and production remains Luna-only. See
-`docs/ops/opencode-go-muse-cutover-2026-08-19.md` for the guarded cutover and
-rollback hashes.
+native read in 85,013 ms, and staged Muse initially failed in 4,908 ms while
+the workspace training setting was disabled. After the user enabled that
+setting, `zg-newapi/muse-spark-1.2-contributor:max` passed staged and post-final
+native-read Canaries in 14,511 ms and 8,922 ms. Independent NewAPI logs
+attributed the successful requests to ch48, and a final production-shaped Muse
+Responses smoke returned HTTP 200 in 3,212 ms. The final projection removes
+Luna from ch48, OMP models, roles, and fallbacks. See
+`docs/ops/opencode-go-muse-cutover-2026-08-19.md` for the guarded cutover,
+final hashes, and rollback artifact.
 
 Pre-existing interactive PID 13308 remained responsive and was not restarted or
 reloaded, so it does not yet prove the r5 runtime behavior. The following older

@@ -4,10 +4,11 @@
 
 The user selected the lower-cost `muse-spark-1.2-contributor` tier after the
 data policy was surfaced: OpenCode documents Muse Spark as using prompts and
-completions to train future Meta models and as non-ZDR. Consent alone did not
-activate the account. Direct Responses requests still returned HTTP 403
-`DataPolicyError`, so the attempted cutover was rolled back. Do not silently
-apply this route to another account or environment.
+completions to train future Meta models and as non-ZDR. The first attempt was
+rolled back because the workspace had not enabled training and direct Responses
+requests returned HTTP 403 `DataPolicyError`. After the user enabled the
+workspace setting, the guarded cutover completed. Do not silently apply this
+route to another account or environment.
 
 OpenCode's gateway source checks the workspace `allow_training` field for this
 exact contributor model. The authenticated workspace Go page exposes it as the
@@ -20,18 +21,19 @@ Muse is a Responses-only model on OpenCode Go. OMP must declare a model-level
 provider uses `openai-completions`. OMP 17.3.7 with Chat Completions reproduces
 the missing-`finish_reason` tool failure tracked by oh-my-pi issue 8957.
 
-## Current production projection
+## Final production projection
 
-- NewAPI ch48: enabled, `opencode-go-luna`, model `gpt-5.6-luna`, empty
-  mapping, priority 51, weight 12.
-- OMP roles: `task` is `zg-newapi/gpt-5.6-luna:max`; `tiny` is
-  `zg-newapi/gpt-5.6-luna`. `models.yml` contains Luna and no Muse entry.
-- The Muse model definition is staged only by the deployer. It uses
-  `api: openai-responses`, a 1,048,576-token context declaration, 131,072 max
-  output tokens, and text/image input.
-- The existing OMP PID was not restarted. Fresh OMP processes load the new
-  Canary extension; a pre-existing interactive process keeps its in-memory
-  extension/model registry until a normal reload/restart boundary.
+- NewAPI ch48: enabled, `opencode-go-muse`, model
+  `muse-spark-1.2-contributor`, empty mapping, priority 51, weight 12, with one
+  matching enabled ability row.
+- OMP roles: `task` is `zg-newapi/muse-spark-1.2-contributor:max`; `tiny` is
+  the base contributor selector. `models.yml` contains the Muse model and no
+  Luna entry; `config.yml` contains no Luna selector in roles or fallbacks.
+- The Muse model uses `api: openai-responses`, a 1,048,576-token context
+  declaration, 131,072 max output tokens, and text/image input.
+- The existing OMP PID was not restarted. Fresh OMP processes load the final
+  Muse projection and r5 Canary extension; a pre-existing interactive process
+  keeps its in-memory extension/model registry until a normal restart boundary.
 
 ## Deployment contract
 
@@ -77,24 +79,31 @@ passes. Add `--database-backup <path> --apply` only after those gates.
 
 ## Production evidence
 
-- Pre-change NewAPI backup:
-  `new-api-before-opencode-go-muse-20260819-150304.db`, 85,983,232 bytes,
-  SHA-256 `C2B76C20B27A8E6C65CF7CFE800E4EEF7306F65CCEA2181F93CB1480EB9A7037`.
-- Current rollback hashes: `models.yml`
-  `5E11A9E5119C44B36A545E8F34DD806ACA44434DA6415AB5B31F7156617F8740`;
+- Final pre-change online NewAPI backup:
+  `new-api-before-opencode-go-muse-finalize-20260819-161700.db`, 86,179,840
+  bytes, `PRAGMA integrity_check=ok`, SHA-256
+  `BB370CECB7C3ED1D1D3F2DF758DF1CEC9F575D3DA25D7C2AB182EFCC28235D23`.
+- Final OMP hashes: `models.yml`
+  `ABA7B872AFE682A7566D74E0E153E0E30DA356FDAF20A1E066E62E3A57A39BB2`;
   `config.yml`
-  `CAA074EDB0860CBAF57D80F48D654F3C78CCDA820838E78FC45C1D5BFACC3C59`.
+  `11D4D36442FAD14411DB03BB6013BE7B669E87A2F9E9388BF81F56D9F6F431F2`.
 - The original staged Canary appeared to succeed in 24,917 ms, and a later run
   appeared to succeed in 15,688 ms. Those results are invalid Muse evidence:
   the child inherited global `modelFallback=true`, Muse failed, and another
   model completed the nonce under Muse's selector.
-- Routing revision r5 injects a per-run no-fallback overlay. Under that
-  contract Luna failed in 10,191 ms with `probe-result-missing`, Haiku genuinely
-  completed the native read in 85,013 ms, and staged Muse failed in 4,908 ms
-  with `probe-result-missing`. No target attribution was invented.
-- After the failed Muse proof, `rollback` restored the Luna-only channel,
-  `models.yml`, and unchanged role/fallback configuration. A subsequent
-  rollback dry-run reported no changes.
+- Routing revision r5 injects a per-run no-fallback overlay. Before the
+  workspace opt-in, staged Muse correctly failed in 4,908 ms rather than being
+  rescued by another model. After opt-in, the staged Muse native-read Canary
+  succeeded in 14,511 ms and the post-final Canary succeeded in 8,922 ms.
+- Independent NewAPI log rows attribute both successful verification windows
+  to `channel_id=48`. Response headers still exposed no numeric channel ID, so
+  Canary status honestly reports `gatewayAttribution=missing`.
+- The final production-shaped `/v1/responses` smoke returned HTTP 200 in
+  3,212 ms. The aggregate smoke still reported unrelated pre-existing posture
+  drift on ch39, ch91/92, and ch9/18; those channels were not changed here.
+- Final readback found zero Luna references across `models.yml` and
+  `config.yml`, seven Muse references, one exclusive ch48 Muse ability at
+  priority 51 / weight 12, and a no-change finalize dry-run.
 
 ## Rollback
 
