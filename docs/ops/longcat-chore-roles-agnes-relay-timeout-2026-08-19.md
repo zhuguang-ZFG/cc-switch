@@ -235,6 +235,23 @@ the paid LongCat key on high-volume `:max` reasoning no longer applies to
 `sensenova-6.7-flash-lite`) covers task failures. Backup:
 `config.yml.bak-20260819-task-muse`.
 
+## Advisor enabled on the SOTA channel, plan raised to k3:max (2026-08-19, same session)
+
+Capability-layer changes per user decision:
+
+- `advisor` role moved from `zg-newapi-anthropic/claude-opus-5:high` to
+  `zg-newapi/omp-sota-claude-opus-5:high` — advisor traffic now rides the
+  dedicated SOTA channel ch93, keeping Opus-5 off shared lanes per the
+  isolation policy. `advisor.enabled` flipped `false -> true`, so OMP now
+  consults Opus-5 for review/risk identification at key checkpoints, matching
+  the user's stated SOTA usage policy.
+- `plan` raised `zg-newapi/k3:medium -> zg-newapi/k3:max` (`:max` was already
+  proven in-config via the `designer` role).
+
+Probe after edit: `omp-sota-claude-opus-5` with `reasoning_effort=high`
+returned HTTP 200 in 1.6s via ch93. Backup:
+`config.yml.bak-20260819-advisor-plan`. Effective on next OMP restart.
+
 ## Rollback
 
 - Relay: copy the `.bak-20260819-upstream-timeout-600s` file over
