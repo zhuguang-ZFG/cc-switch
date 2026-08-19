@@ -97,19 +97,24 @@ test("channel phases are narrow and preserve unrelated settings", () => {
     models: "gpt-5.6-luna",
     model_mapping: "{}",
     priority: 51,
-    weight: 12,
+    weight: 13,
     setting: "{\"proxy\":\"http://127.0.0.1:7897\"}",
   };
   const staged = planChannel(channel, "stage");
   assert.equal(staged.models, "gpt-5.6-luna,muse-spark-1.2-contributor");
   assert.equal(staged.priority, 51);
+  assert.equal(staged.weight, 12);
+  assert.equal(staged.test_model, "muse-spark-1.2-contributor");
   assert.equal(staged.setting, channel.setting);
   const finalized = planChannel(staged, "finalize");
   assert.equal(finalized.models, "muse-spark-1.2-contributor");
   assert.equal(finalized.name, "opencode-go-muse");
+  assert.equal(finalized.weight, 12);
   const rolled = planChannel(staged, "rollback");
   assert.equal(rolled.models, "gpt-5.6-luna");
   assert.equal(rolled.name, "opencode-go-luna");
+  assert.equal(rolled.weight, 20);
+  assert.equal(rolled.test_model, "gpt-5.6-luna");
 });
 
 test("channel planner refuses identity drift and unrelated models", () => {

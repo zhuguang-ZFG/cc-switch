@@ -12,6 +12,9 @@ const CHANNEL_BASE_URL = "https://opencode.ai/zen/go";
 const LUNA_ID = "gpt-5.6-luna";
 const STANDARD_MUSE_ID = "muse-spark-1.2";
 const MUSE_ID = "muse-spark-1.2-contributor";
+const CHANNEL_PRIORITY = 51;
+const MUSE_WEIGHT = 12;
+const LUNA_WEIGHT = 20;
 const PROVIDER = "zg-newapi";
 const NEWAPI_BASE = "http://127.0.0.1:3002";
 const CANARY_MAX_AGE_MS = 10 * 60 * 1000;
@@ -206,7 +209,9 @@ export function planChannel(channel, phase) {
           : "opencode-go-luna",
     models,
     model_mapping: "{}",
-    test_model: "",
+    test_model: phase === "rollback" ? LUNA_ID : MUSE_ID,
+    priority: CHANNEL_PRIORITY,
+    weight: phase === "rollback" ? LUNA_WEIGHT : MUSE_WEIGHT,
   };
 }
 
@@ -369,7 +374,10 @@ export async function deploy({
   const changedChannel =
     planned.models !== original.models ||
     planned.name !== original.name ||
-    planned.model_mapping !== original.model_mapping;
+    planned.model_mapping !== original.model_mapping ||
+    planned.test_model !== original.test_model ||
+    Number(planned.priority) !== Number(original.priority) ||
+    Number(planned.weight) !== Number(original.weight);
   const summary = {
     phase,
     apply,
@@ -401,7 +409,13 @@ export async function deploy({
       auth.user_id || 1,
     );
     const actual = readback?.data;
-    if (actual?.models !== planned.models || actual?.name !== planned.name) {
+    if (
+      actual?.models !== planned.models ||
+      actual?.name !== planned.name ||
+      actual?.test_model !== planned.test_model ||
+      Number(actual?.priority) !== Number(planned.priority) ||
+      Number(actual?.weight) !== Number(planned.weight)
+    ) {
       throw new Error("ch48 readback does not match the planned projection");
     }
     return { ...summary, applied: true, ...files };

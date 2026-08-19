@@ -24,6 +24,7 @@ def load(name: str, filename: str):
 
 
 fallback = load("sol_fallback_editor_tests", "remove_omp_default_fallback.py")
+dead_fallback = load("dead_fallback_editor_tests", "remove_omp_dead_fallback.py")
 verifier = load("sol_verifier_tests", "verify_zzzcoding_sol_primary.py")
 monitor = load("sol_monitor_tests", "monitor_sol_semantic.py")
 campaign = load("sol_context_campaign_tests", "campaign_sol_context.py")
@@ -71,6 +72,41 @@ class OmpFallbackEditorTests(unittest.TestCase):
             fallback.remove_exact_default_chain(
                 self.fixture().replace("zg-newapi/k3:high", "zg-newapi/other:high", 1)
             )
+
+
+class DeadFallbackEditorTests(unittest.TestCase):
+    def fixture(self) -> str:
+        return (
+            "retry:\n"
+            "  fallbackChains:\n"
+            "    zg-newapi/agnes-2.5-flash:\n"
+            "      - zg-newapi/agnes-2.0-flash\n"
+            "      - zg-newapi/sensenova-6.7-flash-lite\n"
+            "    vision:\n"
+            "      - zg-newapi/agnes-2.5-flash\n"
+        )
+
+    def test_removes_only_dead_candidate_and_is_idempotent(self):
+        updated, changed = dead_fallback.remove_exact_candidate(self.fixture())
+        self.assertTrue(changed)
+        self.assertNotIn("      - zg-newapi/agnes-2.0-flash\n", updated)
+        self.assertIn("      - zg-newapi/sensenova-6.7-flash-lite\n", updated)
+        self.assertIn("    vision:\n      - zg-newapi/agnes-2.5-flash\n", updated)
+        self.assertEqual(dead_fallback.remove_exact_candidate(updated), (updated, False))
+
+    def test_refuses_to_empty_or_guess_missing_chain(self):
+        only_dead = self.fixture().replace(
+            "      - zg-newapi/sensenova-6.7-flash-lite\n", ""
+        )
+        with self.assertRaisesRegex(RuntimeError, "refusing to empty"):
+            dead_fallback.remove_exact_candidate(only_dead)
+        with self.assertRaisesRegex(RuntimeError, "chain not found"):
+            dead_fallback.remove_exact_candidate("retry:\n  fallbackChains:\n")
+
+    def test_refuses_fallback_mapping_outside_retry(self):
+        misplaced = self.fixture().replace("retry:\n", "other:\n")
+        with self.assertRaisesRegex(RuntimeError, "retry mapping not found"):
+            dead_fallback.remove_exact_candidate(misplaced)
 
 
 class IncrementalSseTests(unittest.TestCase):
@@ -129,6 +165,50 @@ class MonitorStateTests(unittest.TestCase):
             path = Path(temp_dir) / "state.json"
             path.write_text("secret-not-json", encoding="utf-8")
             self.assertEqual(monitor.read_failure_count(path), (0, True))
+
+
+class MonitorClassificationTests(unittest.TestCase):
+    def test_primary_success_is_ok(self):
+        self.assertEqual(
+            monitor.classify_probe_result(
+                status=200,
+                semantic_ok=True,
+                done=True,
+                prompt_tokens=10,
+                completion_tokens=2,
+                channel_id=92,
+                expected_channel_id=92,
+            ),
+            ("primary", None),
+        )
+
+    def test_non_primary_success_is_actionable_route_failure(self):
+        self.assertEqual(
+            monitor.classify_probe_result(
+                status=200,
+                semantic_ok=True,
+                done=True,
+                prompt_tokens=10,
+                completion_tokens=2,
+                channel_id=45,
+                expected_channel_id=92,
+            ),
+            ("non_primary", "primary_not_attributed"),
+        )
+
+    def test_missing_usage_and_attribution_have_stable_categories(self):
+        self.assertEqual(
+            monitor.classify_probe_result(
+                status=200,
+                semantic_ok=True,
+                done=True,
+                prompt_tokens=0,
+                completion_tokens=2,
+                channel_id=None,
+                expected_channel_id=92,
+            ),
+            ("unattributed", "usage_missing"),
+        )
 
 
 class ContextCampaignTests(unittest.TestCase):

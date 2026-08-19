@@ -74,6 +74,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="apply the backed-up live change; default is read-only",
     )
+    parser.add_argument(
+        "--allow-disabled-probe-failures",
+        action="store_true",
+        help=(
+            "apply posture to an already-disabled backup even when its forced "
+            "probe fails; enabled channels still require 2/2 probes"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -205,6 +213,32 @@ def management_probe(
         )
 
 
+def preflight_management_probes(
+    smoke,
+    headers: dict[str, str],
+    state: dict,
+    allow_disabled_probe_failures: bool = False,
+) -> dict[int, list[str]]:
+    """Require 2/2 probes unless a failing channel is already disabled."""
+    failures: dict[int, list[str]] = {}
+    for channel_id in (92, 91):
+        for _ in range(2):
+            try:
+                management_probe(smoke, headers, channel_id)
+            except RuntimeError as error:
+                failures.setdefault(channel_id, []).append(str(error))
+
+        if not failures.get(channel_id):
+            continue
+        status = int(state["channels"][channel_id][1])
+        if not allow_disabled_probe_failures or status == 1:
+            raise RuntimeError(
+                f"ch{channel_id} failed "
+                f"{len(failures[channel_id])}/2 management probes"
+            )
+    return failures
+
+
 def main() -> int:
     args = parse_args()
     smoke = load_smoke()
@@ -230,10 +264,20 @@ def main() -> int:
         "Authorization": f"Bearer {token}",
         "New-Api-User": str(user_id),
     }
-    for channel_id in (92, 91):
-        for _ in range(2):
-            management_probe(smoke, headers, channel_id)
-    print("preflight ok: ch92/ch91 forced management probes 2/2 each")
+    failures = preflight_management_probes(
+        smoke,
+        headers,
+        original,
+        allow_disabled_probe_failures=args.allow_disabled_probe_failures,
+    )
+    if failures:
+        blocked = ",".join(f"ch{channel_id}" for channel_id in sorted(failures))
+        print(
+            "preflight bounded: enabled channels passed 2/2; "
+            f"disabled unhealthy channels remain isolated={blocked}"
+        )
+    else:
+        print("preflight ok: ch92/ch91 forced management probes 2/2 each")
     backup = online_backup(db_path)
     print(f"backup ok: {backup.name} ({backup.stat().st_size} bytes, integrity=ok)")
 
@@ -248,7 +292,9 @@ def main() -> int:
 
         print(f"posture written; waiting {CACHE_SYNC_SECONDS}s for channel cache")
         time.sleep(CACHE_SYNC_SECONDS)
-        management_probe(smoke, headers)
+        for channel_id in (92, 91):
+            if int(original["channels"][channel_id][1]) == 1:
+                management_probe(smoke, headers, channel_id)
         with closing(
             sqlite3.connect(
                 f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=30

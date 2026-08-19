@@ -369,7 +369,7 @@ def validate_fallback_chains(
 
 
 def validate_sota_upgrade_only(config_text: str, models_text: str) -> list[str]:
-    """Keep ``omp-sota-*`` registrations out of ordinary routing and compaction."""
+    """Allow marked SOTA only for advisor; keep fallback/compaction isolated."""
     violations: list[str] = []
     roles = _model_role_entries(config_text)
     chains = _fallback_chain_entries(config_text)
@@ -391,7 +391,7 @@ def validate_sota_upgrade_only(config_text: str, models_text: str) -> list[str]:
 
     for role, selector in roles.items():
         parsed = _parse_selector(_base_selector(selector))
-        if parsed and parsed[1].startswith("omp-sota-"):
+        if parsed and parsed[1].startswith("omp-sota-") and role != "advisor":
             violations.append(f"role {role} routes through SOTA alias {selector}")
     for chain, candidates in chains.items():
         for selector in candidates:
@@ -587,7 +587,10 @@ class OmpRouteGateTests(unittest.TestCase):
     def test_marked_sota_alias_is_upgrade_only_and_keeps_flash_compaction(self):
         config = _config_yml(
             {"default": ["zg-newapi/deepseek-v4-flash"]},
-            roles={"default": "zg-newapi/deepseek-v4-flash:max"},
+            roles={
+                "default": "zg-newapi/deepseek-v4-flash:max",
+                "advisor": "zg-newapi/omp-sota-claude-opus-5:high",
+            },
         )
         models = _models_yml(
             _model_block(

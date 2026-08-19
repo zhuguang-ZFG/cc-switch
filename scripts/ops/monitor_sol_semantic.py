@@ -81,6 +81,39 @@ def append_jsonl(path: Path, value: dict) -> None:
         os.fsync(handle.fileno())
 
 
+def classify_probe_result(
+    *,
+    status: int | None,
+    semantic_ok: bool,
+    done: bool,
+    prompt_tokens: int,
+    completion_tokens: int,
+    channel_id: int | None,
+    expected_channel_id: int,
+) -> tuple[str, str | None]:
+    """Return a redacted route category and actionable failure category."""
+    if channel_id is None:
+        route_category = "unattributed"
+    elif channel_id == expected_channel_id:
+        route_category = "primary"
+    else:
+        route_category = "non_primary"
+
+    if status != 200:
+        return route_category, "http_error"
+    if not semantic_ok:
+        return route_category, "semantic_mismatch"
+    if not done:
+        return route_category, "stream_incomplete"
+    if prompt_tokens <= 0 or completion_tokens <= 0:
+        return route_category, "usage_missing"
+    if channel_id is None:
+        return route_category, "log_attribution_missing"
+    if channel_id != expected_channel_id:
+        return route_category, "primary_not_attributed"
+    return route_category, None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -102,8 +135,11 @@ def main() -> int:
         "timestamp": timestamp,
         "model": "gpt-5.6-sol",
         "expected_channel_id": 92,
+        "route_category": "unattributed",
+        "error_category": "probe_exception",
     }
     ok = False
+    channel_id: int | None = None
     try:
         base = Path(__file__).resolve().parent
         verifier = load_module("sol_monitor_verifier", base / "verify_zzzcoding_sol_primary.py")
@@ -119,14 +155,16 @@ def main() -> int:
         log_row = verifier.latest_log_after(db_path, last_id)
         channel_id = int(log_row[1]) if log_row else None
         log_id = int(log_row[0]) if log_row else None
-        ok = bool(
-            metrics.status == 200
-            and metrics.text == EXPECTED_TEXT
-            and metrics.done
-            and metrics.prompt_tokens > 0
-            and metrics.completion_tokens > 0
-            and channel_id == 92
+        route_category, error_category = classify_probe_result(
+            status=metrics.status,
+            semantic_ok=metrics.text == EXPECTED_TEXT,
+            done=metrics.done,
+            prompt_tokens=metrics.prompt_tokens,
+            completion_tokens=metrics.completion_tokens,
+            channel_id=channel_id,
+            expected_channel_id=92,
         )
+        ok = error_category is None
         record.update(
             {
                 "status": metrics.status,
@@ -140,6 +178,8 @@ def main() -> int:
                 "total_ms": metrics.total_ms,
                 "channel_id": channel_id,
                 "log_id": log_id,
+                "route_category": route_category,
+                "error_category": error_category,
             }
         )
     except Exception as error:
@@ -149,6 +189,7 @@ def main() -> int:
                 "semantic_ok": False,
                 "done": False,
                 "error_type": type(error).__name__,
+                "channel_id": channel_id,
             }
         )
 
