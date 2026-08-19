@@ -126,6 +126,11 @@ mcp:
 
 tools:
   approvalMode: write
+  approval:
+    eval: allow
+    task: allow
+    bash: allow
+    hub: allow
 ```
 
 `mcp.enableProjectConfig=false` prevents a repository-root `.mcp.json` or
@@ -140,8 +145,8 @@ but prompts before execution-tier tools such as shell, browser, evaluation,
 and task tools. A trusted one-off session can override this with
 `--approval-mode yolo`; the safer default remains persistent.
 
-For the trusted local OMP automation workflow, repeated Python `eval` and
-subagent `task` prompts are narrowed with:
+For this trusted local OMP automation workflow, the reviewed unattended tools
+are:
 
 ```yaml
 tools:
@@ -149,14 +154,18 @@ tools:
   approval:
     eval: allow
     task: allow
+    bash: allow
+    hub: allow
 ```
 
-This is preferable to persistent `yolo`: Python notebook-style evaluation and
-subagent dispatch become unattended, while `bash`, browser, and other exec-tier
-tools still require approval. Adding the ESP-IDF Python directory as an extra
-workspace root does not solve the screenshot case because the prompt is caused
-by the `eval` tool's exec tier, not read-path membership. Reset only this
-exception with `omp config reset tools.approval`.
+This is preferable to persistent `yolo`: the explicitly trusted Python,
+subagent, shell, and agent-coordination paths are unattended, while browser,
+`computer`, and unreviewed exec-tier tools still require approval. The `hub`
+exception is separate from `bash`: `hub list`, job inspection, and peer
+messaging are read-tier, but process `start`, `stop`, `restart`, and
+process-targeted `send` are exec-tier and otherwise prompt under `write`.
+Adding a workspace root cannot bypass either approval gate. Reset all per-tool
+exceptions with `omp config reset tools.approval`.
 
 The 2026-08-19 change preserved
 `C:\Users\zhugu\.omp\agent\config.yml.before-eval-task-auto-20260819-005948.bak`
@@ -165,6 +174,16 @@ with SHA-256
 A fresh isolated RPC process (temporary PID 23900) loaded `write` plus the two
 allow entries with zero extension errors. The older interactive PID 16296 was
 not restarted and may retain its in-memory settings until a normal restart.
+
+The later shell and hub additions preserved
+`C:\Users\zhugu\.omp\agent\config.yml.before-hub-auto-20260819-123916.bak`
+(3,741 bytes, SHA-256
+`1C1067DE8C92FE32927EBEE0049C698635EB6A91F351F38283872691B051E3C5`).
+OMP 17.3.7 does not watch external config writes: `omp config set` updates the
+next settings load, while `/reload-plugins` reloads plugins, skills, commands,
+tools, agents, and MCP without reloading the live `Settings` instance. After an
+approval change, verify it in a fresh isolated process and normally restart an
+older interactive session.
 
 OMP `17.3.5` still has upstream limitations that this local setting cannot
 solve:
@@ -195,9 +214,11 @@ The following checks passed after all writes:
 - `omp config get mcp.enableProjectConfig --json`: `false`;
 - read-only effective MCP discovery: 10 entries, zero project sources;
 - `omp config get tools.approvalMode --json`: `write`;
-- `omp config get tools.approval --json`: only `eval=allow` and `task=allow`;
-- isolated RPC settings probe: the persisted `write` plus two-tool allowlist
-  loaded in a fresh process with zero extension errors;
+- `omp config get tools.approval --json`: exactly `eval=allow`, `task=allow`,
+  `bash=allow`, and `hub=allow`;
+- fresh read-only OMP settings and approval resolution: `hub list` (read),
+  `hub start` (exec), and process-targeted `hub send` (exec) all resolved to
+  `policy=allow`, `source=user`, and `policyKey=hub`;
 - live Hermes `sessions.db`: `PRAGMA quick_check = ok`;
 - the pre-existing OMP process remained responsive and was not terminated;
 - repository worktree was clean before this documentation update.
