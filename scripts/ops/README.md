@@ -8,6 +8,7 @@
 - **错误渠道扫描**: 每 5 分钟分批主动探测 402/401/502 等瞬间返回的错误（慢渠道检测无法覆盖）
 - **自动修复**: 慢渠道降权→禁用、错误渠道直接禁用；NewAPI 故障只告警（本地服务自动重启由独立 watchdog 负责）；本地代理的周期性推理探针已禁用（省上游费用），崩溃复活由 proxies-supervisor/watchdog 负责，Telegram `/restart` 手动重启仍可用
 - **权重闭环自愈**: 渠道恢复 → 自动启用 → 加入聚合池 → 仅恢复 weight → 性能监控 → 自动降权/禁用；priority 保留人工策略
+- **固定路由保护**: ch48/ch83/ch91/ch92 不参与动态调权；错误扫描和全量扫描共享真实软失败计数，连续 3 次后隔离，恢复时回到契约 weight
 - **OMP 角色观测**: 每 20 分钟主动探测角色端点并报警；Guardian 不自动修改 OMP `modelRoles`，避免覆盖人工路由策略
 - **Telegram 报警**: 实时报警、每日健康报告、余额趋势预警
 - **指标导出**: JSON metrics 文件，可与其他监控系统集成
@@ -30,6 +31,7 @@
 渠道故障
   ├─ 慢渠道: 3 个不同 test_time 均 > 60s，主动复测失败后降权
   ├─ 全量扫描软错误: 连续 3 次失败后降权
+  ├─ 固定路由软错误: 错误扫描/全量扫描合计 3 次后直接隔离，不漂移 weight
   ├─ 硬错误: 402/401/502 + 关键词匹配后直接禁用
   └─ 禁用后
        ├─ 至少等待 5 分钟冷却，并按失败次数指数退避
@@ -62,9 +64,24 @@
 - 余额不足 / INSUFFICIENT_BALANCE / credit balance / quota
 - 402 / 401 / invalid
 
+ch48/ch83/ch91/ch92 是显式固定路由。每批最多测试 2 个固定路由，并至少为普通渠道保留
+3 个槽位。ch48/ch91/ch92 使用流式 Responses 管理探针；429 和探针形态不兼容不计入
+软失败。固定路由成功、被禁用或身份指纹变化时清除计数。渠道 PUT 必须从本地只读
+SQLite SSOT 回填未掩码 key，并同时校验 `id + name`；无法验证时拒绝写入。
+
 ## NewAPI smoke 管理会话
 
-`newapi-local-smoke.py` 复用 `.admin-token-cache.json` 中的管理令牌，避免定时任务反复创建持久化 session 并触发 `AUTH_SESSION_LIMIT`。缓存校验仅在 HTTP 401 时重新登录；HTTP 403 表示权限问题，429/5xx/网络错误表示瞬态故障，这些响应均保留缓存并使本轮 smoke 失败。
+`newapi-local-smoke.py` reuses `.admin-token-cache.json` to avoid scheduled
+session churn and `AUTH_SESSION_LIMIT`. Authentication order is cached token,
+then Guardian's long-lived `newapi_token`, then password login only when no
+Guardian token is configured. A cached 401/403 is discarded; 403 falls through
+to the Guardian token. 429/5xx/network errors keep the cache and fail the
+current run. A configured Guardian token returning 401 fails closed without a
+password login.
+
+真实语义 smoke 只有在某模型的所有声明渠道均不可路由，且每个禁用都能归因给
+Guardian、NewAPI auto-ban 或显式隔离策略时才输出 `SKIP`。未知禁用、没有声明路由、
+仍启用但 weight 为 0 等状态继续失败；`SKIP` 只证明隔离/fallback 姿态正确，不证明上游恢复。
 
 ## NewAPI 侧配置
 
@@ -80,7 +97,7 @@ Guardian 依赖以下 NewAPI 设置（已通过 API 配置）：
 | `ChannelDisableThreshold` | `90` | NewAPI 自动测试的慢响应阈值（秒），不是连续失败次数 |
 | `RetryTimes` | `1` | NewAPI 内层最多重试一次，避免与 OMP fallback 叠乘 |
 
-本机关闭 NewAPI 内置定时渠道测试以控制探测成本，因此 Guardian 每轮会把 `status=3 && auto_ban=1` 的渠道同步到自身恢复队列。同步不立即启用：先等待至少 5 分钟，再执行 3 次探测、至少 2 次通过、恢复权重和 10 分钟稳定性回滚。手工 `status=2`、`auto_ban=0` 以及明确隔离的 2/62/63/64/65 不进入自动恢复。
+本机关闭 NewAPI 内置定时渠道测试以控制探测成本，因此 Guardian 每轮会把 `status=3 && auto_ban=1` 的渠道同步到自身恢复队列。同步不立即启用：先等待至少 5 分钟，再执行 3 次探测、至少 2 次通过、恢复权重和 10 分钟稳定性回滚。手工 `status=2`、`auto_ban=0` 以及 `AUTO_BAN_RECOVERY_EXCLUSIONS` 中的明确隔离渠道不进入自动恢复；Guardian 会持续执行 status/weight 双锁。
 
 计划任务 `CCSwitch-NewAPI-DX-Ops` 每轮运行 `newapi-local-smoke.py`。`newapi-smoke-alert.py` 在首次失败和失败后的首次恢复时发送一次 Telegram 告警；投递失败不落状态，下一轮继续尝试，避免“任务一直红但无人知道”。容量门禁只计算 `status=1 && weight>0` 的真实可路由渠道。
 
@@ -164,6 +181,9 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 | `~/.omp/guardian/heartbeat.json` | 心跳（Guardian.run() 每轮原子写 ts+pid） |
 | `~/.omp/guardian/guardian.log` | 日志（RotatingFileHandler, 5MB × 5） |
 | `~/.omp/guardian/state.json` | 状态（禁用/降权/加入/权重历史） |
+| `repair_guardian_channel_state.py` | Guardian 停止时清理指定渠道的旧恢复元数据；默认 dry-run，apply 前双备份并原子回滚 |
+| `repair_muse_channel_posture.py` | 只修复 ch48 p51/w12 channel/ability 姿态，保留 status；启用时要求两次 Responses、512-token 语义/usage 与日志归属探针，并拒绝 incomplete 响应 |
+| `quarantine_newapi_channels.py` | 显式渠道 status=2/weight=0 双锁；创建脱敏摘要和完整性校验 DB 快照，失败恢复原姿态 |
 | `~/.omp/guardian/metrics.json` | 指标导出 |
 | 计划任务 `NewAPI Guardian` | Guardian 唯一规范启动/恢复入口 |
 | 计划任务 `NewAPI Guardian Watchdog` | 登录触发，单实例常驻；自身失败最多重启 3 次、间隔 1 分钟；电池供电不停止 |
@@ -188,8 +208,8 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 - runinfra qwen3-8-27b 渠道脚本：`scripts/ops/add_runinfra_qwen_channel.py`（ch88；上游硬拒 `prompt_cache_key`，已配 param_override delete 剥离，runbook 见 `docs/ops/runinfra-qwen-via-newapi-2026-08-16.md`；PUT 渠道会清 key 的坑见该文档）
 - seeseed1ck hydrogel 渠道脚本：`scripts/ops/add_seeseed_hydrogel_channel.py`（ch89；GLM-5.3/grok-4.6/grok-chat-fast/mimo-v2.5，仅收录直连实测存活模型；param_override 删 `enable_thinking`——GLM-5.3 强制思考拒 `enable_thinking:false`，runbook 见 `docs/ops/seeseed-hydrogel-channel-2026-08-16.md`）
 - t1qq sol 兜底渠道脚本：`scripts/ops/add_t1qq_sol_channel.py`（ch90，双 key 轮询，priority 20 垫底；fork 多 key 三连坑——`multi_to_single` 创建仍不落 `is_multi_key`、PUT 会整体重生成 channel_info 冲掉 DB 修复、可用配方=完整 BLOB 直写+等 60s 缓存同步，runbook 见 `docs/ops/t1qq-sol-channel-2026-08-16.md`）
-- Sol 主备：ch92 `zzzcoding-gpt-5.6-sol` 为 p60/w15 主力，ch91 `jianzhile-gpt-5.6-sol` 为 p55/w5 严格第二，ch83 `muyuan-sol` 保留 p50/w5 及原状态。`scripts/ops/update_zzzcoding_sol_primary.py [--apply]` 默认 dry-run，以完整性校验快照、原子 channel/abilities 双写、75 秒缓存等待和失败回滚执行切换；`scripts/ops/verify_zzzcoding_sol_primary.py` 连续验证 ch92 Responses 探针、聚合 SSE 语义与 `channel_id=92` 日志归属。两条主备上游都按 channel-local policy 将 OMP Chat 转为 Responses，Guardian 使用 `endpoint_type=openai-response&stream=true`；zzzcoding 另需 `parallel_tool_calls=false`。runbook 见 `docs/ops/zzzcoding-gpt56sol-primary-2026-08-17.md`，ch91 历史见 `docs/ops/jianzhile-gpt56sol-channel-2026-08-17.md`。
-- Sol 硬化工具：`remove_omp_default_fallback.py [--apply]` 只删除当前默认 selector 的精确 fallback；`drill_sol_failover.py [--preflight|--apply]` 在 `finally` 恢复 ch92 状态和三层姿态；`rollout_agentrouter_sol.py [--apply]` 仅在两次管理探针和 OMP 精确语义通过后启用 ch45；`monitor_sol_semantic.py` + `register-sol-semantic-monitor-task.ps1` 提供 30 分钟、`IgnoreNew`、无自动修复的 TTFT/语义监控；`campaign_sol_context.py --run` 以服务端 `prompt_tokens` 执行 200k/280k/340k/380k/396k 阶梯、约 +/-8k 边界二分和两个工具形态点。所有变更工具默认 dry-run，大上下文工具还要求显式 `--run`。
+- Sol 配置顺序：ch92 `zzzcoding-gpt-5.6-sol` p60/w15、ch91 `jianzhile-gpt-5.6-sol` p55/w5、ch83 `muyuan-sol` p50/w5、ch45 `agentrouter` p40/w5。2026-08-20 当前 ch83/ch91/ch92 均因真实探针失败保持 `status=2`，只有 ch45 在服务；这里的 p60/p55/p50 是恢复后的顺序，不代表当前可用。`update_zzzcoding_sol_primary.py --allow-disabled-probe-failures --apply` 仅允许已禁用渠道在探针失败时修复 priority/weight，绝不豁免启用渠道，也不改变 status。
+- Sol 硬化工具：`remove_omp_default_fallback.py [--apply]` 只删除当前默认 selector 的精确 fallback；`remove_omp_dead_fallback.py [--apply]` 只从 Agnes Flash 链删除已知不可解析候选；`drill_sol_failover.py [--preflight|--apply]` 在 `finally` 恢复 ch92 状态和三层姿态；`rollout_agentrouter_sol.py [--apply]` 仅在两次管理探针和 OMP 精确语义通过后启用 ch45；`monitor_sol_semantic.py` + `register-sol-semantic-monitor-task.ps1` 提供 30 分钟、`IgnoreNew`、无自动修复的 TTFT/语义监控；`campaign_sol_context.py --run` 以服务端 `prompt_tokens` 执行 200k/280k/340k/380k/396k 阶梯、约 +/-8k 边界二分和两个工具形态点。所有变更工具默认 dry-run，大上下文工具还要求显式 `--run`。
 
 ## sol 链劣化与亲和迁移（2026-08-16/17）
 
@@ -218,6 +238,15 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 - NewAPI 源码: https://github.com/QuantumNous/new-api
 - NewAPI Channel.Update() → UpdateAbilities(nil): abilities 表自动同步证据
 - OpenClaw WatchDog: https://clawhub.ai/abdullah4ai/openclaw-watchdog
+
+### NewAPI smoke auth contract
+
+`newapi-local-smoke.py` authenticates with the session cache first, then the
+long-lived Guardian `newapi_token` from `~/.omp/guardian/secrets.json`. A
+configured Guardian token that returns 401 fails closed; the smoke does not
+fall back to password login and create another server session. Password login
+is used only when no Guardian token is configured, which prevents scheduled
+runs from exhausting NewAPI's `AUTH_SESSION_LIMIT`.
 
 ## Untrusted provider conformance canary
 
@@ -324,6 +353,13 @@ terminal reviews may schedule one recursion-suppressed continuation. It never
 switches the main model and never enters ordinary fallback or compaction
 routing. `/sota-status` reports only bounded operational state.
 
+Automatic SOTA calls also consult `~/.omp/agent/sota-workload-health.json`.
+Two timeout-class child executions since the last success block further
+automatic reviews for that selector; an explicit `/sota*` command may perform
+one deliberate retry. A successful child clears the breaker. The marked SOTA
+selector may be assigned only to `modelRoles.advisor`; it remains forbidden for
+default/task/slow roles, fallback chains, and compaction.
+
 For the `hutuji` workspace, the same extension compares Git object hashes at
 turn start and terminal settle, then merges successful OMP `edit`/`write`
 paths so external firmware mutations remain visible. It classifies only files
@@ -348,8 +384,10 @@ NewAPI aliases are managed by
 `add_omp_sota_model.mjs [--apply]`, and the independent production extension
 is deployed with `deploy-omp-sota-escalation.ps1`. See
 `docs/ops/omp-sota-escalation-layer.md` for the complete contract and rollback.
-`probe_omp_sota_alias.py [--run] [--readiness-path PATH]` is the opt-in,
-eight-token semantic and log-attribution check; without `--channel-id` it
+`probe_omp_sota_alias.py [--run] [--readiness-path PATH]` is the opt-in
+capability check. It requires an exact eight-token semantic response, a second
+forced `report_review` tool call with exact bounded arguments, and fresh log
+attribution for both requests; without `--channel-id` it
 prefers a dedicated `omp-sota-*` NewAPI channel over shared Opus pools. To
 create or refresh that isolated single-key channel, run
 `create-omp-sota-channel-secure.ps1`; it prompts locally, creates an online

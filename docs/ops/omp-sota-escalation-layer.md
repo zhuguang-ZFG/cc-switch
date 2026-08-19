@@ -3,8 +3,10 @@
 ## Purpose
 
 OMP uses SOTA models as a bounded upgrade layer for complex or risky work. It
-does not make a SOTA model the default, does not add one to ordinary fallback
-chains, and does not use one for background compaction.
+does not make a SOTA model the default/task/slow model, does not add one to
+ordinary fallback chains, and does not use one for background compaction. A
+marked selector may be assigned to the dedicated `advisor` role; no other role
+may route through `omp-sota-*`.
 
 The routing identity is always:
 
@@ -59,6 +61,15 @@ atomically when `--readiness-path` is supplied. Only a fresh `ready` entry is
 selectable; HTTP, semantic, or NewAPI attribution failure writes
 `unavailable`. The file stores only selector, status, reason, check time,
 channel id, and TTL.
+
+Automatic child execution has a second, workload-shaped health boundary in
+`~/.omp/agent/sota-workload-health.json`. A child killed near the three-minute
+deadline increments `consecutiveTimeouts`; two timeout-class executions since
+the last success mark that selector `automaticBlocked`. High-risk, complexity,
+and rescue triggers then fail closed without another child. An explicit
+`/sota*` command may perform one deliberate retry through the breaker, and a
+successful child resets the count. The file contains only selector health,
+bounded result class, count, and timestamp.
 
 `/sota-status` reports the extension revision, trigger, attempts, successes,
 failures, target, cooldowns, and candidate readiness without prompts, URLs,
@@ -200,17 +211,19 @@ python -m unittest scripts.ops.test_add_omp_sota_newapi_alias scripts.ops.test_o
 pnpm typecheck
 ```
 
-The explicit semantic probe is billable and therefore requires `--run`:
+The explicit capability probe is billable and therefore requires `--run`:
 
 ```powershell
 python scripts/ops/probe_omp_sota_alias.py
 python scripts/ops/probe_omp_sota_alias.py --run --readiness-path $env:USERPROFILE\.omp\agent\sota-readiness.json
 ```
 
-It requests only eight output tokens and requires both exact semantic output
-and a fresh NewAPI log row attributed to the marked model and expected channel.
-Failure updates readiness to `unavailable`, preventing repeated child calls to
-a known-broken route.
+It first requests an eight-token exact semantic marker, then sends a second
+64-token bounded request that must call `report_review` exactly once with the
+expected schema and arguments. Both requests require fresh NewAPI log rows
+attributed to the marked model and expected channel. Failure updates readiness
+to `unavailable`, preventing repeated child calls to a route that answers cheap
+text but cannot perform the real review tool shape.
 
 Install the bounded Windows refresh after the isolated channel passes its first
 manual probe:
@@ -225,6 +238,11 @@ four-minute execution cap. It management-tests only the dedicated
 marks readiness unavailable and disables that channel; it never mutates ch75.
 
 ## Live evidence (2026-08-19)
+
+Current note (2026-08-20): ch93 is disabled by NewAPI auto-ban after current
+workload health regressed. This is unrelated to the Muse ch48 repair. Leave it
+disabled until both the semantic and forced review-tool probes pass; do not use
+its historical HTTP 200 evidence as current readiness.
 
 - The dedicated single-key `omp-sota-sotamodel` channel is ch93, with the
   marked alias mapped to `claude-opus-5`. After upstream quota recovery, direct

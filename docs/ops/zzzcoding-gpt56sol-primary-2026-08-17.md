@@ -8,6 +8,12 @@ strict direct backup at priority 55 / weight 5. ch83 `muyuan-sol` retains
 priority 50 / weight 5 and its existing status. Each channel and its ability
 rows use the same posture.
 
+These tiers describe recovery order, not unconditional availability. As of
+2026-08-20, ch83/ch91/ch92 are all `status=2` after current protocol-shaped
+probes failed; ch45 `agentrouter` remains enabled at p40/w5. Do not enable a
+dedicated Sol tier to satisfy a route-count check. Guardian owns bounded
+recovery and will restore the fixed weight only after successful probes.
+
 The API key is stored only in NewAPI. Do not place it in repository files,
 command arguments, logs, or runbooks.
 
@@ -30,6 +36,7 @@ command arguments, logs, or runbooks.
 ```powershell
 python3 scripts/ops/update_zzzcoding_sol_primary.py
 python3 scripts/ops/update_zzzcoding_sol_primary.py --apply
+python3 scripts/ops/update_zzzcoding_sol_primary.py --allow-disabled-probe-failures --apply
 python3 scripts/ops/verify_zzzcoding_sol_primary.py
 python3 scripts/ops/newapi-local-smoke.py
 ```
@@ -39,6 +46,12 @@ exact ch91/ch92 identities and BLOB `channel_info`, creates an online SQLite
 snapshot with `PRAGMA integrity_check`, atomically changes only channel and
 ability priority/weight, preserves status and secrets, waits 75 seconds for
 the NewAPI cache, and restores all three tiers on any failure.
+
+The `--allow-disabled-probe-failures` exception is deliberately narrow: it may
+repair priority/weight for an already-disabled ch91/ch92 while preserving that
+disabled status. Every enabled channel still requires two successful forced
+management probes, and post-write probes run for enabled channels only. The
+flag is not permission to enable an unhealthy route.
 
 Rollback artifacts retained under `~/.new-api-local/backups/`:
 
@@ -135,6 +148,54 @@ three ability rows at p50 instead of p55, plus an unrelated live
 `gpt-5.6-luna` 403. Repository/route/Guardian tests remained 249/249 green;
 the retained ch45 snapshot was 80,527,360 bytes and passed
 `PRAGMA integrity_check`.
+
+## Fixed-tier quarantine follow-up (2026-08-20)
+
+The earlier pending p55 posture was later applied while the route remained
+disabled. Current channel/ability posture is:
+
+| Channel | Status | Priority / weight | Owner/evidence |
+| --- | ---: | ---: | --- |
+| ch92 zzzcoding | 2 | 60 / 15 | fixed tier, current probe unhealthy |
+| ch91 jianzhile | 2 | 55 / 5 | fixed tier, current probe unhealthy |
+| ch83 muyuan | 2 | 50 / 5 | fixed tier, current probe unhealthy |
+| ch45 agentrouter | 1 | 40 / 5 | serving independent fallback |
+
+Guardian no longer dynamically reweights ch83/ch91/ch92. Error and full scans
+share a three-soft-failure threshold; successful, disabled, or identity-changed
+channels clear the in-memory streak. ch91/ch92 use streaming Responses
+management probes. Recovery restores the exact configured weight instead of a
+stale historical or pool-balanced value.
+
+The live NewAPI smoke now accepts a real-model `SKIP` only when every declared
+route is disabled and attributed to Guardian, NewAPI auto-ban, or explicit
+policy. Unknown disables, zero-weight enabled channels, and missing route
+declarations remain failures. The 2026-08-20 smoke passed SenseNova with HTTP
+200 and skipped Muse because its only declared route, ch48, was attributed
+disabled. That result says nothing about the three Sol upstreams and must not
+be used to re-enable them.
+
+### Monitor/auth follow-up (2026-08-20 01:38-01:47 CST)
+
+The scheduled smoke now reuses Guardian's existing long-lived NewAPI admin
+token after the session cache, so the missing-cache path no longer creates a
+password session on every run. A configured Guardian token is fail-closed on
+401; it is never rotated or printed. The repository smoke read the management
+API through this path, passed all policy checks, and finished with
+`summary: ALL OK`; SenseNova returned HTTP 200 and Muse was explicitly skipped for its fully
+attributed disabled route.
+
+The updated monitor runtime was deployed with verified backups under
+`~/.omp/guardian/task-backups/smoke-auth-20260820-014127/` and
+`~/.omp/guardian/task-backups/smoke-monitor-classification-20260820-014710/`.
+The monitor remains read-only. A temporary-output validation request returned
+HTTP 200, exact semantic text, positive usage, `[DONE]`, and `channel_id=45`;
+it was classified as `route_category=non_primary` and
+`error_category=primary_not_attributed`, with `alert=false` for the first
+failure. This is evidence that ch45 is serving as the independent fallback
+while ch92 is unavailable, not evidence that ch92 recovered. The production
+monitor's historical state and `LastTaskResult=1` were intentionally retained
+and no channel was re-enabled.
 
 ## Hermes background K3 diagnosis and Agnes cutover (2026-08-17 21:31-21:43 CST)
 
