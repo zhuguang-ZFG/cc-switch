@@ -254,7 +254,7 @@ AFFINITY_REQUIRED_MODELS: dict[str, tuple[str, ...]] = {
 # NewAPI channel PUT rebuilds abilities and can reset model-level routing
 # posture. These rows are the deliberate pool/diagnostic selectors.
 CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
-    (48, "gpt-5.6-luna"): (51, 20),
+    (48, "gpt-5.6-luna"): (51, 12),
     (45, "gpt-5.6-sol"): (40, 5),
     (45, "zg-gpt-5.6-sol"): (40, 5),
     (45, "zg-agent-gpt-5.6-sol"): (40, 5),

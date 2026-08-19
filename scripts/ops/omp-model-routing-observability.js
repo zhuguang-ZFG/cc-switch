@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-export const EXTENSION_REVISION = "2026.08.19-routing-r4";
+export const EXTENSION_REVISION = "2026.08.19-routing-r5";
 export const ROUTING_LOG_FILENAME = "omp-model-routing.jsonl";
 export const ROUTING_LOG_MAX_BYTES = 2 * 1024 * 1024;
 export const ROUTING_LOG_MAX_RECORDS = 200;
@@ -438,7 +438,7 @@ export function acquireCanaryLease(path, now = Date.now()) {
   return release;
 }
 
-export function buildCanaryArgs(selector, noncePath, probePath) {
+export function buildCanaryArgs(selector, noncePath, probePath, configPath) {
   const safe = safeSelector(selector);
   if (!safe) throw new Error("invalid-canary-selector");
   return [
@@ -450,6 +450,8 @@ export function buildCanaryArgs(selector, noncePath, probePath) {
     "--no-extensions",
     "-e",
     probePath,
+    "--config",
+    configPath,
     "--no-skills",
     "--no-title",
     "--max-time",
@@ -486,9 +488,15 @@ export async function runModelToolCanary(pi, selector, options) {
   const token = randomBytes(8).toString("hex");
   const noncePath = join(root, `omp-model-tool-canary-${token}.txt`);
   const resultPath = `${noncePath}.result.json`;
-  writeFileSync(noncePath, `${nonce}\n`, "utf8");
+  const configPath = `${noncePath}.config.yml`;
   try {
-    const result = await pi.exec("omp", buildCanaryArgs(safe, noncePath, probePath), {
+    writeFileSync(noncePath, `${nonce}\n`, "utf8");
+    writeFileSync(
+      configPath,
+      "retry:\n  maxRetries: 0\n  modelFallback: false\n",
+      { encoding: "utf8", flag: "wx" },
+    );
+    const result = await pi.exec("omp", buildCanaryArgs(safe, noncePath, probePath, configPath), {
       cwd: options.cwd,
       timeout: options.timeoutMs ?? 130_000,
     });
@@ -530,7 +538,7 @@ export async function runModelToolCanary(pi, selector, options) {
       gatewayAttribution: "missing",
     };
   } finally {
-    for (const path of [noncePath, resultPath]) {
+    for (const path of [noncePath, resultPath, configPath]) {
       try {
         unlinkSync(path);
       } catch {}

@@ -674,7 +674,7 @@ class AdminAuthTests(unittest.TestCase):
 
         rows = [row for row in rows if row[:2] != (45, "gpt-5.6-sol")]
         rows = [
-            (48, "gpt-5.6-luna", 1, 50, 20)
+            (48, "gpt-5.6-luna", 1, 50, 12)
             if row[:2] == (48, "gpt-5.6-luna")
             else row
             for row in rows
@@ -682,8 +682,8 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual(
             smoke.critical_ability_posture_violations(rows),
             [
-                "48:gpt-5.6-luna=expected:enabled=1,priority=51,weight=20;"
-                "actual=[(1, 50, 20)]",
+                "48:gpt-5.6-luna=expected:enabled=1,priority=51,weight=12;"
+                "actual=[(1, 50, 12)]",
                 "45:gpt-5.6-sol=missing",
             ],
         )

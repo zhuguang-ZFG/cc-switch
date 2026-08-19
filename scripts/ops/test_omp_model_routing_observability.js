@@ -170,10 +170,17 @@ test("real-tool canary requires child, probe, tool-result, and final nonce proof
     const probePath = join(root, "probe.js");
     writeFileSync(probePath, "export default function() {}\n");
     let observedArgs;
+    let observedConfigPath;
     const pi = {
       async exec(command, args) {
         assert.equal(command, "omp");
         observedArgs = args;
+        observedConfigPath = args[args.indexOf("--config") + 1];
+        assert.equal(existsSync(observedConfigPath), true);
+        assert.equal(
+          readFileSync(observedConfigPath, "utf8"),
+          "retry:\n  maxRetries: 0\n  modelFallback: false\n",
+        );
         const prefix = "Use the read tool to read exactly this file: ";
         const noncePath = args[1].split("\n")[0].slice(prefix.length);
         const nonce = readFileSync(noncePath, "utf8").trim();
@@ -195,9 +202,38 @@ test("real-tool canary requires child, probe, tool-result, and final nonce proof
     assert.equal(summary.result, "success");
     assert.equal(summary.gatewayAttribution, "channel-id");
     assert.equal(observedArgs.includes("--no-extensions"), true);
+    assert.equal(observedArgs.includes("--config"), true);
+    assert.equal(existsSync(observedConfigPath), false);
     assert.deepEqual(observedArgs.slice(observedArgs.indexOf("--tools"), observedArgs.indexOf("--tools") + 2), ["--tools", "read"]);
-    assert.doesNotThrow(() => buildCanaryArgs("p/m", join(root, "nonce"), probePath));
+    assert.doesNotThrow(() =>
+      buildCanaryArgs("p/m", join(root, "nonce"), probePath, join(root, "config.yml")),
+    );
     assert.match(formatCanaryStatus({ selectors: { "p/m:max": summary } }, ["p/m:max"]), /gateway=channel-id/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("real-tool canary removes its no-fallback overlay after child failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-canary-failure-"));
+  try {
+    const probePath = join(root, "probe.js");
+    writeFileSync(probePath, "export default function() {}\n");
+    let configPath;
+    const summary = await runModelToolCanary(
+      {
+        async exec(_command, args) {
+          configPath = args[args.indexOf("--config") + 1];
+          assert.match(readFileSync(configPath, "utf8"), /modelFallback: false/);
+          throw new Error("simulated child launch failure");
+        },
+      },
+      "p/m",
+      { root, probePath, cwd: root },
+    );
+    assert.equal(summary.result, "failed");
+    assert.equal(summary.failureClass, "local-exec-failed");
+    assert.equal(existsSync(configPath), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

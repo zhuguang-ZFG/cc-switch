@@ -94,6 +94,12 @@ is enabled. The model must read an unpredictable nonce file and return the
 exact nonce. The probe independently observes the structured tool arguments,
 tool result, final assistant text, and provider response metadata.
 
+The child also receives an ephemeral `--config` overlay setting
+`retry.maxRetries: 0` and `retry.modelFallback: false`. The overlay is removed
+with the nonce and result files in every terminal path. This is an attribution
+boundary: a fallback model completing the nonce must not be recorded as success
+for the requested selector.
+
 State contains only result class, timing, selector, a hashed request ID, and a
 numeric channel ID when the gateway exposes one. A request-ID hash is an
 attribution anchor, not proof of a specific NewAPI channel; unavailable channel
@@ -200,34 +206,41 @@ The orchestration-hardening deployment produced this verified pair:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| routing r4 | `C107F75E103D3C5FDAEA592E74860B3B400CA9466B3B35EDF18F0928FAF32F3C` |
+| routing r5 | `F25A53622C6CC973EBBEB948C2FFE53260436EF9F684E831BCC835F2DEFD64A0` |
 | explicit canary probe r1 | `259FF0F22CEC6EC9D84C5A3CDEC08C50D63C3B32FFDE79ADB8A1F98824701A62` |
 
 The manifest and rollback artifacts are under:
 
 ```text
-C:\Users\zhugu\.omp\agent\extension-backups\omp-model-routing-observability-20260819-140509-25072
+C:\Users\zhugu\.omp\agent\extension-backups\omp-model-routing-observability-20260819-160019-27604
 ```
 
-The manifest records `restartPerformed=false`, a matching source/live hash for
-both artifacts, and `legacyProbeRemoved=true`. The legacy probe copy is retained
-as `legacy-discovered-probe.js`; the live top-level copy is absent, so ambient
-extension discovery cannot load it. Fresh isolated RPC PID 14536 registered
+The manifest records `restartPerformed=false`, matching source/live hashes for
+both artifacts, and `legacyProbeRemoved=false` because the legacy top-level
+probe was already absent. Ambient extension discovery therefore cannot load
+the probe. The earlier isolated RPC PID 14536 registered
 `/model-routing-status`, `/model-tool-canary`, `/model-tool-canary-status`, and
 `/agent-watchdog-status`, with zero missing commands and zero extension-load
 errors, then exited normally.
 
-Live model evidence did not pass on this deployment window. The exact effective
-task selector `zg-newapi/gpt-5.6-luna:max` failed after 130,033 ms with
-`failureClass=timeout`; the effective smol selector
-`zg-newapi/claude-haiku-4-5` failed after 130,026 ms with the same class. Neither
-run produced tool/nonce proof, a request-ID hash, or a numeric channel header.
-No retry was issued and no canary child remained. Treat the model path as
-unverified until a later bounded canary succeeds; do not infer a NewAPI channel
-from the configured model name.
+The first live window timed out on Luna and Haiku. Later Muse runs appeared to
+pass in 24,917 ms and 15,688 ms, but investigation showed the Canary inherited
+global model fallback: Muse's failure was followed by another model completing
+the nonce. Those records are historical false positives and are not target
+model evidence.
+
+Revision r5 disables retries and model fallback in every Canary child. With the
+corrected contract, Luna failed in 10,191 ms, Haiku genuinely completed the
+native read in 85,013 ms, and staged
+`zg-newapi/muse-spark-1.2-contributor:max` failed in 4,908 ms. Direct Muse
+Responses requests had returned HTTP 403 `DataPolicyError`; explicit user
+consent did not activate the OpenCode account. The staged route was therefore
+rolled back and production remains Luna-only. See
+`docs/ops/opencode-go-muse-cutover-2026-08-19.md` for the guarded cutover and
+rollback hashes.
 
 Pre-existing interactive PID 13308 remained responsive and was not restarted or
-reloaded, so it does not yet prove the r4 runtime behavior. The following older
+reloaded, so it does not yet prove the r5 runtime behavior. The following older
 routing/compaction/SOTA deployment evidence remains historical context.
 
 The final repository and production extension hashes matched:
@@ -268,4 +281,8 @@ addresses [Issue #6032](https://github.com/can1357/oh-my-pi/issues/6032)
 (peer wait deadlocks), [Issue #8711](https://github.com/can1357/oh-my-pi/issues/8711)
 and [Issue #8956](https://github.com/can1357/oh-my-pi/issues/8956) (stale
 background/search jobs), and [Issue #7954](https://github.com/can1357/oh-my-pi/issues/7954)
-(custom-model tool dialect inference).
+(custom-model tool dialect inference), and
+[Issue #8957](https://github.com/can1357/oh-my-pi/issues/8957) (Muse on the
+wrong Chat Completions dialect), and OpenCode
+[Issue #43379](https://github.com/anomalyco/opencode/issues/43379) (Muse Chat
+streams closing without `finish_reason`).

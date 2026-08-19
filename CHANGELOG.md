@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **OpenCode Go Muse contributor guarded cutover (2026-08-19)**: added a transactional `muse-spark-1.2-contributor` stage/finalize/rollback tool with a model-level Responses API override and explicit contributor data-policy gate. Fixed the native-read Canary so every probe runs with retries and model fallback disabled; this exposed the earlier Muse success as a fallback false positive. Finalize now refuses to mutate anything without a fresh revision-r5 proof for the exact contributor selector. The target Muse route still returns the account-level DataPolicy rejection, so production was restored to Luna-only. See `docs/ops/opencode-go-muse-cutover-2026-08-19.md`.
+
 - **OMP agent orchestration hardening (2026-08-19)**: added dynamic real-tool canaries for the effective default/task/smol and marked SOTA selectors, a Main-only coordination contract that removes blocking peer dependencies, and a public-API task watchdog for stalled web search, progress, and runtime. Canary and watchdog records are redacted; the routing/probe extension pair deploys transactionally with verified rollback. See `docs/ops/omp-model-routing-observability.md`.
 
 - **OMP hutuji 项目感知路由与门禁（2026-08-18）**: `hutuji-worker` 与旧 `dsv4pro-worker` 兼容入口统一改走 `@task`，当前自动解析至 Luna，后续切换 task 角色无需再改 agent 文件；SOTA 扩展新增 hutuji 高风险路径识别，并以回合开始/结束 `git hash-object` 快照加成功的外部固件 `edit/write` 路径只审查本轮真实改动，避免长期脏树重复触发 Opus；每轮自动选择 `docs`/`hub`/`full` 门禁并显示计划，外部 Grbl 变更缺 `GRBL_ROOT` 时 fail-closed，不后台执行硬件、部署或生产命令。详见 `docs/ops/omp-sota-escalation-layer.md`。
