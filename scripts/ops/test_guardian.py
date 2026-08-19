@@ -1,11 +1,13 @@
 import os
 import sys
 import json
+import sqlite3
 import time
 import socket
 import tempfile
 import logging
 import unittest
+from contextlib import closing
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, Mock, patch
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -61,6 +63,142 @@ class FakeTelegram:
         return True
 
 
+class NewAPIClientUpdateTests(unittest.TestCase):
+    def test_update_channel_hydrates_masked_key_from_local_ssot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'gorouter', 'fixture-real-key')"
+                )
+                connection.commit()
+
+            client = guardian.NewAPIClient("http://127.0.0.1:3002", "token", "1")
+            with patch.object(guardian, "NEWAPI_DB", database):
+                with patch.object(
+                    client,
+                    "_request",
+                    return_value={"success": True},
+                ) as request:
+                    self.assertTrue(
+                        client.update_channel(
+                            {
+                                "id": 57,
+                                "name": "gorouter",
+                                "key": "sk-***masked***",
+                                "status": 2,
+                                "weight": 0,
+                            }
+                        )
+                    )
+
+            payload = request.call_args.args[2]
+            self.assertEqual(payload["key"], "fixture-real-key")
+            self.assertNotIn("status", payload)
+
+    def test_update_channel_fails_closed_when_masked_key_cannot_be_hydrated(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = guardian.NewAPIClient("http://127.0.0.1:3002", "token", "1")
+            with patch.object(
+                guardian, "NEWAPI_DB", Path(temp_dir) / "missing.db"
+            ):
+                with patch.object(client, "_request") as request:
+                    self.assertFalse(
+                        client.update_channel(
+                            {
+                                "id": 57,
+                                "key": "sk-***masked***",
+                                "weight": 0,
+                            }
+                        )
+                    )
+            request.assert_not_called()
+
+    def test_update_channel_rejects_reused_channel_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'replacement', 'fixture-real-key')"
+                )
+                connection.commit()
+
+            client = guardian.NewAPIClient("http://127.0.0.1:3002", "token", "1")
+            with patch.object(guardian, "NEWAPI_DB", database):
+                with patch.object(client, "_request") as request:
+                    self.assertFalse(
+                        client.update_channel(
+                            {
+                                "id": 57,
+                                "name": "stale-channel",
+                                "key": "sk-***masked***",
+                                "weight": 0,
+                            }
+                        )
+                    )
+            request.assert_not_called()
+
+    def test_update_channel_checks_identity_even_when_key_is_unmasked(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'replacement', 'current-key')"
+                )
+                connection.commit()
+
+            client = guardian.NewAPIClient("http://127.0.0.1:3002", "token", "1")
+            with patch.object(guardian, "NEWAPI_DB", database):
+                with patch.object(client, "_request") as request:
+                    self.assertFalse(
+                        client.update_channel(
+                            {
+                                "id": 57,
+                                "name": "stale-channel",
+                                "key": "stale-unmasked-key",
+                                "weight": 0,
+                            }
+                        )
+                    )
+            request.assert_not_called()
+
+    def test_update_channel_rejects_unmasked_key_drift(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'gorouter', 'current-key')"
+                )
+                connection.commit()
+
+            client = guardian.NewAPIClient("http://127.0.0.1:3002", "token", "1")
+            with patch.object(guardian, "NEWAPI_DB", database):
+                with patch.object(client, "_request") as request:
+                    self.assertFalse(
+                        client.update_channel(
+                            {
+                                "id": 57,
+                                "name": "gorouter",
+                                "key": "stale-unmasked-key",
+                                "weight": 0,
+                            }
+                        )
+                    )
+            request.assert_not_called()
+
+
 def make_engine(state=None):
     engine = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
     engine.newapi = FakeNewAPI()
@@ -74,7 +212,8 @@ def make_engine(state=None):
     )
     engine._last_channel_tests = {}
     engine._cleanup_count = 0
-    engine._full_scan_failures = {}
+    engine._probe_soft_failures = {}
+    engine._pinned_scan_offset = 0
     engine._save_state = lambda: None
     return engine
 
@@ -315,6 +454,34 @@ class TelegramCommandTests(unittest.TestCase):
 
 
 class FullHealthScanTests(unittest.TestCase):
+    def test_pinned_channel_is_disabled_instead_of_reweighted(self):
+        engine = make_engine()
+        engine._full_scan_offset = 0
+        engine.newapi.channels[92] = {
+            "id": 92,
+            "name": "zzzcoding-gpt-5.6-sol",
+            "status": 1,
+            "weight": 15,
+            "priority": 60,
+            "models": "gpt-5.6-sol",
+        }
+        engine.newapi.test_results.extend([(False, "timed out")] * 3)
+
+        with patch.object(guardian.logger, "warning"), patch.object(
+            guardian.logger, "info"
+        ):
+            for _ in range(3):
+                engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
+                engine.full_health_scan()
+
+        self.assertEqual(engine.newapi.updates, [])
+        self.assertEqual(engine.newapi.disable_calls, [92])
+        self.assertEqual(engine.state["weight_history"]["92"]["weight"], 15)
+        self.assertEqual(
+            engine.state["disabled_channels"][0]["reason"],
+            "full_scan: timed out",
+        )
+
     def test_deadline_defers_unscanned_channels_without_skipping_rotation(self):
         engine = make_engine()
         engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
@@ -381,10 +548,169 @@ class FullHealthScanTests(unittest.TestCase):
         engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
         engine.full_health_scan()
 
-        self.assertNotIn(57, engine._full_scan_failures)
+        self.assertNotIn(57, engine._probe_soft_failures)
         self.assertEqual(engine.newapi.updates, [])
         self.assertEqual(engine.newapi.disable_calls, [])
-class TransientRateLimitTests(unittest.TestCase):
+class ChannelFailureScanTests(unittest.TestCase):
+    def test_error_scan_disables_pinned_channel_after_three_soft_failures(self):
+        engine = make_engine()
+        engine._scan_offset = 0
+        engine.newapi.channels[48] = {
+            "id": 48,
+            "name": "opencode-go-muse",
+            "status": 1,
+            "weight": 13,
+            "priority": 51,
+            "models": "muse-spark-1.2-contributor",
+        }
+        engine.newapi.test_results.extend(
+            [(False, "503 Endpoint is unavailable")] * 3
+        )
+
+        for expected_disables in (0, 0, 1):
+            engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+            engine.scan_error_channels()
+            self.assertEqual(len(engine.newapi.disable_calls), expected_disables)
+
+        self.assertEqual(engine.newapi.updates, [])
+        self.assertEqual(engine.state["weight_history"]["48"]["weight"], 13)
+        self.assertEqual(
+            engine.state["disabled_channels"][0]["reason"],
+            "error_scan: 503 Endpoint is unavailable",
+        )
+        self.assertNotIn(48, engine._probe_soft_failures)
+
+    def test_error_scan_success_resets_pinned_soft_failure_streak(self):
+        engine = make_engine()
+        engine._scan_offset = 0
+        engine.newapi.channels[48] = {
+            "id": 48,
+            "name": "opencode-go-muse",
+            "status": 1,
+            "weight": 12,
+            "priority": 51,
+            "models": "muse-spark-1.2-contributor",
+        }
+        engine.newapi.test_results.extend(
+            [
+                (False, "503 Endpoint is unavailable"),
+                (True, "ok"),
+                (False, "503 Endpoint is unavailable"),
+                (False, "503 Endpoint is unavailable"),
+            ]
+        )
+
+        for _ in range(4):
+            engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+            engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertEqual(engine._probe_soft_failures[48], 2)
+
+    def test_error_scan_drops_streak_for_channel_disabled_between_scans(self):
+        engine = make_engine()
+        engine._scan_offset = 0
+        channel = {
+            "id": 48,
+            "name": "opencode-go-muse",
+            "status": 1,
+            "weight": 12,
+            "priority": 51,
+            "models": "muse-spark-1.2-contributor",
+        }
+        engine.newapi.channels[48] = channel
+        engine.newapi.test_results.append((False, "503 Endpoint is unavailable"))
+
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine.scan_error_channels()
+        self.assertEqual(engine._probe_soft_failures[48], 1)
+
+        channel["status"] = 2
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine.scan_error_channels()
+
+        self.assertNotIn(48, engine._probe_soft_failures)
+
+    def test_error_scan_soft_failure_does_not_accumulate_for_regular_channel(self):
+        engine = make_engine()
+        engine._scan_offset = 0
+        engine.newapi.channels[45] = {
+            "id": 45,
+            "name": "agentrouter",
+            "status": 1,
+            "weight": 5,
+            "priority": 40,
+            "models": "gpt-5.6-sol",
+        }
+        engine.newapi.test_results.extend([(False, "503 upstream unavailable")] * 3)
+
+        for _ in range(3):
+            engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+            engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertEqual(engine.newapi.updates, [])
+        self.assertNotIn(45, engine._probe_soft_failures)
+
+    def test_error_and_full_scans_share_pinned_soft_failure_streak(self):
+        engine = make_engine()
+        engine._scan_offset = 0
+        engine._full_scan_offset = 0
+        engine.newapi.channels[92] = {
+            "id": 92,
+            "name": "zzzcoding-gpt-5.6-sol",
+            "status": 1,
+            "weight": 15,
+            "priority": 60,
+            "models": "gpt-5.6-sol",
+        }
+        engine.newapi.test_results.extend([(False, "upstream 503")] * 3)
+
+        engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
+        engine.full_health_scan()
+        for _ in range(2):
+            engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+            engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [92])
+        self.assertEqual(
+            engine.state["disabled_channels"][0]["reason"],
+            "error_scan: upstream 503",
+        )
+
+    def test_error_scan_reserves_slots_for_pinned_and_regular_channels(self):
+        engine = make_engine()
+        engine._scan_offset = 0
+        for channel_id, name in (
+            (48, "opencode-go-muse"),
+            (83, "muyuan-sol"),
+            (91, "jianzhile-gpt-5.6-sol"),
+            (92, "zzzcoding-gpt-5.6-sol"),
+        ):
+            engine.newapi.channels[channel_id] = {
+                "id": channel_id,
+                "name": name,
+                "status": 1,
+                "weight": 5,
+            }
+        for channel_id in range(100, 106):
+            engine.newapi.channels[channel_id] = {
+                "id": channel_id,
+                "name": f"regular-{channel_id}",
+                "status": 1,
+                "weight": 5,
+            }
+        engine.newapi.test_results.extend([(True, "ok")] * 10)
+
+        for _ in range(2):
+            engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+            engine.scan_error_channels()
+
+        self.assertEqual(
+            engine.newapi.test_calls,
+            [48, 83, 100, 101, 102, 91, 92, 103, 104, 105],
+        )
+
     def test_error_scan_404_invalid_request_does_not_disable(self):
         engine = make_engine()
         engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
@@ -452,7 +778,7 @@ class TransientRateLimitTests(unittest.TestCase):
         engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
         engine.full_health_scan()
 
-        self.assertNotIn(45, engine._full_scan_failures)
+        self.assertNotIn(45, engine._probe_soft_failures)
         self.assertEqual(engine.newapi.updates, [])
         self.assertEqual(engine.newapi.disable_calls, [])
 
@@ -660,6 +986,19 @@ class RetryPolicyTests(unittest.TestCase):
 
 
 class ChannelTestProfileTests(unittest.TestCase):
+    def test_muse_uses_streaming_responses_probe(self):
+        client = guardian.NewAPIClient("https://example.invalid", "token", "1")
+        client._request = Mock(return_value={"success": True})
+
+        self.assertEqual(client.test_channel(48, timeout=22), (True, "测试通过"))
+
+        client._request.assert_called_once_with(
+            "GET",
+            "/api/channel/test/48?model=muse-spark-1.2-contributor"
+            "&endpoint_type=openai-response&stream=true",
+            timeout=22,
+        )
+
     def test_jianzhile_uses_streaming_responses_probe(self):
         client = guardian.NewAPIClient("https://example.invalid", "token", "1")
         client._request = Mock(return_value={"success": True})
@@ -698,6 +1037,21 @@ class ChannelTestProfileTests(unittest.TestCase):
 
 
 class WeightAdjustmentTests(unittest.TestCase):
+    def test_pinned_routing_channel_is_not_dynamically_reweighted(self):
+        engine = make_engine()
+        channel = {
+            "id": 92,
+            "name": "zzzcoding-gpt-5.6-sol",
+            "status": 1,
+            "weight": 15,
+        }
+        add_samples(engine, 92, guardian.WEIGHT_ADJUST_WINDOW, healthy=False)
+
+        engine._auto_adjust_weights([channel])
+
+        self.assertEqual(engine.newapi.updates, [])
+        self.assertEqual(channel["weight"], 15)
+
     def test_records_each_newapi_test_result_once(self):
         engine = make_engine()
         channel = {"id": 7, "test_time": 100, "response_time": 900}
@@ -1057,6 +1411,31 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(engine.newapi.updates[0]["priority"], 57)
         self.assertEqual(engine.state["joined_channels"]["7"]["priority"], 57)
 
+    def test_recovery_restores_pinned_weight_instead_of_stale_history(self):
+        engine = make_engine(
+            {
+                "weight_history": {"92": {"weight": 24, "priority": 60}},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[92] = {
+            "id": 92,
+            "name": "zzzcoding-gpt-5.6-sol",
+            "status": 1,
+            "models": "gpt-5.6-sol",
+            "weight": 12,
+            "priority": 60,
+        }
+        engine._balance_pool_weights = Mock(
+            side_effect=AssertionError("pinned channel must not be pool-balanced")
+        )
+
+        self.assertTrue(engine._auto_join_pool(92, "zzzcoding-gpt-5.6-sol"))
+
+        self.assertEqual(engine.newapi.updates[0]["weight"], 15)
+        self.assertEqual(engine.state["joined_channels"]["92"]["weight"], 15)
+
     def test_joins_pool_with_channel_declared_models_not_api_models(self):
         """opencode-go 等 model_mapping 左侧别名不在 /api/models 中，仍须加入聚合池"""
         engine = make_engine(
@@ -1160,6 +1539,94 @@ class StateCleanupTests(unittest.TestCase):
         engine.cleanup_stale_state()
 
         self.assertNotIn("7", engine.state["weight_history"])
+
+
+class ChannelIdentityTests(unittest.TestCase):
+    def test_reused_channel_id_clears_all_legacy_recovery_state(self):
+        engine = make_engine(
+            {
+                "disabled_channels": [
+                    {"id": 48, "name": "opencode-go-luna", "manual": False}
+                ],
+                "weight_history": {"48": {"weight": 20, "priority": 51}},
+                "degraded_channels": {
+                    "48": {"name": "opencode-go-luna", "original_weight": 20}
+                },
+                "joined_channels": {"48": {"models": ["opencode-go"]}},
+            }
+        )
+        engine.channel_perf[48].append({"healthy": True})
+        engine._last_channel_tests[48] = 123
+        engine._probe_soft_failures[48] = 2
+
+        cleared = engine.reconcile_channel_identities(
+            [
+                {
+                    "id": 48,
+                    "name": "opencode-go-muse",
+                    "type": 1,
+                    "base_url": "https://opencode.ai",
+                    "models": "muse-spark-1.2-contributor",
+                    "model_mapping": "{}",
+                    "test_model": "muse-spark-1.2-contributor",
+                    "status": 1,
+                    "weight": 12,
+                    "priority": 51,
+                }
+            ]
+        )
+
+        self.assertEqual(cleared, 1)
+        self.assertEqual(engine.state["disabled_channels"], [])
+        for key in ("weight_history", "degraded_channels", "joined_channels"):
+            self.assertNotIn("48", engine.state[key])
+        self.assertNotIn(48, engine.channel_perf)
+        self.assertNotIn(48, engine._last_channel_tests)
+        self.assertNotIn(48, engine._probe_soft_failures)
+        self.assertEqual(engine.state["channel_identities"]["48"]["name"], "opencode-go-muse")
+
+    def test_mutable_posture_does_not_change_channel_identity(self):
+        base = {
+            "id": 92,
+            "name": "zzzcoding-gpt-5.6-sol",
+            "type": 1,
+            "base_url": "https://api.zzzcoding.org/",
+            "models": "zg-gpt-5.6-sol,gpt-5.6-sol",
+            "model_mapping": '{"zg-gpt-5.6-sol":"gpt-5.6-sol"}',
+            "test_model": "gpt-5.6-sol",
+            "status": 1,
+            "weight": 15,
+            "priority": 60,
+        }
+        changed = {
+            **base,
+            "status": 3,
+            "weight": 7,
+            "priority": 55,
+            "models": "gpt-5.6-sol,zg-gpt-5.6-sol",
+        }
+
+        self.assertEqual(
+            engine_identity := guardian.AutoFixEngine._channel_identity(base),
+            guardian.AutoFixEngine._channel_identity(changed),
+        )
+        self.assertEqual(len(engine_identity), 64)
+
+    def test_quarantine_enforcement_disables_and_zeroes_reenabled_channel(self):
+        engine = make_engine()
+        engine.newapi.channels[39] = {
+            "id": 39,
+            "name": "ai-168661-grok",
+            "status": 1,
+            "weight": 10,
+            "models": "grok-4.5",
+        }
+
+        enforced = engine.enforce_quarantine(list(engine.newapi.channels.values()))
+
+        self.assertEqual(enforced, 1)
+        self.assertEqual(engine.newapi.disable_calls, [39])
+        self.assertEqual(engine.newapi.updates[0]["weight"], 0)
 
 
 class PoolJoinTests(unittest.TestCase):

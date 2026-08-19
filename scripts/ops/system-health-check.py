@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 HOME = Path.home()
@@ -22,6 +23,8 @@ OMP = HOME / ".omp"
 GUARDIAN = OMP / "guardian"
 NEWAPI_LOCAL = HOME / ".new-api-local"
 RESULT: list[dict] = []
+DX_SMOKE_TASK = "CCSwitch-NewAPI-DX-Ops"
+DX_SMOKE_STALE_SEC = 5 * 60 * 60
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -61,6 +64,52 @@ def fresh_json(path: Path, stale_sec: int) -> tuple[bool, dict]:
         return age <= stale_sec, data
     except Exception:
         return False, {}
+
+
+def scheduled_task_status(
+    raw: str, stale_sec: int, now: datetime | None = None
+) -> tuple[bool, str]:
+    """Validate one Task Scheduler result encoded as result|time|state."""
+    if not raw or raw == "missing":
+        return False, f"task missing or unreadable: {raw!r}"
+    try:
+        result_s, run_s, state = (raw.split("|") + ["", ""])[:3]
+        result = int(result_s) & 0xFFFFFFFF
+        run_time = datetime.fromisoformat(run_s)
+        current = now or datetime.now(run_time.tzinfo)
+        age = (current - run_time).total_seconds()
+    except (TypeError, ValueError):
+        return False, f"invalid task status: {raw!r}"
+    ok = result == 0 and -60 <= age < stale_sec and state in {"Ready", "Running"}
+    detail = (
+        f"result=0x{result:08X} last_run={run_s} state={state} age_sec={int(age)}"
+    )
+    if result == 0x800710E0:
+        detail += " (IgnoreNew rejected trigger; a previous task instance is stuck)"
+    return ok, detail
+
+
+def query_scheduled_task(task_name: str, stale_sec: int) -> tuple[bool, str]:
+    escaped = task_name.replace("'", "''")
+    command = (
+        f"$t = Get-ScheduledTask -TaskName '{escaped}' -ErrorAction SilentlyContinue; "
+        f"$i = Get-ScheduledTaskInfo -TaskName '{escaped}' -ErrorAction SilentlyContinue; "
+        "if ($t -and $i) { '{0}|{1}|{2}' -f $i.LastTaskResult, "
+        "$i.LastRunTime.ToString('o'), $t.State } else { 'missing' }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False, f"query failed rc={result.returncode}"
+        return scheduled_task_status(result.stdout.strip(), stale_sec)
+    except (OSError, subprocess.SubprocessError) as error:
+        return False, f"query error: {type(error).__name__}: {error}"
 
 
 def relay_owner_violations(processes: object, listeners: object) -> list[str]:
@@ -190,28 +239,14 @@ def main() -> int:
         check("new-api.exe 进程存活", False, f"tasklist error: {e}")
     # 计划任务"已启用"≠能跑：MultipleInstancesPolicy=IgnoreNew 下，挂起实例会以
     # 0x800710E0 拒绝每次新触发（start.ps1 曾被注入 -Wait 导致）。校验上次结果与新鲜度。
-    try:
-        ps = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "$t = Get-ScheduledTask -TaskName 'LocalNewAPI-Watchdog' -ErrorAction SilentlyContinue; "
-             "$i = Get-ScheduledTaskInfo -TaskName 'LocalNewAPI-Watchdog' -ErrorAction SilentlyContinue; "
-             "if ($t -and $i) { '{0}|{1}|{2}' -f $i.LastTaskResult, $i.LastRunTime.ToString('o'), $t.State } "
-             "else { 'missing' }"],
-            capture_output=True, text=True, timeout=20).stdout.strip()
-        if ps == "missing" or not ps:
-            check("看门狗计划任务", False, f"task missing or unreadable: {ps!r}")
-        else:
-            result_s, run_s, state = (ps.split("|") + ["", ""])[:3]
-            result = int(result_s) & 0xFFFFFFFF
-            from datetime import datetime
-            age = (datetime.now() - datetime.fromisoformat(run_s[:19])).total_seconds()
-            ok = result == 0 and age < 600
-            detail = f"result=0x{result:08X} last_run={run_s[:19]} state={state}"
-            if result == 0x800710E0:
-                detail += "（IgnoreNew 拒绝触发：存在挂起的看门狗实例，见 2026-08-10 事故）"
-            check("看门狗计划任务", ok, detail)
-    except Exception as e:  # noqa: BLE001
-        check("看门狗计划任务", False, f"query error: {e}")
+    watchdog_ok, watchdog_detail = query_scheduled_task(
+        "LocalNewAPI-Watchdog", 600
+    )
+    check("看门狗计划任务", watchdog_ok, watchdog_detail)
+    smoke_ok, smoke_detail = query_scheduled_task(
+        DX_SMOKE_TASK, DX_SMOKE_STALE_SEC
+    )
+    check("NewAPI 综合 smoke 计划任务", smoke_ok, smoke_detail)
     # start.ps1 完整性：PS 5.1 对无 BOM 脚本按 ANSI 解析（中文注释字节错位→崩溃），
     # -Wait 会让看门狗同步挂起（两者均为 2026-08-10 凌晨事故根因，防回归）。
     try:

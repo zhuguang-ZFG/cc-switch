@@ -11,7 +11,7 @@ Checks, in order:
      - model isolation, quarantine double-lock (status + weight=0),
        fallback posture, critical-model pool capacity
   3b. multi-key silent degradation via DB channel_info (upstream issue #3537)
-  4. Two cheap real completions through the gateway (latency sample)
+  4. Eligible cheap real completions through the gateway (latency sample)
 
 Logs one summary block to .tmp-newapi-dx-ops.log (repo root, same file the
 old DX-Ops task used) and exits nonzero when any check fails, so Task
@@ -53,7 +53,7 @@ SMOKE_PROBES: tuple[tuple[str, str], ...] = (
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
 # Channel 74 is held out until its shared upstream quota recovers and a real
 # relay + aggregate smoke passes. Channel 45 remains a live fallback.
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 9, 18, 20, 57, 62, 63, 64, 65, 70, 71, 73, 74}  # 9/18: linxi 同账号余额耗尽（2026-08-10 403 insufficient balance），禁用+weight 0 双锁，被未知调用方回捞过一次；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中（73 于 08-10 15:06 被重新启用且未同步本契约，冒烟会持续 FAIL 直至 codex-relay 修复完成并更新本集合）
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 9, 18, 20, 39, 57, 62, 63, 64, 65, 70, 71, 73, 74, 78}  # 9/18: linxi 同账号余额耗尽（2026-08-10 403 insufficient balance），禁用+weight 0 双锁，被未知调用方回捞过一次；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中
 
 # Model isolation is channel-specific. AgentRouter (ch45) serves Sol only
 # (Claude moved to AnyRouter ch72 on 2026-08-14 so an overloaded Sol recovery
@@ -175,7 +175,7 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
         "mapping": {"zg-grok-4.5": "grok-4.5"},
         "test_model": "grok-4.5",
         "priority": 55,
-        "weight": 10,
+        "weight": 0,
         # The temporary 2026-08-16 revival regressed to INVALID_API_KEY.
         # Keep the recovery point quarantined and do not expose Grok in OMP.
         "status": 2,
@@ -193,7 +193,7 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
         },
         "test_model": "deepseek-v4-flash",
         "priority": 50,
-        "weight": 5,
+        "weight": 0,
         "status": 2,
     },
 }
@@ -271,6 +271,22 @@ CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
     (92, "zg-gpt-5.6-sol"): (60, 15),
     (92, "zg-agent-gpt-5.6-sol"): (60, 15),
 }
+
+
+def _auto_ban_enabled(value: object) -> bool:
+    return str(value).strip().lower() in ("1", "true")
+
+
+def disabled_critical_ability_ids(
+    channel_rows: list[tuple[int, int, object]], guardian_ids: set[int]
+) -> set[int]:
+    """Return disabled critical channels with an automation owner."""
+    return {
+        channel_id
+        for channel_id, status, auto_ban in channel_rows
+        if status != 1
+        and (_auto_ban_enabled(auto_ban) or channel_id in guardian_ids)
+    }
 
 
 def option_policy_violations(options: object) -> list[str]:
@@ -398,14 +414,16 @@ def ability_posture_violations() -> list[str]:
                 channel_ids,
             )
         )
-        disabled_channel_ids = {
-            row[0]
-            for row in con.execute(
-                "SELECT id FROM channels "
-                f"WHERE id IN ({placeholders}) AND status != 1 AND auto_ban = 1",
+        channel_rows = list(
+            con.execute(
+                "SELECT id, status, auto_ban FROM channels "
+                f"WHERE id IN ({placeholders})",
                 channel_ids,
             )
-        }
+        )
+        disabled_channel_ids = disabled_critical_ability_ids(
+            channel_rows, guardian_disabled_ids()
+        )
         return critical_ability_posture_violations(rows, disabled_channel_ids)
     except sqlite3.Error as e:
         return [f"db-read-failed={e}"]
@@ -815,6 +833,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 TOKEN_CACHE = DEPLOY_DIR / ".admin-token-cache.json"
+GUARDIAN_SECRETS = Path.home() / ".omp" / "guardian" / "secrets.json"
 
 
 def _drop_token_cache() -> None:
@@ -833,6 +852,19 @@ class _AdminAuthUnavailable(Exception):
     """
 
 
+def _guardian_admin_token() -> tuple[str, str] | None:
+    """Read Guardian's long-lived admin token without exposing its value."""
+    try:
+        secrets = read_json(GUARDIAN_SECRETS)
+    except (OSError, ValueError, TypeError):
+        return None
+    token = secrets.get("newapi_token") if isinstance(secrets, dict) else None
+    if not isinstance(token, str) or not token.strip():
+        return None
+    user_id = secrets.get("newapi_user", "1")
+    return token.strip(), str(user_id or "1")
+
+
 def admin_auth() -> tuple[str, str]:
     """Admin API auth with token reuse.
 
@@ -844,11 +876,14 @@ def admin_auth() -> tuple[str, str]:
     an explicit FAIL check (recorded here) and raises _AdminAuthUnavailable
     instead of a RuntimeError, so main() skips the admin-API checks but keeps
     running multi-key and smoke checks. 401 drops the stale cache and refreshes
-    via a fresh login; 403 drops the cache too so a recovered permission
-    re-logins next run instead of poisoning the cache forever; 429/5xx/network
-    errors keep the cache (re-login on a transient blip would burn the
-    AUTH_SESSION_LIMIT quota).
+    via Guardian or, when no Guardian token is configured, a fresh login;
+    403 drops the cache too; a configured Guardian token is tried before any
+    password login, while an absent Guardian token fails closed. 429/5xx/network errors keep the
+    cache (re-login on a transient blip would burn the AUTH_SESSION_LIMIT
+    quota). A configured Guardian token that returns 401 fails closed rather
+    than repeatedly creating password sessions.
     """
+    cached_permission_failure = False
     try:
         cached = read_json(TOKEN_CACHE)
         token, user_id = cached["token"], str(cached.get("user_id") or "1")
@@ -876,15 +911,40 @@ def admin_auth() -> tuple[str, str]:
             # 缓存让下一轮重新登录——否则权限恢复后缓存 token 永久毒化，无人
             # 干预则永远 FAIL。若权限真被收回，下轮登录失败会给出可操作报错。
             _drop_token_cache()
-            check("admin token auth", False,
-                  "cached token rejected with HTTP 403; cache dropped, next run re-logins")
-            raise _AdminAuthUnavailable from None
+            cached_permission_failure = True
         else:
             # 429/5xx/其他非 200：保留缓存（每次限流重登会打满
             # AUTH_SESSION_LIMIT），本轮降级 FAIL，不中断后续检查。
             check("admin token auth", False,
                   f"cached token check returned HTTP {status}; cache kept")
             raise _AdminAuthUnavailable from None
+    guardian_token = _guardian_admin_token()
+    if guardian_token is not None:
+        token, user_id = guardian_token
+        try:
+            status, _ = http_json(
+                f"{NEWAPI_BASE}/api/channel/?p=0&page_size=1",
+                headers={"Authorization": f"Bearer {token}", "New-Api-User": user_id},
+            )
+        except urllib.error.URLError as e:
+            check("admin token auth", False,
+                  f"Guardian token check network error: {e}")
+            raise _AdminAuthUnavailable from None
+        if status == 200:
+            return token, user_id
+        if status != 401:
+            check("admin token auth", False,
+                  f"Guardian token check returned HTTP {status}; password login skipped")
+            raise _AdminAuthUnavailable from None
+        check("admin token auth", False,
+              "Guardian token rejected with HTTP 401; password login skipped")
+        raise _AdminAuthUnavailable from None
+
+    if cached_permission_failure:
+        check("admin token auth", False,
+              "cached token rejected with HTTP 403; no Guardian token available")
+        raise _AdminAuthUnavailable from None
+
     creds = read_json(DEPLOY_DIR / "admin-credentials.json")
     _, login = http_json(
         f"{NEWAPI_BASE}/api/user/login", method="POST",
@@ -922,7 +982,41 @@ def serving_channel_ids(channels: list[dict], model: str) -> list[int]:
     ]
 
 
+def smoke_probe_skip_reason(
+    channels: list[dict], model: str, guardian_ids: set[int]
+) -> str | None:
+    """Skip only when every declared route is explicitly owned and disabled."""
+    if serving_channel_ids(channels, model):
+        return None
+    declared = [
+        channel
+        for channel in channels
+        if model
+        in {
+            item.strip()
+            for item in str(channel.get("models") or "").split(",")
+        }
+    ]
+    if not declared:
+        return None
+    policy_ids = KNOWN_BROKEN_CHANNELS | set(DEGRADED_ACCEPTED_DISABLED) | guardian_ids
+    attributed = {
+        channel.get("id")
+        for channel in declared
+        if channel.get("status") in (2, 3)
+        and (
+            channel.get("id") in policy_ids
+            or _auto_ban_enabled(channel.get("auto_ban"))
+        )
+    }
+    declared_ids = {channel.get("id") for channel in declared}
+    if declared_ids and declared_ids == attributed:
+        return f"all declared channels attributed disabled ids={sorted(attributed)}"
+    return None
+
+
 def main() -> int:
+    channel_items: list[dict] | None = None
     # 1. NewAPI status
     status, _ = http_json(f"{NEWAPI_BASE}/api/status", timeout=8)
     check("newapi /api/status", status == 200, f"HTTP {status}")
@@ -966,6 +1060,7 @@ def main() -> int:
         if status != 200 or not isinstance(items, list):
             check("channels", False, f"bad response: HTTP {status}, items={str(items)[:80]!r}")
         else:
+            channel_items = items
             # 意外禁用归因（2026-08-10 事故类：多起渠道状态变更无法归因）：
             # - status=2 ∧ auto_ban=1 = fork 内部 auto-ban 自调（机器行为，预期）；
             # - status=2 ∧ auto_ban=0 = 人工/脚本禁用 → 必须能归因：白名单集合
@@ -1068,7 +1163,16 @@ def main() -> int:
     try:
         tok = read_json(DEPLOY_DIR / "client-token.json")
         key = tok.get("api_key") or tok.get("key")
+        guardian_ids = guardian_disabled_ids()
         for model, api in SMOKE_PROBES:
+            skip_reason = (
+                smoke_probe_skip_reason(channel_items, model, guardian_ids)
+                if channel_items is not None
+                else None
+            )
+            if skip_reason:
+                log(f"SKIP smoke {model} — {skip_reason}")
+                continue
             t0 = time.time()
             if api == "responses":
                 endpoint = f"{NEWAPI_BASE}/v1/responses"

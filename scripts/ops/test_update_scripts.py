@@ -52,6 +52,9 @@ zzzcoding_verify = load(
 quarantine = load(
     "quarantine_newapi_channels_for_tests", "quarantine_newapi_channels.py"
 )
+muse_posture = load(
+    "repair_muse_channel_posture_for_tests", "repair_muse_channel_posture.py"
+)
 
 
 class AffinityUpdateTests(unittest.TestCase):
@@ -172,42 +175,27 @@ class QuarantineChannelTests(unittest.TestCase):
                 DEPLOY_DIR = Path(temp_dir)
 
                 @staticmethod
-                def admin_auth():
-                    return "redacted", 1
-
-                @staticmethod
                 def http_json(url, **kwargs):
                     method = kwargs.get("method", "GET")
                     calls.append((method, url, kwargs.get("body")))
-                    if method == "GET" and url.endswith("/api/channel/57"):
-                        reads = sum(
-                            1
-                            for called_method, called_url, _ in calls
-                            if called_method == "GET"
-                            and called_url.endswith("/api/channel/57")
-                        )
-                        return 200, {
-                            "data": {
-                                "id": 57,
-                                "name": "gorouter",
-                                "key": "sk-***masked***",
-                                "status": 1 if reads == 1 else 2,
-                                "weight": 0,
-                            }
-                        }
                     if method == "POST" and url.endswith("/status"):
                         return 200, {"success": True}
                     raise AssertionError(f"unexpected call: {method} {url}")
 
-            with (
-                patch.object(quarantine, "load_smoke", return_value=FakeSmoke),
-                patch.object(
-                    sys,
-                    "argv",
-                    ["quarantine_newapi_channels.py", "57", "--apply"],
-                ),
-            ):
-                self.assertEqual(quarantine.main(), 0)
+            quarantine.set_channel_posture(
+                FakeSmoke,
+                {},
+                {
+                    "id": 57,
+                    "name": "gorouter",
+                    "key": "sk-***masked***",
+                    "status": 1,
+                    "weight": 0,
+                },
+                Path(temp_dir) / "missing.db",
+                2,
+                0,
+            )
 
             self.assertFalse(
                 any(
@@ -215,6 +203,205 @@ class QuarantineChannelTests(unittest.TestCase):
                     for method, url, _ in calls
                 )
             )
+
+    def test_key_hydration_failure_happens_before_status_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'replacement', 'fixture-real-key')"
+                )
+                connection.commit()
+
+            calls: list[str] = []
+
+            class FakeSmoke:
+                NEWAPI_BASE = "http://127.0.0.1:3002"
+
+                @staticmethod
+                def http_json(url, **kwargs):
+                    calls.append(kwargs.get("method", "GET"))
+                    return 200, {"success": True}
+
+            with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
+                quarantine.set_channel_posture(
+                    FakeSmoke,
+                    {},
+                    {
+                        "id": 57,
+                        "name": "gorouter",
+                        "key": "sk-***masked***",
+                        "status": 1,
+                        "weight": 5,
+                    },
+                    database,
+                    2,
+                    0,
+                )
+            self.assertEqual(calls, [])
+
+    def test_restore_enabled_puts_weight_before_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database = root / "new-api.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'gorouter', 'fixture-real-key')"
+                )
+                connection.commit()
+
+            calls: list[str] = []
+
+            class FakeSmoke:
+                NEWAPI_BASE = "http://127.0.0.1:3002"
+
+                @staticmethod
+                def http_json(url, **kwargs):
+                    calls.append(kwargs.get("method", "GET"))
+                    return 200, {"success": True}
+
+            quarantine.set_channel_posture(
+                FakeSmoke,
+                {},
+                {
+                    "id": 57,
+                    "name": "gorouter",
+                    "key": "sk-***masked***",
+                    "status": 2,
+                    "weight": 0,
+                },
+                database,
+                1,
+                5,
+            )
+            self.assertEqual(calls, ["PUT", "POST"])
+
+    def test_nonzero_weight_put_uses_unmasked_ssot_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database = root / "new-api.db"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'gorouter', 'fixture-real-key')"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            calls: list[tuple[str, str, dict | None]] = []
+
+            class FakeSmoke:
+                NEWAPI_BASE = "http://127.0.0.1:3002"
+
+                @staticmethod
+                def http_json(url, **kwargs):
+                    method = kwargs.get("method", "GET")
+                    body = kwargs.get("body")
+                    calls.append((method, url, body))
+                    if method == "POST" and url.endswith("/status"):
+                        return 200, {"success": True}
+                    if method == "PUT" and url.endswith("/api/channel/"):
+                        return 200, {"success": True}
+                    raise AssertionError(f"unexpected call: {method} {url}")
+
+            quarantine.set_channel_posture(
+                FakeSmoke,
+                {},
+                {
+                    "id": 57,
+                    "name": "gorouter",
+                    "key": "sk-***masked***",
+                    "status": 1,
+                    "weight": 5,
+                },
+                database,
+                2,
+                0,
+            )
+
+            put = next(body for method, url, body in calls if method == "PUT")
+            self.assertEqual(put["key"], "fixture-real-key")
+            self.assertEqual(put["weight"], 0)
+
+    def test_key_hydration_rejects_reused_channel_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'replacement', 'fixture-real-key')"
+                )
+                connection.commit()
+
+            with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
+                quarantine.hydrate_key(
+                    {"id": 57, "name": "gorouter", "key": "unmasked-key"},
+                    database,
+                )
+
+    def test_key_hydration_rejects_unmasked_key_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "new-api.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, key TEXT)"
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (57, 'gorouter', 'current-key')"
+                )
+                connection.commit()
+
+            with self.assertRaisesRegex(RuntimeError, "key mismatch"):
+                quarantine.hydrate_key(
+                    {"id": 57, "name": "gorouter", "key": "stale-key"},
+                    database,
+                )
+
+    def test_single_asterisk_key_is_treated_as_masked(self) -> None:
+        self.assertFalse(quarantine.usable_key("sk-*masked"))
+
+    def test_quarantine_readback_requires_disabled_abilities(self) -> None:
+        class FakeSmoke:
+            NEWAPI_BASE = "http://127.0.0.1:3002"
+
+            @staticmethod
+            def http_json(_url, **_kwargs):
+                return 200, {"data": {"status": 2, "weight": 0}}
+
+        with patch.object(
+            quarantine,
+            "read_ability_posture",
+            return_value=[("gpt-5.6-sol", 1, 50, 0)],
+        ):
+            self.assertFalse(
+                quarantine.verify_quarantined(
+                    FakeSmoke, {}, Path("missing.db"), 57
+                )
+            )
+
+    def test_safe_backup_summary_excludes_secret_fields(self) -> None:
+        summary = quarantine.safe_channel_summary(
+            {
+                "id": 57,
+                "name": "gorouter",
+                "key": "fixture-secret",
+                "channel_info": b"secret-blob",
+                "settings": "secret-settings",
+                "weight": 5,
+            }
+        )
+        self.assertEqual(summary, {"id": 57, "name": "gorouter", "weight": 5})
 
 
 class OmpContextUpdateTests(unittest.TestCase):
@@ -476,6 +663,44 @@ class ZzzcodingSolPrimaryPostureTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "expected"):
                     zzzcoding_posture.read_state(connection)
 
+    def test_preflight_allows_only_disabled_channel_probe_failures(self) -> None:
+        state = {
+            "channels": {
+                92: ("zzzcoding", 1, 60, 15, "blob"),
+                91: ("jianzhile", 2, 55, 5, "blob"),
+            }
+        }
+
+        def probe(_smoke, _headers, channel_id):
+            if channel_id == 91:
+                raise RuntimeError("fixture upstream failure")
+
+        with patch.object(zzzcoding_posture, "management_probe", side_effect=probe):
+            failures = zzzcoding_posture.preflight_management_probes(
+                object(), {}, state, allow_disabled_probe_failures=True
+            )
+
+        self.assertEqual(len(failures[91]), 2)
+        self.assertNotIn(92, failures)
+
+    def test_preflight_never_waives_enabled_channel_failure(self) -> None:
+        state = {
+            "channels": {
+                92: ("zzzcoding", 1, 60, 15, "blob"),
+                91: ("jianzhile", 2, 55, 5, "blob"),
+            }
+        }
+
+        with patch.object(
+            zzzcoding_posture,
+            "management_probe",
+            side_effect=RuntimeError("fixture upstream failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ch92 failed 2/2"):
+                zzzcoding_posture.preflight_management_probes(
+                    object(), {}, state, allow_disabled_probe_failures=True
+                )
+
     def test_chat_sse_parser_requires_semantic_text_done_and_usage(self) -> None:
         payload = (
             b'data: {"choices":[{"delta":{"content":"CH92-"}}]}\n\n'
@@ -488,6 +713,124 @@ class ZzzcodingSolPrimaryPostureTests(unittest.TestCase):
             zzzcoding_verify.parse_chat_sse(payload),
             ("CH92-PRIMARY-OK", True, 9, 4),
         )
+
+
+class MuseChannelPostureTests(unittest.TestCase):
+    @staticmethod
+    def make_database(path: Path) -> bytes:
+        marker = b'{"is_multi_key":false}'
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute(
+                "CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT, "
+                "status INTEGER, type INTEGER, priority INTEGER, weight INTEGER, "
+                "channel_info BLOB, base_url TEXT, models TEXT)"
+            )
+            connection.execute(
+                "CREATE TABLE abilities (`group` TEXT, model TEXT, channel_id INTEGER, "
+                "enabled INTEGER, priority INTEGER, weight INTEGER)"
+            )
+            connection.execute(
+                "INSERT INTO channels VALUES (?, ?, 1, 1, 51, 13, ?, ?, ?)",
+                (
+                    muse_posture.CHANNEL_ID,
+                    muse_posture.CHANNEL_NAME,
+                    marker,
+                    muse_posture.CHANNEL_BASE_URL,
+                    muse_posture.MODEL,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO abilities VALUES ('default', ?, ?, 1, 51, 13)",
+                (muse_posture.MODEL, muse_posture.CHANNEL_ID),
+            )
+            connection.commit()
+        return marker
+
+    def test_write_and_restore_preserve_identity_status_and_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "new-api.db"
+            marker = self.make_database(db_path)
+            with closing(sqlite3.connect(db_path)) as connection:
+                original = muse_posture.read_state(connection)
+                muse_posture.write_target(connection)
+                muse_posture.verify_target(connection, original)
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT status, channel_info FROM channels WHERE id=48"
+                    ).fetchone(),
+                    (1, marker),
+                )
+                muse_posture.restore_state(connection, original)
+                self.assertEqual(muse_posture.read_state(connection), original)
+
+    def test_read_state_rejects_channel_identity_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "new-api.db"
+            self.make_database(db_path)
+            with closing(sqlite3.connect(db_path)) as connection:
+                connection.execute("UPDATE channels SET name='replacement' WHERE id=48")
+                connection.commit()
+                with self.assertRaisesRegex(RuntimeError, "expected"):
+                    muse_posture.read_state(connection)
+
+    def test_response_text_reads_nested_responses_content(self) -> None:
+        payload = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "O"},
+                        {"type": "output_text", "text": "K"},
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(muse_posture.response_text(payload), "OK")
+
+    def test_aggregate_probe_requires_semantics_usage_and_channel_attribution(self) -> None:
+        class FakeSmoke:
+            NEWAPI_BASE = "http://local.invalid"
+            request_body = None
+
+            @staticmethod
+            def http_json(*_args, **_kwargs):
+                FakeSmoke.request_body = _kwargs.get("body")
+                return 200, {
+                    "output_text": "OK",
+                    "usage": {"input_tokens": 4, "output_tokens": 1},
+                }
+
+        with patch.object(muse_posture, "latest_log_id", return_value=10), patch.object(
+            muse_posture, "require_log_attribution"
+        ) as attribution:
+            muse_posture.aggregate_probe(FakeSmoke, Path("fixture.db"), "token")
+
+        attribution.assert_called_once_with(Path("fixture.db"), 10)
+        self.assertEqual(
+            FakeSmoke.request_body["max_output_tokens"],
+            muse_posture.SEMANTIC_MAX_OUTPUT_TOKENS,
+        )
+
+    def test_aggregate_probe_rejects_reasoning_only_incomplete_response(self) -> None:
+        class FakeSmoke:
+            NEWAPI_BASE = "http://local.invalid"
+
+            @staticmethod
+            def http_json(*_args, **_kwargs):
+                return 200, {
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "output_text": "OK",
+                    "usage": {"input_tokens": 4, "output_tokens": 128},
+                }
+
+        with patch.object(muse_posture, "latest_log_id", return_value=10):
+            with self.assertRaisesRegex(
+                RuntimeError, "returned incomplete output"
+            ):
+                muse_posture.aggregate_probe(
+                    FakeSmoke, Path("fixture.db"), "token"
+                )
 
 
 class AnyRouterSplitTests(unittest.TestCase):

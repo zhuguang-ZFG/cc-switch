@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -82,6 +83,35 @@ class RelayOwnerTests(unittest.TestCase):
             health.relay_owner_violations(processes, listeners),
             ["port 15999: relay_processes=0 expected=1"],
         )
+
+
+class ScheduledTaskStatusTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 8, 19, 22, 30, 0)
+
+    def test_accepts_fresh_successful_ready_task(self) -> None:
+        ok, detail = health.scheduled_task_status(
+            "0|2026-08-19T22:25:00|Ready", 600, self.now
+        )
+        self.assertTrue(ok)
+        self.assertIn("result=0x00000000", detail)
+
+    def test_rejects_fresh_nonzero_smoke_result(self) -> None:
+        ok, detail = health.scheduled_task_status(
+            "1|2026-08-19T19:25:01|Ready", 5 * 60 * 60, self.now
+        )
+        self.assertFalse(ok)
+        self.assertIn("result=0x00000001", detail)
+
+    def test_rejects_stale_or_malformed_task_state(self) -> None:
+        stale = (self.now - timedelta(seconds=601)).isoformat()
+        self.assertFalse(
+            health.scheduled_task_status(f"0|{stale}|Ready", 600, self.now)[0]
+        )
+        self.assertFalse(
+            health.scheduled_task_status("not-a-task-result", 600, self.now)[0]
+        )
+        self.assertFalse(health.scheduled_task_status("missing", 600, self.now)[0])
 
 
 if __name__ == "__main__":

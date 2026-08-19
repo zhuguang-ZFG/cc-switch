@@ -63,6 +63,18 @@ class AdminAuthTests(unittest.TestCase):
 
         self.assertEqual(guardian_exclusions, smoke.KNOWN_BROKEN_CHANNELS)
 
+    def test_disabled_ai168661_contracts_are_double_locked_and_quarantined(self):
+        disabled = {
+            channel_id
+            for channel_id, contract in smoke.AI168661_CHANNEL_CONTRACTS.items()
+            if contract["status"] == 2
+        }
+        self.assertTrue(disabled)
+        self.assertTrue(disabled.issubset(smoke.KNOWN_BROKEN_CHANNELS))
+        self.assertTrue(
+            all(smoke.AI168661_CHANNEL_CONTRACTS[channel_id]["weight"] == 0 for channel_id in disabled)
+        )
+
     def test_cached_token_reused_on_200(self):
         """缓存校验 200 → 直接复用，不发登录请求"""
         calls = []
@@ -80,6 +92,94 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual((token, user_id), ("cached-tok", "7"))
         self.assertEqual(len(calls), 1)
         self.assertNotIn("/api/user/login", calls[0])
+
+    def test_guardian_token_reused_without_password_login(self):
+        """Guardian's long-lived token avoids creating a new server session."""
+        calls = []
+
+        def fake_read(path):
+            if path == smoke.TOKEN_CACHE:
+                raise FileNotFoundError("no session cache")
+            if path == smoke.GUARDIAN_SECRETS:
+                return {"newapi_token": "guardian-tok", "newapi_user": "7"}
+            return CREDS
+
+        def fake_http(url, **kwargs):
+            calls.append((url, kwargs))
+            return 200, {}
+
+        with (
+            patch.object(smoke, "read_json", fake_read),
+            patch.object(smoke, "http_json", fake_http),
+        ):
+            token, user_id = smoke.admin_auth()
+
+        self.assertEqual((token, user_id), ("guardian-tok", "7"))
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("/api/user/login", calls[0][0])
+        self.assertEqual(
+            calls[0][1]["headers"],
+            {"Authorization": "Bearer guardian-tok", "New-Api-User": "7"},
+        )
+
+    def test_guardian_token_recovers_from_cached_permission_failure(self):
+        """A stale session 403 can fall through to the long-lived token."""
+        calls = []
+
+        def fake_read(path):
+            if path == smoke.TOKEN_CACHE:
+                return {"token": "old-session", "user_id": 7}
+            if path == smoke.GUARDIAN_SECRETS:
+                return {"newapi_token": "guardian-tok", "newapi_user": "1"}
+            return CREDS
+
+        def fake_http(url, **kwargs):
+            calls.append(url)
+            if "/api/user/login" in url:
+                raise AssertionError("password login is not allowed")
+            if len(calls) == 1:
+                return 403, {}
+            return 200, {}
+
+        with (
+            patch.object(smoke, "read_json", fake_read),
+            patch.object(smoke, "http_json", fake_http),
+            patch.object(type(smoke.TOKEN_CACHE), "unlink"),
+        ):
+            token, user_id = smoke.admin_auth()
+
+        self.assertEqual((token, user_id), ("guardian-tok", "1"))
+        self.assertEqual(len(calls), 2)
+
+    def test_expired_guardian_token_fails_without_password_login(self):
+        """A stale long-lived token must not create recurring sessions."""
+        calls = []
+
+        def fake_read(path):
+            if path == smoke.TOKEN_CACHE:
+                raise FileNotFoundError("no session cache")
+            if path == smoke.GUARDIAN_SECRETS:
+                return {"newapi_token": "expired-guardian-tok"}
+            return CREDS
+
+        def fake_http(url, **kwargs):
+            calls.append(url)
+            if "/api/user/login" in url:
+                return 200, LOGIN_OK
+            return 401, {}
+
+        with (
+            patch.object(smoke, "read_json", fake_read),
+            patch.object(smoke, "http_json", fake_http),
+            patch.object(type(smoke.TOKEN_CACHE), "write_text"),
+        ):
+            with self.assertRaises(smoke._AdminAuthUnavailable):
+                smoke.admin_auth()
+
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("/api/user/login", calls[0])
+        self.assertIn("admin token auth", smoke.failures)
+        smoke.failures.clear()
 
     def test_401_triggers_relogin(self):
         """确定性鉴权失败 401 → 丢弃过期缓存、重新登录并返回新 token"""
@@ -697,6 +797,46 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual(
             smoke.critical_ability_posture_violations(rows, {83}),
             [],
+        )
+
+    def test_critical_ability_posture_accepts_guardian_owned_disable(self):
+        self.assertEqual(
+            smoke.disabled_critical_ability_ids(
+                [
+                    (48, 2, 0),
+                    (83, 2, 1),
+                    (91, 1, 0),
+                    (92, 2, 0),
+                ],
+                {48, 91},
+            ),
+            {48, 83},
+        )
+
+    def test_smoke_probe_skips_only_fully_attributed_disabled_routes(self):
+        disabled_muse = {
+            "id": 48,
+            "name": "opencode-go-muse",
+            "status": 2,
+            "auto_ban": 0,
+            "weight": 12,
+            "models": "muse-spark-1.2-contributor",
+        }
+        model = "muse-spark-1.2-contributor"
+
+        reason = smoke.smoke_probe_skip_reason([disabled_muse], model, {48})
+        self.assertEqual(
+            reason,
+            "all declared channels attributed disabled ids=[48]",
+        )
+        self.assertIsNone(smoke.smoke_probe_skip_reason([disabled_muse], model, set()))
+        self.assertIsNone(
+            smoke.smoke_probe_skip_reason(
+                [{**disabled_muse, "status": 1}], model, {48}
+            )
+        )
+        self.assertIsNone(
+            smoke.smoke_probe_skip_reason([disabled_muse], "missing-model", {48})
         )
 
     def test_main_fails_on_invalid_channels_response(self):

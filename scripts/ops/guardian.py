@@ -19,11 +19,13 @@ P0/P1 修复:
 - 指标导出（JSON metrics）
 """
 
+import hashlib
 import json
 import logging
 import logging.handlers
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -32,6 +34,7 @@ import urllib.request
 import urllib.error
 from urllib.parse import urlparse
 from collections import defaultdict, deque
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -79,6 +82,12 @@ AGENTROUTER_PROXY_KEY = _config_value("AGENTROUTER_PROXY_KEY", "agentrouter_prox
 # "any" 会在 relay 日志每轮记一批 "Invalid token" 401 噪音；配置真实
 # relay token 后消除噪音。未配置时维持 "any" 原语义（任何响应算存活）。
 NEWAPI_PROBE_KEY = _config_value("NEWAPI_PROBE_KEY", "newapi_probe_key")
+NEWAPI_DB = Path(
+    os.environ.get(
+        "NEWAPI_DB",
+        str(Path.home() / ".new-api-local" / "new-api.db"),
+    )
+)
 # 需带真实 relay token 探测的本机端口：NewAPI 自身（NEWAPI_BASE 端口）+
 # TTFT 网关 3003（/v1/models 转发给 NewAPI，同样校验 token）。
 _NEWAPI_PROBE_PORTS = {3003}
@@ -127,18 +136,38 @@ WEIGHT_ADJUST_SUCCESS_THRESHOLD = 0.8  # 成功率低于此值则降权
 WEIGHT_ADJUST_SLOW_THRESHOLD = 45000  # 平均响应时间超过此值则降权
 WEIGHT_BOOST_SUCCESS_THRESHOLD = 0.95  # 成功率高于此值且响应快则加权
 MAX_AUTO_WEIGHT = 20  # 自动加权上限
+# These channels have explicit cross-layer routing contracts. Weight changes do
+# not reduce traffic at a unique priority tier, so health automation must
+# disable/recover them instead of drifting their configured posture.
+PINNED_CHANNEL_WEIGHTS = {
+    48: ("opencode-go-muse", 12),
+    83: ("muyuan-sol", 5),
+    91: ("jianzhile-gpt-5.6-sol", 5),
+    92: ("zzzcoding-gpt-5.6-sol", 15),
+}
+
+
+def _pinned_channel_weight(channel: dict) -> Optional[int]:
+    policy = PINNED_CHANNEL_WEIGHTS.get(channel.get("id"))
+    if policy is None or channel.get("name") != policy[0]:
+        return None
+    return policy[1]
 
 # 防抖动 / 回滚
 RECOVERY_COOLDOWN_MIN = 5  # 恢复冷却时间（分钟）
 RECOVERY_TEST_COUNT = 3  # 恢复验证测试次数
 RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 # 明确隔离且不应自动恢复的本地渠道；与 newapi-local-smoke.py 策略保持一致。
-AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 9, 18, 20, 57, 62, 63, 64, 65, 70, 71, 73, 74}  # 9: linxi-k40 余额耗尽双锁（2026-08-10，auto_ban=0 不会被导入，入集仅为三处同步一致性）；18: linxi-k40-opus5-backup 恢复测试持续超时（2026-08-09）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；57: gorouter 余额不足（$0.05<预扣$0.30）；70: vip-j3gb-gpt 上游 15 次恢复失败；71: hugai-claude-opus5 上游网关 routing group 坏（非本机配置）；73: zzzcoding-codex-relay 上游 405 真死（2026-08-08）；74: sharedchat-codex-sol 同源禁用
+AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 9, 18, 20, 39, 57, 62, 63, 64, 65, 70, 71, 73, 74, 78}  # 9: linxi-k40 余额耗尽双锁（2026-08-10，auto_ban=0 不会被导入，入集仅为三处同步一致性）；18: linxi-k40-opus5-backup 恢复测试持续超时（2026-08-09）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；39/78: ai.168661 账号侧死 key 恢复点；57: gorouter 余额不足（$0.05<预扣$0.30）；70: vip-j3gb-gpt 上游 15 次恢复失败；71: hugai-claude-opus5 上游网关 routing group 坏（非本机配置）；73: zzzcoding-codex-relay 上游 405 真死（2026-08-08）；74: sharedchat-codex-sol 同源禁用
 # ch91's upstream only implements the streaming Codex Responses wire shape
 # reliably. Keep it under normal health/recovery governance, but make every
 # Guardian probe exercise the same protocol as OMP instead of the admin API's
 # generic non-stream test.
 CHANNEL_TEST_PATH_OVERRIDES = {
+    48: (
+        "/api/channel/test/48?model=muse-spark-1.2-contributor"
+        "&endpoint_type=openai-response&stream=true"
+    ),
     91: (
         "/api/channel/test/91?model=jianzhile-codex-gpt-5.6-sol"
         "&endpoint_type=openai-response&stream=true"
@@ -160,6 +189,7 @@ NEWAPI_RESTART_BACKOFF_SEC = 60  # 重启失败后的退避间隔（秒），成
 # 同步进受冷却/退避保护的恢复队列，并补充错误码扫描、本地代理和 OMP 观测。
 ERROR_SCAN_INTERVAL = 20  # 每 N 个检查周期扫描一次（20*15s=5min，NewAPI 30min 太慢）
 ERROR_SCAN_BATCH_SIZE = 5  # 每次最多测试 N 个渠道（降低 API 负载）
+ERROR_SCAN_PINNED_BATCH_SIZE = 2  # 固定路由每批最多占 N 个槽位，兼顾快速隔离和普通渠道轮转
 ERROR_DISABLE_KEYWORDS = [
     "余额不足",
     "INSUFFICIENT_BALANCE",
@@ -663,9 +693,73 @@ class NewAPIClient:
         所以 weight/priority 变更会自动同步到 abilities 表。
         注意：请求体中不能包含 status 字段（NewAPI 会拒绝）。
         """
-        ch = {k: v for k, v in channel.items() if k != "status"}
+        ch = self._hydrate_channel_key(channel)
+        if ch is None:
+            logger.error(
+                "Refusing channel update because channel key is masked or unavailable "
+                "in the local SSOT (channel_id=%s)",
+                channel.get("id"),
+            )
+            return False
+        ch = {k: v for k, v in ch.items() if k != "status"}
         result = self._request("PUT", "/api/channel/", ch)
         return result.get("success", False) if result else False
+
+    @staticmethod
+    def _hydrate_channel_key(channel: dict) -> Optional[dict]:
+        """Verify channel identity and restore a redacted key before a PUT."""
+        channel_id = channel.get("id")
+        if not isinstance(channel_id, int):
+            return None
+        db_path = NEWAPI_DB.expanduser().resolve()
+        try:
+            with closing(
+                sqlite3.connect(
+                    f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5
+                )
+            ) as connection:
+                row = connection.execute(
+                    "SELECT name, key FROM channels WHERE id = ?", (channel_id,)
+                ).fetchone()
+        except (OSError, sqlite3.Error) as error:
+            logger.error(
+                "Unable to hydrate channel key from local SSOT "
+                "(channel_id=%s, error=%s)",
+                channel_id,
+                error,
+            )
+            return None
+
+        channel_name = channel.get("name")
+        if (
+            row is None
+            or not isinstance(channel_name, str)
+            or not channel_name
+            or row[0] != channel_name
+        ):
+            logger.error(
+                "Local SSOT channel identity mismatch during key hydration "
+                "(channel_id=%s)",
+                channel_id,
+            )
+            return None
+        actual_key = row[1]
+        if not isinstance(actual_key, str) or not actual_key.strip() or "*" in actual_key:
+            return None
+        supplied_key = channel.get("key")
+        if (
+            isinstance(supplied_key, str)
+            and supplied_key.strip()
+            and "*" not in supplied_key
+            and supplied_key.strip() != actual_key.strip()
+        ):
+            logger.error(
+                "Local SSOT channel key mismatch during key hydration "
+                "(channel_id=%s)",
+                channel_id,
+            )
+            return None
+        return {**channel, "key": actual_key}
 
     def disable_channel(self, channel_id: int) -> bool:
         """禁用渠道（status=2）— 使用专用 status API"""
@@ -855,10 +949,11 @@ class AutoFixEngine:
         self._scan_count = 0       # 错误扫描独立计数器
         self._stability_count = 0  # 稳定性检查独立计数器
         self._scan_offset = 0      # 错误扫描批次轮转偏移
+        self._pinned_scan_offset = 0  # 固定路由错误扫描批次轮转偏移
         self._omp_check_count = 0  # OMP 角色主动检测计数器
         self._full_scan_count = 0  # 全量健康扫描计数器
         self._full_scan_offset = 0  # 全量扫描批次轮转偏移
-        self._full_scan_failures: Dict[int, int] = {}
+        self._probe_soft_failures: Dict[int, int] = {}
         self._ability_fix_count = 0  # abilities 修复计数器
         self._cleanup_count = 0    # 状态清理计数器
 
@@ -872,6 +967,7 @@ class AutoFixEngine:
             "weight_history": {},
             "joined_channels": {},
             "degraded_channels": {},
+            "channel_identities": {},
             "newapi_fail_streak": 0,
         }
         if STATE_FILE.exists():
@@ -972,6 +1068,147 @@ class AutoFixEngine:
         backup_tmp.write_text(payload, encoding="utf-8")
         os.replace(backup_tmp, STATE_BACKUP_FILE)
 
+    @staticmethod
+    def _channel_identity(channel: dict) -> str:
+        """Fingerprint stable routing identity without keys or mutable posture."""
+        models = sorted(
+            model.strip()
+            for model in str(channel.get("models") or "").split(",")
+            if model.strip()
+        )
+        raw_mapping = channel.get("model_mapping")
+        try:
+            mapping = json.loads(raw_mapping) if isinstance(raw_mapping, str) else raw_mapping
+        except (TypeError, ValueError):
+            mapping = str(raw_mapping or "")
+        if not isinstance(mapping, (dict, list, str, int, float, bool, type(None))):
+            mapping = str(mapping)
+        payload = {
+            "name": str(channel.get("name") or ""),
+            "type": channel.get("type"),
+            "base_url": str(channel.get("base_url") or "").rstrip("/"),
+            "models": models,
+            "model_mapping": mapping,
+            "test_model": str(channel.get("test_model") or ""),
+        }
+        encoded = json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _clear_channel_state(self, channel_id: int) -> None:
+        cid = str(channel_id)
+        disabled = self.state.setdefault("disabled_channels", [])
+        self.state["disabled_channels"] = [
+            record for record in disabled if record.get("id") != channel_id
+        ]
+        for key in ("weight_history", "degraded_channels", "joined_channels"):
+            self.state.setdefault(key, {}).pop(cid, None)
+        if hasattr(self, "channel_perf"):
+            self.channel_perf.pop(channel_id, None)
+        if hasattr(self, "_last_channel_tests"):
+            self._last_channel_tests.pop(channel_id, None)
+        if hasattr(self, "_probe_soft_failures"):
+            self._probe_soft_failures.pop(channel_id, None)
+
+    def reconcile_channel_identities(self, channels: List[dict]) -> int:
+        """Drop recovery state when a NewAPI channel id is repurposed."""
+        if not channels:
+            return 0
+        identities = self.state.setdefault("channel_identities", {})
+        changed = False
+        cleared = 0
+        for channel in channels:
+            channel_id = channel.get("id")
+            if not isinstance(channel_id, int):
+                continue
+            cid = str(channel_id)
+            current = self._channel_identity(channel)
+            previous_entry = identities.get(cid)
+            previous = (
+                previous_entry.get("fingerprint")
+                if isinstance(previous_entry, dict)
+                else previous_entry
+            )
+
+            legacy_names = {
+                str(record.get("name"))
+                for record in self.state.get("disabled_channels", [])
+                if record.get("id") == channel_id and record.get("name")
+            }
+            degraded = self.state.get("degraded_channels", {}).get(cid)
+            if isinstance(degraded, dict) and degraded.get("name"):
+                legacy_names.add(str(degraded["name"]))
+
+            identity_changed = bool(previous and previous != current)
+            legacy_identity_changed = bool(
+                not previous
+                and legacy_names
+                and str(channel.get("name") or "") not in legacy_names
+            )
+            if identity_changed or legacy_identity_changed:
+                self._clear_channel_state(channel_id)
+                cleared += 1
+                changed = True
+                logger.warning(
+                    f"Channel {channel_id} identity changed; cleared stale recovery state"
+                )
+
+            expected_entry = {
+                "fingerprint": current,
+                "name": str(channel.get("name") or ""),
+            }
+            if identities.get(cid) != expected_entry:
+                identities[cid] = expected_entry
+                changed = True
+
+        if changed:
+            self._save_state()
+        return cleared
+
+    def enforce_quarantine(self, channels: List[dict]) -> int:
+        """Keep policy-quarantined channels disabled and out of the pool."""
+        if not channels:
+            return 0
+        self.reconcile_channel_identities(channels)
+        changed = False
+        enforced = 0
+        for channel in channels:
+            channel_id = channel.get("id")
+            if channel_id not in AUTO_BAN_RECOVERY_EXCLUSIONS:
+                continue
+            cid = str(channel_id)
+            if any(
+                cid in self.state.get(key, {})
+                for key in ("weight_history", "degraded_channels", "joined_channels")
+            ) or any(
+                record.get("id") == channel_id
+                for record in self.state.get("disabled_channels", [])
+            ):
+                self._clear_channel_state(channel_id)
+                changed = True
+
+            channel_changed = False
+            if channel.get("status") == 1:
+                if not self.newapi.disable_channel(channel_id):
+                    logger.error(f"Quarantine disable failed for channel {channel_id}")
+                    continue
+                channel_changed = True
+            if channel.get("weight") != 0:
+                updated = channel.copy()
+                updated["weight"] = 0
+                if not self.newapi.update_channel(updated):
+                    logger.error(f"Quarantine weight lock failed for channel {channel_id}")
+                    continue
+                channel["weight"] = 0
+                channel_changed = True
+            if channel_changed:
+                enforced += 1
+                changed = True
+        if changed:
+            self._save_state()
+        return enforced
+
     def _append_disabled(self, record: dict):
         """追加禁用渠道记录（防重复：同 id 不重复追加）。
 
@@ -994,7 +1231,9 @@ class AutoFixEngine:
         disabled = self.state.setdefault("disabled_channels", [])
         known_ids = {record.get("id") for record in disabled}
         added = 0
-        for channel in self.newapi.get_channels():
+        channels = self.newapi.get_channels()
+        self.reconcile_channel_identities(channels)
+        for channel in channels:
             channel_id = channel.get("id")
             auto_ban = str(channel.get("auto_ban", "")).strip().lower()
             if (
@@ -1107,20 +1346,39 @@ class AutoFixEngine:
 
         channels = self.newapi.get_channels()
         enabled = [c for c in channels if c.get("status") == 1 and c.get("weight", 0) > 0]
-
-        # 分批轮转测试，确保所有启用渠道都被扫描到
-        n = len(enabled)
-        if n == 0:
+        enabled_ids = {c.get("id") for c in enabled}
+        for channel_id in tuple(self._probe_soft_failures):
+            if channel_id not in enabled_ids:
+                self._probe_soft_failures.pop(channel_id, None)
+        if not enabled:
             return
-        offset = self._scan_offset % n
-        batch = (enabled[offset:] + enabled[:offset])[:ERROR_SCAN_BATCH_SIZE]
-        self._scan_offset = (offset + ERROR_SCAN_BATCH_SIZE) % n
+
+        # 固定路由需要在软故障时快速隔离，但不能吃掉全部批次导致普通渠道饿死。
+        # 两组分别轮转，固定路由最多占两个槽位，普通渠道至少保留三个槽位。
+        pinned = [c for c in enabled if _pinned_channel_weight(c) is not None]
+        regular = [c for c in enabled if _pinned_channel_weight(c) is None]
+        pinned_batch = []
+        if pinned:
+            pinned_offset = self._pinned_scan_offset % len(pinned)
+            pinned_limit = min(ERROR_SCAN_PINNED_BATCH_SIZE, len(pinned))
+            pinned_batch = (pinned[pinned_offset:] + pinned[:pinned_offset])[:pinned_limit]
+            self._pinned_scan_offset = (pinned_offset + pinned_limit) % len(pinned)
+
+        regular_batch = []
+        regular_slots = ERROR_SCAN_BATCH_SIZE - len(pinned_batch)
+        if regular and regular_slots > 0:
+            offset = self._scan_offset % len(regular)
+            regular_batch = (regular[offset:] + regular[:offset])[:regular_slots]
+            self._scan_offset = (offset + regular_slots) % len(regular)
+        batch = pinned_batch + regular_batch
+
         for channel in batch:
             channel_id = channel["id"]
             name = channel["name"]
 
             test_ok, test_msg = self.newapi.test_channel(channel_id)
             if test_ok:
+                self._probe_soft_failures.pop(channel_id, None)
                 continue
             # 瞬态限流（429/rate limit）：不是渠道故障——不禁用、不累计永久失败
             if _is_transient_rate_limit(test_msg):
@@ -1138,6 +1396,7 @@ class AutoFixEngine:
             matched_keyword = _matched_disable_keyword(test_msg)
 
             if matched_keyword:
+                self._probe_soft_failures.pop(channel_id, None)
                 logger.warning(f"Channel {channel_id} ({name}) error scan failed: {test_msg[:100]}")
                 # 保存原始权重
                 self.state.setdefault("weight_history", {})
@@ -1171,6 +1430,25 @@ class AutoFixEngine:
                         detail + f"时间: {datetime.now().strftime('%H:%M:%S')}",
                         "warning"
                     )
+                continue
+
+            # 固定 priority 层无法通过降 weight 排空流量。对有结论的 5xx/超时
+            # 等软失败跨错误扫描和全量扫描累计，达到阈值后由 Guardian 禁用并
+            # 持有恢复记录；普通渠道仍只由低频全量扫描执行渐进降权。
+            if _pinned_channel_weight(channel) is None:
+                continue
+            failures = self._probe_soft_failures.get(channel_id, 0) + 1
+            self._probe_soft_failures[channel_id] = failures
+            if failures < CHANNEL_FAIL_THRESHOLD:
+                logger.warning(
+                    f"Error scan soft failure {failures}/{CHANNEL_FAIL_THRESHOLD} "
+                    f"for pinned channel {channel_id}: {test_msg[:80]}"
+                )
+                continue
+            if self.disable_slow_channel(
+                channel, reason=f"error_scan: {test_msg[:80]}"
+            ):
+                self._probe_soft_failures.pop(channel_id, None)
 
     # ── P1: 自动降权（渐进式处理） ────────────────────────────────────────
 
@@ -1244,10 +1522,13 @@ class AutoFixEngine:
 
     def _auto_adjust_weights(self, channels: List[dict]):
         """按滚动的新测试窗口调权；执行动作后才清窗（P3-15），未动作则窗口继续滚动。"""
+        self.reconcile_channel_identities(channels)
         degraded = self.state.get("degraded_channels", {})
         for channel in channels:
             channel_id = channel["id"]
             if channel.get("status") != 1 or channel.get("weight", 0) == 0:
+                continue
+            if _pinned_channel_weight(channel) is not None:
                 continue
 
             stats = self._get_channel_stats(channel_id)
@@ -1308,7 +1589,12 @@ class AutoFixEngine:
 
     # ── P0: 防抖动 + 恢复 + 加入聚合池 ────────────────────────────────────
 
-    def disable_slow_channel(self, channel: dict, manual: bool = False) -> bool:
+    def disable_slow_channel(
+        self,
+        channel: dict,
+        manual: bool = False,
+        reason: Optional[str] = None,
+    ) -> bool:
         """禁用慢渠道（P1: 先检查是否已降权，降权后仍慢则禁用）
 
         manual=True 表示用户手动禁用（/disable 命令），不会被自动恢复。
@@ -1316,6 +1602,7 @@ class AutoFixEngine:
         channel_id = channel["id"]
         name = channel["name"]
         response_time = channel.get("response_time", 0)
+        reason_text = reason or f"response_time: {response_time}ms"
 
         # 保存原始权重到 weight_history（用于恢复时还原）
         self.state.setdefault("weight_history", {})
@@ -1330,7 +1617,7 @@ class AutoFixEngine:
             self._append_disabled({
                 "id": channel_id,
                 "name": name,
-                "reason": f"response_time: {response_time}ms",
+                "reason": reason_text,
                 "time": datetime.now().isoformat(),
                 "manual": manual,
             })
@@ -1342,7 +1629,7 @@ class AutoFixEngine:
                 self.telegram.send_alert(
                     "渠道自动禁用",
                     f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已自动禁用\n"
-                    f"原因: 响应过慢 ({response_time}ms)\n"
+                    f"原因: {_html_escape(reason_text)}\n"
                     f"时间: {datetime.now().strftime('%H:%M:%S')}",
                     "warning"
                 )
@@ -1466,14 +1753,24 @@ class AutoFixEngine:
                 logger.info(f"Channel {channel_id} ({name}) has no models, skipping join")
                 return False
 
+            pinned_weight = _pinned_channel_weight(channel)
             history = self.state.setdefault("weight_history", {}).get(str(channel_id))
-            if history and history.get("weight", 0) > 0:
+            if pinned_weight is not None:
+                desired_weight = pinned_weight
+                logger.info(
+                    f"Channel {channel_id} restoring pinned routing weight: "
+                    f"{desired_weight}"
+                )
+            elif history and history.get("weight", 0) > 0:
                 desired_weight = history["weight"]
                 logger.info(f"Channel {channel_id} restoring weight from history: {desired_weight}")
             else:
                 desired_weight = 5
 
-            desired_weight = self._balance_pool_weights(pool_models, channel_id, desired_weight)
+            if pinned_weight is None:
+                desired_weight = self._balance_pool_weights(
+                    pool_models, channel_id, desired_weight
+                )
             current_weight = channel.get("weight", 0)
             current_priority = channel.get("priority", 50)
             if current_weight != desired_weight:
@@ -1731,7 +2028,7 @@ class AutoFixEngine:
         batch = (enabled[offset:] + enabled[:offset])[:FULL_SCAN_BATCH_SIZE]
 
         scanned = 0
-        degraded = 0
+        mitigated = 0
         for channel in batch:
             timeout = TEST_CHANNEL_TIMEOUT
             if deadline is not None:
@@ -1748,7 +2045,7 @@ class AutoFixEngine:
             scanned += 1
             self._full_scan_offset = (offset + scanned) % n
             if test_ok:
-                self._full_scan_failures.pop(channel_id, None)
+                self._probe_soft_failures.pop(channel_id, None)
                 continue
             # 限流与探针形态不相容都不提供渠道健康结论，不累计破坏性失败。
             if _is_transient_rate_limit(test_msg):
@@ -1763,7 +2060,7 @@ class AutoFixEngine:
                 continue
             # 硬错误（402/401）直接禁用；数字状态码走词边界匹配（P2-7）
             if _matched_disable_keyword(test_msg):
-                self._full_scan_failures.pop(channel_id, None)
+                self._probe_soft_failures.pop(channel_id, None)
                 self.state.setdefault("weight_history", {})
                 if str(channel_id) not in self.state["weight_history"]:
                     self.state["weight_history"][str(channel_id)] = {
@@ -1781,8 +2078,8 @@ class AutoFixEngine:
                     logger.warning(f"Full scan disabled channel {channel_id}: {test_msg[:80]}")
                 continue
 
-            failures = self._full_scan_failures.get(channel_id, 0) + 1
-            self._full_scan_failures[channel_id] = failures
+            failures = self._probe_soft_failures.get(channel_id, 0) + 1
+            self._probe_soft_failures[channel_id] = failures
             if failures < CHANNEL_FAIL_THRESHOLD:
                 logger.warning(
                     f"Full scan soft failure {failures}/{CHANNEL_FAIL_THRESHOLD} "
@@ -1790,11 +2087,25 @@ class AutoFixEngine:
                 )
                 continue
 
+            # Fixed routing tiers cannot be meaningfully drained by changing
+            # weight alone. Isolate after the same bounded failure threshold;
+            # recovery restores the contract weight through _auto_join_pool.
+            if _pinned_channel_weight(channel) is not None:
+                if self.disable_slow_channel(
+                    channel, reason=f"full_scan: {test_msg[:80]}"
+                ):
+                    mitigated += 1
+                    self._probe_soft_failures.pop(channel_id, None)
+                continue
+
             # 软错误仅在连续失败达到阈值后降权。
             if self.degrade_channel_weight(channel, f"full_scan: {test_msg[:60]}"):
-                degraded += 1
-                self._full_scan_failures.pop(channel_id, None)
-        logger.info(f"Full health scan batch: {scanned} channels, {degraded} degraded (offset={offset}/{n})")
+                mitigated += 1
+                self._probe_soft_failures.pop(channel_id, None)
+        logger.info(
+            f"Full health scan batch: {scanned} channels, {mitigated} mitigated "
+            f"(offset={offset}/{n})"
+        )
 
     def periodic_ability_fix(self):
         """周期性修复 NewAPI 路由投影并排除无意义的 402 池内重试。"""
@@ -2361,6 +2672,11 @@ class Guardian:
         if not newapi_ok:
             logger.warning(f"NewAPI unavailable; skipped dependent work: {newapi_msg}")
             return
+
+        self._run_step(
+            "quarantine enforcement",
+            lambda: self.autofix.enforce_quarantine(self.newapi.get_channels()),
+        )
 
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
         self._run_step("error scan", self.autofix.scan_error_channels)
