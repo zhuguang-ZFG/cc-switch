@@ -1,7 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, join } from "node:path";
 
-export const EXTENSION_REVISION = "2026.08.19-sota-r4";
+export const EXTENSION_REVISION = "2026.08.19-sota-r5";
 const ROUTE_WRITER_SYMBOL = Symbol.for("omp.modelRoutingTelemetry.writer");
 export const SOTA_ALIAS_PREFIX = "omp-sota-";
 
@@ -12,6 +18,8 @@ const MAX_PROMPT_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 12_000;
 const MAX_CHANGED_FILES = 40;
 const READINESS_FILENAME = "sota-readiness.json";
+const WORKLOAD_HEALTH_FILENAME = "sota-workload-health.json";
+const WORKLOAD_TIMEOUT_THRESHOLD = 2;
 
 const HIGH_RISK_PATTERN =
   /\b(auth(?:entication|orization)?|credentials?|secrets?|tokens?|security|permissions?|databases?|schemas?|migrations?|production|deploy(?:ment)?|rollbacks?|routing|fallbacks?|concurrency|locks?|releases?|payments?|billing)\b/i;
@@ -213,6 +221,85 @@ export function readSotaReadiness(agentDir) {
   } catch {
     return { candidates: {} };
   }
+}
+
+export function readWorkloadHealth(agentDir) {
+  if (!isAbsolute(String(agentDir ?? ""))) return { candidates: {} };
+  const path = join(agentDir, WORKLOAD_HEALTH_FILENAME);
+  if (!existsSync(path)) return { schema: 1, candidates: {} };
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return {
+      schema: 1,
+      candidates:
+        parsed?.candidates && typeof parsed.candidates === "object"
+          ? parsed.candidates
+          : {},
+    };
+  } catch {
+    return { schema: 1, candidates: {} };
+  }
+}
+
+export function recordWorkloadResult(
+  health,
+  selector,
+  { ok = false, timedOut = false, checkedAt = Date.now() } = {},
+) {
+  const candidates = {
+    ...(health?.candidates && typeof health.candidates === "object"
+      ? health.candidates
+      : {}),
+  };
+  const previous = candidates[selector] ?? {};
+  const consecutiveTimeouts = ok
+    ? 0
+    : timedOut
+      ? Math.max(0, Number(previous.consecutiveTimeouts) || 0) + 1
+      : Math.max(0, Number(previous.consecutiveTimeouts) || 0);
+  candidates[selector] = {
+    consecutiveTimeouts,
+    automaticBlocked: consecutiveTimeouts >= WORKLOAD_TIMEOUT_THRESHOLD,
+    lastResult: ok ? "success" : timedOut ? "timeout" : "failure",
+    checkedAt: Number(checkedAt),
+  };
+  return { schema: 1, candidates };
+}
+
+export function writeWorkloadHealth(agentDir, health) {
+  if (!isAbsolute(String(agentDir ?? ""))) return false;
+  const path = join(agentDir, WORKLOAD_HEALTH_FILENAME);
+  mkdirSync(agentDir, { recursive: true });
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(health, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
+  renameSync(temporary, path);
+  return true;
+}
+
+export function applyWorkloadBreaker(readiness, health, explicit = false) {
+  if (explicit || readiness === undefined) return readiness;
+  const candidates = { ...(readiness?.candidates ?? {}) };
+  for (const [selector, entry] of Object.entries(health?.candidates ?? {})) {
+    if (entry?.automaticBlocked === true && candidates[selector]) {
+      candidates[selector] = {
+        ...candidates[selector],
+        status: "unavailable",
+        reason: "workload-timeout-breaker",
+      };
+    }
+  }
+  return { ...readiness, candidates };
+}
+
+export function isWorkloadTimeout(
+  killed,
+  durationMs,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+) {
+  return killed === true && durationMs >= Math.max(0, timeoutMs - 5000);
 }
 
 function readinessFor(readiness, selector, now = Date.now()) {
@@ -605,16 +692,17 @@ export function changedFilesSince(before, after) {
 
 export default function sotaEscalationExtension(pi) {
   const coordinator = createSotaEscalationCoordinator();
+  const agentDir = typeof pi?.pi?.getAgentDir === "function" ? pi.pi.getAgentDir() : undefined;
   let currentPrompt = "";
   let currentModels = [];
   let currentReadiness;
+  let workloadHealth = readWorkloadHealth(agentDir);
   let currentGatePlan = classifyHutujiGate();
   let turnBaseline = { files: [], hashes: {}, complete: false };
   let turnCwd = "";
   let mutationPaths = [];
   let suppressCurrentTurn = false;
   let suppressNextAutomaticTurn = false;
-  const agentDir = typeof pi?.pi?.getAgentDir === "function" ? pi.pi.getAgentDir() : undefined;
   const emitRoute = event => {
     const writer = globalThis[ROUTE_WRITER_SYMBOL];
     if (typeof writer !== "function" || !agentDir) return false;
@@ -631,7 +719,13 @@ export default function sotaEscalationExtension(pi) {
   }
 
   async function runEscalation(reason, ctx, logger, files, gatePlan) {
-    const started = coordinator.start(currentModels, refreshReadiness());
+    const explicit = reason === "explicit";
+    const readiness = applyWorkloadBreaker(
+      refreshReadiness(),
+      workloadHealth,
+      explicit,
+    );
+    const started = coordinator.start(currentModels, readiness);
     if (!started.started) {
       emitRoute({
         revision: EXTENSION_REVISION,
@@ -652,6 +746,7 @@ export default function sotaEscalationExtension(pi) {
     });
     try {
       const changedFiles = files ?? (await collectChangedFiles(pi, ctx.cwd));
+      const startedAt = Date.now();
       const result = await pi.exec(
         "omp",
         safeExecArgs(
@@ -666,10 +761,24 @@ export default function sotaEscalationExtension(pi) {
         { cwd: ctx.cwd, timeout: DEFAULT_TIMEOUT_MS },
       );
       const ok = result.code === 0 && result.stdout.trim().length > 0;
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      const timedOut = isWorkloadTimeout(result.killed, elapsedMs);
       const status = coordinator.complete({
         ok,
         retryable: !ok && !result.killed,
       });
+      workloadHealth = recordWorkloadResult(workloadHealth, target, {
+        ok,
+        timedOut,
+      });
+      try {
+        writeWorkloadHealth(agentDir, workloadHealth);
+      } catch {
+        logger?.warn?.("sota workload health persistence failed", {
+          revision: EXTENSION_REVISION,
+          target,
+        });
+      }
       if (ok) {
         const immediateRescue = reason === "rescue";
         if (!immediateRescue) suppressNextAutomaticTurn = true;
@@ -697,6 +806,7 @@ export default function sotaEscalationExtension(pi) {
         result: ok ? "success" : "failed",
         code: result.code,
         killed: result.killed === true,
+        timedOut,
       });
       emitRoute({
         revision: EXTENSION_REVISION,
@@ -705,7 +815,7 @@ export default function sotaEscalationExtension(pi) {
         result: ok ? "success" : "failed",
         trigger: reason,
         durationMs: Number.isFinite(status?.durationMs) ? status.durationMs : undefined,
-        failureClass: ok ? undefined : result.killed === true ? "aborted" : "failed",
+        failureClass: ok ? undefined : timedOut ? "timeout" : result.killed === true ? "aborted" : "failed",
       });
       return status;
     } catch {

@@ -18,6 +18,8 @@ SMOKE_PATH = Path(__file__).with_name("newapi-local-smoke.py")
 DEFAULT_MODEL = "omp-sota-claude-opus-5"
 DEFAULT_CHANNEL_ID = 0
 EXPECTED_TEXT = "OMP-SOTA-OK"
+EXPECTED_REVIEW_TEXT = "OMP-SOTA-REVIEW-OK"
+REVIEW_TOOL_NAME = "report_review"
 DEFAULT_PROVIDER = "zg-newapi"
 DEFAULT_READINESS_TTL_MS = 15 * 60 * 1000
 
@@ -45,6 +47,34 @@ def extract_text(body: object) -> str:
 
 def semantic_matches(text: str) -> bool:
     return text in (EXPECTED_TEXT, f"{EXPECTED_TEXT}.")
+
+
+def extract_review_tool_args(body: object) -> dict[str, object] | None:
+    if not isinstance(body, dict):
+        return None
+    try:
+        calls = body["choices"][0]["message"]["tool_calls"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if not isinstance(calls, list) or len(calls) != 1:
+        return None
+    function = calls[0].get("function") if isinstance(calls[0], dict) else None
+    if not isinstance(function, dict) or function.get("name") != REVIEW_TOOL_NAME:
+        return None
+    try:
+        arguments = json.loads(str(function.get("arguments") or ""))
+    except (TypeError, ValueError):
+        return None
+    return arguments if isinstance(arguments, dict) else None
+
+
+def review_tool_matches(body: object) -> bool:
+    arguments = extract_review_tool_args(body)
+    return bool(
+        arguments
+        and arguments.get("severity") == "none"
+        and arguments.get("summary") == EXPECTED_REVIEW_TEXT
+    )
 
 
 def latest_log_after(
@@ -232,8 +262,8 @@ def main() -> int:
         )
         return 1
 
-    row = latest_log_after(db_path, last_id, args.model)
-    if not verify_log(row, channel_id, args.model):
+    semantic_row = latest_log_after(db_path, last_id, args.model)
+    if not verify_log(semantic_row, channel_id, args.model):
         if args.readiness_path:
             update_readiness(
                 args.readiness_path,
@@ -244,18 +274,93 @@ def main() -> int:
             )
         print("log attribution failed: marked model/channel row unavailable")
         return 1
-    assert row is not None
+    assert semantic_row is not None
+
+    review_started = time.monotonic()
+    review_status, review_body = smoke.http_json(
+        f"{smoke.NEWAPI_BASE}/v1/chat/completions",
+        method="POST",
+        timeout=90,
+        headers={"Authorization": f"Bearer {key}"},
+        body={
+            "model": args.model,
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Review this safe no-op change. Call report_review exactly once "
+                        f"with severity none and summary {EXPECTED_REVIEW_TEXT}."
+                    ),
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": REVIEW_TOOL_NAME,
+                        "description": "Return the bounded review result.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "severity": {"type": "string", "enum": ["none"]},
+                                "summary": {"type": "string"},
+                            },
+                            "required": ["severity", "summary"],
+                            "additionalProperties": False,
+                        },
+                    },
+                }
+            ],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": REVIEW_TOOL_NAME},
+            },
+        },
+    )
+    review_elapsed_ms = int((time.monotonic() - review_started) * 1000)
+    review_ok = review_status == 200 and review_tool_matches(review_body)
+    if not review_ok:
+        if args.readiness_path:
+            update_readiness(
+                args.readiness_path,
+                selector,
+                channel_id,
+                "unavailable",
+                "review-tool-failed",
+            )
+        print(
+            f"review tool probe failed: HTTP {review_status} "
+            f"toolMatch={str(review_tool_matches(review_body)).lower()}"
+        )
+        return 1
+
+    review_row = latest_log_after(db_path, int(semantic_row[0]), args.model)
+    if not verify_log(review_row, channel_id, args.model):
+        if args.readiness_path:
+            update_readiness(
+                args.readiness_path,
+                selector,
+                channel_id,
+                "unavailable",
+                "review-log-attribution-failed",
+            )
+        print("review log attribution failed: marked model/channel row unavailable")
+        return 1
+    assert review_row is not None
     if args.readiness_path:
         update_readiness(
             args.readiness_path,
             selector,
             channel_id,
             "ready",
-            "semantic-and-log-verified",
+            "semantic-review-tool-and-log-verified",
         )
     print(
-        f"semantic=ok HTTP=200 model={args.model} channelId={row[1]} "
-        f"stream=0 usage={row[4]}/{row[5]} elapsedMs={elapsed_ms} useTime={row[6]}"
+        f"semantic=ok reviewTool=ok HTTP=200 model={args.model} "
+        f"channelId={review_row[1]} stream=0 "
+        f"usage={review_row[4]}/{review_row[5]} elapsedMs={elapsed_ms} "
+        f"reviewElapsedMs={review_elapsed_ms} useTime={review_row[6]}"
     )
     return 0
 

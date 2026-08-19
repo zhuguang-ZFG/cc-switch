@@ -7,6 +7,7 @@ import test from "node:test";
 import globalExtension, {
   EXTENSION_REVISION,
   SOTA_ALIAS_PREFIX,
+  applyWorkloadBreaker,
   changedFilesSince,
   classifyEscalationSignal,
   classifyHutujiGate,
@@ -15,7 +16,11 @@ import globalExtension, {
   formatHutujiGatePlan,
   formatSotaStatus,
   readSotaReadiness,
+  readWorkloadHealth,
+  recordWorkloadResult,
   safeExecArgs,
+  isWorkloadTimeout,
+  writeWorkloadHealth,
 } from "./omp-sota-escalation.js";
 
 const MODELS = [
@@ -100,6 +105,56 @@ test("readiness file parsing fails closed without exposing payload data", () => 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("persistent workload breaker blocks automatic reviews after two timeouts", () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-sota-workload-"));
+  const selector = "zg-newapi/omp-sota-claude-opus-5";
+  const readiness = {
+    ttlMs: 500,
+    candidates: {
+      [selector]: { status: "ready", checkedAt: 100 },
+    },
+  };
+  try {
+    let health = readWorkloadHealth(root);
+    health = recordWorkloadResult(health, selector, {
+      timedOut: true,
+      checkedAt: 110,
+    });
+    assert.equal(health.candidates[selector].automaticBlocked, false);
+    health = recordWorkloadResult(health, selector, {
+      timedOut: true,
+      checkedAt: 120,
+    });
+    assert.equal(health.candidates[selector].automaticBlocked, true);
+    assert.equal(
+      applyWorkloadBreaker(readiness, health).candidates[selector].status,
+      "unavailable",
+    );
+    assert.equal(
+      applyWorkloadBreaker(readiness, health, true).candidates[selector].status,
+      "ready",
+    );
+    assert.equal(writeWorkloadHealth(root, health), true);
+    assert.deepEqual(readWorkloadHealth(root), health);
+
+    health = recordWorkloadResult(health, selector, {
+      ok: true,
+      checkedAt: 130,
+    });
+    assert.equal(health.candidates[selector].automaticBlocked, false);
+    assert.equal(health.candidates[selector].consecutiveTimeouts, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("only near-deadline kills count as workload timeouts", () => {
+  assert.equal(isWorkloadTimeout(true, 180_000), true);
+  assert.equal(isWorkloadTimeout(true, 176_000), true);
+  assert.equal(isWorkloadTimeout(true, 30_000), false);
+  assert.equal(isWorkloadTimeout(false, 180_000), false);
 });
 
 test("classifies explicit, rescue, high-risk, complexity, and normal signals", () => {

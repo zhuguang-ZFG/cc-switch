@@ -24,6 +24,33 @@ class OmpSotaProbeTests(unittest.TestCase):
         self.assertTrue(probe.semantic_matches("OMP-SOTA-OK."))
         self.assertFalse(probe.semantic_matches("OMP-SOTA-OK extra"))
 
+    def test_requires_one_exact_review_tool_call(self):
+        body = {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": probe.REVIEW_TOOL_NAME,
+                                    "arguments": json.dumps(
+                                        {
+                                            "severity": "none",
+                                            "summary": probe.EXPECTED_REVIEW_TEXT,
+                                        }
+                                    ),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        self.assertTrue(probe.review_tool_matches(body))
+        body["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = "other"
+        self.assertFalse(probe.review_tool_matches(body))
+        self.assertFalse(probe.review_tool_matches({"choices": []}))
+
     def test_reads_fresh_marked_log_and_validates_posture(self):
         with tempfile.TemporaryDirectory() as temp:
             database = Path(temp) / "new-api.db"
