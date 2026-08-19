@@ -1,17 +1,30 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import {
+  COORDINATION_CONTRACT,
+  acquireCanaryLease,
+  buildCanaryArgs,
   canonicalRoleSnapshot,
+  createAgentWatchdog,
+  discoverCanarySelectors,
   extractTaskDispatchEvents,
   extractTaskRouteEvents,
+  formatCanaryStatus,
   formatRoutingStatus,
+  formatWatchdogStatus,
+  guardHubInput,
   hashRoleSnapshot,
+  injectCoordinationContract,
+  isCanaryDue,
+  readCanaryState,
   refreshAndValidateRoles,
   readRouteEvents,
+  runModelToolCanary,
   validateModelRoles,
+  writeCanaryState,
   writeRouteEvent,
 } from "./omp-model-routing-observability.js";
 import modelRoutingObservability from "./omp-model-routing-observability.js";
@@ -49,6 +62,145 @@ test("offline refresh is observable and does not require public settings APIs", 
   );
   assert.equal(fallback.refreshState, "failed");
   assert.equal(fallback.refreshError, "offline-refresh-failed");
+});
+
+test("canary selectors follow managed roles and future SOTA registrations", () => {
+  const models = [
+    { provider: "p", id: "main" },
+    { provider: "p", id: "worker" },
+    { provider: "p", id: "small" },
+    { provider: "p", id: "omp-sota-reviewer" },
+  ];
+  assert.deepEqual(
+    discoverCanarySelectors(
+      { default: "p/main:xhigh", task: "p/worker:max", smol: "p/small", slow: "missing/model" },
+      models,
+    ),
+    ["p/main:xhigh", "p/worker:max", "p/small", "p/omp-sota-reviewer"],
+  );
+  assert.equal(isCanaryDue(undefined, 1000), true);
+  assert.equal(isCanaryDue({ result: "success", checkedAt: 1000 }, 1001), false);
+  assert.equal(isCanaryDue({ result: "failed", checkedAt: 0 }, 30 * 60 * 1000), true);
+});
+
+test("coordination contract is idempotent and hub waits stay bounded", () => {
+  const flat = injectCoordinationContract({ agent: "scout", task: "inspect" });
+  assert.match(flat.task, new RegExp(`^${COORDINATION_CONTRACT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.equal(injectCoordinationContract(flat), flat);
+  const batch = injectCoordinationContract({
+    context: "shared",
+    tasks: [{ name: "one", task: "first" }, { name: "two", task: "second" }],
+  });
+  assert.equal(batch.context, "shared");
+  assert.equal(batch.tasks.every(item => item.task.startsWith(COORDINATION_CONTRACT)), true);
+  assert.deepEqual(guardHubInput({ op: "send", to: "Main", message: "done", await: true }), {
+    input: { op: "send", to: "Main", message: "done", await: false },
+  });
+  assert.equal(guardHubInput({ op: "wait", from: "peer" }).block, true);
+  assert.deepEqual(guardHubInput({ op: "wait", timeoutMs: 0 }), {
+    input: { op: "wait", timeoutMs: 15000 },
+  });
+  assert.equal(guardHubInput({ op: "wait", name: "server", timeout: 30 }), undefined);
+  assert.equal(guardHubInput({ op: "wait" }, true).block, true);
+});
+
+test("watchdog detects stalls once and clears incidents when progress resumes", () => {
+  const watchdog = createAgentWatchdog({ webSearchStallMs: 100, noProgressMs: 200, maxAgeMs: 300 });
+  watchdog.observeTaskProgress(
+    {
+      details: {
+        async: { jobId: "task_web" },
+        // OMP 17.3.7 forwards currentTool but omits currentToolStartMs for detached tasks.
+        progress: [{ id: "agent-a", status: "running", currentTool: "web_search", toolCount: 1, requests: 1 }],
+      },
+    },
+    1000,
+  );
+  const snapshot = { running: [{ id: "task_web", type: "task", status: "running", startTime: 900 }] };
+  assert.equal(watchdog.sweep(snapshot, 1099).length, 0);
+  assert.deepEqual(watchdog.sweep(snapshot, 1100).map(item => item.reason), ["web-search-stall"]);
+  assert.equal(watchdog.sweep(snapshot, 1200).length, 0);
+  assert.equal(watchdog.hasStaleJobs(), true);
+  watchdog.observeTaskProgress(
+    {
+      details: {
+        async: { jobId: "task_web" },
+        progress: [{ id: "agent-a", status: "running", currentTool: "read", currentToolStartMs: 1200, toolCount: 2, requests: 2 }],
+      },
+    },
+    1200,
+  );
+  assert.equal(watchdog.hasStaleJobs(), false);
+  assert.deepEqual(watchdog.sweep(snapshot, 1500).map(item => item.reason), ["runtime-budget"]);
+  assert.match(formatWatchdogStatus(watchdog.getIncidents()), /task_web\{reason=runtime-budget/);
+  watchdog.sweep({ running: [] }, 1600);
+  assert.equal(watchdog.hasStaleJobs(), false);
+});
+
+test("canary state is bounded and lease acquisition is exclusive", () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-canary-state-"));
+  try {
+    const statePath = join(root, "state.json");
+    const leasePath = join(root, "canary.lock");
+    assert.equal(
+      writeCanaryState(statePath, {
+        selectors: {
+          "p/m": { result: "success", checkedAt: 1, requestIdHash: "0123456789abcdef", raw: "drop me" },
+          "https://secret.invalid/key": { result: "failed", checkedAt: 1 },
+        },
+      }),
+      true,
+    );
+    const state = readCanaryState(statePath);
+    assert.equal(state.selectors["p/m"].result, "success");
+    assert.equal(JSON.stringify(state).includes("secret.invalid"), false);
+    const release = acquireCanaryLease(leasePath, 1000);
+    assert.equal(typeof release, "function");
+    assert.equal(acquireCanaryLease(leasePath, 1001), undefined);
+    release();
+    assert.equal(existsSync(leasePath), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("real-tool canary requires child, probe, tool-result, and final nonce proof", async () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-canary-run-"));
+  try {
+    const probePath = join(root, "probe.js");
+    writeFileSync(probePath, "export default function() {}\n");
+    let observedArgs;
+    const pi = {
+      async exec(command, args) {
+        assert.equal(command, "omp");
+        observedArgs = args;
+        const prefix = "Use the read tool to read exactly this file: ";
+        const noncePath = args[1].split("\n")[0].slice(prefix.length);
+        const nonce = readFileSync(noncePath, "utf8").trim();
+        writeFileSync(
+          `${noncePath}.result.json`,
+          JSON.stringify({
+            readCalled: true,
+            argsValid: true,
+            toolResultContainsNonce: true,
+            finalContainsNonce: true,
+            requestIdHash: "0123456789abcdef",
+            channelId: "92",
+          }),
+        );
+        return { code: 0, killed: false, stdout: nonce, stderr: "" };
+      },
+    };
+    const summary = await runModelToolCanary(pi, "p/m:max", { root, probePath, cwd: root });
+    assert.equal(summary.result, "success");
+    assert.equal(summary.gatewayAttribution, "channel-id");
+    assert.equal(observedArgs.includes("--no-extensions"), true);
+    assert.deepEqual(observedArgs.slice(observedArgs.indexOf("--tools"), observedArgs.indexOf("--tools") + 2), ["--tools", "read"]);
+    assert.doesNotThrow(() => buildCanaryArgs("p/m", join(root, "nonce"), probePath));
+    assert.match(formatCanaryStatus({ selectors: { "p/m:max": summary } }, ["p/m:max"]), /gateway=channel-id/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("task and scout results become safe structured route records", () => {
@@ -173,14 +325,15 @@ test("extension refreshes before task dispatch and records terminal details", as
       },
       ui: { notify() {} },
     };
-    await handlers.get("tool_call")({ toolName: "task", toolCallId: "call-1", input: { agent: "scout" } }, ctx);
+    const guarded = await handlers.get("tool_call")({ toolName: "task", toolCallId: "call-1", input: { agent: "scout", task: "inspect" } }, ctx);
+    assert.equal(guarded.input.task.startsWith(COORDINATION_CONTRACT), true);
     handlers.get("tool_result")({
       toolName: "task",
       toolCallId: "call-1",
       details: { results: [{ agent: "scout", resolvedModel: "p/m", exitCode: 0, durationMs: 5 }] },
     });
     assert.equal(refreshCount, 1);
-    assert.deepEqual(commands, ["model-routing-status"]);
+    assert.deepEqual(commands, ["model-routing-status", "model-tool-canary", "model-tool-canary-status", "agent-watchdog-status"]);
     const records = readRouteEvents(join(root, "logs", "omp-model-routing.jsonl"));
     assert.equal(records[0].route, "scout");
     assert.equal(records[0].result, "started");
