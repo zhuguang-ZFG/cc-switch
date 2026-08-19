@@ -157,11 +157,23 @@ guardian — a dead config entry with zero effect. Both were removed.
 station enforces a balance pre-auth threshold on large requests) to
 `zg-newapi/dots-3-note-prev` (ch77), whose live text/image/OCR evidence is
 recorded in `omp-global-compaction-model.md`. The role-level `vision` chain
-now falls back to `zg-newapi/agnes-2.5-flash` then `zg-newapi/agnes-2.5-pro-alpha`;
-the redundant first entry (same model as the new primary) was dropped.
+falls back to `zg-newapi/agnes-2.5-flash` then
+`zg-newapi/sensenova-6.7-flash-lite`; the redundant first entry (same model as
+the new primary) was dropped. The earlier last-resort choice
+`agnes-2.5-pro-alpha` was removed because it is officially a paid model
+($0.45/M input, $0.90/M output) and would silently spend money on fallback.
+
+Vision-chain probe evidence (2026-08-19, repository screenshot `add-en.png`):
+
+| Probe | Result |
+|---|---|
+| `dots-3-note-prev`, text trivial | HTTP 200 in 0.6s |
+| `agnes-2.5-flash`, image input | HTTP 200 in 1.2s, correctly read the screenshot subject — free tier does accept image input via NewAPI |
+| `sensenova-6.7-flash-lite`, image input, two attempts | both hung past the client timeout (90s/180s) with no gateway completion record; officially documented as image-capable, but live evidence is negative — treat this third leg as weak |
 
 Smoke after edit: `dots-3-note-prev` via NewAPI returned HTTP 200 in 0.6s for
-a trivial completion. Backup: `config.yml.bak-20260819-bigctx-vision`.
+a trivial completion. Backups: `config.yml.bak-20260819-bigctx-vision`,
+`config.yml.bak-20260819-vision-free-fallback`.
 Effective on next OMP restart, same as the role changes above.
 
 ## Rollback
