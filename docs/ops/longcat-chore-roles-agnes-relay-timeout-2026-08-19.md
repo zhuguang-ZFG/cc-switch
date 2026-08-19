@@ -176,6 +176,41 @@ a trivial completion. Backups: `config.yml.bak-20260819-bigctx-vision`,
 `config.yml.bak-20260819-vision-free-fallback`.
 Effective on next OMP restart, same as the role changes above.
 
+## SOTA channel ch93 re-enabled (2026-08-19, same session)
+
+Symptom: every SOTA escalation today failed — three attempts burned exactly
+~180s before `aborted` (`rescue`/`prompt`/`hutuji-path` triggers in
+`omp-model-routing.jsonl`). Direct probe returned instant
+`503 No available channel for model omp-sota-claude-opus-5`.
+
+Cause: ch93 `omp-sota-sotamodel` was disabled (`channels.status=2`, both
+abilities `enabled=0`). Notably `AutomaticDisableChannelEnabled=false` and
+zero error logs for ch93 in 24h (last success 10:45), so this was a manual or
+scripted disable, not NewAPI auto-ban. The model name
+`omp-sota-claude-opus-5` exists only on ch93, which keeps the SOTA lane
+isolated from every other channel by construction — per policy, do not
+re-route SOTA traffic onto shared channels as a "fix".
+
+Fix: direct SQLite update (`status=1`, abilities `enabled=1`) inside a single
+transaction after a full DB backup; the admin API `PUT /api/channel/` was
+deliberately abandoned because it rejects partial updates, and PUTting the
+GET-readback object would write back a masked key and corrupt the channel.
+NewAPI (no memory channel cache configured) picked the change up immediately.
+
+Verification: `omp-sota-claude-opus-5` via OMP's `zg-newapi` route returned
+HTTP 200 in 1.7s with cache-read billing fields populated; the NewAPI log
+attributes the request to ch93 — isolation confirmed.
+
+Known remaining gaps (not fixed in this session):
+
+- The SOTA escalation extension slow-fails: a hard-down channel (instant 503
+  at the distributor) still produced ~180s `aborted` attempts. It should
+  fail fast on immediate gateway-level "no available channel" responses.
+- Canary selectors `zg-newapi/gpt-5.6-sol:max` and `zg-newapi/gpt-5.6-luna:max`
+  repeatedly fail with `probe-result-missing` (38–79s). Neither selector is on
+  any current role; the red canaries mask real alerts. Fix or remove them from
+  the canary list.
+
 ## Rollback
 
 - Relay: copy the `.bak-20260819-upstream-timeout-600s` file over
@@ -185,3 +220,6 @@ Effective on next OMP restart, same as the role changes above.
   `config.yml` and restart OMP.
 - Name: copy `models.yml.bak-20260819-longcat-name-mojibake` over
   `models.yml` and restart OMP.
+- ch93: set `channels.status=2` and `abilities.enabled=0` for `channel_id=93`
+  (or disable in the NewAPI UI). Pre-change DB backup:
+  `~/.new-api-local/new-api.db.bak-20260819-reenable-ch93`.
