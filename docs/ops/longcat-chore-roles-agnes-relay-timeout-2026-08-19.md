@@ -211,6 +211,16 @@ Known remaining gaps (not fixed in this session):
   any current role; the red canaries mask real alerts. Fix or remove them from
   the canary list.
 
+## smol fallback chain reordered free-first (2026-08-19, same session)
+
+The role-level `smol` chain previously led with the paid
+`muse-spark-1.2-contributor`, so a LongCat outage would fall straight onto a
+paid model. Reordered to put verified-live inexpensive/free legs first:
+`fengwind/deepseek-v4-flash` (probe 200/2.5s), `zg-newapi/mercury-2`
+(200/0.5s), `zg-newapi/sensenova-6.7-flash-lite` (200/6.3s), with
+`muse-spark-1.2-contributor` kept last as the quality floor. Backup:
+`config.yml.bak-20260819-smol-chain-reorder`.
+
 ## Rollback
 
 - Relay: copy the `.bak-20260819-upstream-timeout-600s` file over
