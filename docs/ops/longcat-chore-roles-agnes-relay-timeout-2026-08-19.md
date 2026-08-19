@@ -221,6 +221,20 @@ paid model. Reordered to put verified-live inexpensive/free legs first:
 `muse-spark-1.2-contributor` kept last as the quality floor. Backup:
 `config.yml.bak-20260819-smol-chain-reorder`.
 
+## task role back to Muse contributor (2026-08-19, same session)
+
+Clarification from the user: `muse-spark-1.2-contributor` rides the OpenCode
+Go subscription — prepaid, so idle quota is waste, and it should carry real
+coding work. `task` (the subagent code-execution role) therefore returns to
+`zg-newapi/muse-spark-1.2-contributor:max`, exactly the final projection in
+`opencode-go-muse-cutover-2026-08-19.md` (Responses-only model with its
+model-level API override; r5 no-fallback canary already proven on this
+selector). LongCat keeps `smol` + `commit`; the earlier worry about burning
+the paid LongCat key on high-volume `:max` reasoning no longer applies to
+`task`. The muse-spark model-level chain (`fengwind/deepseek-v4-flash` then
+`sensenova-6.7-flash-lite`) covers task failures. Backup:
+`config.yml.bak-20260819-task-muse`.
+
 ## Rollback
 
 - Relay: copy the `.bak-20260819-upstream-timeout-600s` file over
