@@ -144,6 +144,26 @@ OMP has no `zg-newapi/LongCat-2.0` route, so the NewAPI-side `LongCat-2.0`
 alias on ch68/ch69 (mapped to `agnes-2.0-flash`) cannot be hit accidentally
 from OMP; the direct provider and the NewAPI alias do not interfere.
 
+## Dead `bigctx` role removed, vision moved to Dots (2026-08-19, same session)
+
+The official OMP runtime honors exactly ten role keys (`default, smol, slow,
+vision, plan, designer, commit, tiny, task, advisor`; see
+[docs/models.md](https://github.com/can1357/oh-my-pi/blob/main/docs/models.md)).
+The configured `bigctx: zg-newapi/k3:max` role and its `bigctx:` fallback
+chain appeared nowhere in the runtime bundles, the local extensions, or the
+guardian — a dead config entry with zero effect. Both were removed.
+
+`vision` moved from `zg-newapi/agnes-2.5-pro` (officially paid, and the China
+station enforces a balance pre-auth threshold on large requests) to
+`zg-newapi/dots-3-note-prev` (ch77), whose live text/image/OCR evidence is
+recorded in `omp-global-compaction-model.md`. The role-level `vision` chain
+now falls back to `zg-newapi/agnes-2.5-flash` then `zg-newapi/agnes-2.5-pro-alpha`;
+the redundant first entry (same model as the new primary) was dropped.
+
+Smoke after edit: `dots-3-note-prev` via NewAPI returned HTTP 200 in 0.6s for
+a trivial completion. Backup: `config.yml.bak-20260819-bigctx-vision`.
+Effective on next OMP restart, same as the role changes above.
+
 ## Rollback
 
 - Relay: copy the `.bak-20260819-upstream-timeout-600s` file over
