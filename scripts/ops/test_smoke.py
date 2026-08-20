@@ -63,6 +63,66 @@ class AdminAuthTests(unittest.TestCase):
 
         self.assertEqual(guardian_exclusions, smoke.KNOWN_BROKEN_CHANNELS)
 
+    def test_deployed_guardian_exclusions_match_repo_copy(self):
+        """2026-08-20：仓库副本与部署副本（~/.omp/guardian/guardian.py）的
+        排除集必须一致——当天部署副本漏更 75/98，tombstone 渠道面临被
+        Guardian 恢复队列回捞的风险。部署文件缺失（CI 等环境）时跳过。
+        """
+        deployed = Path.home() / ".omp" / "guardian" / "guardian.py"
+        if not deployed.exists():
+            self.skipTest(f"deployed guardian not present: {deployed}")
+
+        def _exclusions(path: Path) -> set:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in tree.body:
+                if isinstance(node, ast.Assign) and any(
+                    isinstance(target, ast.Name)
+                    and target.id == "AUTO_BAN_RECOVERY_EXCLUSIONS"
+                    for target in node.targets
+                ):
+                    return set(ast.literal_eval(node.value))
+            return set()
+
+        repo_set = _exclusions(Path(__file__).with_name("guardian.py"))
+        deployed_set = _exclusions(deployed)
+        self.assertEqual(
+            repo_set,
+            deployed_set,
+            "部署副本排除集漂移：cp scripts/ops/guardian.py ~/.omp/guardian/ "
+            "并重启 Guardian（apply-secrets-restart.ps1）",
+        )
+
+    def test_zero_output_billing_detection(self):
+        """零输出计费侦测：GROUP BY/HAVING 过滤由 SQL 完成，假连接只回罐装行。"""
+
+        class FakeResult:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def fetchall(self):
+                return self._rows
+
+        class FakeConn:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def execute(self, *_args, **_kwargs):
+                return FakeResult(self._rows)
+
+            def close(self):
+                pass
+
+        with patch.object(
+            smoke.sqlite3, "connect", return_value=FakeConn([(86, 3, 150000)])
+        ):
+            violations = smoke.zero_output_billing_violations()
+        self.assertEqual(len(violations), 1)
+        self.assertIn("channel=86", violations[0])
+        self.assertIn("x3", violations[0])
+
+        with patch.object(smoke.sqlite3, "connect", return_value=FakeConn([])):
+            self.assertEqual(smoke.zero_output_billing_violations(), [])
+
     def test_disabled_ai168661_contracts_are_double_locked_and_quarantined(self):
         disabled = {
             channel_id

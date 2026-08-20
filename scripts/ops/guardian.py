@@ -192,6 +192,8 @@ ERROR_SCAN_BATCH_SIZE = 5  # 每次最多测试 N 个渠道（降低 API 负载�
 ERROR_SCAN_PINNED_BATCH_SIZE = 2  # 固定路由每批最多占 N 个槽位，兼顾快速隔离和普通渠道轮转
 ERROR_DISABLE_KEYWORDS = [
     "余额不足",
+    "预扣费额度失败",  # 2026-08-20：tabitoken 余额见底时上游 403 报文，旧词表不命中致渠道裸奔接客
+    "daily_free_credits_exhausted",  # 2026-08-20：sotamodel 免费日额度耗尽 429 报文
     "INSUFFICIENT_BALANCE",
     "credit balance",
     "quota",

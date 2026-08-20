@@ -218,8 +218,11 @@ DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
 # minimum number of enabled (status=1) channels serving the model; 0 enabled =
 # hard FAIL ("503 No available channel" state detected before traffic hits it).
 # Current capacity is reported in the check detail either way.
+# 2026-08-20：min=1 在塌缩到单渠道（ch86 裸奔）时仍是绿的， opus 双模型提到 2，
+# 塌缩到单渠道即 FAIL（当前 justwoker ch94/95 + ch86 兜底，容量 3）。
 MIN_ENABLED_CRITICAL_MODELS: dict[str, int] = {
-    "claude-opus-5": 1,
+    "claude-opus-5": 2,
+    "claude-opus-4-8": 2,
 }
 
 NEWAPI_DB = DEPLOY_DIR / "new-api.db"
@@ -766,6 +769,43 @@ def multi_key_health_violations() -> list[str]:
         con.close()
     return violations
 
+ZERO_OUTPUT_WINDOW_SECONDS = 6 * 3600  # 回看窗口
+ZERO_OUTPUT_MIN_USE_TIME = 120  # 挂死指纹：长时间流且零输出
+ZERO_OUTPUT_MIN_EVENTS_PER_CHANNEL = 2  # 单渠道偶发取消不报，≥2 才算系统性挂死
+
+
+def zero_output_billing_violations() -> list[str]:
+    """Detect upstream hangs that still bill (2026-08-20 ch86: 67.9k prompt
+    120s 零输出 client_gone，仍计费 ¥0.5)。
+
+    指纹：consume 日志 completion_tokens=0 且 use_time>=120s 且 quota>0。
+    用户手动取消可能产生单条同类记录，故单渠道窗口内 ≥2 条才报。
+    直读 NewAPI SQLite logs 表（只读），admin API 无此聚合。
+    """
+    violations: list[str] = []
+    try:
+        con = sqlite3.connect(f"file:{NEWAPI_DB.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        return [f"db-open-failed={e}"]
+    try:
+        since = int(time.time()) - ZERO_OUTPUT_WINDOW_SECONDS
+        rows = con.execute(
+            "SELECT channel_id, COUNT(*), SUM(quota) FROM logs"
+            " WHERE type=2 AND created_at>=? AND completion_tokens=0"
+            " AND use_time>=? AND quota>0"
+            " GROUP BY channel_id HAVING COUNT(*)>=?",
+            (since, ZERO_OUTPUT_MIN_USE_TIME, ZERO_OUTPUT_MIN_EVENTS_PER_CHANNEL),
+        ).fetchall()
+        for channel_id, count, quota in rows:
+            violations.append(
+                f"channel={channel_id} zero-output-billed x{count} quota={quota}"
+            )
+    except sqlite3.Error as e:
+        violations.append(f"db-read-failed={e}")
+    finally:
+        con.close()
+    return violations
+
 GUARDIAN_STATE_FILE = Path.home() / ".omp" / "guardian" / "state.json"
 
 
@@ -1151,6 +1191,12 @@ def main() -> int:
         "multi-key pool health",
         not mk_violations,
         f"violations={mk_violations or 'none'}",
+    )
+    zero_out_violations = zero_output_billing_violations()
+    check(
+        "zero-output billed streams",
+        not zero_out_violations,
+        f"violations={zero_out_violations or 'none'}",
     )
     ability_violations = ability_posture_violations()
     check(

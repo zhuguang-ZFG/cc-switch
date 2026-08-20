@@ -3294,6 +3294,24 @@ class KeywordBoundaryTests(unittest.TestCase):
         self.assertTrue(guardian._is_transient_rate_limit("HTTP 429 too many requests"))
         self.assertTrue(guardian._is_transient_rate_limit("rate limit exceeded"))
 
+    def test_prepay_quota_failure_disables(self):
+        """2026-08-20：预扣费额度失败（403）是余额耗尽，必须命中禁用词。
+
+        tabitoken 拆分当日 key#1/key#3 余额低于预扣门槛，403 报文不含旧词表
+        任何关键词，渠道持续接客导致 OMP 反复故障路由。
+        """
+        msg = "预扣费额度失败, 用户剩余额度: ＄0.209590, 需要预扣费额度: ＄0.800000"
+        self.assertEqual(guardian._matched_disable_keyword(msg), "预扣费额度失败")
+        self.assertFalse(guardian._is_transient_rate_limit(msg))
+
+    def test_daily_free_credits_exhausted_disables(self):
+        """sotamodel 免费日额度耗尽：虽带 429 但属硬错误，不得当瞬态限流跳过。"""
+        msg = "bad response status code 429, message: daily_free_credits_exhausted"
+        self.assertEqual(
+            guardian._matched_disable_keyword(msg), "daily_free_credits_exhausted"
+        )
+        self.assertFalse(guardian._is_transient_rate_limit(msg))
+
     def test_quota_exhausted_429_is_hard_failure(self):
         msg = "HTTP 429 quota exhausted: insufficient_quota"
         self.assertFalse(guardian._is_transient_rate_limit(msg))
