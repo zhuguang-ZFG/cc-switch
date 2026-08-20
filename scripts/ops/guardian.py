@@ -158,7 +158,7 @@ RECOVERY_COOLDOWN_MIN = 5  # 恢复冷却时间（分钟）
 RECOVERY_TEST_COUNT = 3  # 恢复验证测试次数
 RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 # 明确隔离且不应自动恢复的本地渠道；与 newapi-local-smoke.py 策略保持一致。
-AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 9, 18, 20, 39, 57, 62, 63, 64, 65, 70, 71, 73, 74, 78}  # 9: linxi-k40 余额耗尽双锁（2026-08-10，auto_ban=0 不会被导入，入集仅为三处同步一致性）；18: linxi-k40-opus5-backup 恢复测试持续超时（2026-08-09）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；39/78: ai.168661 账号侧死 key 恢复点；57: gorouter 余额不足（$0.05<预扣$0.30）；70: vip-j3gb-gpt 上游 15 次恢复失败；71: hugai-claude-opus5 上游网关 routing group 坏（非本机配置）；73: zzzcoding-codex-relay 上游 405 真死（2026-08-08）；74: sharedchat-codex-sol 同源禁用
+AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 9, 18, 20, 39, 57, 62, 63, 64, 65, 70, 71, 73, 74, 75, 78, 98}  # 9: linxi-k40 余额耗尽双锁（2026-08-10，auto_ban=0 不会被导入，入集仅为三处同步一致性）；18: linxi-k40-opus5-backup 恢复测试持续超时（2026-08-09）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；39/78: ai.168661 账号侧死 key 恢复点；57: gorouter 余额不足（$0.05<预扣$0.30）；70: vip-j3gb-gpt 上游 15 次恢复失败；71: hugai-claude-opus5 上游网关 routing group 坏（非本机配置）；73: zzzcoding-codex-relay 上游 405 真死（2026-08-08）；74: sharedchat-codex-sol 同源禁用；75: tabitoken 多 key 已拆分为 ch97/98/99 单 key 渠道（2026-08-20），保留为禁用 tombstone，绝不可复活（轮询会再撞欠费 key 再触发整渠道 auto_ban）；98: tabitoken-2 key#2 欠费（$0.22<预扣$0.8），小探针能过但真实流量必失败，充值后手工 enable + 重跑 split 脚本验证
 # ch91's upstream only implements the streaming Codex Responses wire shape
 # reliably. Keep it under normal health/recovery governance, but make every
 # Guardian probe exercise the same protocol as OMP instead of the admin API's
