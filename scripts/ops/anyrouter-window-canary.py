@@ -12,6 +12,9 @@
 - 多挤策略（2026-08-20，社区情报：anyrouter 429 是拥堵式、持续有界重试可挤入）：
   每轮最多 5 次尝试、间隔 10s，首次 200 即判 open；429 秒回不耗额度，
   总量有界（每 30min 至多 5 次），不构成重试风暴。桥不可达（本地故障）不挤，直接判 closed。
+- sol 探测（2026-08-20 同批）：每轮附带探测 gpt-5.6-sol（chat/completions 路径，
+  代理内置有界挤 8×5s，单次调用即"挤完后可用性"，不叠加 canary burst 防嵌套放大），
+  独立 sol_state 状态与 closed→open 告警。
 - 仅 closed→open 跳变发 Telegram；凭据读 ~/.omp/guardian/secrets.json，不落日志。
 - 状态文件 anyrouter-canary-state.json 防重复告警；日志 anyrouter-canary.log。
 - 无任何持久状态/锁需求：计划任务触发即跑即退，崩溃由下一次触发掩盖。
@@ -32,8 +35,11 @@ STATE_FILE = GUARDIAN_DIR / "anyrouter-canary-state.json"
 LOG_FILE = GUARDIAN_DIR / "anyrouter-canary.log"
 
 BRIDGE = "http://127.0.0.1:8789/v1/messages"
+BRIDGE_CHAT = "http://127.0.0.1:8789/v1/chat/completions"
 PROBE_MODEL = "claude-haiku-4-5-20251001"  # 池内最便宜模型；429 为全池语义
+SOL_MODEL = "gpt-5.6-sol"  # 唯一在役非 Claude 模型（codex/gemini 已 404 下架）
 PROBE_TIMEOUT = 60
+SOL_TIMEOUT = 120  # 代理内置有界挤（8×5s），单次调用最坏 ~40s+ 请求时间
 BURST_ATTEMPTS = 5   # 多挤：每轮最多尝试次数（429 秒回不耗额度）
 BURST_INTERVAL = 10  # 多挤：尝试间隔（秒）
 MAX_LOG_BYTES = 512 * 1024
@@ -101,6 +107,34 @@ def probe() -> tuple[bool, str]:
     return False, f"{BURST_ATTEMPTS} attempts closed, last: {last}"
 
 
+def probe_sol() -> tuple[bool, str]:
+    """sol 单次探测：代理内置有界挤（8×5s），一次调用即代表"挤完后的可用性"。
+
+    不再叠加 canary 侧 burst，避免 5×40s 的嵌套放大。
+    """
+    body = json.dumps({
+        "model": SOL_MODEL,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "ping"}],
+    }).encode()
+    req = urllib.request.Request(
+        BRIDGE_CHAT, data=body, method="POST",
+        headers={"content-type": "application/json", "authorization": "Bearer local"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=SOL_TIMEOUT) as resp:
+            return True, f"HTTP {resp.status}"
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:200]
+        except OSError:
+            pass
+        return False, f"HTTP {e.code} {detail}"
+    except (OSError, ValueError) as e:
+        return False, f"bridge unreachable: {e}"
+
+
 def send_telegram(secrets: dict, text: str) -> bool:
     token = secrets.get("telegram_token", "")
     chat_id = secrets.get("telegram_chat_id", "")
@@ -128,14 +162,21 @@ def send_telegram(secrets: dict, text: str) -> bool:
 def main() -> int:
     secrets = load_secrets()
     last_state = ""
+    last_sol_state = ""
     try:
-        last_state = json.loads(STATE_FILE.read_text(encoding="utf-8")).get("state", "")
+        prior = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        last_state = prior.get("state", "")
+        last_sol_state = prior.get("sol_state", "")
     except (OSError, ValueError):
         pass
 
     open_now, detail = probe()
     state = "open" if open_now else "closed"
     log(f"probe {PROBE_MODEL}: {state} ({detail})")
+
+    sol_open, sol_detail = probe_sol()
+    sol_state = "open" if sol_open else "closed"
+    log(f"probe {SOL_MODEL}: {sol_state} ({sol_detail})")
 
     if open_now and last_state != "open":
         ok = send_telegram(
@@ -148,9 +189,22 @@ def main() -> int:
         )
         log(f"window-open alert sent={ok}")
 
+    if sol_open and last_sol_state != "open":
+        ok = send_telegram(
+            secrets,
+            "🟢 anyrouter sol 窗口开启\n"
+            f"探测 {SOL_MODEL} 挤入成功（代理有界挤 8×5s 内恢复 200）。\n"
+            "可用法（门禁禁止自动挂链，需人工显式选用）：\n"
+            "OMP 指定 anyrouter-sol/gpt-5.6-sol。\n"
+            "窗口可能随时关闭（模型负载上限），用后请回报结果。",
+        )
+        log(f"sol window-open alert sent={ok}")
+
     try:
         STATE_FILE.write_text(json.dumps({
             "state": state, "ts": datetime.now(timezone.utc).isoformat(), "detail": detail,
+            "sol_state": sol_state, "sol_ts": datetime.now(timezone.utc).isoformat(),
+            "sol_detail": sol_detail,
         }, ensure_ascii=False), encoding="utf-8")
     except OSError as e:
         log(f"状态写入失败: {e}")

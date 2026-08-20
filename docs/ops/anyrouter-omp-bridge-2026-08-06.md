@@ -135,3 +135,28 @@ Veridrop 2026-08-19 聚合 63 份探针报告 anyrouter.top 中位可用率 0/10
 （`Service Unavailable`），正确判 closed、未发告警，状态文件正常写入；
 部署副本与仓库副本一致（`scripts/ops/anyrouter-window-canary.py` →
 `~/.omp/guardian/anyrouter-window-canary.py`）。
+
+## 2026-08-20：sol 接入与代理层有界挤
+
+模型目录实测（8789 `/v1/models` + 逐模型探测）：Claude 全家在列但全池 429；
+`gpt-5-codex`、`gemini-2.5-pro` 虽在目录但 responses 面 404"当前 API 不支持所选模型"，
+已实质下架；**唯一在役非 Claude 模型是 `gpt-5.6-sol`**，返回 500
+"负载已经达到上限，请稍后重试"（秒回 ~0.1s、不耗额度，拥堵式拒绝）。
+
+处置（社区"多挤"策略的有界实现）：
+
+- **8789 代理内置有界挤**：responses 路径识别负载上限特征错误
+  （500/429 + "负载已经达到上限"），最多 8 次、间隔 5s，其余错误照旧直传
+  （NewAPI failover 依赖原状态码）。备份 `proxy.cjs.bak-20260820-squeeze`，
+  经 `apply-secrets-restart.ps1 -Proxy anyrouter` 重启生效。实测日志可见
+  squeeze attempt 1→3 后上游转 502 直传，机制按预期工作。
+- **canary 扩展 sol 探测**：`anyrouter-window-canary.py` 每轮附探
+  `gpt-5.6-sol`（单次调用即"挤完后可用性"，不叠加 burst 防嵌套放大），
+  独立 `sol_state` 状态与 closed→open Telegram 告警。
+- **OMP 手动注册**：models.yml 新增 provider `anyrouter-sol`
+  （openai-completions，8789），模型 `gpt-5.6-sol`。**仅手动选用，
+  不进任何 fallbackChains**（门禁 test_omp_routes.py anyrouter 条不变）。
+- 门禁验证：test_omp_routes 37 项、test_smoke 39 项全绿。
+
+用法：开窗告警后 OMP 显式 `anyrouter-sol/gpt-5.6-sol`；未开窗时请求会在
+代理侧挤 ~40s 后返回上游负载上限错误，属预期行为而非故障。
