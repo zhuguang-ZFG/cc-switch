@@ -515,6 +515,21 @@ class OmpRouteGateTests(unittest.TestCase):
         )
 
 
+    def test_advisor_role_is_pinned_to_sota(self):
+        """用户约束（2026-08-20）：advisor 只能走 sota 免费模型。
+
+        advisor 是高频后台角色（活跃会话 ~20s/轮）。当日曾被建议切到
+        TTFT 付费路径，上线后每 3 分钟烧 ¥0.2+ justwoker 额度被用户叫停。
+        sotamodel 日额度耗尽导致 advisor 停机是可接受取舍，
+        不得以此为由把 advisor 切到任何付费路由。
+        """
+        roles = _model_role_entries(CONFIG_FILE.read_text(encoding="utf-8"))
+        self.assertEqual(
+            _base_selector(roles.get("advisor", "")),
+            "zg-newapi/omp-sota-claude-opus-5",
+            "advisor 只能走 sota 免费模型（用户约束），不得改指付费路由",
+        )
+
     def test_critical_chains_exclude_known_bad_agentrouter_claude(self):
         chains = _fallback_chain_entries(CONFIG_FILE.read_text(encoding="utf-8"))
         for role, candidates in chains.items():
