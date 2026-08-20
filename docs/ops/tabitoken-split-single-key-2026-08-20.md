@@ -105,3 +105,30 @@ POST /api/channel/99/status {"status":2}
 # 若需回到多 key 形态：从两个排除集移除 75，POST /api/channel/75/status {"status":1}
 # （key#2 充值前不建议——会立刻再触发整渠道禁用）
 ```
+
+## 2026-08-20 16:47 续：key#1/key#3 同日耗尽，ch97/ch99 停放
+
+拆分上线约 5 小时后，剩余两把 key 也相继见底（claude-opus-5 真实流量消耗）：
+
+- 16:25:12 ch97（key#1）真实请求 403：`预扣费额度失败, 用户剩余额度: ＄0.209590,
+  需要预扣费额度: ＄0.800000`——OMP `slow` 角色（zg-newapi-anthropic/claude-opus-5:max）
+  被打到故障路由，随后 k3 兜底偶发 400、fengwind/deepseek-v4-pro aborted，链条走完；
+- 16:22:11 ch99（key#3）渠道测试 403：余额 $0.607874 < $0.80 预扣门槛；
+- 403 余额类错误**不触发 NewAPI auto_ban**，渠道会持续接客持续 403，
+  必须手动双锁（本节的教训补：拆分上线时应同步评估各 key 余额水位）。
+
+处置（与 ch98 同模式）：
+
+- ch97/ch99：status=2 + weight=0 双锁；备份
+  `~/.new-api-local/backups/channel-{97,99}-before-park-20260820-164747.json`（仓外，按惯例不落库）；
+- `AUTO_BAN_RECOVERY_EXCLUSIONS`（guardian.py）与 `KNOWN_BROKEN_CHANNELS`
+  （newapi-local-smoke.py）同步加入 97/99，test_smoke.py 39 项通过；
+- **修复部署漂移**：`~/.omp/guardian/guardian.py` 的排除集缺 75/98
+  （上午只改了仓库副本忘了部署），本次一并同步并通过
+  `apply-secrets-restart.ps1` 重启 Guardian（新 pid 12284）；
+- claude-opus-5 池余量：ch94/ch95（justwoker，p50/w8）在役，
+  满足 MIN_ENABLED_CRITICAL_MODELS≥1；ch93（omp-sota-sotamodel）仅服务
+  `omp-sota-claude-opus-5`，不计入普通 opus-5 池。
+
+恢复条件：tabitoken 充值后手工 enable ch97/ch99 + 从两排除集移除 +
+真实档 max_tokens=8192 偿付探测（小探针假活教训不变）。
