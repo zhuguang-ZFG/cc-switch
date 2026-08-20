@@ -29,3 +29,22 @@ justwoker 额度。用户叫停并明确约束：**advisor 只能用 sota 模型
 
 反例即本次：只看到"advisor 每天停机"的缺点就推荐付费路径，
 没算高频调用 × 付费单价，也没确认用户选择免费模型的意图。
+
+## 续：sota 停机期间 Zen 免费模型顶上（当日用户决策）
+
+约束不变（advisor 主选永远锁 sota），但为消除每日额度耗尽后的停机窗口，
+新增兜底链（config.yml fallbackChains）：
+
+```
+zg-newapi/omp-sota-claude-opus-5:
+  - zg-newapi/muse-spark-1.2-contributor-free
+  - zg-newapi/hy3-free
+```
+
+- 链上全部是 Zen 免费模型（ModelRatio=0），零成本，符合"advisor 不烧钱"的约束本意；
+- 质量降级（免费小模型给建议）但 advisor 不停机；
+- 门禁兼容性：`validate_sota_upgrade_only` 只禁止 sota 别名作为链候选，
+  以 sota 别名为链键指向免费模型是合法方向；test_omp_routes 38 项全绿；
+- **待观察项**：OMP advisor 角色是否消费 fallbackChains 未经实测（此前 advisor
+  503 时无链可走直接 halt）。下次 sota 耗尽时看日志：若 advisor 仍 halt 而非
+  切 muse-free，说明 advisor 不吃链，需另想办法（届时更新本节）。
