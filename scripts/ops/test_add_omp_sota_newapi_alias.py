@@ -182,5 +182,29 @@ class OmpSotaNewApiAliasTests(unittest.TestCase):
             )
 
 
+    def test_multi_key_detection_reads_channel_info_blob(self):
+        with tempfile.TemporaryDirectory() as temp:
+            database = Path(temp) / "new-api.db"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("CREATE TABLE channels (id INTEGER, channel_info TEXT)")
+                connection.execute(
+                    "INSERT INTO channels VALUES (75, ?)",
+                    (json.dumps({"is_multi_key": True, "multi_key_size": 3}),),
+                )
+                connection.execute(
+                    "INSERT INTO channels VALUES (93, ?)",
+                    (json.dumps({"is_multi_key": False}),),
+                )
+                connection.execute("INSERT INTO channels VALUES (99, NULL)")
+                connection.commit()
+            finally:
+                connection.close()
+            self.assertTrue(sota.is_multi_key_channel(database, 75))
+            self.assertFalse(sota.is_multi_key_channel(database, 93))
+            self.assertFalse(sota.is_multi_key_channel(database, 99))
+            self.assertFalse(sota.is_multi_key_channel(database, 1234))
+
+
 if __name__ == "__main__":
     unittest.main()

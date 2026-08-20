@@ -9,7 +9,15 @@ are never included in output.
 Strict isolation (2026-08-20): the alias may only be added to a dedicated
 ``omp-sota-*`` channel; adding it to a shared pool is refused because it
 silently turns a dedicated-channel outage into paid shared-pool fallback.
-``--remove`` remains allowed on any channel as the drift cleanup path.
+``--remove`` remains allowed on any single-key channel as the drift cleanup
+path. Note the dedicated ch93 is alias-only, so the add path effectively
+applies to future dedicated channels that also carry the base model; ch93
+itself is rebuilt by ``create_omp_sota_channel.py``.
+
+Multi-key channels are refused outright: this tool applies changes via API
+PUT, which regenerates ``channel_info`` on multi-key channels and wipes manual
+DB repairs (t1qq runbook). Multi-key drift must be cleaned by direct DB write
+plus a cache-sync wait, as done for ch75 on 2026-08-20.
 """
 
 from __future__ import annotations
@@ -97,6 +105,24 @@ def hydrate_channel_key(
     return {**channel, "key": key}
 
 
+def is_multi_key_channel(db_path: Path, channel_id: int) -> bool:
+    """Read channel_info from the SQLite SSOT (the management API projection
+    does not expose multi-key state)."""
+    with closing(
+        sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=30)
+    ) as connection:
+        row = connection.execute(
+            "SELECT channel_info FROM channels WHERE id = ?", (channel_id,)
+        ).fetchone()
+    if not row or not row[0]:
+        return False
+    try:
+        info = json.loads(row[0])
+    except (TypeError, ValueError):
+        return False
+    return bool(isinstance(info, dict) and info.get("is_multi_key"))
+
+
 def plan_channel_update(
     channel: dict[str, Any],
     channel_id: int,
@@ -119,7 +145,10 @@ def plan_channel_update(
             f"{ALIAS_PREFIX}* channel, not {name!r}"
         )
     if channel.get("status") != 1:
-        raise ValueError(f"ch{channel_id} must be enabled before adding a SOTA alias")
+        # Applies to removal too: verify_projection and the rollback path
+        # assume an enabled channel; clean disabled channels by direct DB
+        # write instead.
+        raise ValueError(f"ch{channel_id} must be enabled before modifying a SOTA alias")
     if not has_usable_key(channel):
         raise ValueError("channel key is empty or masked; refusing PUT")
 
@@ -302,6 +331,14 @@ def main() -> int:
     original = read_channel()
     if original is None:
         print(f"refused: ch{args.channel_id} read failed")
+        return 1
+    if is_multi_key_channel(db_path, args.channel_id):
+        print(
+            f"refused: ch{args.channel_id} is multi-key; API PUT regenerates "
+            "channel_info and wipes DB repairs — clean alias drift by direct "
+            "DB write plus a cache-sync wait (see the t1qq runbook and the "
+            "2026-08-20 ch75 cleanup)"
+        )
         return 1
     try:
         original = hydrate_channel_key(original, db_path, args.channel_id)

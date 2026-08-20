@@ -270,9 +270,12 @@ pool.
 
 Tooling guards added the same day so the drift cannot silently recur:
 `add_omp_sota_newapi_alias.py` now refuses to add the alias to any channel not
-named `omp-sota-*` (removal stays allowed everywhere as the cleanup path), and
-`create_omp_sota_channel.py` / `create-omp-sota-channel-secure.ps1` now build
-ch93 alias-only with `test_model` set to the alias.
+named `omp-sota-*`, and refuses ALL operations (including `--remove`) on
+multi-key channels — its API PUT would regenerate `channel_info` (verified
+live: a dry-run against ch75 is refused; multi-key drift must be cleaned by
+direct DB write plus a cache-sync wait). `create_omp_sota_channel.py` /
+`create-omp-sota-channel-secure.ps1` now build ch93 alias-only with
+`test_model` set to the alias.
 
 - The dedicated single-key `omp-sota-sotamodel` channel is ch93, with the
   marked alias mapped to `claude-opus-5`. After upstream quota recovery, direct

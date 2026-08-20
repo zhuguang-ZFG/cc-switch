@@ -361,15 +361,33 @@ def main() -> int:
             items = list_channels(smoke, headers)
         for name, channel_id in created_ids.items():
             strict = name in created_new
-            expected_status = 1 if strict else int(existing[name]["status"])
+            if strict:
+                expected_status = 1
+            else:
+                # Re-read the existing channel's status from the freshest
+                # list: Guardian may flip it during the cache-sync window,
+                # and a stale expectation would roll back healthy new
+                # channels on a spurious mismatch.
+                current = next(
+                    (i for i in items if i.get("id") == channel_id), existing[name]
+                )
+                status_value = current.get("status")
+                if not isinstance(status_value, int):
+                    status_value = existing[name].get("status")
+                if not isinstance(status_value, int):
+                    raise RuntimeError(f"ch{channel_id} status unavailable in API projection")
+                expected_status = status_value
             verify(db_path, items, name, channel_id, expected_status, strict=strict)
         parts = []
         for name, cid in created_ids.items():
             if name in created_new:
                 parts.append(f"ch{cid} {name} live at p{PRIORITY}/w{WEIGHT}")
             else:
+                current = next(
+                    (i for i in items if i.get("id") == cid), existing[name]
+                )
                 parts.append(
-                    f"ch{cid} {name} present, status={existing[name].get('status')} untouched"
+                    f"ch{cid} {name} present, status={current.get('status')} untouched"
                 )
         print(f"OK: {', '.join(parts)}; backup={backup.name if backup else '(not needed)'}")
         return 0
