@@ -81,6 +81,21 @@ ch3 baibei-100xlabs、ch9 linxi-k40、ch14 wintoken-glm、ch91
 jianzhile-gpt-5.6-sol 均为多 key 且已全部处于禁用状态，暂无同类急性风险；
 若日后要重新启用，应同样拆分为单 key 渠道。
 
+## 代理层多 key 审计（2026-08-20，结论：健康，无需动作）
+
+"单 key 欠费拖垮整体"是 **NewAPI 渠道层**多 key 的机制病；本地代理层的
+多 key 是另一套实现，已自带 per-key 隔离：
+
+- **agentrouter-proxy (8788)**：3 key 池。402/403 命中额度关键词
+  （quota/额度/余额…）→ `_mark_fail` 只冷却该 key 180s，`_pick_key` 轮询
+  跳过冷却中的 key，同请求自动换 key 重试；认证类 403 快速失败不换 key。
+  单 key 欠费 = 自己进冷却，池不受拖累。ch45 `agentrouter`（NewAPI）指向
+  8788，间接受益。已知小瑕疵：冷却固定 180s，欠费 key 每 180s 被重试一次
+  （一次上游空调用），可改指数退避，属优化非 bug。
+- **ch86 `agentrouter-claude`**：直连 `ps.air-outer.com` 的单 key 渠道，
+  不涉多 key（其 w0 隔离是独立事件）。
+- **anyrouter-proxy (8789)**：无 key 池（device_id 单账号机制），不涉此问题。
+
 ## 回滚
 
 ```powershell
