@@ -121,8 +121,9 @@ POST /api/channel/96/status {"status": 2}
 # ModelRatio：从备份快照恢复 options 行，或手工删除 6 个免费模型条目
 ```
 
-## 顺带发现（未动）
+## 顺带清理
 
-`global.chat_completions_to_responses_policy` 的 `channel_ids` 含 `142`，但
-当前 channels 表 max id=95 —— 142 是已删除渠道的残留引用。不影响功能
-（policy 按存在的渠道匹配），本次未清理，记录待后续确认。
+`global.chat_completions_to_responses_policy` 的 `channel_ids` 原有残留引用
+`142`（渠道已删除，当时 max id=95）。2026-08-20 已摘除，现为 `[91, 92]`，
+model_patterns 与 enabled 未动；备份
+`new-api-before-policy-ch142-cleanup-20260820-145831.db`。
