@@ -84,3 +84,11 @@ abilities 自动更新为 ch95/ch94 p50/w8 + ch86 p40/w13，justwoker 优先、c
 
 注意：ch86 大 prompt 挂起未定性（小请求正常），保持启用作兜底但不再承载主力流量；
 若再出现 120s 零输出，按 runbook 双锁隔离。`-thinking` 变体语义不变（独立模型名）。
+
+## 2026-08-20 17:3x 续：补聚合 plain claude-opus-4-8
+
+justwoker 上游目录共 4 个模型（opus-5/opus-5-thinking/opus-4-8/opus-4-8-thinking），
+此前漏聚合 plain `claude-opus-4-8`，其 ability 同样塌缩到 ch86 单渠道。已补入
+ch94/ch95 models（备份 `~/.new-api-local/backups/channel-{94,95}-before-add-opus48-*.json`），
+abilities：ch95/ch94 p50/w8 优先 + ch86 p40/w13 兜底。真实请求验证 3.8s OK 走 ch94。
+至此 justwoker 上游 4 个模型全部双渠道聚合完毕。
