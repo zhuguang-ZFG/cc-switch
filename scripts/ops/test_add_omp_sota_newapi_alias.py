@@ -18,7 +18,7 @@ SPEC.loader.exec_module(sota)
 def channel_fixture(**overrides):
     channel = {
         "id": 75,
-        "name": "tabitoken",
+        "name": "omp-sota-sotamodel",
         "status": 1,
         "key": "fixture-secret-never-print",
         "models": "claude-opus-5,claude-sonnet-4-8",
@@ -31,6 +31,24 @@ def channel_fixture(**overrides):
 
 
 class OmpSotaNewApiAliasTests(unittest.TestCase):
+    def test_refuses_alias_on_non_dedicated_channel(self):
+        # strict isolation (2026-08-20): adding to a shared pool is refused
+        with self.assertRaisesRegex(ValueError, "strict isolation"):
+            sota.plan_channel_update(
+                channel_fixture(name="tabitoken"), 75, "claude-opus-5"
+            )
+        # removal from a shared channel stays allowed (drift cleanup path)
+        alias = "omp-sota-claude-opus-5"
+        drifted = channel_fixture(
+            name="tabitoken",
+            models=f"claude-opus-5,{alias}",
+            model_mapping=json.dumps({alias: "claude-opus-5"}),
+        )
+        _, _, changed = sota.plan_channel_update(
+            drifted, 75, "claude-opus-5", remove=True
+        )
+        self.assertTrue(changed)
+
     def test_plans_exact_marker_and_preserves_existing_mapping(self):
         updated, alias, changed = sota.plan_channel_update(
             channel_fixture(), 75, "claude-opus-5"

@@ -17,7 +17,9 @@ SMOKE_PATH = HERE / "newapi-local-smoke.py"
 PROBE_PATH = HERE / "probe_omp_sota_alias.py"
 READINESS_PATH = Path.home() / ".omp" / "agent" / "sota-readiness.json"
 MODEL = "omp-sota-claude-opus-5"
-BASE_MODEL = "claude-opus-5"
+# 2026-08-20 strict isolation: ch93 carries ONLY the marked alias (plain
+# claude-opus-5 removed), so the management probe uses the alias too; the
+# channel model_mapping rewrites it to the upstream base model.
 
 
 def load_module(path: Path, name: str) -> Any:
@@ -66,7 +68,7 @@ def main() -> int:
     token, user_id = smoke.admin_auth()
     headers = {"Authorization": f"Bearer {token}", "New-Api-User": str(user_id)}
     status, body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/api/channel/test/{channel_id}?model={BASE_MODEL}",
+        f"{smoke.NEWAPI_BASE}/api/channel/test/{channel_id}?model={MODEL}",
         headers=headers,
         timeout=90,
     )

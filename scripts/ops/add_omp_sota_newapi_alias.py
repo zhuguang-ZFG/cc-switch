@@ -5,6 +5,11 @@ The default mode is read-only. ``--apply`` creates an integrity-checked online
 SQLite backup, updates the channel through NewAPI, and verifies both the
 channel projection and the rebuilt ability row. Secrets remain in memory and
 are never included in output.
+
+Strict isolation (2026-08-20): the alias may only be added to a dedicated
+``omp-sota-*`` channel; adding it to a shared pool is refused because it
+silently turns a dedicated-channel outage into paid shared-pool fallback.
+``--remove`` remains allowed on any channel as the drift cleanup path.
 """
 
 from __future__ import annotations
@@ -102,6 +107,17 @@ def plan_channel_update(
     marked_alias = build_alias(base_model, alias)
     if channel.get("id") != channel_id:
         raise ValueError(f"expected channel id {channel_id}")
+    name = str(channel.get("name") or "")
+    # 2026-08-20 strict isolation: the SOTA alias may only live on the
+    # dedicated omp-sota-* channel. Adding it to a shared pool (as happened
+    # to ch75 on 2026-08-18) silently turns a dedicated-channel outage into
+    # paid shared-pool fallback traffic. Removal stays allowed everywhere —
+    # it is the drift cleanup path.
+    if not remove and not name.startswith(ALIAS_PREFIX):
+        raise ValueError(
+            f"strict isolation: SOTA alias may only be added to a dedicated "
+            f"{ALIAS_PREFIX}* channel, not {name!r}"
+        )
     if channel.get("status") != 1:
         raise ValueError(f"ch{channel_id} must be enabled before adding a SOTA alias")
     if not has_usable_key(channel):

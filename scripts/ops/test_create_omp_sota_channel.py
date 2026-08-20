@@ -19,7 +19,9 @@ class CreateOmpSotaChannelTests(unittest.TestCase):
     def test_payload_is_isolated_single_key_and_keeps_local_proxy(self):
         payload = sota.payload("opaque-key", 93)
         self.assertEqual(payload["id"], 93)
-        self.assertEqual(payload["models"], "claude-opus-5,omp-sota-claude-opus-5")
+        # strict isolation (2026-08-20): the marked alias only, no base model
+        self.assertEqual(payload["models"], "omp-sota-claude-opus-5")
+        self.assertEqual(payload["test_model"], "omp-sota-claude-opus-5")
         self.assertEqual(
             json.loads(payload["model_mapping"]),
             {"omp-sota-claude-opus-5": "claude-opus-5"},

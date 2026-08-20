@@ -244,6 +244,36 @@ workload health regressed. This is unrelated to the Muse ch48 repair. Leave it
 disabled until both the semantic and forced review-tool probes pass; do not use
 its historical HTTP 200 evidence as current readiness.
 
+Isolation note (2026-08-20): despite the "never appended to ch75" contract,
+ch75 `tabitoken` had drifted to also carry the marked alias (models +
+model_mapping + enabled ability at p50/w8). With ch93 disabled, 11 advisor-role
+calls (~30k prompt tokens each, ~¥190 total, 12:20-12:24) silently fell back to
+the shared paid pool. The alias was removed from ch75 by direct DB write
+(ch75 is multi-key; API PUT would regenerate `channel_info`, see the t1qq
+runbook) after backup `new-api-before-ch75-sota-isolation-20260820-123917.db`.
+Readback confirmed ch75 no longer lists the alias and the only remaining
+ability is ch93 (disabled); a live negative probe returned 503
+`No available channel for model omp-sota-claude-opus-5`. The alias now fails
+loudly when the dedicated channel is down — no shared-pool fallback.
+
+Strict isolation, both directions (2026-08-20, user decision): ch93 itself was
+also narrowed to carry ONLY the marked alias — plain `claude-opus-5` removed
+from models and abilities, `test_model` set to the alias (backup
+`new-api-before-ch93-strict-isolation-20260820-124826.db`). Regular Opus traffic
+can never land on the SOTA channel, and SOTA traffic can never land on shared
+channels. `refresh_omp_sota_readiness.py` now management-probes ch93 with the
+alias (the channel model_mapping rewrites it to the upstream base model);
+mapped aliases are valid in the management test path (same pattern as the
+zzzcoding ch92 probe). Verified while disabled: alias request -> 503
+`No available channel`, plain `claude-opus-5` still resolves via the normal
+pool.
+
+Tooling guards added the same day so the drift cannot silently recur:
+`add_omp_sota_newapi_alias.py` now refuses to add the alias to any channel not
+named `omp-sota-*` (removal stays allowed everywhere as the cleanup path), and
+`create_omp_sota_channel.py` / `create-omp-sota-channel-secure.ps1` now build
+ch93 alias-only with `test_model` set to the alias.
+
 - The dedicated single-key `omp-sota-sotamodel` channel is ch93, with the
   marked alias mapped to `claude-opus-5`. After upstream quota recovery, direct
   TLS still failed on this host; adding only the channel-local Clash proxy

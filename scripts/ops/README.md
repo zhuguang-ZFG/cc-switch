@@ -208,6 +208,7 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 - runinfra qwen3-8-27b 渠道脚本：`scripts/ops/add_runinfra_qwen_channel.py`（ch88；上游硬拒 `prompt_cache_key`，已配 param_override delete 剥离，runbook 见 `docs/ops/runinfra-qwen-via-newapi-2026-08-16.md`；PUT 渠道会清 key 的坑见该文档）
 - seeseed1ck hydrogel 渠道脚本：`scripts/ops/add_seeseed_hydrogel_channel.py`（ch89；GLM-5.3/grok-4.6/grok-chat-fast/mimo-v2.5，仅收录直连实测存活模型；param_override 删 `enable_thinking`——GLM-5.3 强制思考拒 `enable_thinking:false`，runbook 见 `docs/ops/seeseed-hydrogel-channel-2026-08-16.md`）
 - t1qq sol 兜底渠道脚本：`scripts/ops/add_t1qq_sol_channel.py`（ch90，双 key 轮询，priority 20 垫底；fork 多 key 三连坑——`multi_to_single` 创建仍不落 `is_multi_key`、PUT 会整体重生成 channel_info 冲掉 DB 修复、可用配方=完整 BLOB 直写+等 60s 缓存同步，runbook 见 `docs/ops/t1qq-sol-channel-2026-08-16.md`）
+- justwoker opus-thinking 聚合渠道脚本：`scripts/ops/add_justwoker_opus_channel.py`（ch94/ch95 双单 key 渠道，claude-opus-5-thinking/claude-opus-4-8-thinking，p50/w8 与 tabitoken ch75 同级；上游 Cloudflare 拦非浏览器 UA 报 1010，header_override 浏览器 UA 为必需，runbook 见 `docs/ops/justwoker-opus-channels-2026-08-20.md`）
 - Sol 配置顺序：ch92 `zzzcoding-gpt-5.6-sol` p60/w15、ch91 `jianzhile-gpt-5.6-sol` p55/w5、ch83 `muyuan-sol` p50/w5、ch45 `agentrouter` p40/w5。2026-08-20 当前 ch83/ch91/ch92 均因真实探针失败保持 `status=2`，只有 ch45 在服务；这里的 p60/p55/p50 是恢复后的顺序，不代表当前可用。`update_zzzcoding_sol_primary.py --allow-disabled-probe-failures --apply` 仅允许已禁用渠道在探针失败时修复 priority/weight，绝不豁免启用渠道，也不改变 status。
 - Sol 硬化工具：`remove_omp_default_fallback.py [--apply]` 只删除当前默认 selector 的精确 fallback；`remove_omp_dead_fallback.py [--apply]` 只从 Agnes Flash 链删除已知不可解析候选；`drill_sol_failover.py [--preflight|--apply]` 在 `finally` 恢复 ch92 状态和三层姿态；`rollout_agentrouter_sol.py [--apply]` 仅在两次管理探针和 OMP 精确语义通过后启用 ch45；`monitor_sol_semantic.py` + `register-sol-semantic-monitor-task.ps1` 提供 30 分钟、`IgnoreNew`、无自动修复的 TTFT/语义监控；`campaign_sol_context.py --run` 以服务端 `prompt_tokens` 执行 200k/280k/340k/380k/396k 阶梯、约 +/-8k 边界二分和两个工具形态点。所有变更工具默认 dry-run，大上下文工具还要求显式 `--run`。
 
@@ -388,7 +389,12 @@ is deployed with `deploy-omp-sota-escalation.ps1`. See
 capability check. It requires an exact eight-token semantic response, a second
 forced `report_review` tool call with exact bounded arguments, and fresh log
 attribution for both requests; without `--channel-id` it
-prefers a dedicated `omp-sota-*` NewAPI channel over shared Opus pools. To
+prefers a dedicated `omp-sota-*` NewAPI channel. Since 2026-08-20 the marked
+alias is carried ONLY by the dedicated channel: ch75 `tabitoken` no longer
+lists it (models/model_mapping/ability removed via direct DB write, never API
+PUT — ch75 is multi-key), so a downed dedicated channel fails the alias
+loudly (503 no available channel) instead of silently falling back to the
+shared paid pool. To
 create or refresh that isolated single-key channel, run
 `create-omp-sota-channel-secure.ps1`; it prompts locally, creates an online
 backup, configures the channel-local Clash proxy, probes while disabled, and

@@ -24,7 +24,11 @@ CHANNEL_NAME = "omp-sota-sotamodel"
 BASE_URL = "https://www.sotamodel.net"
 BASE_MODEL = "claude-opus-5"
 MARKED_MODEL = "omp-sota-claude-opus-5"
-MODELS = f"{BASE_MODEL},{MARKED_MODEL}"
+# 2026-08-20 strict isolation: the channel carries ONLY the marked alias.
+# Plain claude-opus-5 must never be listed, or regular Opus traffic can route
+# onto the SOTA channel. The alias is valid as test_model/probe model because
+# the management test path applies model_mapping (same as the ch92 precedent).
+MODELS = MARKED_MODEL
 MODEL_MAPPING = json.dumps({MARKED_MODEL: BASE_MODEL}, separators=(",", ":"))
 CHANNEL_SETTING = json.dumps(
     {
@@ -102,7 +106,7 @@ def payload(key: str, channel_id: int | None = None) -> dict[str, Any]:
         "group": "default",
         "model_mapping": MODEL_MAPPING,
         "setting": CHANNEL_SETTING,
-        "test_model": BASE_MODEL,
+        "test_model": MARKED_MODEL,
         "priority": 1,
         "weight": 1,
         "auto_ban": 1,
@@ -200,7 +204,7 @@ def main() -> int:
 
         assert channel_id is not None
         probe_status, probe_body = smoke.http_json(
-            f"{smoke.NEWAPI_BASE}/api/channel/test/{channel_id}?model={BASE_MODEL}",
+            f"{smoke.NEWAPI_BASE}/api/channel/test/{channel_id}?model={MARKED_MODEL}",
             headers=headers,
             timeout=90,
         )
