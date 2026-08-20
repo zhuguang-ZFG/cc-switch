@@ -115,3 +115,23 @@ AnyRouter 上游持续 429/无首事件时，OMP、NewAPI 和本地代理的嵌�
 系统健康检查 24/24。隔离 canary 正确解析 200K Opus 能力，但实际请求 181 秒后
 以 `Deadline exceeded`、exit 1 结束，无 fallback、无成功响应；ch72 仍保持
 disabled，不能宣称 AnyRouter 上游已恢复。
+
+## 2026-08-20：开窗哨兵改为有界多挤
+
+社区情报：anyrouter 的 429 是拥堵式拒绝（上游池瞬时满载），持续有界重试可以挤进去；
+Veridrop 2026-08-19 聚合 63 份探针报告 anyrouter.top 中位可用率 0/100，属全站性劣化，
+非本地配置问题。单次探测在边际开窗时会漏报，因此把哨兵从"每轮 1 次"改为"每轮有界突发"：
+
+- `anyrouter-window-canary.py` 每轮最多 5 次尝试、间隔 10 秒，首次 200 即判 open；
+  429 秒回不消耗额度，每 30 分钟至多 5 次，总量有界，不构成重试风暴；
+- 桥不可达（本地故障）不挤，直接判 closed，避免对本地桥做无谓重试；
+- closed→open 跳变才发 Telegram 的告警语义不变；状态文件/日志路径不变；
+- 计划任务 `AnyRouter Window Canary` 触发器保持 30 分钟（PT30M），动作指向
+  `~/.omp/guardian/anyrouter-window-canary.py`，脚本原地更新，无需重注册；
+- 门禁不变：`test_omp_routes.py:487` 仍禁止 anyrouter 进自动 fallback 链，
+  开窗后只能人工显式选用（OMP 指定 `anyrouter/claude-opus-5` 等）。
+
+运行验证（2026-08-20 16:25 本地手动触发）：5 次尝试全部 429
+（`Service Unavailable`），正确判 closed、未发告警，状态文件正常写入；
+部署副本与仓库副本一致（`scripts/ops/anyrouter-window-canary.py` →
+`~/.omp/guardian/anyrouter-window-canary.py`）。

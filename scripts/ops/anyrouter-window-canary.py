@@ -9,6 +9,9 @@
 
 - 探测走本地指纹桥 127.0.0.1:8789（claude-haiku-4-5-20251001，max_tokens=16，
   单次 < $0.001；429 不消耗额度）。桥自身读 secrets.json 里的上游 key。
+- 多挤策略（2026-08-20，社区情报：anyrouter 429 是拥堵式、持续有界重试可挤入）：
+  每轮最多 5 次尝试、间隔 10s，首次 200 即判 open；429 秒回不耗额度，
+  总量有界（每 30min 至多 5 次），不构成重试风暴。桥不可达（本地故障）不挤，直接判 closed。
 - 仅 closed→open 跳变发 Telegram；凭据读 ~/.omp/guardian/secrets.json，不落日志。
 - 状态文件 anyrouter-canary-state.json 防重复告警；日志 anyrouter-canary.log。
 - 无任何持久状态/锁需求：计划任务触发即跑即退，崩溃由下一次触发掩盖。
@@ -18,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +34,8 @@ LOG_FILE = GUARDIAN_DIR / "anyrouter-canary.log"
 BRIDGE = "http://127.0.0.1:8789/v1/messages"
 PROBE_MODEL = "claude-haiku-4-5-20251001"  # 池内最便宜模型；429 为全池语义
 PROBE_TIMEOUT = 60
+BURST_ATTEMPTS = 5   # 多挤：每轮最多尝试次数（429 秒回不耗额度）
+BURST_INTERVAL = 10  # 多挤：尝试间隔（秒）
 MAX_LOG_BYTES = 512 * 1024
 
 
@@ -52,8 +58,8 @@ def load_secrets() -> dict:
         return {}
 
 
-def probe() -> tuple[bool, str]:
-    """返回 (window_open, detail)。"""
+def probe_once() -> tuple[bool, str]:
+    """单次探测，返回 (window_open, detail)。"""
     body = json.dumps({
         "model": PROBE_MODEL,
         "max_tokens": 16,
@@ -75,6 +81,24 @@ def probe() -> tuple[bool, str]:
         return False, f"HTTP {e.code} {detail}"
     except (OSError, ValueError) as e:
         return False, f"bridge unreachable: {e}"
+
+
+def probe() -> tuple[bool, str]:
+    """有界多挤：最多 BURST_ATTEMPTS 次、间隔 BURST_INTERVAL 秒，首次 200 即 open。
+
+    桥不可达属本地故障，挤无意义，直接判 closed；HTTP 错误（429/5xx）才继续挤。
+    """
+    last = ""
+    for attempt in range(1, BURST_ATTEMPTS + 1):
+        open_now, detail = probe_once()
+        if open_now:
+            return True, f"attempt {attempt}/{BURST_ATTEMPTS}: {detail}"
+        last = detail
+        if detail.startswith("bridge unreachable"):
+            return False, detail
+        if attempt < BURST_ATTEMPTS:
+            time.sleep(BURST_INTERVAL)
+    return False, f"{BURST_ATTEMPTS} attempts closed, last: {last}"
 
 
 def send_telegram(secrets: dict, text: str) -> bool:
