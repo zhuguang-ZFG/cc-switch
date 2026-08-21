@@ -30,9 +30,12 @@ received content_block_stop for unopened index 0`，2026-08-21 全天 161 次。
 
 ## 待办
 
-- [ ] Guardian 监控口径：把 `claude-opus-5` / `omp-sota-claude-opus-5` 的
-  空响应率做成可告警指标（超阈值告警），替代体感。（2026-08-21 用户已
-  看过定性，开发项待排期）
+- [x] Guardian 监控口径：把 `claude-opus-5` / `omp-sota-claude-opus-5` 的
+  空响应率做成可告警指标（超阈值告警），替代体感。已在 `scripts/ops/guardian.py`
+  落地，实现口径：最近 6 小时、prompt_tokens>=1000 的样本数 >=30 时，空轮率
+  >20% 触发 Telegram 告警；告警复用 `AlertManager` warning 级冷却，避免重复刷屏。
+  新增 4 项单元测试（`scripts/ops/test_guardian.py` 共 171 项，全绿）覆盖样本不足、
+  正常率、超阈值告警与冷却去重。
 
 ## 排查方法备查
 

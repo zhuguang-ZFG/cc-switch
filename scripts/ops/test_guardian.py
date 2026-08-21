@@ -3624,3 +3624,102 @@ def tearDownModule():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpusEmptyResponseTests(unittest.TestCase):
+    """justwoker opus 空响应率监控：样本口径、阈值告警与冷却。"""
+
+    @staticmethod
+    def _make_db(rows):
+        tmp = tempfile.TemporaryDirectory()
+        db = Path(tmp.name) / "new-api.db"
+        with closing(sqlite3.connect(db)) as conn:
+            conn.execute(
+                "CREATE TABLE logs ("
+                "id INTEGER PRIMARY KEY, created_at INTEGER, type INTEGER, "
+                "model_name TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, "
+                "channel_id INTEGER)"
+            )
+            for row in rows:
+                conn.execute(
+                    "INSERT INTO logs (created_at, type, model_name, prompt_tokens, "
+                    "completion_tokens, channel_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    row,
+                )
+            conn.commit()
+        return db, tmp
+
+    @staticmethod
+    def _rows(total, empty, now):
+        rows = []
+        for i in range(total):
+            completion = 0 if i < empty else 100
+            rows.append(
+                (int(now) - i * 60, 2, "claude-opus-5", 1500, completion, 94)
+            )
+        return rows
+
+    def test_sample_too_small_skips_alert(self):
+        """样本不足阈值时不告警，也不消耗告警冷却。"""
+        now = time.time()
+        db, tmp = self._make_db(self._rows(5, 0, now))
+        with patch.object(guardian, "NEWAPI_DB", db):
+            g = guardian.Guardian.__new__(guardian.Guardian)
+            g.autofix = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+            g.alerts = Mock()
+            g.alerts.should_alert.return_value = True
+            g.telegram = Mock()
+            g._step_opus_empty_response()
+        g.alerts.should_alert.assert_not_called()
+        g.telegram.send_alert.assert_not_called()
+        tmp.cleanup()
+
+    def test_rate_below_threshold_does_not_alert(self):
+        """空轮率低于阈值时只记录不告警。"""
+        now = time.time()
+        db, tmp = self._make_db(self._rows(100, 10, now))
+        with patch.object(guardian, "NEWAPI_DB", db):
+            g = guardian.Guardian.__new__(guardian.Guardian)
+            g.autofix = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+            g.alerts = Mock()
+            g.alerts.should_alert.return_value = True
+            g.telegram = Mock()
+            g._step_opus_empty_response()
+        g.alerts.should_alert.assert_not_called()
+        g.telegram.send_alert.assert_not_called()
+        tmp.cleanup()
+
+    def test_rate_above_threshold_sends_alert(self):
+        """空轮率超过阈值时通过 Telegram 告警。"""
+        now = time.time()
+        db, tmp = self._make_db(self._rows(100, 25, now))
+        with patch.object(guardian, "NEWAPI_DB", db):
+            g = guardian.Guardian.__new__(guardian.Guardian)
+            g.autofix = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+            g.alerts = Mock()
+            g.alerts.should_alert.return_value = True
+            g.telegram = Mock()
+            g._step_opus_empty_response()
+        g.alerts.should_alert.assert_called_once_with(
+            "opus_empty_response", "warning"
+        )
+        g.telegram.send_alert.assert_called_once()
+        title, message, level = g.telegram.send_alert.call_args.args
+        self.assertIn("opus 空响应率超标", title)
+        self.assertIn("25.0%", message)
+        self.assertEqual(level, "warning")
+        tmp.cleanup()
+
+    def test_alert_cooldown_suppresses_duplicate(self):
+        """同一故障段内告警冷却避免重复刷群。"""
+        now = time.time()
+        db, tmp = self._make_db(self._rows(100, 30, now))
+        with patch.object(guardian, "NEWAPI_DB", db):
+            g = guardian.Guardian.__new__(guardian.Guardian)
+            g.autofix = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+            g.alerts = guardian.AlertManager(Mock())
+            g.telegram = Mock()
+            g._step_opus_empty_response()
+            g._step_opus_empty_response()
+        self.assertEqual(g.telegram.send_alert.call_count, 1)
+        tmp.cleanup()

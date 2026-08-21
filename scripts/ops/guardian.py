@@ -128,6 +128,14 @@ BALANCE_WARNING_THRESHOLD = 1000000  # 100 万 quota
 BALANCE_TREND_WINDOW = 10  # 余额趋势分析窗口（检查周期数）
 BALANCE_TREND_DEPLETION_HOURS = 24  # 预计耗尽时间预警（小时）
 
+# justwoker opus 空响应率监控（2026-08-21 定性：空响应轮 ≈ 上游流结束但未产出内容块）
+# 口径：NewAPI logs 表 type=2 消费行，prompt_tokens >= 1000 且 completion_tokens <= 2 记为空轮
+# 2026-08-21 实测基线：claude-opus-5 9.0%（9/100），omp-sota-claude-opus-5 12.7%（103/809）
+OPUS_EMPTY_RESPONSE_MODELS = ("claude-opus-5", "omp-sota-claude-opus-5")
+OPUS_EMPTY_RESPONSE_WINDOW_HOURS = 6  # 统计窗口：最近 6 小时
+OPUS_EMPTY_RESPONSE_MIN_SAMPLES = 30  # 样本不足时不告警，避免小样本抖动
+OPUS_EMPTY_RESPONSE_THRESHOLD = 0.20  # 告警阈值 20%，高于基线并留足抖动余量
+
 # 降权/禁用阈值（P1: 渐进式处理）
 WEIGHT_DEGRADE_FACTOR = 0.5  # 降权到原来的 50%
 MIN_WEIGHT = 1  # 最小权重
@@ -933,6 +941,53 @@ class HealthChecker:
         remaining = quota - used
         return remaining > BALANCE_WARNING_THRESHOLD, remaining, quota
 
+
+def _query_opus_empty_response_rate(
+    db_path: Path, now: Optional[float] = None
+) -> Optional[dict]:
+    """只读查询 justwoker opus 线最近窗口内的空响应率。
+
+    返回 {"total": 样本数, "empty": 空轮数, "rate": 空轮率}；
+    样本不足、DB 不可用或查询失败时返回 None，避免误告警。
+    """
+    if not db_path.exists():
+        return None
+    cutoff = int((now or time.time()) - OPUS_EMPTY_RESPONSE_WINDOW_HOURS * 3600)
+    placeholders = ",".join("?" * len(OPUS_EMPTY_RESPONSE_MODELS))
+    sql = f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN completion_tokens <= 2 THEN 1 ELSE 0 END) AS empty
+        FROM logs
+        WHERE type = 2
+          AND created_at >= ?
+          AND model_name IN ({placeholders})
+          AND prompt_tokens >= 1000
+    """
+    try:
+        with closing(
+            sqlite3.connect(
+                f"file:{db_path.expanduser().resolve().as_posix()}?mode=ro",
+                uri=True,
+                timeout=5,
+            )
+        ) as conn:
+            row = conn.execute(sql, (cutoff, *OPUS_EMPTY_RESPONSE_MODELS)).fetchone()
+    except (OSError, sqlite3.Error) as e:
+        logger.error(f"opus 空响应率查询失败: {e}")
+        return None
+    if not row:
+        return None
+    total = row[0] or 0
+    empty = row[1] or 0
+    if total < OPUS_EMPTY_RESPONSE_MIN_SAMPLES:
+        logger.info(
+            f"opus 空响应率样本不足：{total} < {OPUS_EMPTY_RESPONSE_MIN_SAMPLES}，跳过"
+        )
+        return None
+    return {"total": total, "empty": empty, "rate": empty / total}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 自愈引擎
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1069,6 +1124,10 @@ class AutoFixEngine:
         backup_tmp = STATE_BACKUP_FILE.with_name(f"{STATE_BACKUP_FILE.name}.{os.getpid()}.tmp")
         backup_tmp.write_text(payload, encoding="utf-8")
         os.replace(backup_tmp, STATE_BACKUP_FILE)
+
+    def check_opus_empty_response_rate(self) -> Optional[dict]:
+        """查询 justwoker opus 线空响应率，供主循环告警决策。"""
+        return _query_opus_empty_response_rate(NEWAPI_DB)
 
     @staticmethod
     def _channel_identity(channel: dict) -> str:
@@ -2727,6 +2786,9 @@ class Guardian:
 
         self._run_step("error rate check", _error_rate)
 
+        # 7.5 justwoker opus 空响应率监控（本地 NewAPI DB 只读查询）
+        self._run_step("opus empty response", self._step_opus_empty_response)
+
         # 8. 余额 + P2: 趋势分析（get_user_info 网络调用，预算守卫）
         def _balance():
             nonlocal remaining
@@ -2771,6 +2833,29 @@ class Guardian:
             "full health scan",
             lambda: self.autofix.full_health_scan(self._cycle_deadline),
         )
+
+    def _step_opus_empty_response(self) -> None:
+        """justwoker opus 线空响应率检查：样本足且空轮率超阈值时告警。
+
+        复用 Guardian.alert_manager 的 warning 级冷却，避免同一故障段重复刷群。
+        """
+        stats = self.autofix.check_opus_empty_response_rate()
+        if not isinstance(stats, dict):
+            return
+        rate = stats["rate"]
+        total = stats["total"]
+        empty = stats["empty"]
+        logger.info(f"opus 空响应率：{rate:.1%} ({empty}/{total})")
+        if rate > OPUS_EMPTY_RESPONSE_THRESHOLD and self.alerts.should_alert(
+            "opus_empty_response", "warning"
+        ):
+            self.telegram.send_alert(
+                "opus 空响应率超标",
+                f"justwoker opus 线最近 {OPUS_EMPTY_RESPONSE_WINDOW_HOURS} 小时空响应率 "
+                f"{rate:.1%}（{empty}/{total}），高于阈值 {OPUS_EMPTY_RESPONSE_THRESHOLD:.0%}\n"
+                f"模型：{', '.join(OPUS_EMPTY_RESPONSE_MODELS)}",
+                "warning",
+            )
 
     def _check_channels_health(self, channels):
         """P1: 慢渠道检测 + 性能记录。
