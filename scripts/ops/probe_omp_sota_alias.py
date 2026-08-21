@@ -261,6 +261,9 @@ def main() -> int:
         text = extract_text(body)
         if status == 200 and semantic_matches(text):
             break
+        # 确定性 4xx（除 429）重试无意义，且会烧付费额度、拖长故障判定
+        if status in (400, 401, 403, 404, 422):
+            break
         if attempt < PROBE_ATTEMPTS:
             time.sleep(PROBE_RETRY_DELAY_SECONDS)
     if status != 200 or not semantic_matches(text):
@@ -341,6 +344,9 @@ def main() -> int:
         review_elapsed_ms = int((time.monotonic() - review_started) * 1000)
         review_ok = review_status == 200 and review_tool_matches(review_body)
         if review_ok:
+            break
+        # 与语义探针一致：确定性 4xx（除 429）重试无意义
+        if review_status in (400, 401, 403, 404, 422):
             break
         if attempt < PROBE_ATTEMPTS:
             time.sleep(PROBE_RETRY_DELAY_SECONDS)

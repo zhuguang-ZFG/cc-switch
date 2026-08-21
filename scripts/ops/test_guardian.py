@@ -3743,15 +3743,25 @@ class DailyQuotaCapTests(unittest.TestCase):
     def test_reset_iso_fallback_when_reset_missing_or_stale(self):
         iso = guardian._daily_cap_reset_iso("daily_free_credits_exhausted")
         delta = datetime.fromisoformat(iso) - datetime.now()
-        self.assertGreater(delta, timedelta(hours=11))
-        self.assertLess(delta, timedelta(hours=13))
-        # 过去或超出 36h 的 reset 一律回落保守值
+        self.assertGreater(delta, timedelta(hours=2.5))
+        self.assertLess(delta, timedelta(hours=3.5))
+        # 超出 36h 或过去较久的 reset 一律回落保守值
         stale = int((time.time() - 3600) * 1000)
         iso2 = guardian._daily_cap_reset_iso(
             'free-models-per-day "X-RateLimit-Reset":"%d"' % stale
         )
         delta2 = datetime.fromisoformat(iso2) - datetime.now()
-        self.assertGreater(delta2, timedelta(hours=11))
+        self.assertGreater(delta2, timedelta(hours=2.5))
+
+    def test_reset_iso_clamps_just_past_reset_to_now(self):
+        # reset 刚过去几秒/几分钟：立即恢复探测，不回落 3h 兜底
+        just_past = int((time.time() - 5) * 1000)
+        iso = guardian._daily_cap_reset_iso(
+            'free-models-per-day "X-RateLimit-Reset":"%d"' % just_past
+        )
+        delta = datetime.fromisoformat(iso) - datetime.now()
+        self.assertLessEqual(delta, timedelta(seconds=5))
+        self.assertGreaterEqual(delta, timedelta(seconds=-10))
 
     def test_reset_iso_ignores_non_daily_errors(self):
         self.assertIsNone(guardian._daily_cap_reset_iso("429 too many requests"))
@@ -3817,3 +3827,26 @@ class DailyQuotaCapTests(unittest.TestCase):
         engine.check_and_enable_recovered_channels()
         self.assertEqual(len(engine.newapi.test_calls), 3)
         self.assertEqual(engine.state["disabled_channels"], [])
+
+    def test_daily_cap_repeat_event_updates_tombstone_in_place(self):
+        # 同 id 已有旧记录时，新日额度事件必须原地刷新 daily_cap_until，
+        # 不能被 _append_disabled 的按 id 去重静默丢弃（否则告警声称的
+        # 恢复时间与 state 实际记录不一致）。
+        engine = make_engine()
+        channel = {
+            "id": 102, "name": "ai-168661-ox-alpha", "status": 2,
+            "weight": 5, "priority": 7, "models": "x-preview-f-free",
+        }
+        old_until = (datetime.now() + timedelta(hours=1)).isoformat()
+        new_until = (datetime.now() + timedelta(hours=3)).isoformat()
+        engine.state["disabled_channels"] = [
+            {"id": 102, "name": "ai-168661-ox-alpha",
+             "time": datetime.now().isoformat(), "daily_cap_until": old_until}
+        ]
+        engine._disable_for_daily_cap(
+            channel, "daily_free_credits_exhausted", new_until, "error_scan"
+        )
+        records = engine.state["disabled_channels"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["daily_cap_until"], new_until)
+        self.assertIn("daily_quota_cap", records[0]["reason"])

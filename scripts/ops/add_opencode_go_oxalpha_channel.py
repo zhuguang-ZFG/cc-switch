@@ -251,10 +251,17 @@ def verify(
         "base_url": BASE_URL,
         "models": MODELS,
         "test_model": TEST_MODEL,
-        "model_mapping": MODEL_MAPPING,
+        # model_mapping 不进 expected（字符串相等比对会因 NewAPI JSON
+        # 规范化回显误报 mismatch → 回滚误禁健康渠道）；下方用 JSON 级比对。
     }
     if strict:
         expected.update({"auto_ban": 1, "priority": PRIORITY, "weight": WEIGHT})
+    mismatch = {
+        field: (channel.get(field), value)
+        for field, value in expected.items()
+        if channel.get(field) != value
+    }
+    if strict:
         try:
             mapping_ok = json.loads(
                 str(channel.get("model_mapping") or "null")
@@ -263,11 +270,6 @@ def verify(
             mapping_ok = False
         if not mapping_ok:
             mismatch["model_mapping"] = (channel.get("model_mapping"), MODEL_MAPPING)
-    mismatch = {
-        field: (channel.get(field), value)
-        for field, value in expected.items()
-        if channel.get(field) != value
-    }
     try:
         header_ok = json.loads(str(channel.get("header_override") or "null")) == {
             "User-Agent": BROWSER_UA

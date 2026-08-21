@@ -201,7 +201,10 @@ ERROR_SCAN_PINNED_BATCH_SIZE = 2  # 固定路由每批最多占 N 个槽位，�
 ERROR_DISABLE_KEYWORDS = [
     "余额不足",
     "预扣费额度失败",  # 2026-08-20：tabitoken 余额见底时上游 403 报文，旧词表不命中致渠道裸奔接客
-    "daily_free_credits_exhausted",  # 2026-08-20：sotamodel 免费日额度耗尽 429 报文
+    # 2026-08-20：sotamodel 免费日额度耗尽 429 报文。注意：扫描路径里
+    # 日额度墓碑分支（DAILY_QUOTA_CAP_MARKERS）优先拦截；此词条保留是为
+    # _is_transient_rate_limit 守卫，勿删。
+    "daily_free_credits_exhausted",
     "INSUFFICIENT_BALANCE",
     "credit balance",
     "quota",
@@ -283,8 +286,11 @@ DAILY_QUOTA_CAP_MARKERS = (
     "openrouter_free_tier_daily",
     "daily_free_credits_exhausted",
 )
-_DAILY_CAP_RESET_RE = re.compile(r"X-RateLimit-Reset.{0,12}?(\d{10,13})")
-DAILY_CAP_FALLBACK_HOURS = 12  # 无显式 reset 时间时的保守墓碑时长
+_DAILY_CAP_RESET_RE = re.compile(r"X-RateLimit-Reset.{0,12}?(\d{10,13})", re.IGNORECASE)
+# 无显式 reset 时间时的保守墓碑时长。12h 对 sotamodel 这类报文不带
+# reset 头的渠道会过冲数小时（日额度 ~08:00 重置、~01:00 耗尽）；
+# 3h 在"免白试"与"及时回池"间取平衡，恢复探测本身有退避兜底。
+DAILY_CAP_FALLBACK_HOURS = 3
 
 
 def _daily_cap_reset_iso(message: str) -> Optional[str]:
@@ -305,6 +311,9 @@ def _daily_cap_reset_iso(message: str) -> Optional[str]:
             candidate = None
         if candidate is not None and now < candidate < now + timedelta(hours=36):
             reset = candidate
+        elif candidate is not None and now - timedelta(minutes=30) <= candidate <= now:
+            # reset 刚过去几秒/几分钟：立即恢复探测，不回落 3h 兜底
+            reset = now
     if reset is None:
         reset = now + timedelta(hours=DAILY_CAP_FALLBACK_HOURS)
     return reset.isoformat()
@@ -1452,13 +1461,24 @@ class AutoFixEngine:
                 f"Channel {channel_id} ({name}) daily-cap disable failed: {test_msg[:80]}"
             )
             return
-        self._append_disabled({
+        record = {
             "id": channel_id,
             "name": name,
             "reason": f"{source}: daily_quota_cap — {test_msg[:80]}",
             "time": datetime.now().isoformat(),
             "daily_cap_until": cap_until,
-        })
+        }
+        # 同 id 旧记录存在时 _append_disabled 会去重丢弃新墓碑（告警声称
+        # "恢复到 X"但 state 未更新）；日额度事件要原地刷新恢复时间。
+        self.state.setdefault("disabled_channels", [])
+        existing = next(
+            (r for r in self.state["disabled_channels"] if r.get("id") == channel_id),
+            None,
+        )
+        if existing is not None:
+            existing.update(record)
+        else:
+            self._append_disabled(record)
         self.state.setdefault("degraded_channels", {})
         self.state["degraded_channels"].pop(str(channel_id), None)
         self._save_state()

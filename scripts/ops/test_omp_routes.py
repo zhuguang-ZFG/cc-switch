@@ -512,7 +512,12 @@ class OmpRouteGateTests(unittest.TestCase):
         self.assertIn("default", roles, "modelRoles.default must be configured")
         primary = _base_selector(roles["default"])
         approved = {"agentrouter/gpt-5.6-sol"}
-        configured = sorted(({"default", primary} & set(chains)) - approved)
+        # 仅当 default 主模型本身就是已审批的 sol 时才豁免；否则残留链
+        # 不能因审批名单而静默放行（default 切走后旧链必须被门禁拦下）。
+        if primary in approved:
+            configured = sorted(({"default", primary} & set(chains)) - approved)
+        else:
+            configured = sorted({"default", primary} & set(chains))
         self.assertEqual(
             configured,
             [],

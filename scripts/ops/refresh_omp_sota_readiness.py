@@ -112,7 +112,7 @@ def main() -> int:
             ],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=660,  # 覆盖 probe 两段重试最坏耗时 2×(3×90+2×5)+2×20≈620s（2026-08-21 审查 B1：120s 会把重试中的抖动截成 timeout 误禁 ch93）
             check=False,
         )
     except subprocess.TimeoutExpired:
