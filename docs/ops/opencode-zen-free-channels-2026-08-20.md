@@ -238,3 +238,15 @@ timeout 已放宽到 100s，复测 1.7s）。实施：
 `scripts/ops/add_ai168661_ox_alpha_channel.py <KEY> --apply`（备份 →
 禁用创建 → 管理探针 → 启用 → 75s 缓存同步 → relay 探针 3002 ok）。
 备份 `new-api-before-168661-ox-alpha-20260821-152325.db`。
+
+**第四上游聚合（2026-08-21）**：`https://api.608885.xyz`。已建 ch103
+`s608885-ox-alpha`（type=1，base_url 不带 /v1），`model_mapping` 把公开名
+`x-preview-f-free` 映射到 `stealth/ox-alpha`，**p6/w5** 落在 168661（p7）
+与 OpenRouter（p5）之间：Zen p10 > 168661 p7 > 608885 p6 > OpenRouter p5。
+实测免费（`cost: 0`）、非流式 1.8s / 流式 3.6s 无冷启动，故排在付费档账号
+的 OpenRouter 之前。**key 形态坑**：站点发放的是 base64 编码 key
+（`c2st...` = base64("sk-...")），原样调用 401，解码后才可用；脚本对
+`c2st` 前缀自动解码。该上游目录共 5 模型（grok-4.5/4.6、kimi-k3、glm-5.2、
+ox-alpha），本渠道只映射 ox-alpha。实施：
+`scripts/ops/add_608885_ox_alpha_channel.py <KEY> --apply`。
+备份 `new-api-before-608885-ox-alpha-20260821-162828.db`。
