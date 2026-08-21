@@ -1,12 +1,15 @@
 # opencode-zen 免费池渠道 ch96（2026-08-20）
 
+> 2026-08-21 池变动：新增 `x-preview-f-free`（Ox Alpha Free，zero-retention），
+> 摘除 `deepseek-v4-flash-free`（免费促销结束，上游硬 401）。见文末"池变动"。
+
 ## Scope
 
 把 OpenCode Zen 的免费模型池接入本地 NewAPI，供 OMP 兜底使用：
 
 | Channel | Name | Models | Priority/Weight | Role |
 |---|---|---|---|---|
-| ch96 | opencode-zen-free | 6 个免费模型（见下） | 10 / 5 | 免费兜底池（best-effort） |
+| ch96 | opencode-zen-free | 免费模型池（见下，随上游促销变动） | 10 / 5 | 免费兜底池（best-effort） |
 
 关键发现：**OpenCode Go 的 key（ch48 `opencode-go-muse` 同一把）对 Zen 免费端点
 直接有效**。官方文档把 Go（`https://opencode.ai/zen/go`）和 Zen
@@ -25,8 +28,12 @@ Zen `/v1/chat/completions` 与 `/v1/responses` 上认证通过，免费模型可
 
 `/v1/models` 列出但文档尚未收录（数据政策未明，默认不注册进 OMP）：
 
-- `deepseek-v4-flash-free`（chat/completions，实测 429 额度耗尽）
-- `laguna-s-2.1-free`（chat/completions，实测 200）
+- `laguna-s-2.1-free`（chat/completions，接入时 200；2026-08-21 起 503
+  "Endpoint is unavailable"，未注册 OMP，留在渠道上等恢复）
+
+**已下线**：`deepseek-v4-flash-free` —— 2026-08-21 上游返回 401 ModelError
+"Free promotion has ended"（硬错误非额度 429），已从 ch96 摘除
+（`scripts/ops/remove_opencode_deepseek_flash_free.py`）。
 
 **刻意排除**：`nemotron-3-ultra-free` / `nemotron-3.5-lightning-free` ——
 NVIDIA trial 条款更严格（"do not submit personal or confidential data" +
@@ -58,8 +65,9 @@ NVIDIA API Trial Terms），不适合自动化 agent 流量。
 - **muse-free 无需 chat→responses 转换策略**：OMP 侧该模型声明
   `api: openai-responses`，原生发 /v1/responses，NewAPI type-1 渠道直通
   （与 ch48 相同的机制；`global.chat_completions_to_responses_policy` 未动）
-- **ModelRatio=0**：6 个模型名是 Zen 独占且上游免费，倍率置 0 保证计费日志
-  真实（含把已有的 `mimo-v2.5-free`/`deepseek-v4-flash-free` 0.5 纠正为 0）
+- **ModelRatio=0**：池内模型名是 Zen 独占且上游免费，倍率置 0 保证计费日志
+  真实（接入时含把已有的 `mimo-v2.5-free`/`deepseek-v4-flash-free` 0.5
+  纠正为 0；后者下线时其条目已一并删除）
 
 ## OMP 侧接线
 
@@ -67,9 +75,9 @@ NVIDIA API Trial Terms），不适合自动化 agent 流量。
 
 - `muse-spark-1.2-contributor-free`：`api: openai-responses`，context/maxTokens
   照抄付费版 ch48 条目（1048576/131072，text+image）
-- `big-pickle` / `mimo-v2.5-free` / `hy3-free`：openai-completions（provider
-  默认），contextWindow 保守取 131072 / maxTokens 16384（官方未公布，低估
-  只损失截断头部空间）
+- `big-pickle` / `mimo-v2.5-free` / `hy3-free` / `x-preview-f-free`：
+  openai-completions（provider 默认），contextWindow 保守取 131072 /
+  maxTokens 16384（官方未公布，低估只损失截断头部空间）
 
 `~/.omp/agent/config.yml` fallbackChains：
 
@@ -77,14 +85,18 @@ NVIDIA API Trial Terms），不适合自动化 agent 流量。
   `zg-newapi/muse-spark-1.2-contributor-free` —— ch48 当前 RegionError 禁用中，
   task 角色立即可落到同族免费版
 - `smol` 链尾追加 big-pickle / mimo-v2.5-free / hy3-free —— 最后手段免费池
+- （2026-08-21）`zg-newapi/omp-sota-claude-opus-5` 链尾与 `smol` 链尾追加
+  `x-preview-f-free` —— 零数据保留免费模型，sota 日额度耗尽后的兜底之一
 
 主力 modelRoles 未动。
 
 ## 隐私注意
 
-- 全部免费模型在免费期内"collected data may be used to improve the model"
+- 大部分免费模型在免费期内"collected data may be used to improve the model"
   （Zen 隐私章节明示）；muse contributor free 条款是"用 prompt/completion
   换折扣/免费"。脚本 `--apply` 强制要求 `--accept-zen-free-data-policy`。
+- **例外：`x-preview-f-free`（Ox Alpha Free）官方明示 zero-retention，
+  不用于训练**（Zen 隐私章节），是池内隐私姿态最好的免费模型。
 - 不要把机密代码/密钥推进走免费池的会话；它定位是兜底，不是主力。
 
 ## 验证证据
@@ -127,3 +139,31 @@ POST /api/channel/96/status {"status": 2}
 `142`（渠道已删除，当时 max id=95）。2026-08-20 已摘除，现为 `[91, 92]`，
 model_patterns 与 enabled 未动；备份
 `new-api-before-policy-ch142-cleanup-20260820-145831.db`。
+
+## 池变动（2026-08-21）
+
+**新增 `x-preview-f-free`（Ox Alpha Free）**——OpenCode 新上线的 stealth
+免费模型，chat/completions 端点，官方明示 **zero-retention、不用于训练**
+（池内隐私姿态最好）。实测（Go key + 浏览器 UA 直连）：/v1/models 在列，
+chat/completions 200（reasoning 模型，16 max_tokens 全花在
+reasoning_tokens 上空 content 属预期）。实施：
+`scripts/ops/add_opencode_ox_alpha_model.py --apply`（备份 → ch96 models
++= → 管理探针 ok → ModelRatio=0 → 75s 缓存同步 → relay 探针 3002 ok →
+回读验证渠道/abilities/倍率）。OMP 侧 models.yml 注册（131072/16384 保守
+窗口），config.yml `omp-sota-claude-opus-5` 链尾与 `smol` 链尾追加。备份
+`new-api-before-opencode-ox-alpha-20260821-112505.db`。Ox Alpha 是
+zero-retention，无需 `--accept-zen-free-data-policy` 门禁。
+
+**摘除 `deepseek-v4-flash-free`**——免费促销结束，/v1/models 仍在列但调用
+硬 401 ModelError "Free promotion has ended for DeepSeek V4 Flash Free"
+（非额度 429，不会自愈）。实施：
+`scripts/ops/remove_opencode_deepseek_flash_free.py --apply`（备份 → ch96
+models -= → 删除孤儿 ModelRatio 条目 → 回读验证 abilities 行失效）。该模型
+从未注册进 OMP，OMP 侧无改动。备份
+`new-api-before-opencode-dsflash-free-removal-20260821-113057.db`。
+
+**观察**：`laguna-s-2.1-free` 同日起 503 "Endpoint is unavailable"（接入时
+200）。未注册 OMP，留在渠道上等恢复；若持续 503 可按同一摘除流程处理。
+
+`add_opencode_zen_free_channels.py` 的 `MODELS` 常量已同步为现状（6 个），
+重跑幂等验证通过（2026-08-21，ch96 status=1 untouched，probe ok）。

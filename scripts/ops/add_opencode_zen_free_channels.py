@@ -9,9 +9,15 @@ free pool (verified 2026-08-20 against https://opencode.ai/zen/v1 directly):
     laguna-s-2.1-free           200
     big-pickle                  429 FreeUsageLimitError (auth ok, quota out)
     mimo-v2.5-free              429 FreeUsageLimitError (auth ok, quota out)
-    deepseek-v4-flash-free      429 FreeUsageLimitError (auth ok, quota out)
   responses:
     muse-spark-1.2-contributor-free  200
+
+Later pool changes (handled by dedicated scripts, kept here so MODELS stays
+the live contract):
+- 2026-08-21 x-preview-f-free (Ox Alpha Free) added —
+  add_opencode_ox_alpha_model.py; zero-retention provider, no data gate.
+- 2026-08-21 deepseek-v4-flash-free removed — its free promotion ended
+  (upstream 401 ModelError), see remove_opencode_deepseek_flash_free.py.
 
 A 429 FreeUsageLimitError proves auth + routing and only means the free daily
 quota is temporarily exhausted, so the management probe accepts it as a
@@ -31,7 +37,7 @@ a browser-UA header_override. Posture: priority 10 / weight 5, a best-effort
 free fallback pool (the models are unique to this channel, so the posture only
 documents intent). auto_ban=1.
 
-Billing truthfulness: the six onboarded model names are Zen-exclusive and
+Billing truthfulness: the onboarded model names are Zen-exclusive and
 cost nothing upstream, so the script merges ModelRatio=0 entries for them
 (the option is backed up and restored on rollback).
 
@@ -69,8 +75,8 @@ CHANNEL_NAME = "opencode-zen-free"
 BASE_URL = "https://opencode.ai/zen"  # NewAPI appends /v1/chat/completions
 MODELS = (
     "big-pickle,mimo-v2.5-free,hy3-free,"
-    "deepseek-v4-flash-free,laguna-s-2.1-free,"
-    "muse-spark-1.2-contributor-free"
+    "laguna-s-2.1-free,"
+    "muse-spark-1.2-contributor-free,x-preview-f-free"
 )
 TEST_MODEL = "hy3-free"  # the chat model verified 200 during onboarding
 MUSE_FREE_MODEL = "muse-spark-1.2-contributor-free"
@@ -404,7 +410,7 @@ def main() -> int:
     else:
         print(
             f"plan: create {CHANNEL_NAME} as ch{planned_id} (key={mask(key)}) "
-            f"disabled, probe ({TEST_MODEL}), set ModelRatio=0 for 6 free "
+            f"disabled, probe ({TEST_MODEL}), set ModelRatio=0 for the free "
             f"models, enable at p{PRIORITY}/w{WEIGHT}, relay-probe "
             f"{MUSE_FREE_MODEL} via /v1/responses"
         )
@@ -467,7 +473,7 @@ def main() -> int:
                 merge_free_model_ratios(original_ratio),
             )
             ratio_changed = True
-            print(f"ModelRatio=0 set for the 6 free models")
+            print(f"ModelRatio=0 set for the free models")
 
             set_status(smoke, headers, channel_id, 1)
             print(f"ch{channel_id} enabled at p{PRIORITY}/w{WEIGHT}")
