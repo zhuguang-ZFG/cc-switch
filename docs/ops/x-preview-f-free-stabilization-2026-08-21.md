@@ -31,9 +31,16 @@
 `free-models-per-day` / `openrouter_free_tier_daily` /
 `daily_free_credits_exhausted` 时，error scan 和 full scan 不再按瞬态
 限流跳过，而是禁用渠道并在 state 记录 `daily_cap_until`（优先解析
-X-RateLimit-Reset，毫秒/秒自适应；缺失或异常时保守 12h；超出 36h 的
-reset 视为不可信同样回落 12h）。恢复侧在重置点之前跳过墓碑记录（不烧
-恢复配额），到点后走正常 3 探针恢复流程，成功自动回池。
+X-RateLimit-Reset，毫秒/秒自适应、大小写不敏感；缺失或异常时保守 3h；
+超出 36h 的 reset 视为不可信同样回落 3h；reset 刚过去 30 分钟内钳位为
+立即恢复探测）。恢复侧在重置点之前跳过墓碑记录（不烧恢复配额），到点后
+走正常 3 探针恢复流程，成功自动回池。
+
+同 id 已有旧记录时原地刷新 `daily_cap_until`/reason/time，不走
+`_append_disabled` 的按 id 去重（否则告警声称的恢复时间与 state 实际
+记录不一致——2026-08-21 深夜 review 修复，含回归测试）。回落时长从
+12h 收紧到 3h 的同轮修复原因：ch93（sotamodel）报文不带 reset 头，
+12h 会对 ~08:00 的重置点过冲数小时。
 
 注意：`daily_free_credits_exhausted` 同时覆盖 ch93（sotamodel sota 线），
 墓碑机制让 ch93 的夜间停机恢复点也更精确（此前靠全量扫描碰运气）。
