@@ -167,3 +167,12 @@ models -= → 删除孤儿 ModelRatio 条目 → 回读验证 abilities 行失�
 
 `add_opencode_zen_free_channels.py` 的 `MODELS` 常量已同步为现状（6 个），
 重跑幂等验证通过（2026-08-21，ch96 status=1 untouched，probe ok）。
+
+**限额修正（2026-08-21，数据源 models.dev —— opencode 官方元数据源）**：
+OMP models.yml 四条免费条目从保守占位 131072/16384 改为实测/官方值——
+`x-preview-f-free` 1000000/131072（input text+image，图片输入已实测：8x8
+红色 PNG 正确回答 "Red"）、`big-pickle` 200000/32000（注意 models.dev 标注
+input 上限 160000）、`mimo-v2.5-free` 200000/32000、`hy3-free`
+190000/64000。`reasoning_effort` 已实测被上游接受：low→reasoning_tokens=0
+（3.1s），high→推理参与（4.7s），两者答案均正确，OMP 的 `:effort` 后缀
+机制对该模型有效。
