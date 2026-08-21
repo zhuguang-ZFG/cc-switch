@@ -204,3 +204,30 @@ big-pickle / mimo-v2.5-free 当时额度耗尽未测。OMP models.yml 已按实�
 从源头避免 `:xhigh` 这类不支持档位被发到上游（故障实例：2026-08-21
 OMP 以 `x-preview-f-free:xhigh` 调 172 条消息会话，上游 1210 拒收，
 dump 见 `~/.omp/logs/http-400-requests/1787294055247-*.json`）。
+
+**Go 套餐 mimo-v2.5（2026-08-21）**：Go 订阅本身活着（muse 之外 6 个模型
+实测全 200），官方额度表里**可用模型中月用量最大的是 MiMo-V2.5**
+（~150,400 req/月典型、$60 内含额度档；Muse Contributor 更高但训练数据
+条款+上游已收回，不可用）。已建 ch101 `opencode-go-mimo`（type=1，
+base_url=`https://opencode.ai/zen/go`，复用 Go key，浏览器 UA 必需），
+ModelRatio=0（订阅制边际成本为零；**注意首次接入时 NewAPI 已有非零
+mimo-v2.5 倍率残留，脚本已改为"值不等即纠正"，不能只查存在性**）。
+与 ch96 的 `mimo-v2.5-free` 不同：Go 档是 zero-retention 正式档，可进
+通用 fallback。OMP：models.yml 注册（200000/32000 照 models.dev），
+smol 链插在免费池之前、agnes（tiny）链尾追加。实施：
+`scripts/ops/add_opencode_go_mimo_channel.py <GO_KEY> --apply`。
+备份 `new-api-before-opencode-go-mimo-20260821-151200.db`。
+
+**第三上游聚合（2026-08-21）**：Ox Alpha 第三个兜底源
+`https://ai.168661.xyz`（一 key 一模型族，/v1/models 只列 `ox-alpha`）。
+已建 ch102 `ai-168661-ox-alpha`（type=1，base_url 不带 /v1，NewAPI 自拼，
+key argv 传入不入仓），`model_mapping` 把公开名 `x-preview-f-free` 映射
+到 `ox-alpha`，与 ch96/ch100 **聚合同名**：Zen 直连（p10）> 168661
+（p7/w5）> OpenRouter（p5/w5），OMP 侧零改动。实测该上游**免费**
+（usage `cost: 0`、`upstream_inference_cost: 0`），聚到 ModelRatio=0 的
+公开名下计费依然真实。注意两点：站点在 Cloudflare 后，浏览器 UA
+header_override 必需；非流式请求存在冷启动（首次 >90s，脚本管理探针
+timeout 已放宽到 100s，复测 1.7s）。实施：
+`scripts/ops/add_ai168661_ox_alpha_channel.py <KEY> --apply`（备份 →
+禁用创建 → 管理探针 → 启用 → 75s 缓存同步 → relay 探针 3002 ok）。
+备份 `new-api-before-168661-ox-alpha-20260821-152325.db`。
