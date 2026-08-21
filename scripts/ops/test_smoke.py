@@ -874,9 +874,11 @@ class AdminAuthTests(unittest.TestCase):
         )
 
     def test_smoke_probe_skips_only_fully_attributed_disabled_routes(self):
+        # 9048 是不属于任何策略排除集的合成渠道（ch48 自 2026-08-21 起已入
+        # KNOWN_BROKEN_CHANNELS，不能再当"未归因"样例）。
         disabled_muse = {
-            "id": 48,
-            "name": "opencode-go-muse",
+            "id": 9048,
+            "name": "test-unattributed",
             "status": 2,
             "auto_ban": 0,
             "weight": 12,
@@ -884,19 +886,19 @@ class AdminAuthTests(unittest.TestCase):
         }
         model = "muse-spark-1.2-contributor"
 
-        reason = smoke.smoke_probe_skip_reason([disabled_muse], model, {48})
+        reason = smoke.smoke_probe_skip_reason([disabled_muse], model, {9048})
         self.assertEqual(
             reason,
-            "all declared channels attributed disabled ids=[48]",
+            "all declared channels attributed disabled ids=[9048]",
         )
         self.assertIsNone(smoke.smoke_probe_skip_reason([disabled_muse], model, set()))
         self.assertIsNone(
             smoke.smoke_probe_skip_reason(
-                [{**disabled_muse, "status": 1}], model, {48}
+                [{**disabled_muse, "status": 1}], model, {9048}
             )
         )
         self.assertIsNone(
-            smoke.smoke_probe_skip_reason([disabled_muse], "missing-model", {48})
+            smoke.smoke_probe_skip_reason([disabled_muse], "missing-model", {9048})
         )
 
     def test_main_fails_on_invalid_channels_response(self):

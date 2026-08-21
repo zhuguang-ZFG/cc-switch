@@ -553,15 +553,17 @@ class FullHealthScanTests(unittest.TestCase):
         self.assertEqual(engine.newapi.disable_calls, [])
 class ChannelFailureScanTests(unittest.TestCase):
     def test_error_scan_disables_pinned_channel_after_three_soft_failures(self):
+        # ch83 做 pinned 样例：ch48 自 2026-08-21 起在 AUTO_BAN_RECOVERY_EXCLUSIONS
+        # 中，其禁用记录按策略不入恢复队列，无法再断言 disabled_channels 条目。
         engine = make_engine()
         engine._scan_offset = 0
-        engine.newapi.channels[48] = {
-            "id": 48,
-            "name": "opencode-go-muse",
+        engine.newapi.channels[83] = {
+            "id": 83,
+            "name": "muyuan-sol",
             "status": 1,
             "weight": 13,
             "priority": 51,
-            "models": "muse-spark-1.2-contributor",
+            "models": "gpt-5.6-sol",
         }
         engine.newapi.test_results.extend(
             [(False, "503 Endpoint is unavailable")] * 3
@@ -573,12 +575,12 @@ class ChannelFailureScanTests(unittest.TestCase):
             self.assertEqual(len(engine.newapi.disable_calls), expected_disables)
 
         self.assertEqual(engine.newapi.updates, [])
-        self.assertEqual(engine.state["weight_history"]["48"]["weight"], 13)
+        self.assertEqual(engine.state["weight_history"]["83"]["weight"], 13)
         self.assertEqual(
             engine.state["disabled_channels"][0]["reason"],
             "error_scan: 503 Endpoint is unavailable",
         )
-        self.assertNotIn(48, engine._probe_soft_failures)
+        self.assertNotIn(83, engine._probe_soft_failures)
 
     def test_error_scan_success_resets_pinned_soft_failure_streak(self):
         engine = make_engine()

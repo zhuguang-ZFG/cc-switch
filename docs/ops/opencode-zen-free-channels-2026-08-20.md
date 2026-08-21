@@ -26,14 +26,15 @@ Zen `/v1/chat/completions` 与 `/v1/responses` 上认证通过，免费模型可
 - `hy3-free`（chat/completions）
 - `muse-spark-1.2-contributor-free`（**仅 /v1/responses**）
 
-`/v1/models` 列出但文档尚未收录（数据政策未明，默认不注册进 OMP）：
+**已下线**：
 
-- `laguna-s-2.1-free`（chat/completions，接入时 200；2026-08-21 起 503
-  "Endpoint is unavailable"，未注册 OMP，留在渠道上等恢复）
+- `deepseek-v4-flash-free` —— 2026-08-21 上游返回 401 ModelError
+  "Free promotion has ended"（硬错误非额度 429），已从 ch96 摘除
+- `laguna-s-2.1-free` —— 2026-08-21 起持续 503 "Endpoint is unavailable"
+  （接入时 200，未注册 OMP），同日按用户决策摘除
 
-**已下线**：`deepseek-v4-flash-free` —— 2026-08-21 上游返回 401 ModelError
-"Free promotion has ended"（硬错误非额度 429），已从 ch96 摘除
-（`scripts/ops/remove_opencode_deepseek_flash_free.py`）。
+摘除工具：`scripts/ops/remove_opencode_zen_free_model.py <model> --apply`
+（通用版；注意额度型 429 FreeUsageLimitError 会自愈，不是摘除理由）。
 
 **刻意排除**：`nemotron-3-ultra-free` / `nemotron-3.5-lightning-free` ——
 NVIDIA trial 条款更严格（"do not submit personal or confidential data" +
@@ -157,7 +158,7 @@ zero-retention，无需 `--accept-zen-free-data-policy` 门禁。
 **摘除 `deepseek-v4-flash-free`**——免费促销结束，/v1/models 仍在列但调用
 硬 401 ModelError "Free promotion has ended for DeepSeek V4 Flash Free"
 （非额度 429，不会自愈）。实施：
-`scripts/ops/remove_opencode_deepseek_flash_free.py --apply`（备份 → ch96
+`scripts/ops/remove_opencode_zen_free_model.py --apply`（备份 → ch96
 models -= → 删除孤儿 ModelRatio 条目 → 回读验证 abilities 行失效）。该模型
 从未注册进 OMP，OMP 侧无改动。备份
 `new-api-before-opencode-dsflash-free-removal-20260821-113057.db`。
@@ -176,3 +177,30 @@ input 上限 160000）、`mimo-v2.5-free` 200000/32000、`hy3-free`
 190000/64000。`reasoning_effort` 已实测被上游接受：low→reasoning_tokens=0
 （3.1s），high→推理参与（4.7s），两者答案均正确，OMP 的 `:effort` 后缀
 机制对该模型有效。
+
+**第二上游聚合（2026-08-21）**：Ox Alpha 同时上架 OpenRouter
+（`stealth/ox-alpha`，定价 0，models.dev 标注 1048576 上下文）。已建
+ch100 `openrouter-ox-alpha`（type=1，base_url=`https://openrouter.ai/api`，
+key argv 传入不入仓），`model_mapping` 把公开名 `x-preview-f-free` 映射到
+`stealth/ox-alpha`，与 ch96 **聚合同名**——Zen 直连（p10）优先，OpenRouter
+（p5/w5）在 Zen 免费日额度耗尽时垫底接管，OMP 侧零改动。实施：
+`scripts/ops/add_openrouter_ox_alpha_channel.py <OR_KEY> --apply`（备份 →
+禁用创建 → 管理探针验证 mapping → 启用 → 75s 缓存同步 → relay 探针 3002
+ok → 回读验证渠道/mapping/abilities/倍率）。OpenRouter 不在 Cloudflare 后，
+无需浏览器 UA；该 key 为付费档账号（无免费层每日上限），免费模型本身
+上游定价 0。备份 `new-api-before-openrouter-ox-alpha-20260821-143300.db`。
+
+**思维链 effort 矩阵（2026-08-21 实测，逐个档位探测）**：Zen 免费模型的
+`reasoning_effort` 白名单**按模型不同**，发不支持的档位会 400 [1210]
+"This model always engages in thinking and cannot..."：
+
+| 模型 | low | high | xhigh | max | minimal/medium |
+|---|---|---|---|---|---|
+| x-preview-f-free | ✓ | ✓ | ✗ 1210 | ✓ | ✗ 1210 |
+| hy3-free | ✓ | ✓ | ✓ | ✗ 400 | （未测） |
+
+big-pickle / mimo-v2.5-free 当时额度耗尽未测。OMP models.yml 已按实测
+声明 `thinking.efforts`（x-preview `[low,high,max]`、hy3 `[low,high,xhigh]`），
+从源头避免 `:xhigh` 这类不支持档位被发到上游（故障实例：2026-08-21
+OMP 以 `x-preview-f-free:xhigh` 调 172 条消息会话，上游 1210 拒收，
+dump 见 `~/.omp/logs/http-400-requests/1787294055247-*.json`）。

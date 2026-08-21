@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""Remove deepseek-v4-flash-free from ch96 opencode-zen-free (promotion ended).
+"""Remove a dead model from ch96 opencode-zen-free (generic version).
 
-Verified 2026-08-21 against https://opencode.ai/zen/v1 directly: the model is
-still listed by /v1/models but every chat/completions call now hard-fails with
-401 ModelError "Free promotion has ended for DeepSeek V4 Flash Free. You can
-continue using the model by subscribing to OpenCode Go". That is not a quota
-429 — the free pool entry is dead, so keeping it on the channel only risks a
-wasted relay attempt whenever NewAPI picks it.
+First used 2026-08-21 for deepseek-v4-flash-free (free promotion ended,
+upstream hard 401 ModelError) and laguna-s-2.1-free (upstream 503
+"Endpoint is unavailable" since 2026-08-21, never registered in OMP).
 
-The model was never registered in OMP models.yml (the 2026-08-20 onboarding
-deliberately registered only muse-free/big-pickle/mimo-v2.5-free/hy3-free), so
-this cleanup is NewAPI-side only.
+A model listed by /v1/models but hard-failing every call only wastes relay
+attempts whenever NewAPI picks it. Quota-style 429 FreeUsageLimitError is NOT
+a removal reason — that self-heals when the daily quota resets.
 
 What --apply does:
 - whole-DB SQLite snapshot backup
-- PUT /api/channel/ with models minus deepseek-v4-flash-free (full channel
-  object minus status; the fork syncs abilities on update)
-- delete the now-orphaned ModelRatio=0 entry
+- PUT /api/channel/ with models minus the target (full channel object minus
+  status; the fork syncs abilities on update)
+- delete the now-orphaned ModelRatio entry if present
 - readback verification: model gone from channel.models, abilities row gone
   or disabled, ratio entry removed
 
@@ -37,7 +34,6 @@ from pathlib import Path
 SMOKE_PATH = Path(__file__).with_name("newapi-local-smoke.py")
 
 CHANNEL_NAME = "opencode-zen-free"
-DEAD_MODEL = "deepseek-v4-flash-free"
 MODEL_RATIO_OPTION = "ModelRatio"
 
 
@@ -52,6 +48,7 @@ def load_smoke():
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("model", help="model id to remove from ch96")
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -87,12 +84,12 @@ def put_channel(smoke, headers: dict[str, str], payload: dict) -> None:
         raise RuntimeError(f"channel PUT failed: HTTP {status} message={message!r}")
 
 
-def online_backup(db_path: Path) -> Path:
+def online_backup(db_path: Path, model: str) -> Path:
     backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
+    safe = "".join(c if c.isalnum() else "-" for c in model)
     destination = backup_dir / (
-        f"new-api-before-opencode-dsflash-free-removal-"
-        f"{time.strftime('%Y%m%d-%H%M%S')}.db"
+        f"new-api-before-zen-remove-{safe}-{time.strftime('%Y%m%d-%H%M%S')}.db"
     )
     if destination.exists():
         raise RuntimeError(f"backup already exists: {destination}")
@@ -136,18 +133,18 @@ def put_option(smoke, headers: dict[str, str], key: str, value: str) -> None:
         raise RuntimeError(f"option {key!r} update failed: HTTP {status}")
 
 
-def remove_ratio_entry(current: str) -> str:
+def remove_ratio_entry(current: str, model: str) -> str:
     try:
         ratios = json.loads(current)
     except json.JSONDecodeError as error:
         raise RuntimeError(f"{MODEL_RATIO_OPTION} is invalid JSON") from error
     if not isinstance(ratios, dict):
         raise RuntimeError(f"{MODEL_RATIO_OPTION} must be a JSON object")
-    ratios.pop(DEAD_MODEL, None)
+    ratios.pop(model, None)
     return json.dumps(ratios, separators=(",", ":"), sort_keys=True)
 
 
-def verify(db_path: Path, channel: dict, expected_models: str) -> None:
+def verify(db_path: Path, channel: dict, expected_models: str, model: str) -> None:
     if channel.get("models") != expected_models:
         raise RuntimeError(
             f"readback models mismatch: {channel.get('models')!r} != {expected_models!r}"
@@ -157,22 +154,25 @@ def verify(db_path: Path, channel: dict, expected_models: str) -> None:
     )) as connection:
         ability = connection.execute(
             "SELECT enabled FROM abilities WHERE channel_id = ? AND model = ?",
-            (int(channel["id"]), DEAD_MODEL),
+            (int(channel["id"]), model),
         ).fetchone()
         ratio_row = connection.execute(
             "SELECT value FROM options WHERE key = ?", (MODEL_RATIO_OPTION,)
         ).fetchone()
     if ability is not None and ability[0] != 0:
-        raise RuntimeError(f"abilities row for {DEAD_MODEL} still enabled")
+        raise RuntimeError(f"abilities row for {model} still enabled")
     if ratio_row is None:
         raise RuntimeError(f"{MODEL_RATIO_OPTION} missing on readback")
     ratios = json.loads(ratio_row[0])
-    if DEAD_MODEL in ratios:
-        raise RuntimeError(f"ModelRatio entry for {DEAD_MODEL} still present")
+    if model in ratios:
+        raise RuntimeError(f"ModelRatio entry for {model} still present")
 
 
 def main() -> int:
     args = parse_args()
+    model = args.model.strip()
+    if not model:
+        raise RuntimeError("model must not be empty")
     smoke = load_smoke()
     db_path = Path(smoke.NEWAPI_DB).resolve()
     token, user_id = smoke.admin_auth()
@@ -185,23 +185,23 @@ def main() -> int:
     channel_id = int(channel["id"])
     current_models = str(channel.get("models") or "")
     models_list = [m for m in current_models.split(",") if m]
-    already_gone = DEAD_MODEL not in models_list
-    updated_models = ",".join(m for m in models_list if m != DEAD_MODEL)
+    already_gone = model not in models_list
+    updated_models = ",".join(m for m in models_list if m != model)
     original_ratio = get_option_db(db_path, MODEL_RATIO_OPTION)
-    ratio_has_entry = DEAD_MODEL in json.loads(original_ratio)
+    ratio_has_entry = model in json.loads(original_ratio)
     if already_gone and not ratio_has_entry:
-        print(f"plan: {DEAD_MODEL} already fully removed from ch{channel_id}; "
+        print(f"plan: {model} already fully removed from ch{channel_id}; "
               f"verify only")
     else:
         print(
-            f"plan: ch{channel_id} {CHANNEL_NAME} models -= {DEAD_MODEL} "
+            f"plan: ch{channel_id} {CHANNEL_NAME} models -= {model} "
             f"(present={not already_gone}, ratio_entry={ratio_has_entry})"
         )
     if not args.apply:
         print("dry-run: no changes made")
         return 0
 
-    backup = online_backup(db_path)
+    backup = online_backup(db_path, model)
     print(f"backup ok: {backup.name} ({backup.stat().st_size} bytes, integrity=ok)")
 
     channel_changed = False
@@ -217,13 +217,13 @@ def main() -> int:
                   f"{len(models_list) - 1})")
         if ratio_has_entry:
             put_option(smoke, headers, MODEL_RATIO_OPTION,
-                       remove_ratio_entry(original_ratio))
+                       remove_ratio_entry(original_ratio, model))
             ratio_changed = True
-            print(f"ModelRatio entry removed for {DEAD_MODEL}")
+            print(f"ModelRatio entry removed for {model}")
 
         readback = fetch_channel(smoke, headers)
-        verify(db_path, readback, updated_models)
-        print(f"OK: {DEAD_MODEL} removed from ch{channel_id}; "
+        verify(db_path, readback, updated_models, model)
+        print(f"OK: {model} removed from ch{channel_id}; "
               f"backup={backup.name}")
         return 0
     except Exception:
