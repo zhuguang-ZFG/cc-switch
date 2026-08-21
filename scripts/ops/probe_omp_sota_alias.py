@@ -22,6 +22,12 @@ EXPECTED_REVIEW_TEXT = "OMP-SOTA-REVIEW-OK"
 REVIEW_TOOL_NAME = "report_review"
 DEFAULT_PROVIDER = "zg-newapi"
 DEFAULT_READINESS_TTL_MS = 15 * 60 * 1000
+# Flaky-upstream guard (2026-08-21): a single truncated/model-variance response
+# used to disable ch93 for a whole 10-minute readiness cycle (~1.4k avoidable
+# advisor 503s since 08-19). Retry before reporting failure; a genuinely dead
+# upstream fails every attempt.
+PROBE_ATTEMPTS = 3
+PROBE_RETRY_DELAY_SECONDS = 5
 
 
 def load_smoke() -> Any:
@@ -78,7 +84,7 @@ def review_tool_matches(body: object) -> bool:
 
 
 def latest_log_after(
-    db_path: Path, last_id: int, model: str, wait_seconds: float = 5
+    db_path: Path, last_id: int, model: str, wait_seconds: float = 20
 ) -> tuple | None:
     deadline = time.monotonic() + max(0, wait_seconds)
     while time.monotonic() < deadline:
@@ -200,7 +206,7 @@ def main() -> int:
         print(
             f"dry-run: model={args.model} expectedChannel="
             f"{args.channel_id or 'auto'} "
-            "maxTokens=8 no request sent"
+            "maxTokens=64 no request sent"
         )
         return 0
 
@@ -232,22 +238,31 @@ def main() -> int:
             connection.execute("SELECT COALESCE(MAX(id), 0) FROM logs").fetchone()[0]
         )
 
-    started = time.monotonic()
-    status, body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/v1/chat/completions",
-        method="POST",
-        timeout=90,
-        headers={"Authorization": f"Bearer {key}"},
-        body={
-            "model": args.model,
-            "max_tokens": 8,
-            "messages": [
-                {"role": "user", "content": f"Reply only: {EXPECTED_TEXT}."}
-            ],
-        },
-    )
-    elapsed_ms = int((time.monotonic() - started) * 1000)
-    text = extract_text(body)
+    status = 0
+    body: object = None
+    elapsed_ms = 0
+    text = ""
+    for attempt in range(1, PROBE_ATTEMPTS + 1):
+        started = time.monotonic()
+        status, body = smoke.http_json(
+            f"{smoke.NEWAPI_BASE}/v1/chat/completions",
+            method="POST",
+            timeout=90,
+            headers={"Authorization": f"Bearer {key}"},
+            body={
+                "model": args.model,
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "user", "content": f"Reply only: {EXPECTED_TEXT}."}
+                ],
+            },
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        text = extract_text(body)
+        if status == 200 and semantic_matches(text):
+            break
+        if attempt < PROBE_ATTEMPTS:
+            time.sleep(PROBE_RETRY_DELAY_SECONDS)
     if status != 200 or not semantic_matches(text):
         if args.readiness_path:
             update_readiness(
@@ -276,50 +291,59 @@ def main() -> int:
         return 1
     assert semantic_row is not None
 
-    review_started = time.monotonic()
-    review_status, review_body = smoke.http_json(
-        f"{smoke.NEWAPI_BASE}/v1/chat/completions",
-        method="POST",
-        timeout=90,
-        headers={"Authorization": f"Bearer {key}"},
-        body={
-            "model": args.model,
-            "max_tokens": 64,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        "Review this safe no-op change. Call report_review exactly once "
-                        f"with severity none and summary {EXPECTED_REVIEW_TEXT}."
-                    ),
-                }
-            ],
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": REVIEW_TOOL_NAME,
-                        "description": "Return the bounded review result.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "severity": {"type": "string", "enum": ["none"]},
-                                "summary": {"type": "string"},
+    review_status = 0
+    review_body: object = None
+    review_elapsed_ms = 0
+    review_ok = False
+    for attempt in range(1, PROBE_ATTEMPTS + 1):
+        review_started = time.monotonic()
+        review_status, review_body = smoke.http_json(
+            f"{smoke.NEWAPI_BASE}/v1/chat/completions",
+            method="POST",
+            timeout=90,
+            headers={"Authorization": f"Bearer {key}"},
+            body={
+                "model": args.model,
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Review this safe no-op change. Call report_review exactly once "
+                            f"with severity none and summary {EXPECTED_REVIEW_TEXT}."
+                        ),
+                    }
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": REVIEW_TOOL_NAME,
+                            "description": "Return the bounded review result.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "severity": {"type": "string", "enum": ["none"]},
+                                    "summary": {"type": "string"},
+                                },
+                                "required": ["severity", "summary"],
+                                "additionalProperties": False,
                             },
-                            "required": ["severity", "summary"],
-                            "additionalProperties": False,
                         },
-                    },
-                }
-            ],
-            "tool_choice": {
-                "type": "function",
-                "function": {"name": REVIEW_TOOL_NAME},
+                    }
+                ],
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": REVIEW_TOOL_NAME},
+                },
             },
-        },
-    )
-    review_elapsed_ms = int((time.monotonic() - review_started) * 1000)
-    review_ok = review_status == 200 and review_tool_matches(review_body)
+        )
+        review_elapsed_ms = int((time.monotonic() - review_started) * 1000)
+        review_ok = review_status == 200 and review_tool_matches(review_body)
+        if review_ok:
+            break
+        if attempt < PROBE_ATTEMPTS:
+            time.sleep(PROBE_RETRY_DELAY_SECONDS)
     if not review_ok:
         if args.readiness_path:
             update_readiness(

@@ -273,6 +273,42 @@ def _is_transient_rate_limit(message: str) -> bool:
         for marker in TRANSIENT_RATE_LIMIT_MARKERS
     )
 
+# 日额度耗尽类 429（2026-08-21，x-preview-f-free 主力化）：与瞬态限流不同，
+# 上游在固定时间点重置（OpenRouter 免费层 X-RateLimit-Reset，实测
+# ch102/ch103/ch100 共享同一账号级日额度）。命中后禁用渠道并持有墓碑，
+# 到重置点再走正常恢复探测——避免免费层死亡窗口内每个请求都白试一遍
+# （OpenRouter 官方确认失败请求也计入日额度，白试会延长死亡窗口）。
+DAILY_QUOTA_CAP_MARKERS = (
+    "free-models-per-day",
+    "openrouter_free_tier_daily",
+    "daily_free_credits_exhausted",
+)
+_DAILY_CAP_RESET_RE = re.compile(r"X-RateLimit-Reset.{0,12}?(\d{10,13})")
+DAILY_CAP_FALLBACK_HOURS = 12  # 无显式 reset 时间时的保守墓碑时长
+
+
+def _daily_cap_reset_iso(message: str) -> Optional[str]:
+    """日额度耗尽 → 恢复时间点 ISO 字符串；非日额度类错误返回 None。"""
+    lowered = (message or "").lower()
+    if not any(marker in lowered for marker in DAILY_QUOTA_CAP_MARKERS):
+        return None
+    now = datetime.now()
+    reset: Optional[datetime] = None
+    match = _DAILY_CAP_RESET_RE.search(message or "")
+    if match:
+        epoch = int(match.group(1))
+        if epoch > 10_000_000_000:  # 毫秒时间戳
+            epoch //= 1000
+        try:
+            candidate = datetime.fromtimestamp(epoch)
+        except (OverflowError, OSError, ValueError):
+            candidate = None
+        if candidate is not None and now < candidate < now + timedelta(hours=36):
+            reset = candidate
+    if reset is None:
+        reset = now + timedelta(hours=DAILY_CAP_FALLBACK_HOURS)
+    return reset.isoformat()
+
 PROBE_INCOMPATIBLE_MARKERS = (
     "non_agentic_blocked",
     "only serves agentic",
@@ -1395,6 +1431,49 @@ class AutoFixEngine:
                 return " ".join(ids)
         return ""
 
+    def _disable_for_daily_cap(self, channel: dict, test_msg: str, cap_until: str, source: str) -> None:
+        """日额度耗尽：禁用渠道并挂墓碑，恢复时间由 _daily_cap_reset_iso 决定。
+
+        恢复侧（check_and_enable_recovered_channels）在 cap_until 之前跳过
+        该记录；过期后走正常恢复探测，上游重置成功即自动回池。
+        """
+        channel_id = channel["id"]
+        name = channel["name"]
+        self._probe_soft_failures.pop(channel_id, None)
+        self.state.setdefault("weight_history", {})
+        if str(channel_id) not in self.state["weight_history"]:
+            self.state["weight_history"][str(channel_id)] = {
+                "weight": channel.get("weight", 5),
+                "priority": channel.get("priority", 50),
+                "time": datetime.now().isoformat(),
+            }
+        if not self.newapi.disable_channel(channel_id):
+            logger.warning(
+                f"Channel {channel_id} ({name}) daily-cap disable failed: {test_msg[:80]}"
+            )
+            return
+        self._append_disabled({
+            "id": channel_id,
+            "name": name,
+            "reason": f"{source}: daily_quota_cap — {test_msg[:80]}",
+            "time": datetime.now().isoformat(),
+            "daily_cap_until": cap_until,
+        })
+        self.state.setdefault("degraded_channels", {})
+        self.state["degraded_channels"].pop(str(channel_id), None)
+        self._save_state()
+        logger.warning(
+            f"Channel {channel_id} ({name}) daily quota cap; disabled until {cap_until}"
+        )
+        self.telegram.send_alert(
+            "渠道日额度耗尽",
+            f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 已禁用\n"
+            f"恢复时间: {_html_escape(cap_until[:16])}\n"
+            f"详情: {_html_escape(test_msg[:120])}\n"
+            f"时间: {datetime.now().strftime('%H:%M:%S')}",
+            "warning",
+        )
+
     def scan_error_channels(self):
         """定期扫描启用渠道，检测瞬间返回的错误（402 余额不足、401 无效令牌等）
 
@@ -1440,6 +1519,11 @@ class AutoFixEngine:
             test_ok, test_msg = self.newapi.test_channel(channel_id)
             if test_ok:
                 self._probe_soft_failures.pop(channel_id, None)
+                continue
+            # 日额度耗尽类 429 优先于瞬态限流判定：有明确重置点，挂墓碑禁用
+            cap_until = _daily_cap_reset_iso(test_msg)
+            if cap_until is not None:
+                self._disable_for_daily_cap(channel, test_msg, cap_until, "error_scan")
                 continue
             # 瞬态限流（429/rate limit）：不是渠道故障——不禁用、不累计永久失败
             if _is_transient_rate_limit(test_msg):
@@ -1722,6 +1806,14 @@ class AutoFixEngine:
             # 2026-08-11 评审 P1-6）
             if record["id"] in AUTO_BAN_RECOVERY_EXCLUSIONS:
                 continue
+            # 日额度墓碑：重置点之前不烧恢复配额，到点后走正常恢复探测
+            cap_until = record.get("daily_cap_until")
+            if cap_until:
+                try:
+                    if datetime.now() < datetime.fromisoformat(cap_until):
+                        continue
+                except (ValueError, TypeError):
+                    pass
 
             channel_id = record["id"]
             name = record["name"]
@@ -2109,6 +2201,11 @@ class AutoFixEngine:
                 self._probe_soft_failures.pop(channel_id, None)
                 continue
             # 限流与探针形态不相容都不提供渠道健康结论，不累计破坏性失败。
+            # 日额度耗尽类 429 例外：有明确重置点，挂墓碑禁用（见 error scan）。
+            cap_until = _daily_cap_reset_iso(test_msg)
+            if cap_until is not None:
+                self._disable_for_daily_cap(channel, test_msg, cap_until, "full_scan")
+                continue
             if _is_transient_rate_limit(test_msg):
                 logger.info(
                     f"Full scan: channel {channel_id} rate-limited, skipped (transient): {test_msg[:100]}"

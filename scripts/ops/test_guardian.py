@@ -3723,3 +3723,97 @@ class OpusEmptyResponseTests(unittest.TestCase):
             g._step_opus_empty_response()
         self.assertEqual(g.telegram.send_alert.call_count, 1)
         tmp.cleanup()
+
+
+class DailyQuotaCapTests(unittest.TestCase):
+    """日额度耗尽墓碑（2026-08-21，x-preview-f-free 主力化）。"""
+
+    def test_reset_iso_parses_millisecond_epoch(self):
+        reset_ms = int((time.time() + 3600) * 1000)
+        msg = (
+            'Rate limit exceeded: free-models-per-day-stealth. '
+            '"X-RateLimit-Reset":"%d"' % reset_ms
+        )
+        iso = guardian._daily_cap_reset_iso(msg)
+        self.assertIsNotNone(iso)
+        delta = datetime.fromisoformat(iso) - datetime.now()
+        self.assertGreater(delta, timedelta(minutes=50))
+        self.assertLess(delta, timedelta(minutes=70))
+
+    def test_reset_iso_fallback_when_reset_missing_or_stale(self):
+        iso = guardian._daily_cap_reset_iso("daily_free_credits_exhausted")
+        delta = datetime.fromisoformat(iso) - datetime.now()
+        self.assertGreater(delta, timedelta(hours=11))
+        self.assertLess(delta, timedelta(hours=13))
+        # 过去或超出 36h 的 reset 一律回落保守值
+        stale = int((time.time() - 3600) * 1000)
+        iso2 = guardian._daily_cap_reset_iso(
+            'free-models-per-day "X-RateLimit-Reset":"%d"' % stale
+        )
+        delta2 = datetime.fromisoformat(iso2) - datetime.now()
+        self.assertGreater(delta2, timedelta(hours=11))
+
+    def test_reset_iso_ignores_non_daily_errors(self):
+        self.assertIsNone(guardian._daily_cap_reset_iso("429 too many requests"))
+        self.assertIsNone(guardian._daily_cap_reset_iso("503 Endpoint is unavailable"))
+        self.assertIsNone(guardian._daily_cap_reset_iso(""))
+
+    def test_error_scan_disables_and_tombstones_daily_cap(self):
+        engine = make_engine()
+        engine._scan_offset = 0
+        engine.newapi.channels[102] = {
+            "id": 102,
+            "name": "ai-168661-ox-alpha",
+            "status": 1,
+            "weight": 5,
+            "priority": 7,
+            "models": "x-preview-f-free",
+        }
+        reset_ms = int((time.time() + 7200) * 1000)
+        engine.newapi.test_results.append((
+            False,
+            'bad response status code 429, message: Rate limit exceeded: '
+            'free-models-per-day-stealth. "X-RateLimit-Reset":"%d"' % reset_ms,
+        ))
+
+        engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+        engine.scan_error_channels()
+
+        self.assertEqual(engine.newapi.disable_calls, [102])
+        record = engine.state["disabled_channels"][0]
+        self.assertEqual(record["id"], 102)
+        self.assertIn("daily_quota_cap", record["reason"])
+        delta = datetime.fromisoformat(record["daily_cap_until"]) - datetime.now()
+        self.assertGreater(delta, timedelta(hours=1))
+
+    def test_recovery_skips_tombstone_until_reset(self):
+        future = (datetime.now() + timedelta(hours=2)).isoformat()
+        engine = make_engine(
+            {
+                "disabled_channels": [
+                    {"id": 102, "name": "ai-168661-ox-alpha",
+                     "time": (datetime.now() - timedelta(minutes=10)).isoformat(),
+                     "daily_cap_until": future}
+                ],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[102] = {
+            "id": 102, "name": "ai-168661-ox-alpha", "status": 2,
+            "auto_ban": 1, "weight": 5, "priority": 7,
+            "models": "x-preview-f-free",
+        }
+
+        engine.check_and_enable_recovered_channels()
+        self.assertEqual(engine.newapi.test_calls, [])
+
+        # 重置点过后走正常恢复探测
+        engine.state["disabled_channels"][0]["daily_cap_until"] = (
+            datetime.now() - timedelta(minutes=1)
+        ).isoformat()
+        engine.newapi.test_results.extend([(True, "ok")] * 3)
+        engine.check_and_enable_recovered_channels()
+        self.assertEqual(len(engine.newapi.test_calls), 3)
+        self.assertEqual(engine.state["disabled_channels"], [])

@@ -339,3 +339,40 @@ direct DB write plus a cache-sync wait). `create_omp_sota_channel.py` /
 Upstream unit pricing was not independently verified. The alias inherits the
 channel's existing billing and must be monitored by marked-model usage in
 NewAPI.
+
+## Readiness-task self-DoS fixed (2026-08-21): probe flake was disabling ch93
+
+Symptom: advisor turns failing with 503 `No available channel for model
+omp-sota-claude-opus-5` in ~5-7 minute windows all day (1442 occurrences since
+2026-08-19), while ch93 was enabled in DB and scheduled channel tests passed.
+
+Root cause: the `OMP SOTA Readiness Refresh` scheduled task (every 10 min,
+installed 2026-08-19 — matches the histogram start) runs
+`refresh_omp_sota_readiness.py`, which disables ch93 (status=2,
+`status_reason="manual operation"`) on ANY probe failure and re-enables it on
+the next run whose management probe passes. Two flake sources made probe
+failures routine on a healthy channel:
+
+1. Model variance/truncation: marker probe sent `max_tokens=8`, review probe
+   `max_tokens=64` against a thinking-heavy upstream; verified live that
+   completions of 95-188 tokens are normal, so a strict single-shot match
+   fails intermittently (observed `HTTP 200 toolMatch=false`).
+2. Log-attribution race: `latest_log_after` polled only 5s for the async
+   consume-log row; rows often land later, so `verify_log` failed even after
+   both probes passed.
+
+Fix (repository `scripts/ops/probe_omp_sota_alias.py`): both probes now retry
+up to 3 attempts with a 5s delay before reporting failure; marker probe
+`max_tokens` 8 -> 64, review probe 64 -> 256; `latest_log_after` default poll
+window 5s -> 20s. A genuinely dead upstream (nightly
+`daily_free_credits_exhausted`, 5xx) still fails all attempts, so real-outage
+detection and the strict-isolation contract are unchanged. Verified: unit
+tests 7/7 green, live probe 3/3 pass after the fix (was failing ~2/3 before).
+
+Operational note: during a disable window the advisor has no NewAPI-side
+fallback by design (strict isolation); the OMP-side chain
+(`omp-sota-claude-opus-5` -> muse-free -> hy3-free -> x-preview-f-free) only
+helps if those tail models are themselves healthy — on 2026-08-21 19:4x they
+were not (Zen 503 + OpenRouter free-tier daily cap), so the advisor still
+hard-failed. Tail health is a separate concern tracked in the Ox Alpha
+runbook.

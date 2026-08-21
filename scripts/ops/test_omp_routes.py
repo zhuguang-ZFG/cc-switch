@@ -500,19 +500,31 @@ class OmpRouteGateTests(unittest.TestCase):
         self.assertIn("  fallbackRevertPolicy: cooldown-expiry", text)
 
     def test_default_role_has_no_model_fallback_chain(self):
-        """default 可使用聚合渠道重试，但不得切换到另一个模型。"""
+        """default 可使用聚合渠道重试，但不得切换到另一个模型。
+
+        例外（2026-08-21 用户批准）：agentrouter 内容过滤误伤期间，
+        `agentrouter/gpt-5.6-sol` 允许且仅允许挂审批过的兜底链
+        k3 -> muse-free（见 docs/ops/agentrouter-content-filter-false-positive-2026-08-21.md）。
+        """
         text = CONFIG_FILE.read_text(encoding="utf-8")
         roles = _model_role_entries(text)
         chains = _fallback_chain_entries(text)
         self.assertIn("default", roles, "modelRoles.default must be configured")
         primary = _base_selector(roles["default"])
-        configured = sorted({"default", primary} & set(chains))
+        approved = {"agentrouter/gpt-5.6-sol"}
+        configured = sorted(({"default", primary} & set(chains)) - approved)
         self.assertEqual(
             configured,
             [],
             "default must hard-fail after its provider/pool is exhausted; "
             f"remove model fallback chains {configured}",
         )
+        if primary == "agentrouter/gpt-5.6-sol":
+            self.assertEqual(
+                chains.get(primary),
+                ["zg-newapi/k3", "zg-newapi/muse-spark-1.2-contributor-free"],
+                "agentrouter sol 兜底链仅限审批过的 k3 -> muse-free",
+            )
 
 
     def test_advisor_role_is_pinned_to_sota(self):
