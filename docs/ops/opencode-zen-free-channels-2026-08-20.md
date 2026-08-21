@@ -198,6 +198,13 @@ ok → 回读验证渠道/mapping/abilities/倍率）。OpenRouter 不在 Cloudf
 |---|---|---|---|---|---|
 | x-preview-f-free | ✓ | ✓ | ✗ 1210 | ✓ | ✗ 1210 |
 | hy3-free | ✓ | ✓ | ✓ | ✗ 400 | （未测） |
+| muse-spark-1.2-contributor-free | ✓ | ✓ | （未测） | ✓ | （未测） |
+
+muse-spark 特别注意（2026-08-21 实测）：三档全 200 不拒收，但所有档位
+`reasoning_tokens` 均为 None——muse-free 走 /v1/responses 直通，effort
+参数被上游静默吞掉，**声明档位无实际推理效果**。models.yml 已补
+`efforts: [low,high,max]` 白名单仅为行为显式化（防未来上游收紧变 4xx），
+不要指望 `:max` 让 muse 真的多想。
 
 big-pickle / mimo-v2.5-free 当时额度耗尽未测。OMP models.yml 已按实测
 声明 `thinking.efforts`（x-preview `[low,high,max]`、hy3 `[low,high,xhigh]`），

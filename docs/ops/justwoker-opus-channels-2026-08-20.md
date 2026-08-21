@@ -92,3 +92,24 @@ justwoker 上游目录共 4 个模型（opus-5/opus-5-thinking/opus-4-8/opus-4-8
 ch94/ch95 models（备份 `~/.new-api-local/backups/channel-{94,95}-before-add-opus48-*.json`），
 abilities：ch95/ch94 p50/w8 优先 + ch86 p40/w13 兜底。真实请求验证 3.8s OK 走 ch94。
 至此 justwoker 上游 4 个模型全部双渠道聚合完毕。
+
+## 2026-08-21：claude-opus-5-thinking effort 矩阵实测
+
+经 relay 3002 逐档探测（16 max_tokens 探针，成本可忽略）：
+
+| effort | 结果 | 延迟 | 备注 |
+|---|---|---|---|
+| （无） | 200 | 2.6s | completion=1 |
+| low | 200 | 3.7s | completion=1 |
+| high | 200 | 4.7s | completion=22 |
+| max | 200 | 5.5s | completion=16 |
+| xhigh | 200 | 7.6s | completion=16 |
+
+**五档全部接受，无 4xx 拒收**；延迟单调上升（2.6→7.6s）说明渠道确实把
+effort 映射成了不同的 thinking 预算，不是静默吞掉（对比 muse-free 的
+responses 直通全档同响应）。`reasoning_tokens` 恒为 0 是 Anthropic 风格
+上游不计独立 reasoning 字段，thinking token 计入 completion。
+
+OMP models.yml 的 `claude-opus-5-thinking` 白名单已从 `[high]` 扩为
+`[low, high, xhigh, max]`；`requiresEffort: true` 保留（历史设定，且
+effort=None 在长会话行为未验证，不放宽）。
