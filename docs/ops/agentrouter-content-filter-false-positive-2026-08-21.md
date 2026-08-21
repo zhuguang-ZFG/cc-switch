@@ -46,6 +46,30 @@ agentrouter 多 key 多上游里**至少两个上游各自带内容过滤**，�
 3. **治本**：拿 `aGVsbG8gd29ybGQ=` 被拦的铁证找 agentrouter 报备误伤，
    要求放宽内容过滤/加白。（待用户找客服/社区，AI 无账号登录态。）
 
+## 社区方案调研（2026-08-21）
+
+此病是 agentrouter 已知通病，社区只有绕行方案、无治本：
+
+- [opencode issue #2784](https://github.com/anomalyco/opencode/issues/2784)：
+  正常请求偶发 `sensitive_words_detected`，与本案同症状。
+- **重试风暴**：[TVD-00/opencode-agentrouter](https://github.com/TVD-00/opencode-agentrouter)
+  撞敏感词错误就指数退避重试（至多 30 次）——原理是多上游重试落到
+  不过滤的上游，与我们"至少两个上游带过滤"的实测互相印证。代价是
+  延迟和费用，不如 fallback 链一次到位。
+- **字段剥离**：[agentrouter-opencode-proxy](https://github.com/Goodnessmbakara/agentrouter-opencode-proxy)
+  本地代理剥掉 `thinking`/`output_config` 等非标准字段（实测触发
+  `content-blocked`）。**对本案不适用**：我们的探针纯消息体无特殊字段
+  照样被拦，触发层是内容（base64）而非字段。但注意：OMP 的 `:max`
+  等 effort 后缀会发 `reasoning_effort` 字段，属同类触发器，对
+  agentrouter 直通命中率有负面影响。
+- **系统提示注入**：[agentrouter-spoof-proxy](https://github.com/trefeon/agentrouter-spoof-proxy)
+  注入特定 system prompt 绕过过滤。灰色手段，可能违反对方 ToS，
+  不上生产链。
+
+另该 proxy 仓记录了 agentrouter 的 Aliyun WAF TLS 指纹白名单（仅放行
+Claude Code/Codex CLI/同步 Anthropic SDK 等），本案不涉及（本机请求
+鉴权层一直能通过），存档备查。
+
 ## 复发信号
 
 同类故障再发的特征：错误体含 `sensitive_words_detected` 或
