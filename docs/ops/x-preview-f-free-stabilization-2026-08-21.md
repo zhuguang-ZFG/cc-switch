@@ -45,6 +45,20 @@ X-RateLimit-Reset，毫秒/秒自适应、大小写不敏感；缺失或异常�
 注意：`daily_free_credits_exhausted` 同时覆盖 ch93（sotamodel sota 线），
 墓碑机制让 ch93 的夜间停机恢复点也更精确（此前靠全量扫描碰运气）。
 
+## ch102 key 轮换（2026-08-22）
+
+ai.168661.xyz 重发了 ox-alpha 家族 key（该站契约：每个模型家族一个
+key）。老 key 上游返回 401 Invalid token，已死。按站点的单家族单 key
+契约做了**轮换**而非加第二渠道——`scripts/ops/rotate_ai168661_ox_alpha_key.py`
+备份整库后 PUT 更新 ch102，仅 key 变化，name/models/mapping/p7/w5/
+status/header_override 回读逐项验证不变，management probe
+（x-preview-f-free→ox-alpha）转绿。
+
+经验：NewAPI `PUT /api/channel/` 的 body 是 channel 结构体**本体**
+（create 才是 `{"mode","channel"}` 包装，错用包装报 "record not
+found"）；且必须带列表 API 返回的**完整投影**（去掉 status），手挑子集
+报 "Invalid parameters"。脚本里已注释。
+
 ## 运维要点
 
 - OR 日额度耗尽是日常事件（主力化后 1000/天大概率不够用）。墓碑禁用后
