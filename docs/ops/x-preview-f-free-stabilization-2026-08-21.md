@@ -59,6 +59,33 @@ status/header_override 回读逐项验证不变，management probe
 found"）；且必须带列表 API 返回的**完整投影**（去掉 status），手挑子集
 报 "Invalid parameters"。脚本里已注释。
 
+## ch15 reasoning_effort 条件钳制（2026-08-22）
+
+日志复查发现：muse-free/x-preview-f-free 的 efforts 白名单含 `max`，OMP
+故障转移到 `deepseek-v4-flash`（池主力 ch15）时**沿用原 effort**，ch15
+上游不收 `max` → 400 `field ReasoningEffort invalid, should be one of:
+low, medium, high, xhigh, none`（24h 内 6 次）。OMP 发的是顶层
+`reasoning_effort`（snake_case，已用 http-400 落盘请求证实）。
+
+修复：ch15 加条件 param_override（上游 new-api `relay/common/override.go`
+的 operations DSL——conditions 支持 full/prefix/contains/gt 等 + invert，
+操作为 set）：
+
+```json
+{"operations": [{"mode": "set", "path": "reasoning_effort", "value": "xhigh",
+  "conditions": [{"mode": "full", "path": "reasoning_effort", "value": "max"}],
+  "logic": "AND"}]}
+```
+
+只在 effort 恰好为 `max` 时钳到 `xhigh`（上游白名单最高档），其余档位
+透传，主路 max 不受影响。脚本
+`scripts/ops/clamp_ch15_reasoning_effort.py`：复现 400 → 备份 → 打
+override → max/xhigh/无 effort 三组探针全 200 → 回读验证。重跑幂等
+（已存在则只验证）。
+
+注意范围：只修 ch15。其他渠道若也不认 `max`，同法加钳制即可；OMP 侧
+fallback 不重夹 effort 是结构性行为，目前靠各渠道钳制兜底。
+
 ## 运维要点
 
 - OR 日额度耗尽是日常事件（主力化后 1000/天大概率不够用）。墓碑禁用后
