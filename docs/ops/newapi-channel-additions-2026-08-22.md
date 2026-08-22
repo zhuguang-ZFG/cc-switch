@@ -54,6 +54,21 @@
     `-free` 免费池（价格未知，避免污染免费池成本核算）。
 - 脚本：`scripts/ops/add_imagic_channel.py`。
 
+## 补漏 sweep（同日稍后）
+
+首轮后自查模型列表，补探了漏网模型并补入：
+
+- ch89 seeseed += `qwen3.7-max-normal`（ch89 共 6 模型）。
+  弃：`gpt-5.6-luna`（key 有权限但月额度尽，15 天后重置，死渠道不入）、
+  `mimo-v2.5-free`（200 可用但定价未知，id 与免费池同名——按 imagic muse
+  同款原则不混免费池）、`gpt-oss-120b`/`codex-auto-review`（500）。
+- ch109 imagic += `grok-4.20-0309-non-reasoning`、`grok-4.3`、`grok-4.5`
+  （后两者为首个启用渠道）、`grok-composer-2.5-fast`（新池）、`mimo-v2.5`
+  （入 ch101 池备份）。ch109 共 11 模型。3 个 grok-imagine-image 为图像
+  生成模型，聊天 relay 用不上，刻意跳过。
+- 脚本：`add_seeseed_qwen_models.py`（幂等重跑）、
+  `scripts/ops/add_imagic_extra_models.py`。
+
 ## 运维要点
 
 - 所有新渠道已自动进入 Guardian 扫描/恢复队列，无需额外配置。

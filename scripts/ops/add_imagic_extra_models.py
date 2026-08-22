@@ -1,41 +1,24 @@
 #!/usr/bin/env python3
-"""Extend ch89 (seeseed1ck-hydrogel) with qwen3.7-max / qwen3.7-plus /
-qwen3.8-max / qwen3.7-max-normal.
+"""Extend ch109 (imagic) with the models missed in the first onboarding pass:
+grok-4.20-0309-non-reasoning, grok-4.3, grok-4.5, grok-composer-2.5-fast,
+mimo-v2.5.
 
-User re-provided the same source+key 2026-08-22 (sha256 matches the stored
-key) — the intent is expanding coverage, not rotating credentials. ch89
-currently serves only grok-4.6 + grok-chat-fast at p0.
+Follow-up sweep 2026-08-22 (same key, browser UA — CF 1010 without it):
+- all five: chat/completions 200, content "OK"
+- grok-imagine-image / -2.0 / -lite are image-generation models — the relay
+  is chat/completions, deliberately skipped
+- grok-chat-fast already served by ch89; skipped to keep ch109 focused
 
-Direct upstream probes 2026-08-22 against
-https://api-yi-hydrogel.seeseed1ck.icu/v1 with the ch89 key:
-- qwen3.7-max / qwen3.7-plus / qwen3.8-max / qwen3.7-max-normal: 200 "OK"
-  (max-normal probed in the follow-up sweep the same day)
-- gpt-5.6-sol: 401 Invalid token (key's group has no sol access) — excluded
-- gpt-5.6-luna: 429 monthly usage limit (resets in 15 days) — excluded
-- gpt-5.6-terra / gpt-5.4 / gpt-5.5 / gpt-oss-120b / codex-auto-review:
-  500 upstream error — excluded
-- longcat-2.0-free: 503 no available channel — excluded
-- mimo-v2.5-free: 200 but EXCLUDED — the id is the free pool's name and
-  seeseed's pricing for it is unknown; same rule as imagic's paid-name muse:
-  do not mix unknown-cost sources into free pools
+Pool impact: grok-4.20-0309-non-reasoning / grok-composer-2.5-fast are new
+pools; grok-4.3 / grok-4.5 get their first enabled provider (ch39 disabled);
+mimo-v2.5 joins the ch101 pool as backup. Pricing unknown -> ModelRatio
+untouched.
 
-Pool impact: qwen3.7-max / qwen3.7-plus / qwen3.7-max-normal are brand-new
-pools; qwen3.8-max's only other provider (ch31) is disabled, so ch89 becomes
-the sole enabled provider. Pricing unknown -> ModelRatio untouched.
-
-What --apply does (same pattern as add_opencode_zen_nemotron_models.py):
-- whole-DB SQLite snapshot backup
-- PUT /api/channel/ with models extended (full channel object minus status;
-  the fork syncs abilities on update)
-- management probe of each new model while the channel stays enabled
-- 75s channel-cache wait, then relay probes through 127.0.0.1:3002
-  /v1/chat/completions using the OMP zg-newapi token from
-  ~/.omp/agent/models.yml (never printed)
-- readback verification: channel models, abilities rows
-
-Rollback on failure: PUT the original channel payload back.
-Re-running is idempotent: models already on the channel are only probed and
-verified.
+Same workflow contract as add_seeseed_qwen_models.py: whole-DB backup, PUT
+full channel payload minus status (preserves header_override), per-model
+management probe, 75s cache wait, relay probes via 3002 with the OMP token
+(never printed), readback verify, rollback restores the original payload.
+Idempotent: models already present are only probed and verified.
 """
 from __future__ import annotations
 
@@ -50,8 +33,14 @@ from pathlib import Path
 
 SMOKE_PATH = Path(__file__).with_name("newapi-local-smoke.py")
 
-CHANNEL_NAME = "seeseed1ck-hydrogel"
-NEW_MODELS = ["qwen3.7-max", "qwen3.7-plus", "qwen3.8-max", "qwen3.7-max-normal"]
+CHANNEL_NAME = "imagic"
+NEW_MODELS = [
+    "grok-4.20-0309-non-reasoning",
+    "grok-4.3",
+    "grok-4.5",
+    "grok-composer-2.5-fast",
+    "mimo-v2.5",
+]
 CACHE_SYNC_SECONDS = 75
 OMP_MODELS_YML = Path.home() / ".omp" / "agent" / "models.yml"
 
@@ -150,7 +139,7 @@ def online_backup(db_path: Path) -> Path:
     backup_dir = db_path.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     destination = backup_dir / (
-        f"new-api-before-seeseed-qwen-{time.strftime('%Y%m%d-%H%M%S')}.db"
+        f"new-api-before-imagic-extend-{time.strftime('%Y%m%d-%H%M%S')}.db"
     )
     if destination.exists():
         raise RuntimeError(f"backup already exists: {destination}")
