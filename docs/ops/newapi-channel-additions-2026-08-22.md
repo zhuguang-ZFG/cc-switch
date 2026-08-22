@@ -69,6 +69,37 @@
 - 脚本：`add_seeseed_qwen_models.py`（幂等重跑）、
   `scripts/ops/add_imagic_extra_models.py`。
 
+## OMP 侧注册（同日收尾）
+
+NewAPI 聚合完成后，把本轮 19 个新模型注册进 OMP
+（`~/.omp/agent/models.yml` 的 `zg-newapi` provider 块末尾，
+`qwen3-8-27b` 之后、`omp-sota-claude-opus-5` 之前）：
+
+- 免费：`nemotron-3-ultra-free`、`nemotron-3.5-lightning-free`（ch96）。
+- 付费/定价未知：`deepseek-v4-pro-0813`、`glm-5.3`、`kimi-k2.6`、
+  `kimi-k2.7-code`（ch108）；`qwen3.7-max`、`qwen3.7-max-normal`、
+  `qwen3.7-plus`（ch89）；`grok-4.20-0309-reasoning`、
+  `grok-4.20-0309-non-reasoning`、`grok-4.20-multi-agent-0309`、
+  `grok-build-0.1`、`grok-4.3`、`grok-4.5`、`grok-4.6`、
+  `grok-composer-2.5-fast`、`muse-spark-1.2-contributor`、`x-preview-f`
+  （ch109，后两者为付费池）。
+
+`config.yml` 的 `retry.fallbackChains.smol` 链末尾只追加了两个免费
+nemotron（`x-preview-f-free` 之后）；付费/定价未知模型不进任何兜底链
+（链是手工策划的，避免免费链路烧付费额度）。
+
+注意：
+
+- 新条目的 `contextWindow`/`maxTokens` 是按同系模型估的保守值
+  （nemotron 262144/32768、grok 系 262144/65536、qwen3.7 系
+  262144/65536、whyyin 大杯 1000000/131072），**未逐一实测**，遇到
+  截断/超限再按实测值收紧。
+- 改动前备份：`~/.omp/agent/models.yml.bak-20260822-new-channels`、
+  `config.yml.bak-20260822-new-channels`。
+- 验证：`omp -p --model zg-newapi/nemotron-3-ultra-free` 冒烟出文 OK，
+  证明 models.yml 可被 OMP 解析且 ch96 端到端通。OMP 配置按进程启动时
+  加载，已打开的交互会话若认不出新模型需重启 OMP。
+
 ## 运维要点
 
 - 所有新渠道已自动进入 Guardian 扫描/恢复队列，无需额外配置。
