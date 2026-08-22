@@ -100,6 +100,46 @@ nemotron（`x-preview-f-free` 之后）；付费/定价未知模型不进任何�
   证明 models.yml 可被 OMP 解析且 ch96 端到端通。OMP 配置按进程启动时
   加载，已打开的交互会话若认不出新模型需重启 OMP。
 
+## yjs.im（JasperAPI，ch110 `yjs-free`）
+
+分组制 NewAPI 站。踩坑：用户拿到的第一个 key 绑 **Free-Lite** 组（5k 上
+下文轻量区），该组当前渠道全空——42 个模型全部 503
+`No available channel ... under group Free-Lite`。完整报错里的组名是关
+键线索（截断的报错看不到）。换绑 **Free** 组的 key 后 19/22 探通。
+
+分组地形（/api/pricing 的 `enable_groups` + `group_ratio`）：
+
+- **Free**（ratio 0，真免费）20 模型：deepseek-v4-flash×3 版本、ox-alpha、
+  kimi-k3、glm-5.2、mimo-v2.5、muse-spark-1.2-contributor、hy3、
+  minimax-m3、big-pickle、agnes-2.0/2.5-flash 等。
+- **unlimited**（0 倍率，5k 上下文）10 个小模型；**Codex-Plus/Pro/Team**
+  付费号池装 gpt-5.6-sol/gpt-5.4/5.5/5.6-terra/5.6-luna；**Grok-Super**
+  付费装 grok-4.5/4.6。sol 在这站摸不到免费的。
+
+ch110 配置：p6/w5，auto_ban，浏览器 UA header，19 个模型——
+
+- 映射进现有免费池：`x-preview-f-free`→ox-alpha（第四路上游）、
+  `muse-spark-1.2-contributor-free`、`hy3-free`→hy3。
+- 进现有付费池当免费备份（ModelRatio 不动，高估成本是保守方向）：
+  `k3`→kimi-k3、`glm-5.2`、`deepseek-v4-flash`、`-0731`、agnes×2。
+- 新建 10 个 yjs 独有池（ModelRatio+=0）：`dots-3-note-preview`、
+  `inkling`、`sensenova-6.8-flash-lite`、`step-3.7-flash`、
+  `diffusiongemma-26b-a4b-it`、`gpt-oss-20b`、`glm-4.5-flash`、
+  `minimax-m3`、`nemotron-3-ultra-550b-a55b`、`deepseek-v4-flash-preview`。
+- 排除：`big-pickle`/`mimo-v2.5`（上游持续 429，zen 池里已有）、
+  `gemma-4-31b-it`（读超时 ×2）。`glm-5.2` 管理探针 quota 警告（瞬态
+  限流，路由已证通）。
+
+脚本：`scripts/ops/add_yjs_free_channel.py`（幂等重跑）。注意首跑在
+relay 验证阶段撞上 `hy3-free` 池的**本地** FreeUsageLimitError 429
+（OMP relay 用户当日该池免费额度尽，与渠道无关），脚本按失败回滚禁用
+了 ch110；随后手动续跑（重新启用 + 恢复 ModelRatio 合并 + 用 yjs 独有
+池 `dots-3-note-preview` 做 relay 验证）完成入网。**教训：池级 relay
+探针失败要先分辨是渠道问题还是本地配额/池内其他成员问题，再决定回滚。**
+
+OMP 侧无需改动：进现有池的模型自动增强现有兜底链；10 个新池模型偏
+小/ niche，未注册 OMP，需要时按 models.yml 既有格式补。
+
 ## 运维要点
 
 - 所有新渠道已自动进入 Guardian 扫描/恢复队列，无需额外配置。
