@@ -1,5 +1,9 @@
 # freebuff 免费层入网尝试与 limited 档结论（ch107 freebuff-mimo，2026-08-22）
 
+> **已被同日晚的进展推翻**：当晚经 Clash 美区钉出口恢复 full 档，ch107 已启用
+> 并扩到 mimo/deepseek-v4-flash/luna 三模型。现行状态见
+> `freebuff-full-tier-us-egress-2026-08-22.md`。本文保留作历史记录。
+
 起因：用户想用 freebuff 免费层的 Luna（不占 OpenCode Go 套餐 $15/月额度）。
 结论先行：**Luna 路在此账号/网络下不可行；mimo 可用但受区域出口制约**。
 ch107 已建好但保持禁用，等干净住宅出口后复跑脚本即启用。
