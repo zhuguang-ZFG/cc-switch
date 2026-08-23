@@ -376,3 +376,91 @@ helps if those tail models are themselves healthy — on 2026-08-21 19:4x they
 were not (Zen 503 + OpenRouter free-tier daily cap), so the advisor still
 hard-failed. Tail health is a separate concern tracked in the Ox Alpha
 runbook.
+
+## Open-stdin child hang fixed (2026-08-23): every automatic run "timed out"
+
+Symptom: automatic SOTA reviews silently stopped for 57.5h. `sota-workload-health.json`
+held `consecutiveTimeouts=2, automaticBlocked=true, lastResult="timeout"` at
+`checkedAt=1787217748448` (2026-08-20T09:22:28Z) and 71 subsequent escalation events
+were emitted as `result="skipped"` with `failureClass="unhealthy"`. Success rate over
+the whole window was 0/163.
+
+Root cause chain (each link measured, not inferred):
+
+1. The escalation child was launched through the host's `pi.exec`, which leaves the
+   child's **stdin attached to an open pipe**. An `omp -p` child with open stdin never
+   reaches EOF and never exits on its own.
+2. The parent therefore always hit its kill ceiling. Measured open-pipe kills:
+   180.1s, 180.1s, 300.1s, 300.1s — every one with `stdout_len=0`, so even completed
+   model work was discarded.
+3. With stdin at EOF the same prompt converges normally: exit 0 in 52.7s / 121.1s /
+   154.2s / 172.7s (Node, `stdio` stdin `ignore`) and 52.7s / 173.9s (Python probes).
+4. Because every run was scored a timeout, two runs tripped the workload breaker. The
+   latch had no expiry and only a _successful_ run could clear it — but the latch
+   itself blocked every run, so the state was self-sustaining.
+
+Fix (`scripts/ops/omp-sota-escalation.js`, revision `2026.08.23-sota-r7`):
+
+- `runSotaChild(args, { cwd, timeoutMs })` owns the spawn:
+  `spawn("omp", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })`. Closing stdin is
+  the actual convergence fix. `runEscalation` resolves it as
+  `pi.runSotaChild ?? runSotaChild`, so tests stay injectable while production no
+  longer depends on unobservable host stdin behaviour.
+- `WORKLOAD_BREAKER_TTL_MS = 60 * 60 * 1000`: an expired latch passes through so one
+  probe can re-decide. Only a real success or TTL expiry unblocks; the latch is never
+  cleared by hand.
+- Ceiling raised to `DEFAULT_TIMEOUT_MS = 300_000` with `--max-time 300`. The measured
+  success tail reached 172.7s, so the old 180s ceiling truncated legitimate runs.
+  `--max-time` is a hard ceiling, not a flush point: no graceful self-exit exists, so
+  convergence is enforced by a prompt budget of at most 8 tool calls, bounded reads
+  (grep or <=200 lines), and a 10-line answer cap.
+- The timeout classifier stays killed-only:
+  `killed === true && durationMs >= Math.max(0, timeoutMs - 5000)`. The speculative
+  `killed=false` self-exit branch was removed as dead code; it would have relabelled
+  real failures as timeouts and re-inflated the very latch being fixed.
+
+Verification:
+
+- Repo/live SHA-256 parity `2b88c78e3af676cf52fbb8bbb9a36a389b835febb99896bea7b59511adbca07b`.
+- Live end-to-end through the **deployed** spawn path, with no test override:
+  `result="success"`, `code=0`, `killed=false`, `timedOut=false`, 82.4s wall, one
+  `sota-escalation-review` message containing a real review verdict. First success in
+  163 attempts. NewAPI logs confirm ch93 served it (8 streaming calls, 3-14s each).
+- Breaker cleared through the sanctioned API (`recordWorkloadResult(..., {ok:true})`),
+  not by editing the file: `consecutiveTimeouts=0, automaticBlocked=false,
+lastResult="success"`.
+- Gates: `node --test scripts/ops/test_omp_sota_escalation.js` 23/23 in 124ms (was
+  300s+ because unit fixtures were spawning real children); route gates 38/38;
+  refresh gates 2/2.
+
+Test-isolation regression fixed at the same time: five `pi` fixtures could reach
+`runEscalation` without stubbing the child runner, so `pi.runSotaChild ?? runSotaChild`
+fell through to a real `spawn("omp", ...)` with a 300s SIGKILL timer — unit tests were
+issuing live model calls (observed 76s and 110s). All fixtures now build their stub
+from a shared `makeChildRunner(stdout)` helper, assert against recorded child runs
+instead of `execCalls.at(-1)`, and every `exec` stub throws on any non-`git` command so
+a future missing stub fails loudly and instantly instead of hanging.
+
+Residual, non-blocking: after the successful run the readiness refresh reported
+`management-probe-failed` for ch93 and fail-closed it (`status=2`, by design at
+`refresh_omp_sota_readiness.py:84`). The management probe returned a genuine upstream
+`429 daily_free_credits_exhausted`, not a flake — 1966 client calls burned 14.9M prompt
+tokens on the alias that day. This is real quota exhaustion; the channel returns on the
+next refresh whose probe passes.
+
+`status_reason` is not a `channels` column in this schema; it is nested inside
+`other_info` and only surfaced via the admin API. `GET /api/channel/93` returned
+`{"status_reason":"manual operation","status_time":1787435011}`, i.e. the refresh run
+that immediately followed the successful review. Forcing `status=1` by any route would
+simply re-ban on the next probe while the upstream quota is still exhausted.
+
+NewAPI access discipline used throughout this investigation, and required for future
+ones: NewAPI was live (transient `new-api.db-journal` observed; `journal_mode=delete`,
+so there is no WAL to isolate concurrent access). Every database read therefore used
+`sqlite3.connect("file:...?mode=ro", uri=True)` — verified by an explicit
+`UPDATE channels SET status=1 WHERE id=93` that SQLite rejected with
+`attempt to write a readonly database`. No option or channel value was mutated at any
+point. Channel state changes must go through the admin API (`POST /api/channel/<id>/status`,
+as `refresh_omp_sota_readiness.py:49-56` already does): NewAPI caches options in memory,
+so DB-level edits are ignored or overwritten, and writing to the live database risks
+lock and journal damage.
