@@ -98,8 +98,10 @@ NewAPI 自身反而很轻(累计 CPU 秒远低于 webview2/explorer)。单用户
 `options-performance-before-20260824-021124.json`(原值 98/98);整库基线见
 同日 `new-api-after-k3-reorder-revert-*.db`。
 
-行为验证:16 进程满载压测下 relay 探针 `HTTP 200 ACCEPT`(修复前同条件必返
-503)。电源计划已是卓越性能,无需调整。
+行为验证(同命令闭环):启动 16 个忙循环→采样整机 CPU=100%→relay 探针
+`HTTP 200 ACCEPT`→按记录 PID 清杀→复采样 CPU=15%(无孤儿残留)。作为对照,
+阈值调整前的实测为:8 个并发 relay 探针在同类突发负载下全部被该保护以 503
+拒绝。电源计划已是卓越性能,无需调整。
 
 注意:上游 Moonshot 的 `429 engine overloaded`(ch33)是**服务端**负载,
 与本机阈值无关,不可通过本机制消除。
