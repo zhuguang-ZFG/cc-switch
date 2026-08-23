@@ -28,6 +28,10 @@ VPS NewAPI 退役后本地栈（new-api.exe + 三代理 + Guardian）的第一�
 - 改状态用 `POST /api/channel/:id/status {"status":N}`。
 - `PUT /api/channel/` body **不能含 `status` 字段**，否则 `Invalid parameters`；
   该 fork 还会在 GET 响应里把 `key` 脱敏成空串（len=0 不代表 DB 里为空）。
+  **更新（2026-08-23）**：实测 PUT 列表端点条目（去 `status`）并**显式把 `key`
+  置空提交，后端保留原值不损坏通道**（DB 前缀比对 + 管理探测 + relay 三重验证，
+  见 `omp-config-and-upgrade-2026-08-23.md`）。危险的只有回填非空脱敏值；
+  详情端点（`GET /api/channel/:id`）返回体形状 PUT 仍 400。
 - 本次启用：ch45 agentrouter、ch70 vip-j3gb-gpt、ch65 centos-api-newkey-gpt。
 - ch63 centos-fr-gpt（frapi.centos.hk）实测 62s 后 504，保持 status=3，
   列入 smoke `KNOWN_BROKEN_CHANNELS`。

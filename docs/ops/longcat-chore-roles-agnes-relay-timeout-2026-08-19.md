@@ -197,6 +197,12 @@ deliberately abandoned because it rejects partial updates, and PUTting the
 GET-readback object would write back a masked key and corrupt the channel.
 NewAPI (no memory channel cache configured) picked the change up immediately.
 
+**更正（2026-08-23）**：「PUT 必写坏 key」并非无条件——实测此 fork 对 PUT body 中
+**空 `key` 保留原值**；用列表端点条目（去 `status`、`key` 置空）更新
+`test_model` 成功且三重验证无损（DB 前缀比对、管理探测、relay 实测）。当时失败
+的直接原因是详情端点返回体形状 PUT 400「Invalid parameters」。直连 SQLite 仍可，
+但不再是唯一安全路径。详见 `omp-config-and-upgrade-2026-08-23.md`。
+
 Verification: `omp-sota-claude-opus-5` via OMP's `zg-newapi` route returned
 HTTP 200 in 1.7s with cache-read billing fields populated; the NewAPI log
 attributes the request to ch93 — isolation confirmed.
