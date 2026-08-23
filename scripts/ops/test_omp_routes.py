@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import unittest
@@ -263,6 +264,50 @@ def _omp_models_resolves(output: str, provider: str, model_id: str) -> bool:
     return False
 
 
+
+
+def _parse_effective_efforts(output: str) -> dict[tuple[str, str], set[str]]:
+    """解析 `omp models` 表格为 {(provider, model): thinking 强度集合}。
+
+    生效表包含家族默认推断的强度（models.yml 无显式 thinking 块时），是
+    引用校验的真值来源（k3 2026-08-23 漂移教训：声明缺 max 而角色引用 :max）。
+    """
+    result: dict[tuple[str, str], set[str]] = {}
+    provider: str | None = None
+    for raw_line in output.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        header = re.match(r"^(\S+) \(\d+\)$", stripped)
+        if header:
+            provider = header.group(1)
+            continue
+        if provider is None or "│" not in stripped:
+            continue
+        cells = [cell.strip() for cell in stripped.split("│")][1:-1]
+        if len(cells) < 5 or cells[0] in ("model", ""):
+            continue
+        if set(cells[0]) <= {"─", "="}:
+            continue
+        efforts = set(cells[3].split(",")) if cells[3] != "-" else set()
+        result[(provider, cells[0])] = efforts
+    return result
+
+
+def _collect_effort_references(config_text: str) -> list[tuple[str, str]]:
+    """收集 config.yml 中全部 `provider/model:effort` 引用（含角色与内联）。"""
+    known = {"minimal", "low", "medium", "high", "xhigh", "max"}
+    refs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in re.finditer(r"([\w.-]+/[\w.-]+):(\w+)\b", config_text):
+        selector, effort = match.group(1), match.group(2)
+        if effort not in known or (selector, effort) in seen:
+            continue
+        seen.add((selector, effort))
+        refs.append((selector, effort))
+    return refs
+
+
 def _tool_centric_chain_keys(roles: dict[str, str]) -> set[str]:
     """default/slow/plan/task/designer 及其主模型的精确 selector 链视为 tool-centric。"""
     tool_centric_roles = frozenset(("default", "slow", "plan", "task", "designer"))
@@ -494,6 +539,25 @@ class OmpRouteGateTests(unittest.TestCase):
         cls.omp_models_output = result.stdout
         cls.omp_models_stderr = result.stderr
 
+    def test_role_effort_references_within_effective_whitelist(self):
+        """每个 `selector:effort` 引用必须落在 omp models 生效白名单内。
+
+        k3 教训（2026-08-23）：plan/designer 引用 k3:max 而生效表只有到 high，
+        家族默认推断漂移无人发现。OMP 透传 effort，上游拒绝即 400。
+        """
+        text = CONFIG_FILE.read_text(encoding="utf-8")
+        refs = _collect_effort_references(text)
+        self.assertTrue(refs, "no :effort references found to validate")
+        effective = _parse_effective_efforts(self.omp_models_output)
+        offenders = []
+        for selector, effort in refs:
+            provider, _, model_id = selector.partition("/")
+            allowed = effective.get((provider, model_id))
+            if allowed is None:
+                continue  # 注册/可解析性由既有门禁覆盖
+            if effort not in allowed:
+                offenders.append(f"{selector}:{effort} not in {sorted(allowed)}")
+        self.assertEqual(offenders, [])
     def test_model_fallback_is_enabled(self):
         text = CONFIG_FILE.read_text(encoding="utf-8")
         self.assertIn("  modelFallback: true", text)
