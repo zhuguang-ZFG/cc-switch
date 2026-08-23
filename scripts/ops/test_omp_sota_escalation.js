@@ -29,6 +29,25 @@ const MODELS = [
   { provider: "agentrouter", id: "claude-opus-5" },
 ];
 
+// Every `pi` fixture that can reach runEscalation MUST stub the child runner.
+// Without it the extension falls through to the real `spawn("omp", ...)`, so a
+// unit test launches a live model call and blocks until the SIGKILL ceiling.
+function makeChildRunner(stdout = "severity: low; evidence: src/risky.ts") {
+  const runs = [];
+  return {
+    runs,
+    runSotaChild(args, options) {
+      runs.push({ args, options });
+      return Promise.resolve({
+        code: 0,
+        stdout,
+        stderr: "",
+        killed: false,
+      });
+    },
+  };
+}
+
 test("discovers only marked SOTA aliases and deduplicates selectors", () => {
   assert.deepEqual(
     discoverSotaCandidates([
@@ -129,11 +148,20 @@ test("persistent workload breaker blocks automatic reviews after two timeouts", 
     });
     assert.equal(health.candidates[selector].automaticBlocked, true);
     assert.equal(
-      applyWorkloadBreaker(readiness, health).candidates[selector].status,
+      applyWorkloadBreaker(readiness, health, false, 130).candidates[selector]
+        .status,
       "unavailable",
     );
     assert.equal(
-      applyWorkloadBreaker(readiness, health, true).candidates[selector].status,
+      applyWorkloadBreaker(readiness, health, true, 130).candidates[selector]
+        .status,
+      "ready",
+    );
+    // The latch must decay: only a successful run clears it, and the latch
+    // itself blocks every run that could succeed.
+    assert.equal(
+      applyWorkloadBreaker(readiness, health, false, 120 + 60 * 60 * 1000)
+        .candidates[selector].status,
       "ready",
     );
     assert.equal(writeWorkloadHealth(root, health), true);
@@ -151,10 +179,14 @@ test("persistent workload breaker blocks automatic reviews after two timeouts", 
 });
 
 test("only near-deadline kills count as workload timeouts", () => {
-  assert.equal(isWorkloadTimeout(true, 180_000), true);
-  assert.equal(isWorkloadTimeout(true, 176_000), true);
+  assert.equal(isWorkloadTimeout(true, 300_000), true);
+  assert.equal(isWorkloadTimeout(true, 296_000), true);
   assert.equal(isWorkloadTimeout(true, 30_000), false);
+  // `--max-time` cannot preempt an in-flight model call, so an overrunning
+  // child is always killed by the parent; a non-killed exit is a real failure,
+  // never a timeout, and must stay retryable.
   assert.equal(isWorkloadTimeout(false, 180_000), false);
+  assert.equal(isWorkloadTimeout(false, 150_000), false);
 });
 
 test("classifies explicit, rescue, high-risk, complexity, and normal signals", () => {
@@ -450,7 +482,18 @@ test("child invocation is ephemeral, bounded, read-only, and redacted", () => {
   assert.equal(args.includes("--no-session"), true);
   assert.equal(args.includes("--no-extensions"), true);
   assert.equal(args.includes("--no-skills"), true);
-  assert.equal(args.includes("--max-time"), true);
+  // The value matters, not just the flag: omp rejects unparseable budgets with
+  // exit 2 ("Expected a positive number of seconds"), which would kill every
+  // escalation instantly. It is a hard ceiling, so it matches the parent kill
+  // deadline; convergence is enforced by the prompt's tool-call budget. Measured
+  // convergence reaches 152s, so a 180s ceiling truncated real successes.
+  const budget = args[args.indexOf("--max-time") + 1];
+  assert.match(budget, /^\d+$/);
+  assert.equal(Number(budget) * 1000, 300_000);
+  assert.match(
+    args[1],
+    /Budget: at most 8 tool calls total\. Never read a whole file/,
+  );
   const rendered = args.join(" ");
   assert.equal(rendered.includes("private.example"), false);
   assert.equal(rendered.includes("secret-value"), false);
@@ -497,6 +540,7 @@ test("runs one automatic read-only child review at agent end", async () => {
   const timers = [];
   const messages = [];
   const execCalls = [];
+  const child = makeChildRunner();
   const pi = {
     pi: { getAgentDir: () => "agent-dir" },
     logger: { info() {}, error() {} },
@@ -511,13 +555,9 @@ test("runs one automatic read-only child review at agent end", async () => {
       execCalls.push([command, args]);
       if (command === "git")
         return { code: 0, stdout: "src/risky.ts\n", stderr: "", killed: false };
-      return {
-        code: 0,
-        stdout: "severity: low; evidence: src/risky.ts",
-        stderr: "",
-        killed: false,
-      };
+      throw new Error(`unexpected exec of ${command}: child must not use exec`);
     },
+    runSotaChild: child.runSotaChild,
   };
   globalExtension(pi);
   const ctx = {
@@ -534,9 +574,9 @@ test("runs one automatic read-only child review at agent end", async () => {
   await handlers.get("agent_end")({ willContinue: false }, ctx);
   assert.equal(timers.length, 1);
   await timers[0]();
-  assert.equal(execCalls.at(-1)[0], "omp");
-  assert.equal(execCalls.at(-1)[1].includes("--no-extensions"), true);
-  assert.equal(execCalls.at(-1)[1].includes("--tools"), true);
+  assert.equal(child.runs.length, 1);
+  assert.equal(child.runs[0].args.includes("--no-extensions"), true);
+  assert.equal(child.runs[0].args.includes("--tools"), true);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].customType, "sota-escalation-review");
   if (previousWriter === undefined) delete globalThis[writerSymbol];
@@ -548,6 +588,9 @@ test("second tool failure runs one immediate rescue and steers the current turn"
   const timers = [];
   const messages = [];
   const execCalls = [];
+  const child = makeChildRunner(
+    "severity: medium; retry with a narrower command",
+  );
   const pi = {
     logger: { info() {}, error() {} },
     on(name, handler) {
@@ -561,13 +604,9 @@ test("second tool failure runs one immediate rescue and steers the current turn"
       execCalls.push([command, args]);
       if (command === "git")
         return { code: 0, stdout: "", stderr: "", killed: false };
-      return {
-        code: 0,
-        stdout: "severity: medium; retry with a narrower command",
-        stderr: "",
-        killed: false,
-      };
+      throw new Error(`unexpected exec of ${command}: child must not use exec`);
     },
+    runSotaChild: child.runSotaChild,
   };
   globalExtension(pi);
   const ctx = {
@@ -579,9 +618,9 @@ test("second tool failure runs one immediate rescue and steers the current turn"
   };
   await handlers.get("before_agent_start")({ prompt: "continue" }, ctx);
   await handlers.get("tool_result")({ toolName: "bash", isError: true }, ctx);
-  assert.equal(execCalls.some(([command]) => command === "omp"), false);
+  assert.equal(child.runs.length, 0);
   await handlers.get("tool_result")({ toolName: "bash", isError: true }, ctx);
-  assert.equal(execCalls.filter(([command]) => command === "omp").length, 1);
+  assert.equal(child.runs.length, 1);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].message.customType, "sota-escalation-review");
   assert.deepEqual(messages[0].options, {
@@ -589,10 +628,10 @@ test("second tool failure runs one immediate rescue and steers the current turn"
     deliverAs: "steer",
   });
   await handlers.get("tool_result")({ toolName: "bash", isError: true }, ctx);
-  assert.equal(execCalls.filter(([command]) => command === "omp").length, 1);
+  assert.equal(child.runs.length, 1);
   await handlers.get("agent_end")({ willContinue: false }, ctx);
   await timers[0]();
-  assert.equal(execCalls.filter(([command]) => command === "omp").length, 1);
+  assert.equal(child.runs.length, 1);
 });
 
 test("hutuji high-risk path emits a gate plan and automatic SOTA review", async () => {
@@ -601,6 +640,7 @@ test("hutuji high-risk path emits a gate plan and automatic SOTA review", async 
   const messages = [];
   const execCalls = [];
   let diffCalls = 0;
+  const child = makeChildRunner("severity: low");
   const pi = {
     logger: { info() {}, error() {} },
     on(name, handler) {
@@ -627,8 +667,9 @@ test("hutuji high-risk path emits a gate plan and automatic SOTA review", async 
         }
         return { code: 0, stdout: "", stderr: "", killed: false };
       }
-      return { code: 0, stdout: "severity: low", stderr: "", killed: false };
+      throw new Error(`unexpected exec of ${command}: child must not use exec`);
     },
+    runSotaChild: child.runSotaChild,
   };
   globalExtension(pi);
   const ctx = {
@@ -642,13 +683,13 @@ test("hutuji high-risk path emits a gate plan and automatic SOTA review", async 
   await handlers.get("agent_end")({ willContinue: false }, ctx);
   assert.equal(timers.length, 1);
   await timers[0]();
-  assert.equal(execCalls.at(-1)[0], "omp");
+  assert.equal(child.runs.length, 1);
   assert.deepEqual(
     messages.map((message) => message.customType),
     ["hutuji-gate-plan", "sota-escalation-review"],
   );
   assert.match(messages[0].content, /profile=hub/);
-  assert.match(execCalls.at(-1)[1].join(" "), /hutuji-path/);
+  assert.match(child.runs[0].args.join(" "), /hutuji-path/);
 });
 
 test("ordinary hutuji documentation emits only a docs gate plan", async () => {
@@ -657,6 +698,7 @@ test("ordinary hutuji documentation emits only a docs gate plan", async () => {
   const messages = [];
   const execCalls = [];
   let diffCalls = 0;
+  const child = makeChildRunner();
   const pi = {
     logger: { info() {}, error() {} },
     on(name, handler) {
@@ -680,8 +722,9 @@ test("ordinary hutuji documentation emits only a docs gate plan", async () => {
           killed: false,
         };
       }
-      return { code: 0, stdout: "", stderr: "", killed: false };
+      throw new Error(`unexpected exec of ${command}: child must not use exec`);
     },
+    runSotaChild: child.runSotaChild,
   };
   globalExtension(pi);
   const ctx = {
@@ -699,13 +742,14 @@ test("ordinary hutuji documentation emits only a docs gate plan", async () => {
     ["hutuji-gate-plan"],
   );
   assert.match(messages[0].content, /profile=docs/);
-  assert.equal(execCalls.includes("omp"), false);
+  assert.equal(child.runs.length, 0);
 });
 
 test("successful external firmware writes trigger a fail-closed full plan", async () => {
   const handlers = new Map();
   const timers = [];
   const messages = [];
+  const child = makeChildRunner("severity: high");
   const pi = {
     logger: { info() {}, error() {} },
     on(name, handler) {
@@ -719,8 +763,9 @@ test("successful external firmware writes trigger a fail-closed full plan", asyn
       if (command === "git") {
         return { code: 0, stdout: "", stderr: "", killed: false };
       }
-      return { code: 0, stdout: "severity: high", stderr: "", killed: false };
+      throw new Error(`unexpected exec of ${command}: child must not use exec`);
     },
+    runSotaChild: child.runSotaChild,
   };
   globalExtension(pi);
   const ctx = {
