@@ -464,3 +464,23 @@ point. Channel state changes must go through the admin API (`POST /api/channel/<
 as `refresh_omp_sota_readiness.py:49-56` already does): NewAPI caches options in memory,
 so DB-level edits are ignored or overwritten, and writing to the live database risks
 lock and journal damage.
+
+### r8: first live rescues drove three trigger/payload fixes (2026-08-23)
+
+r7 上线当天，2 次工具失败路径实弹触发了两次救援。第一次证明链路端到端可用，
+第二次暴露了三个真实缺陷，均在 r8（`2026.08.23-sota-r8`）修复：
+
+1. **空证据救援**：无变更文件且 `gatePlan.profile === "none"` 时，救援会启动一个
+   完整子进程去"审查空气"。现在该情形直接跳过，路由事件记
+   `failureClass="no-evidence"`。
+2. **同回合双派发**：failure #2 的 steer 救援不会抑制同一回合的 `agent_end`
+   自动升级——此前只靠单目标冷却挡住；一旦配置第二个 SOTA 候选，就会再烧一整份
+   子进程预算。现在 `escalatedThisTurn` 标志在回合开始时重置、任意派发置位、
+   `agent_end` 入口检查。
+3. **载荷缺上下文**：升级提示词原本只有 reason/gate/用户请求/变更文件；零文件时
+   评审者无可行动对象。现在携带最近 3 次失败工具的 name/args/error（各经
+   `boundedText` 40/200/200 有界+脱敏），untrusted-data 声明同步覆盖失败块；
+   `safeExecArgs` 渲染边界独立再做一次脱敏——它是公开导出，不信任调用方预处理。
+
+暂缓项：失败分类过滤（区分瞬态错误与真实缺陷）需要真实失败类型分布数据，
+贸然分类有漏掉真救援的风险；继续保守计数全部 `isError`。
