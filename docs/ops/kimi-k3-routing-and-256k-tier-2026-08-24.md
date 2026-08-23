@@ -82,3 +82,24 @@ ch33 是 `kimi-for-coding`/`kimi-for-coding-highspeed`/`k3-256k`/`zg-k3`
 四个模型的唯一渠道,`test_model=''`(既有盲区,08-22 基线证实独立于本次变更)
 意味着这些独占能力的故障无法被自动探测。建议经 admin API 设
 `test_model='k3'`(一条 PUT,模式同 ch61 先例),待批。
+
+
+## 附:本地 NewAPI CPU 过载保护调整(2026-08-24)
+
+同日早些时候,8 个并发 relay 探针全部被本地 NewAPI 以
+`503 system cpu overloaded (threshold: 98%)` 拒绝——保护阈值盯的是**整机**
+CPU,而本机是开发机,bun 编译/多代理会话/TGitCache 扫描等突发负载动辄顶满,
+NewAPI 自身反而很轻(累计 CPU 秒远低于 webview2/explorer)。单用户本机中继
+上,"桌面忙就拒绝请求"比排队更伤。
+
+处置:经 admin API(`PUT /api/option/`)将
+`performance_setting.monitor_cpu_threshold` 与 `monitor_memory_threshold`
+98→100(guard 等效关闭)。回滚快照
+`options-performance-before-20260824-021124.json`(原值 98/98);整库基线见
+同日 `new-api-after-k3-reorder-revert-*.db`。
+
+行为验证:16 进程满载压测下 relay 探针 `HTTP 200 ACCEPT`(修复前同条件必返
+503)。电源计划已是卓越性能,无需调整。
+
+注意:上游 Moonshot 的 `429 engine overloaded`(ch33)是**服务端**负载,
+与本机阈值无关,不可通过本机制消除。
