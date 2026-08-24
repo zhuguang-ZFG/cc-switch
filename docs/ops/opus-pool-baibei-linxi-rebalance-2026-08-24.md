@@ -144,4 +144,33 @@ Claude 提示词缓存亲和失效,长会话跨渠道时 cacheRead 命中率会�
 另:本日两次注释编辑曾因复制截断显示丢失内容,已按 c4cdc4bc 原文程序化
 全量恢复并追加新注。
 
-测试：test_smoke 43/43、test_guardian 178/178、test_omp_routes 39/39（2026-08-24 晚终态）。
+## 附 3:claude 聚合提速调权 + 亲和缓存残留案(2026-08-24 深夜)
+
+用户问"有办法提速吗"。24h 实测画像(日志 frt 字段):
+
+| 渠道 | TTFT 中位 | p90 | 备注 |
+|---|---|---|---|
+| ch3 baibei(主) | 24.6s | **51.7s** | 最慢却拿 w28 |
+| ch9 linxi(主) | 9.9s | 15.1s | 主档最快 |
+| ch94/95 justwoker | 7.3/10.9s | — | 108K/177K 输入 prefill 极快 |
+| ch18 | 12.0s | 18.7s | 唯一有 cacheRead 的渠道 |
+
+处置:主档按速度重配 **ch9 w40 / ch3 w20**(契约下限),p50 档 ch86
+w13→2(实测慢,不应主导失败转移)。门禁/契约不变(均为下限/上限语义)。
+
+**验证中撞出两案**:
+
+1. **ch9 上游 503 No available accounts**(linxi 账号池耗尽)——调权后探针
+   ch9 零命中全靠重试下沉,主档实际只剩 ch3。503 属 AutomaticRetryStatusCodes,
+   秒败重试代价极低,保持启用等恢复;Guardian 会接管探测。根因在 linxi 侧。
+2. **亲和缓存残留**:19:23 禁用 claude trace 后,内存缓存里 3 个旧钉扎仍被
+   复用刷新(规则 enabled 校验只管新建,不管存量命中),导致 20:35-20:40
+   探针继续吃钉扎、分布测量全被污染。`DELETE /api/option/channel_affinity_cache?all=true`
+   清除(deleted=3)后,同 UA 双探针复测无新钉扎。**机构知识:禁用亲和规则
+   必须同时清缓存,否则存量钉扎续命。**
+
+提速的剩余杠杆(需用户决策):长会话 prompt cache——亲和关闭+清缓存后
+大上下文每轮全量 prefill(10 万+ token 是 TTFT 大头);要回速度需恢复
+claude trace 亲和,与"林夕百倍不用渠道亲和"指示冲突,由用户权衡。
+
+测试：test_smoke 43/43、test_guardian 178/178、test_omp_routes 39/39（2026-08-24 深夜终态）。
