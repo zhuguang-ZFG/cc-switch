@@ -173,4 +173,8 @@ w13→2(实测慢,不应主导失败转移)。门禁/契约不变(均为下限/�
 大上下文每轮全量 prefill(10 万+ token 是 TTFT 大头);要回速度需恢复
 claude trace 亲和,与"林夕百倍不用渠道亲和"指示冲突,由用户权衡。
 
-测试：test_smoke 43/43、test_guardian 178/178、test_omp_routes 39/39（2026-08-24 深夜终态）。
+用户指示已钉进门禁：`AFFINITY_DISABLED_RULES = {"claude trace"}` +
+`affinity_rule_violations` 校验 `enabled` 字段（改回 true 即红），
+"禁用亲和规则必须清缓存"一并写入常量注释。
+
+测试：test_smoke 45/45、test_guardian 178/178、test_omp_routes 39/39（2026-08-24 深夜终态）。

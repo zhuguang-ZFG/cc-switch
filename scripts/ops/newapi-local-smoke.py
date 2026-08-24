@@ -329,9 +329,15 @@ def option_policy_violations(options: object) -> list[str]:
         if str(by_key.get(key, "missing")).strip().lower() != expected
     ]
 
+# 用户指示钉死（2026-08-24"林夕百倍不用渠道亲和"）：这些规则必须保持
+# enabled=false。改回真需要两处动作——本集合移除 + 清亲和内存缓存
+# （DELETE /api/option/channel_affinity_cache?all=true），否则存量钉扎续命。
+AFFINITY_DISABLED_RULES: frozenset[str] = frozenset({"claude trace"})
+
 
 def affinity_rule_violations(options: object) -> list[str]:
-    """Return sticky-routing rules that miss canonical or zg-* model ids."""
+    """Return sticky-routing rules that miss canonical/zg-* ids or user-disabled
+    rules (AFFINITY_DISABLED_RULES) that were re-enabled."""
     if not isinstance(options, list):
         return ["channel_affinity_setting.rules=missing"]
     raw = next(
@@ -381,6 +387,12 @@ def affinity_rule_violations(options: object) -> list[str]:
         ]
         if missing:
             violations.append(f"{name}=missing:{','.join(missing)}")
+    for name in AFFINITY_DISABLED_RULES:
+        rule = by_name.get(name)
+        if rule is None:
+            continue  # 规则被整体删除也算达成指示
+        if rule.get("enabled", True):
+            violations.append(f"{name}=must-stay-disabled")
     return violations
 
 

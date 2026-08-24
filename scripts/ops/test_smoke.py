@@ -804,6 +804,7 @@ class AdminAuthTests(unittest.TestCase):
                     + "|".join(re.escape(model) for model in models)
                     + ")$"
                 ],
+                "enabled": name not in smoke.AFFINITY_DISABLED_RULES,
             }
             for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
         ]
@@ -816,6 +817,54 @@ class AdminAuthTests(unittest.TestCase):
 
         self.assertEqual(smoke.affinity_rule_violations(options), [])
 
+    def test_affinity_disabled_rules_stay_disabled(self):
+        """用户指示钉死：AFFINITY_DISABLED_RULES 里的规则必须 enabled=false。"""
+        rules = [
+            {
+                "name": name,
+                "model_regex": [
+                    "^(?:"
+                    + "|".join(re.escape(model) for model in models)
+                    + ")$"
+                ],
+                "enabled": name not in smoke.AFFINITY_DISABLED_RULES,
+            }
+            for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
+        ]
+        options = [
+            {"key": "channel_affinity_setting.rules", "value": json.dumps(rules)}
+        ]
+        self.assertEqual(smoke.affinity_rule_violations(options), [])
+
+    def test_affinity_disabled_rules_reject_reenable(self):
+        base = {
+            name: [
+                "^(?:" + "|".join(re.escape(model) for model in models) + ")$"
+            ]
+            for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
+        }
+        for scenario in ("explicit-true", "field-absent-defaults-true"):
+            rules = [
+                {
+                    "name": name,
+                    "model_regex": patterns,
+                    **(
+                        {"enabled": True}
+                        if scenario == "explicit-true" or name not in smoke.AFFINITY_DISABLED_RULES
+                        else {}
+                    ),
+                }
+                for name, patterns in base.items()
+            ]
+            options = [
+                {"key": "channel_affinity_setting.rules", "value": json.dumps(rules)}
+            ]
+            self.assertEqual(
+                smoke.affinity_rule_violations(options),
+                ["claude trace=must-stay-disabled"],
+                scenario,
+            )
+
     def test_affinity_rules_reject_missing_zg_alias_and_invalid_regex(self):
         rules = [
             {
@@ -825,6 +874,7 @@ class AdminAuthTests(unittest.TestCase):
                     "[" if name == "glm trace" else
                     "^(?:" + "|".join(re.escape(model) for model in models) + ")$"
                 ],
+                "enabled": name not in smoke.AFFINITY_DISABLED_RULES,
             }
             for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
         ]
