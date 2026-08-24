@@ -72,4 +72,25 @@ claude-opus-5 池（全启用、auto_ban=0、test_model=claude-opus-5）：
 - 进程拓扑：watchdog.ps1 + guardian.py 已按原样重启（hub 托管，persist），
   心跳持续；期间撞见一个 r8 SOTA 评审子进程实弹运行（omp -p，PID 14008）。
 
+## 附:claude trace 渠道亲和单独禁用(2026-08-24)
+
+该 fork 有全局渠道亲和功能(`options.channel_affinity_setting.*`),7 条按模型
+家族的规则;UI 渠道页的"渠道亲和性: claude trace"只是显示该渠道参与的规则,
+并非渠道自有配置。claude trace 规则匹配 `claude-*` + `/v1/messages`+
+`/v1/chat/completions`,粘性键 metadata.user_id/prompt_cache_key/User-Agent,
+TTL 60s——这正是早前探针分布粘连 ch18 的原因(第一发落点+TTL 内全部粘连)。
+
+用户指示"林夕百倍不用渠道亲和"。规则结构体无渠道级排除字段(二进制确认
+`channel_ids` 标签属其他结构),而当前启用的 claude 渠道恰好就是 3/9/18,
+故最小可逆动作 = 单独将该规则 `enabled=false`(其余 6 条家族规则不动)。
+回滚快照 `options-affinity-before-20260824-192323.json`(原值 enabled=true)。
+
+行为验证:禁用后 9 发 relay 探针分布 {ch9:5, ch18:4, ch3:2},全部成功,
+对比禁用前的 TTL 粘连形态 {ch18:11, ch3:3, ch9:4} 明显散开。代价说明:
+Claude 提示词缓存亲和失效,长会话跨渠道时 cacheRead 命中率会下降。
+
+注:SOTA 评审曾建议"重写 Guardian 恢复"——误判。`check_and_enable_recovered_channels`
+每周期正常重试 ch102/103(当日 18:52/19:15 有记录),它们持续禁用是因根因未消
+(死 key/零余额),属正确行为;恢复手段是换 key/充值,不动 Guardian 代码。
+
 测试：test_smoke 41/41、test_guardian 178/178、test_omp_routes 39/39。
