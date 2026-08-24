@@ -166,7 +166,7 @@ RECOVERY_COOLDOWN_MIN = 5  # 恢复冷却时间（分钟）
 RECOVERY_TEST_COUNT = 3  # 恢复验证测试次数
 RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 # 明确隔离且不应自动恢复的本地渠道；与 newapi-local-smoke.py 策略保持一致。
-AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 9/18 已于 2026-08-24 移出（余额恢复，管理探测双双 200，重新入池参与 opus-5 负载均衡）；57/75/97/98 同日移出（网关自带 /test 实测 opus-5 通过，转 p40 备份档，恢复探测重新交给 Guardian）；99 保留（余额 ＄0.11 低于预扣费门槛）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse 上游账号级 RegionError 振荡——2026-08-21 恢复探测假活复活进池后真实流量连续超时再禁用，且付费 muse...
+AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 9/18 已于 2026-08-24 移出（余额恢复，管理探测双双 200，重新入池参与 opus-5 负载均衡）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse 上游账号级 RegionError 振荡——2026-08-21 恢复探测假活复活进池后真实流量连续超时再禁用，且付费 muse 模型已被上游收回，无复活价值，账号恢复后手工移出；57: gorouter 余额不足（$0.05<预扣$0.30）；70: vip-j3gb-gpt 上游 15 次恢复失败；71: hugai-claude-opus5 上游网关 routing group 坏（非本机配置）；73: zzzcoding-codex-relay 上游 405 真死（2026-08-08）；74: sharedchat-codex-sol 同源禁用；75: tabitoken 多 key 已拆分为 ch97/98/99 单 key 渠道（2026-08-20），保留为禁用 tombstone，绝不可复活（轮询会再撞欠费 key 再触发整渠道 auto_ban）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20，$0.21/$0.61 < 预扣$0.8，403 不触发 auto_ban 需手动双锁）；98: tabitoken-2 key#2 欠费（$0.22<预扣$0.8），小探针能过但真实流量必失败，充值后手工 enable + 重跑 split 脚本验证；57/75/97/98 于 2026-08-24 晚移出：网关自带 /test 实测 claude-opus-5 通过，转 p50 备份次档（选路严格分档已对源码核实），恢复探测重新交给 Guardian
 # ch91's upstream only implements the streaming Codex Responses wire shape
 # reliably. Keep it under normal health/recovery governance, but make every
 # Guardian probe exercise the same protocol as OMP instead of the admin API's

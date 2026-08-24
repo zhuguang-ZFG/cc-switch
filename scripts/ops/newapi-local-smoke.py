@@ -53,7 +53,7 @@ SMOKE_PROBES: tuple[tuple[str, str], ...] = (
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
 # Channel 74 is held out until its shared upstream quota recovers and a real
 # relay + aggregate smoke passes. Channel 45 remains a live fallback.
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 9/18 于 2026-08-24 移出：linxi 同账号余额恢复（管理探测双双 200），重新入池参与 opus-5 负载均衡；57/75/97/98 同日移出：gorouter/tabitoken 通过网关自带 /test（真实 Go 客户端，绕开 Cloudflare 1010 指纹封锁）opus-5 实测通过，转 p40 备份档；99 保留：tabitoken-3 余额 ＄0.107874 低于 ＄0.80 预扣费门槛。20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse RegionError 振荡（2026-08-21 复活即超时再禁用），付费 muse 上游已收回，无复活...
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 9/18 于 2026-08-24 移出：linxi 同账号余额恢复（管理探测双双 200），重新入池参与 opus-5 负载均衡；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse RegionError 振荡（2026-08-21 复活即超时再禁用），付费 muse 上游已收回，无复活价值；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中；75: tabitoken 多 key 拆分后保留的禁用 tombstone（2026-08-20，单 key 欠费拖垮整渠道，拆为 ch97/98/99）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20 16:25 实测 403 预扣费失败，$0.21/$0.61 < $0.8），充值前保持禁用；98: tabitoken-2 key#2 欠费 $0.22，充值前保持禁用（小探针假活，见 runbook docs/ops/tabitoken-split-single-key-2026-08-20.md）；57/75/97/98 同日移出：网关自带 /test 实测 claude-opus-5 通过，转 p50 备份次档
 
 # opus-5 备份档（2026-08-24 起）：主池 3/9/18（p52/p52/p50）之下的一层，
 # 只许低优先级存在——启用状态下 priority 越过 MAX_PRIORITY（进入主池档）即违规。

@@ -93,7 +93,7 @@ Claude 提示词缓存亲和失效,长会话跨渠道时 cacheRead 命中率会�
 每周期正常重试 ch102/103(当日 18:52/19:15 有记录),它们持续禁用是因根因未消
 (死 key/零余额),属正确行为;恢复手段是换 key/充值,不动 Guardian 代码。
 
-## 附 2:其余 opus 渠道转 p40 备份档(2026-08-24 晚)
+## 附 2:其余 opus 渠道转备份档(2026-08-24 晚；初版 p40，勘误见下节)
 
 用户指示"其他渠道的 opus 做备用"。候选 9 渠道逐一用**网关自带**
 `GET /api/channel/test/<id>?model=claude-opus-5`(真实 Go 客户端)实测:
@@ -122,4 +122,26 @@ Claude 提示词缓存亲和失效,长会话跨渠道时 cacheRead 命中率会�
 新增 `BACKUP_CHANNEL_POSTURES` 门禁——备份档启用时 priority>40 或超重即违规,
 禁用抖动容忍(交 Guardian 恢复)。每渠道改动前均已存 `channel-<id>-before-backup-*.json`。
 
-测试：test_smoke 41/41、test_guardian 178/178、test_omp_routes 39/39。
+### 附 2 勘误:备份档由 p40 并入 p50(源码核实后)
+
+初版把备份放在 p40,假设"低优先级只在主池失败时接管"。Advisory 质疑该假设
+未验证——随后对 QuantumNous/new-api 源码 `GetRandomSatisfiedChannel`
+(model/channel_cache.go)核实:
+
+1. 选路**严格分档**:收集候选渠道的唯一优先级集合降序排列,`targetPriority =
+   sortedUniquePriorities[retry]`——首请求 retry=0 只从最高档加权抽取,
+   低档仅随重试索引递减可达;
+2. 档内加权随机,平均权重<10 时平滑因子×100 保证小权重公平;
+3. 全局 `RetryTimes=1`:重试预算 1 次 → 三档 {52,50,40} 里 **p40 需要
+   retry=2,永远不可达**——初版备份档是死档。
+
+修正:7 家备份并入 p50(与 ch18 同档),`RetryTimes=1` 下主档首败即达,
+且不抬全局重试预算。行为复验:10 发探针 {3:7, 9:3} 全落 p52、p50 零命中
+(严格分档实证);早前"ch18 低优先级反获最多流量"的疑案 = p52 上游失败后
+的合规重试下沉,非语义分歧。
+
+`BACKUP_CHANNEL_POSTURES` 门禁相应改为 `max_priority: 50`。
+另:本日两次注释编辑曾因复制截断显示丢失内容,已按 c4cdc4bc 原文程序化
+全量恢复并追加新注。
+
+测试：test_smoke 43/43、test_guardian 178/178、test_omp_routes 39/39（2026-08-24 晚终态）。
