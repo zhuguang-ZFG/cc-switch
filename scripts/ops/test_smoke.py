@@ -625,6 +625,25 @@ class AdminAuthTests(unittest.TestCase):
 
         self.assertEqual(smoke.fallback_posture_violations(channels), [])
 
+    def test_backup_posture_accepts_enabled_low_tier_and_disabled_flap(self):
+        channels = [
+            {"id": 57, "name": "gorouter", "status": 1, "priority": 40, "weight": 5},
+            {"id": 86, "name": "agentrouter-claude", "status": 1, "priority": 40, "weight": 13},
+            {"id": 97, "name": "tabitoken-1", "status": 2, "priority": 40, "weight": 5},
+        ]
+        # 启用的低档位合规；97 禁用抖动不算违规（波动储备交给 Guardian）
+        self.assertEqual(smoke.backup_posture_violations(channels), [])
+
+    def test_backup_posture_rejects_primary_tier_drift(self):
+        channels = [
+            {"id": 94, "name": "justwoker-opus-1", "status": 1, "priority": 52, "weight": 8},
+            {"id": 98, "name": "tabitoken-2", "status": 1, "priority": 40, "weight": 20},
+        ]
+        self.assertEqual(
+            smoke.backup_posture_violations(channels),
+            ["94:justwoker-opus-1=priority=52", "98:tabitoken-2=weight=20"],
+        )
+
     def test_agentrouter_primary_tier_or_excess_weight_is_rejected(self):
         channels = [
             {

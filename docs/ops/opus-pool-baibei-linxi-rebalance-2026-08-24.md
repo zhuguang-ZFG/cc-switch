@@ -93,4 +93,33 @@ Claude 提示词缓存亲和失效,长会话跨渠道时 cacheRead 命中率会�
 每周期正常重试 ch102/103(当日 18:52/19:15 有记录),它们持续禁用是因根因未消
 (死 key/零余额),属正确行为;恢复手段是换 key/充值,不动 Guardian 代码。
 
+## 附 2:其余 opus 渠道转 p40 备份档(2026-08-24 晚)
+
+用户指示"其他渠道的 opus 做备用"。候选 9 渠道逐一用**网关自带**
+`GET /api/channel/test/<id>?model=claude-opus-5`(真实 Go 客户端)实测:
+直连 python urllib 探活全部被 Cloudflare 1010 指纹封锁(假 403),只有网关
+自测可信。结果:57/75/86/94/95/97/98 通过,72(anyrouter 上游 429)与
+99(tab3 余额 ＄0.11<＄0.80 预扣费)排除。
+
+最终拓扑:
+```
+主池:ch3 p52/w28, ch9 p52/w20, ch18 p50/w8
+备份 p40:ch86 w13(agentrouter, TTFT~25s 垫底), ch94/95 w8(justwoker),
+         ch57/75/97/98 w5(gorouter/tabitoken)
+```
+
+三个新机构知识:
+1. **失败 PUT 有破坏性副作用**:对 type=14 等渠道,`Invalid parameters` 的
+   PUT 也会把 status 写回 2。list 端点分页取到的对象形状才是 PUT 可接受的
+   (search/detail 端点形状均被拒;detail 还掩码 key/channel_info)。
+2. **Guardian `enforce_quarantine` 是主动反转器**:对排除集内渠道每周期
+   强制 status=2+weight=0。本次启用后 4 渠道被 19:59 周期反转——文件改完
+   必须重启 guardian 进程才生效(已重启,pid 12756)。
+3. 渠道启用 ≠ ability 启用:PUT 须在渠道已启用状态下重放一次,ability 行
+   才同步 enabled/weight(本轮用"PUT→status POST→DB 核验"循环收敛)。
+
+契约:`KNOWN_BROKEN`/`AUTO_BAN_RECOVERY_EXCLUSIONS` 移除 57/75/97/98(99 保留);
+新增 `BACKUP_CHANNEL_POSTURES` 门禁——备份档启用时 priority>40 或超重即违规,
+禁用抖动容忍(交 Guardian 恢复)。每渠道改动前均已存 `channel-<id>-before-backup-*.json`。
+
 测试：test_smoke 41/41、test_guardian 178/178、test_omp_routes 39/39。

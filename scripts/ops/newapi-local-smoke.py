@@ -53,7 +53,20 @@ SMOKE_PROBES: tuple[tuple[str, str], ...] = (
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
 # Channel 74 is held out until its shared upstream quota recovers and a real
 # relay + aggregate smoke passes. Channel 45 remains a live fallback.
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 57, 62, 63, 64, 65, 70, 71, 73, 74, 75, 78, 97, 98, 99}  # 9/18 于 2026-08-24 移出：linxi 同账号余额恢复（管理探测双双 200），重新入池参与 opus-5 负载均衡；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse RegionError 振荡（2026-08-21 复活即超时再禁用），付费 muse 上游已收回，无复活价值；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中；75: tabitoken 多 key 拆分后保留的禁用 tombstone（2026-08-20，单 key 欠费拖垮整渠道，拆为 ch97/98/99）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20 16:25 实测 403 预扣费失败，$0.21/$0.61 < $0.8），充值前保持禁用；98: tabitoken-2 key#2 欠费 $0.22，充值前保持禁用（小探针假活，见 runbook docs/ops/tabitoken-split-single-key-2026-08-20.md）
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 9/18 于 2026-08-24 移出：linxi 同账号余额恢复（管理探测双双 200），重新入池参与 opus-5 负载均衡；57/75/97/98 同日移出：gorouter/tabitoken 通过网关自带 /test（真实 Go 客户端，绕开 Cloudflare 1010 指纹封锁）opus-5 实测通过，转 p40 备份档；99 保留：tabitoken-3 余额 ＄0.107874 低于 ＄0.80 预扣费门槛。20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse RegionError 振荡（2026-08-21 复活即超时再禁用），付费 muse 上游已收回，无复活...
+
+# opus-5 备份档（2026-08-24 起）：主池 3/9/18（p52/p52/p50）之下的一层，
+# 只许低优先级存在——启用状态下 priority 越过 MAX_PRIORITY（进入主池档）即违规。
+# 禁用被容忍：这些是历史波动渠道，上下由 Guardian/自动封禁驱动，抖动不算漂移。
+BACKUP_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
+    57: {"max_priority": 40, "max_weight": 5},   # gorouter
+    75: {"max_priority": 40, "max_weight": 5},   # tabitoken
+    86: {"max_priority": 40, "max_weight": 13},  # agentrouter-claude（TTFT ~25s，垫底备份）
+    94: {"max_priority": 40, "max_weight": 8},   # justwoker-opus-1
+    95: {"max_priority": 40, "max_weight": 8},   # justwoker-opus-2
+    97: {"max_priority": 40, "max_weight": 5},   # tabitoken-1
+    98: {"max_priority": 40, "max_weight": 5},   # tabitoken-2
+}
 
 # Model isolation is channel-specific. AgentRouter (ch45) serves Sol only
 # (Claude moved to AnyRouter ch72 on 2026-08-14 so an overloaded Sol recovery
@@ -601,6 +614,34 @@ def fallback_posture_violations(channels: list[dict]) -> list[str]:
             reasons.append(f"status={channel.get('status')}")
         if channel.get("priority") != expected["priority"]:
             reasons.append(f"priority={channel.get('priority')}")
+        weight = channel.get("weight")
+        if not isinstance(weight, int) or weight > expected["max_weight"]:
+            reasons.append(f"weight={weight}")
+        if reasons:
+            violations.append(
+                f"{channel_id}:{channel.get('name', '')}=" + ",".join(reasons)
+            )
+    return violations
+
+def backup_posture_violations(channels: list[dict]) -> list[str]:
+    """Return opus-5 backup channels that drifted into the primary tier.
+
+    Unlike fallback_posture_violations, disabled is NOT a violation here:
+    these reserves flap on flaky upstreams (tabitoken 409s, agentrouter slow
+    TTFT), so enable/disable is left to Guardian and auto-ban. What is gated:
+    while enabled, a backup must never sit at/above the primary tier
+    (priority 50+) or carry an inflated weight.
+    """
+    by_id = {channel.get("id"): channel for channel in channels}
+    violations: list[str] = []
+    for channel_id, expected in BACKUP_CHANNEL_POSTURES.items():
+        channel = by_id.get(channel_id)
+        if channel is None or channel.get("status") != 1:
+            continue
+        reasons: list[str] = []
+        priority = channel.get("priority")
+        if not isinstance(priority, int) or priority > expected["max_priority"]:
+            reasons.append(f"priority={priority}")
         weight = channel.get("weight")
         if not isinstance(weight, int) or weight > expected["max_weight"]:
             reasons.append(f"weight={weight}")
@@ -1209,6 +1250,12 @@ def main() -> int:
                 "primary opus pool posture",
                 not primary_violations,
                 f"violations={primary_violations or 'none'}",
+            )
+            backup_violations = backup_posture_violations(items)
+            check(
+                "backup opus pool posture",
+                not backup_violations,
+                f"violations={backup_violations or 'none'}",
             )
             # 池冗余：关键模型不得失去最后一个启用渠道（0 = "503 No available
             # channel" 前置检测；2026-08-10 凌晨 opus 池曾退化到单渠道 ch75）。
