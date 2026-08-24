@@ -181,4 +181,20 @@ w13→2(实测慢,不应主导失败转移)。门禁/契约不变(均为下限/�
 集合清空),`affinity_rule_violations` 校验 `enabled` 字段;"禁用亲和规则
 必须清缓存"写入常量注释。
 
+
+### 深夜补记:Advisor 复核与林夕全面劣化(21:10)
+
+Advisor 质疑"恢复亲和换缓存"的论证——**基本成立**:24h 画像窗口里亲和
+大部分时间是开的,ch3 在残留钉扎明确钉住多轮流量时 cacheRead 仍为 0,
+只有 ch18 产缓存。瓶颈更可能是上游 cache_control 透传/账号缓存行为,
+不是粘性本身。恢复亲和是用户明示选择,其收益依赖林夕侧恢复。
+
+Advisor 建议提升 ch18 进主档——方向有据(唯一实证产缓存的渠道),但
+**实测当下不可行**:21:09 ch18 网关直测 503 No available accounts,近 2h
+96 次请求 18 次零输出。ch9+ch18 双双 503 = 林夕账号池整体耗尽,属
+供应商侧事故。当前 claude-opus-5 实际容量 = baibei ch3 + p50 备份档
+(94/95 justwoker 实测健康、大上下文 prefill 14-16K tok/s)。
+待林夕恢复后,再评估 ch18 升档(届时需同步改 PRIMARY_CHANNEL_POSTURES)。
+另更正:ch18"TTFT 快一倍"系输入量混淆(6.8K vs 35K),按单 token 不快。
+
 测试：test_smoke 45/45、test_guardian 178/178、test_omp_routes 39/39（2026-08-24 深夜终态）。
