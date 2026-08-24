@@ -88,3 +88,21 @@ DB key 前缀比对 + 管理探测 + relay 实测。
 回滚物与生效时机：`~/.bun/bin/omp.exe.pre-update-18.0.0.bak`、
 `omp.exe.stale-18.0.0.bak`；Windows 运行中进程持旧 inode（rename-aside 换入），
 **当前运行中的 agent 宿主仍是旧二进制，下次重启宿主后 18.0.3 生效**。
+
+## 追加:18.0.3 → 18.0.4(2026-08-24 深夜)
+
+同路径升级:GitHub release `v18.0.4/omp-windows-x64.exe`,SHA-256
+`8e04c83f…a2f47` 与官方 `SHA256SUMS.txt` 逐字符一致;备份
+`omp.exe.pre-update-18.0.3.bak`,rename-aside 换入(运行中宿主持旧句柄)。
+
+18.0.4 关键变更(与本环境痛点相关):
+- **pi-agent-core:append-only 上下文模式序列化记忆化**——每轮同步开销不再
+  随会话长度增长(直接利好 636K 级长会话);
+- 修复终端工具结果结束的回合跳过 `onTurnEnd`(子代理收尾路径);
+- pi-ai:OpenAI 兼容网关 Cursor 工具调用参数丢失修复(#9479)、413 分类改进。
+
+验证:`omp --version` → 18.0.4;`omp models` exit 0;SOTA 扩展 repo/live
+SHA parity `58607dc5…` 不受影响;扩展单测 25/25;路由门禁 39/39。
+**生效时机同前:当前运行中宿主仍是 18.0.3,下次重启宿主后 18.0.4 生效。**
+git-bash cp 对刚下载的 150MB exe 报 cannot stat(疑似 Defender 扫描锁),
+PowerShell Copy-Item 成功——记为机构知识。
