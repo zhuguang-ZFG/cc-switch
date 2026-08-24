@@ -169,12 +169,16 @@ w13→2(实测慢,不应主导失败转移)。门禁/契约不变(均为下限/�
    清除(deleted=3)后,同 UA 双探针复测无新钉扎。**机构知识:禁用亲和规则
    必须同时清缓存,否则存量钉扎续命。**
 
-提速的剩余杠杆(需用户决策):长会话 prompt cache——亲和关闭+清缓存后
-大上下文每轮全量 prefill(10 万+ token 是 TTFT 大头);要回速度需恢复
-claude trace 亲和,与"林夕百倍不用渠道亲和"指示冲突,由用户权衡。
+提速的剩余杠杆曾需用户决策——**深夜拍板:恢复 claude trace 亲和**
+(长会话 prompt cache 优先于纯负载均衡)。执行:规则 enabled=true +
+`DELETE /api/option/channel_affinity_cache?all=true`(顺序:先开规则再清
+旧钉扎),回滚快照 `options-affinity-restore-before-*.json`。行为验证:
+同 user_id 三连发,第 1 发建钉、第 2/3 发粘连同一渠道 ✓。
+注意:裸探针(不带 metadata.user_id)不触发钉扎,验证必须模拟真实客户端
+载荷;`AFFINITY_DISABLED_RULES` 机制保留(集合清空),未来再翻转可复用。
 
-用户指示已钉进门禁：`AFFINITY_DISABLED_RULES = {"claude trace"}` +
-`affinity_rule_violations` 校验 `enabled` 字段（改回 true 即红），
-"禁用亲和规则必须清缓存"一并写入常量注释。
+门禁:`AFFINITY_DISABLED_RULES` 钉死机制已建(曾含 "claude trace",恢复后
+集合清空),`affinity_rule_violations` 校验 `enabled` 字段;"禁用亲和规则
+必须清缓存"写入常量注释。
 
 测试：test_smoke 45/45、test_guardian 178/178、test_omp_routes 39/39（2026-08-24 深夜终态）。

@@ -46,7 +46,8 @@ PROXY_PORTS: dict[str, tuple[str, int]] = {
 }
 SMOKE_PROBES: tuple[tuple[str, str], ...] = (
     ("sensenova-6.7-flash-lite", "chat-completions"),
-    ("muse-spark-1.2-contributor", "responses"),
+    # muse-spark-1.2-contributor 于 2026-08-24 移出：上游已收回+地区封锁
+    # （403 not available in your country），ch48 属 KNOWN_BROKEN。
 )
 
 # Channels whose auto-disabled state is currently intentional. Channel 2 has
@@ -59,13 +60,13 @@ KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74
 # 只许低优先级存在——启用状态下 priority 越过 MAX_PRIORITY（进入主池档）即违规。
 # 禁用被容忍：这些是历史波动渠道，上下由 Guardian/自动封禁驱动，抖动不算漂移。
 BACKUP_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
-    57: {"max_priority": 40, "max_weight": 5},   # gorouter
-    75: {"max_priority": 40, "max_weight": 5},   # tabitoken
-    86: {"max_priority": 40, "max_weight": 13},  # agentrouter-claude（TTFT ~25s，垫底备份）
-    94: {"max_priority": 40, "max_weight": 8},   # justwoker-opus-1
-    95: {"max_priority": 40, "max_weight": 8},   # justwoker-opus-2
-    97: {"max_priority": 40, "max_weight": 5},   # tabitoken-1
-    98: {"max_priority": 40, "max_weight": 5},   # tabitoken-2
+    57: {"max_priority": 50, "max_weight": 5},   # gorouter
+    75: {"max_priority": 50, "max_weight": 5},   # tabitoken
+    86: {"max_priority": 50, "max_weight": 13},  # agentrouter-claude（TTFT ~25s，垫底备份）
+    94: {"max_priority": 50, "max_weight": 8},   # justwoker-opus-1
+    95: {"max_priority": 50, "max_weight": 8},   # justwoker-opus-2
+    97: {"max_priority": 50, "max_weight": 5},   # tabitoken-1
+    98: {"max_priority": 50, "max_weight": 5},   # tabitoken-2
 }
 
 # Model isolation is channel-specific. AgentRouter (ch45) serves Sol only
@@ -282,7 +283,7 @@ AFFINITY_REQUIRED_MODELS: dict[str, tuple[str, ...]] = {
 # NewAPI channel PUT rebuilds abilities and can reset model-level routing
 # posture. These rows are the deliberate pool/diagnostic selectors.
 CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
-    (48, "muse-spark-1.2-contributor"): (51, 12),
+    # (48, "muse-spark-1.2-contributor") 于 2026-08-24 移出（同上）。
     (45, "gpt-5.6-sol"): (40, 5),
     (45, "zg-gpt-5.6-sol"): (40, 5),
     (45, "zg-agent-gpt-5.6-sol"): (40, 5),
@@ -329,10 +330,11 @@ def option_policy_violations(options: object) -> list[str]:
         if str(by_key.get(key, "missing")).strip().lower() != expected
     ]
 
-# 用户指示钉死（2026-08-24"林夕百倍不用渠道亲和"）：这些规则必须保持
-# enabled=false。改回真需要两处动作——本集合移除 + 清亲和内存缓存
+# 用户指示钉死机制：此集合内的亲和规则必须保持 enabled=false。
+# 2026-08-24 晚"林夕百倍不用渠道亲和"曾钉住 claude trace；深夜因长会话
+# prompt cache 提速决策恢复（用户拍板）。再次翻转时同步清内存缓存
 # （DELETE /api/option/channel_affinity_cache?all=true），否则存量钉扎续命。
-AFFINITY_DISABLED_RULES: frozenset[str] = frozenset({"claude trace"})
+AFFINITY_DISABLED_RULES: frozenset[str] = frozenset()
 
 
 def affinity_rule_violations(options: object) -> list[str]:

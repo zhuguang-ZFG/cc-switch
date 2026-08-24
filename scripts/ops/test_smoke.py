@@ -816,25 +816,25 @@ class AdminAuthTests(unittest.TestCase):
         ]
 
         self.assertEqual(smoke.affinity_rule_violations(options), [])
-
     def test_affinity_disabled_rules_stay_disabled(self):
-        """用户指示钉死：AFFINITY_DISABLED_RULES 里的规则必须 enabled=false。"""
-        rules = [
-            {
-                "name": name,
-                "model_regex": [
-                    "^(?:"
-                    + "|".join(re.escape(model) for model in models)
-                    + ")$"
-                ],
-                "enabled": name not in smoke.AFFINITY_DISABLED_RULES,
-            }
-            for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
-        ]
-        options = [
-            {"key": "channel_affinity_setting.rules", "value": json.dumps(rules)}
-        ]
-        self.assertEqual(smoke.affinity_rule_violations(options), [])
+        """用户指示钉死机制：AFFINITY_DISABLED_RULES 内的规则必须 enabled=false。"""
+        with patch.object(smoke, "AFFINITY_DISABLED_RULES", frozenset({"claude trace"})):
+            rules = [
+                {
+                    "name": name,
+                    "model_regex": [
+                        "^(?:"
+                        + "|".join(re.escape(model) for model in models)
+                        + ")$"
+                    ],
+                    "enabled": name not in smoke.AFFINITY_DISABLED_RULES,
+                }
+                for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
+            ]
+            options = [
+                {"key": "channel_affinity_setting.rules", "value": json.dumps(rules)}
+            ]
+            self.assertEqual(smoke.affinity_rule_violations(options), [])
 
     def test_affinity_disabled_rules_reject_reenable(self):
         base = {
@@ -843,27 +843,28 @@ class AdminAuthTests(unittest.TestCase):
             ]
             for name, models in smoke.AFFINITY_REQUIRED_MODELS.items()
         }
-        for scenario in ("explicit-true", "field-absent-defaults-true"):
-            rules = [
-                {
-                    "name": name,
-                    "model_regex": patterns,
-                    **(
-                        {"enabled": True}
-                        if scenario == "explicit-true" or name not in smoke.AFFINITY_DISABLED_RULES
-                        else {}
-                    ),
-                }
-                for name, patterns in base.items()
-            ]
-            options = [
-                {"key": "channel_affinity_setting.rules", "value": json.dumps(rules)}
-            ]
-            self.assertEqual(
-                smoke.affinity_rule_violations(options),
-                ["claude trace=must-stay-disabled"],
-                scenario,
-            )
+        with patch.object(smoke, "AFFINITY_DISABLED_RULES", frozenset({"claude trace"})):
+            for scenario in ("explicit-true", "field-absent-defaults-true"):
+                rules = [
+                    {
+                        "name": name,
+                        "model_regex": patterns,
+                        **(
+                            {"enabled": True}
+                            if scenario == "explicit-true" or name not in smoke.AFFINITY_DISABLED_RULES
+                            else {}
+                        ),
+                    }
+                    for name, patterns in base.items()
+                ]
+                options = [
+                    {"key": "channel_affinity_setting.rules", "value": json.dumps(rules)}
+                ]
+                self.assertEqual(
+                    smoke.affinity_rule_violations(options),
+                    ["claude trace=must-stay-disabled"],
+                    scenario,
+                )
 
     def test_affinity_rules_reject_missing_zg_alias_and_invalid_regex(self):
         rules = [
@@ -900,20 +901,19 @@ class AdminAuthTests(unittest.TestCase):
             in smoke.CRITICAL_ABILITY_POSTURES.items()
         ]
         self.assertEqual(smoke.critical_ability_posture_violations(rows), [])
-
         rows = [row for row in rows if row[:2] != (45, "gpt-5.6-sol")]
         rows = [
-            (48, "muse-spark-1.2-contributor", 1, 50, 12)
-            if row[:2] == (48, "muse-spark-1.2-contributor")
+            (45, "zg-gpt-5.6-sol", 1, 39, 5)
+            if row[:2] == (45, "zg-gpt-5.6-sol")
             else row
             for row in rows
         ]
         self.assertEqual(
             smoke.critical_ability_posture_violations(rows),
             [
-                "48:muse-spark-1.2-contributor=expected:enabled=1,priority=51,weight=12;"
-                "actual=[(1, 50, 12)]",
                 "45:gpt-5.6-sol=missing",
+                "45:zg-gpt-5.6-sol=expected:enabled=1,priority=40,weight=5;"
+                "actual=[(1, 39, 5)]",
             ],
         )
 
@@ -1042,7 +1042,6 @@ class AdminAuthTests(unittest.TestCase):
             any("/v1/chat/completions" in u for u in urls),
             "403 后冒烟检查仍须执行",
         )
-        self.assertTrue(any("/v1/responses" in u for u in urls))
 
 
 if __name__ == "__main__":
