@@ -78,8 +78,15 @@ mimo-v2.5 与 deepseek-v4-flash 本机已有渠道（ch101/109、ch15/110），B
 `~/.omp/agent/config.yml` 的 `default: sotamodel-canary/claude-opus-5-max`——
 未受信 sotamodel 被绑为自动角色，正是该门禁设计要拦的情形。
 
-**非本轮改动**（本轮只在 models.yml 追加 3 个模型条目），属外部变更。未擅自
-回改生产路由配置，待用户确认是否有意为之；若非有意，改回受信模型即恢复绿。
+**非本轮改动**（本轮只在 models.yml 追加 3 个模型条目）。事后核查（08-26）：
+`git log --all -S sotamodel-canary -- config.yml` 在 agent 仓库（d1cfa83）
+**零命中**——该值从未进过任何提交，属未提交的外部/运行时写入，来源未证实；
+不做机制归因。门禁按设计捕获了它。
+
+后续：default 已再次被外部切走（现为 `zg-newapi/k3:max`，受信模型），
+路由门禁恢复全绿。可复核的持久事实只有两条：**门禁能捕获此类越界** +
+**当前 default 为受信模型、状态绿**。注意 plan/default 双双压在 k3:max
+（昨日 429 过载渠道），如再过载两角色会一起抖动，回退链可兜底。
 
 ## 林夕现状（承接昨日）
 
