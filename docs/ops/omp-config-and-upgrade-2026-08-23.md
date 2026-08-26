@@ -106,3 +106,12 @@ SHA parity `58607dc5…` 不受影响;扩展单测 25/25;路由门禁 39/39。
 **生效时机同前:当前运行中宿主仍是 18.0.3,下次重启宿主后 18.0.4 生效。**
 git-bash cp 对刚下载的 150MB exe 报 cannot stat(疑似 Defender 扫描锁),
 PowerShell Copy-Item 成功——记为机构知识。
+
+## 追加:18.0.4 → 18.0.5(2026-08-25)
+
+`omp update` 只更新了 bun 包（18.0.5）并自曝 exe 仍 18.0.4——与 08-23 同一
+行为：updater 不覆盖手工换入的 exe。同路径手工升级：release
+`v18.0.5/omp-windows-x64.exe`，SHA-256 `921e74f2…92d6ec` 与官方一致；备份
+`omp.exe.pre-update-18.0.4.bak` + rename-aside 换入。验证套件全绿：
+`--version`=18.0.5、`omp models` exit 0、SOTA 扩展 parity `58607dc5…` +
+25/25、路由门禁 OK。生效时机：运行中宿主下次重启后切到 18.0.5。
