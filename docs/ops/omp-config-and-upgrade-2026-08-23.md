@@ -138,3 +138,14 @@ PowerShell Copy-Item 成功——记为机构知识。
 生效时机不变：换入即对下次宿主启动生效。手动触发：
 `Start-ScheduledTask -TaskName 'OMP AutoUpdate'`；日志
 `~/.omp/omp-autoupdate/autoupdate.log`。
+
+## 追加:18.0.5 → 18.0.6(2026-08-26)
+
+v18.0.6 当日发布，自动升级器按 2 天成熟期正确拦下（`held back: age=0.0d`）；
+用户明确要求立即升级，手动走同一验证路径：release `v18.0.6/omp-windows-x64.exe`
+SHA-256 `9f458a9b…d71e2` 与官方一致；备份 `omp.exe.pre-update-18.0.5.bak` +
+rename-aside 换入。验证套件全绿：`--version`=18.0.6、`omp models` exit 0、
+SOTA parity `58607dc5…` + 25/25、路由门禁 OK。生效时机同前（下次宿主重启）。
+
+注：成熟期门槛只约束自动升级器；用户显式要求时走手动路径可即时采用，
+风险自担。
