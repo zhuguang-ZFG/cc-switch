@@ -115,3 +115,26 @@ PowerShell Copy-Item 成功——记为机构知识。
 `omp.exe.pre-update-18.0.4.bak` + rename-aside 换入。验证套件全绿：
 `--version`=18.0.5、`omp models` exit 0、SOTA 扩展 parity `58607dc5…` +
 25/25、路由门禁 OK。生效时机：运行中宿主下次重启后切到 18.0.5。
+
+## 追加:自动升级机制(2026-08-26)
+
+`omp update` 无法覆盖手工换入的 exe（两次升级实证），故自建计划任务
+`OMP AutoUpdate`（每日 09:40，`StartWhenAvailable`）跑
+`~/.omp/omp-autoupdate/omp-autoupdate.ps1`：
+
+1. `releases.atom` 取最新 tag+发布时间（一次请求，免 GitHub API 限流）；
+2. 已最新即退；**成熟期门槛：发布满 2 天才采用**（避开首发回归）；
+3. 下载 exe+SHA256SUMS → SHA 校验 → 备份 `.pre-update-<旧版>.bak`（留 3 个）
+   → rename-aside 换入；
+4. 版本复核不符即回滚；全程日志 `autoupdate.log`，失败不动现有二进制。
+
+两个机构知识：
+- **PS5.1 读无 BOM 的 UTF-8 .ps1 会按 GBK 解析**——中文注释导致逻辑静默
+  异常（版本比较被跳过、格式化输出残缺）。.ps1 必须带 BOM 写出
+  （`encoding='utf-8-sig'`）。
+- 版本比较前必须把外部命令输出**强制标量化**
+  （`| Select-Object -First 1`），否则 `-le` 对集合返回集合，`if` 恒真。
+
+生效时机不变：换入即对下次宿主启动生效。手动触发：
+`Start-ScheduledTask -TaskName 'OMP AutoUpdate'`；日志
+`~/.omp/omp-autoupdate/autoupdate.log`。
