@@ -107,6 +107,27 @@ SHA-256 `3B46166A…F8700`, repo and live copies byte-identical).
   cooled failure per cooldown window, so behavior only gets smoother, not
   different.
 
+## Candidate curation constraints (2026-08-28)
+
+Output budget is a curation-time constraint, not a runtime sort key. The
+ladder is already ordered by output cap (deepseek-v4-flash 131072 ->
+qwen3-8-27b 32768), and the ordering encodes cost intent (free pools first);
+spec-based ranking would let paid or free-relay entries overtake the curated
+order.
+
+- Weakest link: the `qwen3-8-27b` tail has the ladder's smallest output cap
+  (32768) and is itself `reasoning: true`, so its effective summary budget is
+  32K minus thinking consumption (the 2026-08-28 glm-5.2 probe showed
+  reasoning can consume an entire output budget). It is only reached inside a
+  DeepSeek cooldown window, where a long session (~140K context at the 262K
+  window's 70% threshold) summarized under that cap risks mid-state
+  truncation. Accepted: the head (128K cap) carries the normal path; a real
+  compaction of 140,662 tokens completed on the head in 67.9s on 2026-08-28.
+- `zg-newapi/muse-spark-1.2-contributor-free` (1048576/131072) is explicitly
+  not a candidate: its `api: openai-responses` transport is unverified on the
+  compaction path, and opencode-zen ch96 is a free relay whose summary
+  quality/latency is unsuitable for the maintenance call.
+
 ## Upstream and community evidence (2026-08-18)
 
 - [Issue #4139](https://github.com/can1357/oh-my-pi/issues/4139) requests a
