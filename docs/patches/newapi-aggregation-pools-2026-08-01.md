@@ -74,10 +74,12 @@
 | gpt-5.6-terra | **零源**（仅 centos ch25 曾挂，已禁） |
 | claude-sonnet-5 | ch57（ch26/27 已合并禁用） |
 | qwen3.8-max-preview | ch31 |
+| qwen3-8-27b | ch88 |
 | k3/kimi-for-coding | ch33 |
 | step-router-v1 | ch36 |
 
 > **2026-08-02 实测更正**：本节原写 gpt-5.5 三源 ch16/25/30、luna 二源 ch16/25、terra 单源 ch25、sonnet-5 二源 ch26/27——均过时（ch16/25 已禁、ch41 已删、ch26/27 已并入 ch57）。以上为实测后版本。
+> **2026-08-28 补记**：ch88 `runinfra-qwen3-8-27b`（`https://api.runinfra.ai`，单 key，weight=1，priority=0，auto_ban=1，group=default）后补接入，为 `qwen3-8-27b` **唯一源、未聚合**；该模型现是 OMP default 模型（兼 commit/smol/translator 角色与 compaction 第 4 候选），单源风险点。后续聚合须按三坑教训配置新渠道（group=default、priority=50、正确 weight）。
 
 ## 6. 路由与亲和策略（2026-08-01 生效）
 
