@@ -203,3 +203,41 @@ PS 陷阱(本次 review 实测)：
 存在换入争用。判定顺序固定为 **哈希 > mtime > 目录列举**：只有
 `sha256 == 发布哈希` 且新进程 `--version` 对得上才算换入成功；见到 `*.new`
 分片先查持有进程，无进程即孤儿，直接删除，不要据此推断主二进制被回滚。
+
+## 追加：longcat → qwen3-8-27b 全量替换（2026-08-28）
+
+用户要求把 OMP 里的 LongCat 官方 provider（`api.longcat.chat`）整体下线，
+统一换 `zg-newapi/qwen3-8-27b`（runinfra ch88，OMP 当前 default 模型，
+262K 上下文 / 33K 输出）：
+
+- `config.yml`：`modelRoles.commit`/`smol` → `zg-newapi/qwen3-8-27b:high`
+  （对齐 default 的 :high）；删 `providers.maxInFlightRequests.longcat: 2`；
+- `models.yml`：删 `longcat` provider 块（含 api key）；
+- `agents/translator.md`：model → `zg-newapi/qwen3-8-27b`，描述改 262K 上下文；
+- compaction 扩展：`DEFAULT_COMPACTION_CANDIDATES` 第 4 位 longcat →
+  qwen3-8-27b，REVISION `2026.08.19-r4` → `2026.08.28-r5`；走部署器
+  `deploy-omp-global-compaction-model.ps1`（备份目录
+  `extension-backups/omp-global-compaction-model-20260828-005009-10180`），
+  repo 与 live SHA-256 一致（`D6437826…8077C`）；
+- 门禁 `test_omp_routes.py`：provider 元组/期望集合去 longcat 两处；
+  compaction 单测 fixture 同步换（旧 fixture 断言 longcat 是默认候选）。
+
+**门禁拦截的坑**：最初把 fallback 链键 `longcat/LongCat-2.0:` 1:1 改名为
+`zg-newapi/qwen3-8-27b:`，被 `test_default_role_has_no_model_fallback_chain`
+拦下——default 主模型（2026-08-21 用户批准的不变量）不得挂模型级 fallback
+链，provider/pool 耗尽必须 hard-fail。正确做法：删模型链，给 `commit` 角色
+挂**角色级**链 `commit: [claude-haiku-4-5, muse-spark-1.2-contributor-free]`
+（与既有 `smol:`/`slow:` 等角色链同模式，行为等价于原 longcat 模型链）；
+`smol` 角色保留其原有 8 项角色链。
+
+备份（live，戳 20260828-004906）：`config.yml.bak-…-longcat-to-qwen27b`、
+`models.yml.bak-…-longcat-to-qwen27b`、`agents/translator.md.bak-…-longcat-to-qwen27b`。
+
+权衡记录：LongCat 1M/128K → Qwen 3.8 27B 262K/33K。commit/smol/translator
+均为轻载角色，262K 足够；compaction 候选池不再含 longcat（bench 均值 3.73s
+仅为旧候选的历史记录，见 docs/ops/omp-global-compaction-model.md）。
+NewAPI 侧的 `zg-longcat-2.0`（走 zg 网关的模型）不在本次范围，未动。
+
+验证：`node --check` + compaction 单测 22/22；路由门禁 39/39（含
+`omp models` exit 0、default 无模型链、advisor 锁 sota、effort 白名单）；
+live `omp models` 零 longcat，qwen3-8-27b 行 `262K/33K, minimal..high`。

@@ -24,7 +24,7 @@ scripts/ops/omp-global-compaction-model.js
 1. `zg-newapi/deepseek-v4-flash` (SenseNova ch15)
 2. `zg-newapi/glm-5.2` (SenseNova ch15, reserved candidate)
 3. `zg-newapi/zai-glm-5-2` (Mistral conversations relay ch85)
-4. `longcat/LongCat-2.0` (official provider)
+4. `zg-newapi/qwen3-8-27b` (runinfra ch88)
 
 Only models present in OMP's authenticated model list are eligible. DeepSeek
 remains the normal target. A failed automatic compaction cools that target for
@@ -47,6 +47,24 @@ an upstream failure is learned only from OMP's real auto-compaction result. OMP
 core may perform its own bounded provider handling before that terminal event;
 `extensionRetries` reports only the extension's extra call, not the total number
 of upstream requests made inside OMP.
+
+## Candidate replacement (2026-08-28)
+
+The fourth candidate `longcat/LongCat-2.0` (official provider) was replaced by
+`zg-newapi/qwen3-8-27b` (runinfra ch88); revision `2026.08.19-r4` ->
+`2026.08.28-r5`.
+
+- The LongCat official provider (`api.longcat.chat`) is retired from OMP
+  entirely: the `commit`/`smol` model roles, the translator subagent, and this
+  candidate pool all moved to `zg-newapi/qwen3-8-27b`, and the `longcat`
+  provider entry left `models.yml`, so the old selector is no longer
+  registered in OMP.
+- `zg-newapi/qwen3-8-27b` is OMP's current default model (262K context / 32K
+  output) and is continuously exercised on the default route. The 2026-08-18
+  LongCat bench (average 3.73s) stays as historical evidence for the removed
+  candidate only.
+- The first three candidates are unchanged; DeepSeek V4 Flash remains the
+  normal target.
 
 ## Upstream and community evidence (2026-08-18)
 
@@ -150,7 +168,7 @@ The extension emits structured background logs for:
 - failed, aborted, skipped, or stale compaction state.
 
 No normal notification is shown. `/compaction-status` is an opt-in command that
-shows extension revision `2026.08.18-r2`, current target, last result, managed
+shows extension revision `2026.08.28-r5`, current target, last result, managed
 retry state/count, and per-candidate availability, cooldown remaining, attempts,
 successes, failures, and retry attempts. Raw upstream error text is discarded;
 only a safe class and optional HTTP status are retained. Status and logs never

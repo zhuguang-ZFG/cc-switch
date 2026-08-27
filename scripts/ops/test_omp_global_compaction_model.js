@@ -122,22 +122,22 @@ test("also binds a current model that is not in the registry snapshot", () => {
 });
 
 test("selects only authenticated registry candidates in priority order", () => {
-  const longcat = { provider: "longcat", id: "LongCat-2.0" };
+  const qwen27b = { provider: "zg-newapi", id: "qwen3-8-27b" };
   const glm = { provider: "zg-newapi", id: "zai-glm-5-2" };
   const deepseek = { provider: "zg-newapi", id: "deepseek-v4-flash" };
 
   assert.equal(
-    resolveCompactionTarget(createContext([longcat, glm, deepseek])).target,
+    resolveCompactionTarget(createContext([qwen27b, glm, deepseek])).target,
     TARGET,
   );
   assert.equal(
-    resolveCompactionTarget(createContext([longcat, glm])).target,
+    resolveCompactionTarget(createContext([qwen27b, glm])).target,
     "zg-newapi/zai-glm-5-2",
   );
   assert.equal(
     resolveCompactionTarget(
       createContext([
-        longcat,
+        qwen27b,
         glm,
         { provider: "zg-newapi", id: "glm-5.2" },
       ]),
@@ -145,8 +145,8 @@ test("selects only authenticated registry candidates in priority order", () => {
     "zg-newapi/glm-5.2",
   );
   assert.equal(
-    resolveCompactionTarget(createContext([longcat])).target,
-    "longcat/LongCat-2.0",
+    resolveCompactionTarget(createContext([qwen27b])).target,
+    "zg-newapi/qwen3-8-27b",
   );
 });
 

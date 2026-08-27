@@ -1,10 +1,10 @@
-export const EXTENSION_REVISION = "2026.08.19-r4";
+export const EXTENSION_REVISION = "2026.08.28-r5";
 
 const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
   "zg-newapi/deepseek-v4-flash",
   "zg-newapi/glm-5.2",
   "zg-newapi/zai-glm-5-2",
-  "longcat/LongCat-2.0",
+  "zg-newapi/qwen3-8-27b",
 ]);
 const DEFAULT_RECONCILE_INTERVAL_MS = 1000;
 const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;

@@ -798,7 +798,6 @@ class OmpRouteGateTests(unittest.TestCase):
             "zg-newapi",
             "zg-newapi-anthropic",
             "agentrouter",
-            "longcat",
             "anyrouter",
         ):
             self.assertIn(f"{provider} (", self.omp_models_output)
@@ -1139,7 +1138,7 @@ class OmpRouteGateTests(unittest.TestCase):
     def test_live_models_registrations_parse_expected_providers(self):
         parsed = _parse_model_registrations(MODELS_FILE.read_text(encoding="utf-8"))
         self.assertTrue(
-            {"zg-newapi", "zg-newapi-anthropic", "agentrouter", "longcat", "anyrouter"}
+            {"zg-newapi", "zg-newapi-anthropic", "agentrouter", "anyrouter"}
             <= set(parsed),
             sorted(parsed),
         )

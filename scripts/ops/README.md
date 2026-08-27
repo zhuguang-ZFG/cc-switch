@@ -288,7 +288,7 @@ Production copy: `~/.omp/agent/extensions/omp-unexpected-stop-guard.js`. See `do
 projecting an authenticated background target onto every available model as
 its runtime `compactionModel`. The ordered candidates are SenseNova DeepSeek V4
 Flash, a reserved SenseNova GLM 5.2 selector, Mistral-relay GLM 5.2, then
-official LongCat 2.0. It reconciles at
+runinfra Qwen 3.8 27B (ch88). It reconciles at
 session start, before each agent turn, before compaction, and once per second so
 models added or refreshed in a running OMP session inherit the policy without
 per-model maintenance. A strict provider failure cools the failed target for
