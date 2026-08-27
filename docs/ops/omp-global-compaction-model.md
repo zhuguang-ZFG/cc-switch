@@ -24,7 +24,7 @@ scripts/ops/omp-global-compaction-model.js
 1. `zg-newapi/deepseek-v4-flash` (SenseNova ch15)
 2. `zg-newapi/glm-5.2` (SenseNova ch15, reserved candidate)
 3. `zg-newapi/zai-glm-5-2` (Mistral conversations relay ch85)
-4. `zg-newapi/qwen3-8-27b` (runinfra ch88)
+4. `zg-newapi/qwen3-8-27b` (runinfra ch88 + yjs ch112, two-source 1:1 pool)
 
 Only models present in OMP's authenticated model list are eligible. DeepSeek
 remains the normal target. A failed automatic compaction cools that target for
@@ -65,6 +65,11 @@ The fourth candidate `longcat/LongCat-2.0` (official provider) was replaced by
   candidate only.
 - The first three candidates are unchanged; DeepSeek V4 Flash remains the
   normal target.
+- Same day (2026-08-28) the NewAPI side pooled `qwen3-8-27b`: new ch112
+  `yjs-qwen3-8-27b` (dedicated single-model channel on `api.yjs.im`, upstream
+  id `qwen-3.8-27b`, 1:1 weight with ch88, auto_ban failover). OMP-side
+  candidate list and selectors are unchanged. See
+  `qwen38-27b-aggregation-2026-08-28.md`.
 
 ## Upstream and community evidence (2026-08-18)
 
