@@ -245,3 +245,38 @@ live `omp models` 零 longcat，qwen3-8-27b 行 `262K/33K, minimal..high`。
 **指针（2026-08-28）**：本节 L210 所述 "runinfra ch88，单源" 已被同日
 NewAPI 侧聚合取代——`qwen3-8-27b` 现为 ch88 + ch112（yjs-qwen3-8-27b）
 1:1 池，见 `docs/ops/qwen38-27b-aggregation-2026-08-28.md`。
+
+## 追加:18.0.7 → 18.0.8(2026-08-28)
+
+v18.0.8 发布约 15 分钟(age≈0.0d)即被要求升级,手动走同一验证路径(同
+18.0.6/18.0.7 先例,风险自担;成熟期门槛只约束自动升级器)。
+
+release `v18.0.8/omp-windows-x64.exe`,SHA-256 `8179affc…7da98` 与官方
+`SHA256SUMS.txt` 一致;备份 `omp.exe.pre-update-18.0.7.bak`(复核报
+`omp/18.0.7`,回滚物有效)+ rename-aside 换入。验证:`--version`=18.0.8、
+`omp models` exit 0(注册表解析正常)。手动脚本
+`~/.omp/omp-autoupdate/manual-update-18.0.8.ps1`(curl 断点续传 + 双尝试,
+150MB 约 66s 完成)。
+
+18.0.8 关键变更(与本环境相关,出处
+[v18.0.8 release notes](https://github.com/can1357/oh-my-pi/releases/tag/v18.0.8)
+):
+- **snapcompact:压缩帧超持久化上限时不再截断成无效 image base64**——此前
+  该损坏会让 resume 后 provider 对每个后续请求返回 400(与本部署的重压缩
+  路径直接相关,属静默损坏类修复);
+- 修复损坏 session header 在 resume 时静默覆盖可恢复 transcript(#9915);
+- 修复启动竞态:早期 reconcile 把小型工具集固化为永久启用集,导致新会话
+  几乎无工具、skill 清单为空(现从构造时工具面板播种);
+- LiteLLM 发现不再把 bundled Fireworks 模型的 wire-id 转换泄漏给同名别名
+  (`kimi-k3` 类,曾致 endpoint 未advertise 的 model id → HTTP 400,#9938);
+- Bedrock 上 OpenAI-schema 模型的 thinking 控制修复(本机无 Bedrock,不涉)。
+
+新机构知识:**备份轮转不能删"仍在运行会话持有的 `.hold`"**。本次 keep-3
+轮转在 `omp.exe.running-18.0.7.hold` 上 PermissionDenied——Windows 允许
+rename 运行中 exe(rename-aside 换入的前提)但禁止 delete;运行中宿主
+(本会话)持旧句柄直到退出。处置:手动删除 18.0.5/18.0.6 三个旧备份,
+在用的 `.hold` 留待会话结束后由下次轮转清理。自动升级器(09:40 无人值守
+场景无会话持句柄)不受影响,但手动升级脚本宜对轮转步骤容错
+(EAP=Stop 下单个删除失败会中断收尾,换入本身已成功)。
+
+生效时机同前:当前运行中宿主仍是 18.0.7,下次重启宿主后 18.0.8 生效。
