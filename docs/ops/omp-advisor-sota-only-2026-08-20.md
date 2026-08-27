@@ -56,3 +56,13 @@ zg-newapi/omp-sota-claude-opus-5:
   ch93 上游充值后自然恢复。若日后重议，候选方向为 NewAPI 层 p0 免费垫底渠道
   （公开名 omp-sota-claude-opus-5 映射免费上游，零成本、selector 不变、不碰门禁）。
   见 `docs/ops/ox-alpha-removal-2026-08-27.md` 同日日志审查节。
+
+**2026-08-28 落地：死链移除（用户同意）**——`retry.fallbackChains` 中的
+`zg-newapi/omp-sota-claude-opus-5` 兜底链已从活配置删除（12 → 11 键，
+YAML 校验通过，diff 仅 3 行；备份
+`config.yml.bak-20260828-*-sota-dead-chain-removal`）。复核依据：当前配置中
+sota selector 的唯一消费方是 `modelRoles.advisor`，且无任何角色链以 sota
+为候选，故 L54 括注"对主会话其他角色仍有效"在现配置下已无实际触发路径；
+若未来 advisor 之外的角色/手动切换启用 sota，故障将硬失败而非落到免费
+模型——与"advisor 不消费免费垫底"的既有取舍一致。ch93 充值恢复路径与
+2026-08-27 决策均不受影响。
