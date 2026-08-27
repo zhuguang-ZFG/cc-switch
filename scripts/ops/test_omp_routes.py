@@ -88,6 +88,30 @@ def _base_selector(selector: str) -> str:
     return selector
 
 
+def _chain_reach(chains: dict[str, list[str]]) -> dict[str, set[str]]:
+    """模型键 fallback 链的传递闭包：基选择器 -> 可达基选择器集合。
+
+    仅跟带 "/" 的 provider/model 键（角色名键不跟）；对已解析候选先去
+    thinking 后缀，保证与模型键严格相等匹配。
+    """
+    model_keys = {key for key in chains if "/" in key}
+    reach: dict[str, set[str]] = {}
+    for key in model_keys:
+        seen: set[str] = set()
+        stack = [_base_selector(candidate) for candidate in chains[key]]
+        while stack:
+            selector = stack.pop()
+            if selector in seen:
+                continue
+            seen.add(selector)
+            if selector in model_keys:
+                stack.extend(
+                    _base_selector(candidate) for candidate in chains[selector]
+                )
+        reach[key] = seen
+    return reach
+
+
 def _parse_disabled_providers(text: str) -> list[str]:
     """提取 config.yml 顶层 disabledProviders 全局列表。"""
     result: list[str] = []
@@ -599,28 +623,44 @@ class OmpRouteGateTests(unittest.TestCase):
     def test_reasoning_role_chains_exclude_deepseek(self):
         """用户约束（2026-08-28）：DeepSeek 只干杂活，推理角色链禁 DeepSeek。
 
-        覆盖 plan/designer/slow 三个推理角色的 fallback 链。k3 400 教训
-        （2026-08-27）：高价值推理角色主选瞬时故障后落 deepseek-v4-flash
-        是能力悬崖，且模型切换掩盖 400 真因。推理链应在耗尽 opus/kimi
-        跳后硬失败，不降级到快速廉价杂活模型。smol/task 等杂活角色
-        允许以 DeepSeek 开头（见 smol 链）。
+        覆盖 plan/designer/slow 三个推理角色的 fallback 可达集，含传递
+        模型键链：角色主选或链内任意一跳若以 provider/model 键挂了
+        fallback 链，同样不得可达 DeepSeek（否则
+        `zg-newapi/k3: [deepseek-v4-flash]` 之类可绕过门禁）。
+        k3 400 教训（2026-08-27）：高价值推理角色主选瞬时故障后落
+        deepseek-v4-flash 是能力悬崖，且模型切换掩盖 400 真因。推理链
+        应在耗尽 opus/kimi 跳后硬失败，不降级到快速廉价杂活模型。
+        smol/task 等杂活角色允许以 DeepSeek 开头（见 smol 链）。
         """
-        chains = _fallback_chain_entries(CONFIG_FILE.read_text(encoding="utf-8"))
-        offenders = {}
+        text = CONFIG_FILE.read_text(encoding="utf-8")
+        chains = _fallback_chain_entries(text)
+        roles = _model_role_entries(text)
+        reach = _chain_reach(chains)
+
+        def is_deepseek(selector: str) -> bool:
+            return _base_selector(selector).rsplit("/", 1)[-1].startswith("deepseek")
+
+        offenders: dict[str, list[str]] = {}
         for role in ("plan", "designer", "slow"):
-            candidates = chains.get(role, [])
-            deepseek = [
-                c
-                for c in candidates
-                if _base_selector(c).rsplit("/", 1)[-1].startswith("deepseek")
-            ]
-            if deepseek:
-                offenders[role] = deepseek
+            seeds = {_base_selector(roles[role])} | {
+                _base_selector(candidate) for candidate in chains.get(role, [])
+            }
+            reachable = set(seeds)
+            stack = list(seeds)
+            while stack:
+                selector = stack.pop()
+                for nxt in reach.get(selector, ()):
+                    if nxt not in reachable:
+                        reachable.add(nxt)
+                        stack.append(nxt)
+            hits = sorted(selector for selector in reachable if is_deepseek(selector))
+            if hits:
+                offenders[role] = hits
         self.assertEqual(
             offenders,
             {},
-            f"reasoning role fallback chains (plan/designer/slow) must not "
-            f"contain DeepSeek: {offenders}",
+            f"reasoning role fallback reach (plan/designer/slow, including "
+            f"transitive model-keyed chains) must not contain DeepSeek: {offenders}",
         )
 
     def test_advisor_role_is_pinned_to_sota(self):
