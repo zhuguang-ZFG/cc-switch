@@ -596,6 +596,31 @@ class OmpRouteGateTests(unittest.TestCase):
             )
 
 
+    def test_plan_designer_chains_exclude_deepseek(self):
+        """用户约束（2026-08-28）：DeepSeek 只干杂活，plan/designer 链禁 DeepSeek。
+
+        k3 400 教训（2026-08-27）：高价值推理角色（plan/designer 主选
+        k3）瞬时故障后落 deepseek-v4-flash 是能力悬崖，且模型切换掩盖
+        400 真因。plan/designer 应在耗尽 opus 跳后硬失败，
+        不降级到快速廉价杂活模型。
+        """
+        chains = _fallback_chain_entries(CONFIG_FILE.read_text(encoding="utf-8"))
+        offenders = {}
+        for role in ("plan", "designer"):
+            candidates = chains.get(role, [])
+            deepseek = [
+                c
+                for c in candidates
+                if _base_selector(c).rsplit("/", 1)[-1].startswith("deepseek")
+            ]
+            if deepseek:
+                offenders[role] = deepseek
+        self.assertEqual(
+            offenders,
+            {},
+            f"plan/designer fallback chains must not contain DeepSeek: {offenders}",
+        )
+
     def test_advisor_role_is_pinned_to_sota(self):
         """用户约束（2026-08-20）：advisor 只能走 sota 免费模型。
 
