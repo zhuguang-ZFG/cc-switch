@@ -307,9 +307,11 @@ def main() -> int:
             except Exception as error:
                 print(f"rollback warning: ch{channel_id} restore failed: {error}")
         for channel_id, payload in deleted:
+            # 重建必须拿新 id：POST 不得携带原 id（server 管理字段）
+            recreate = {k: v for k, v in payload.items() if k != "id"}
             try:
-                post_channel(smoke, headers, payload)
-                print(f"rollback: ch{channel_id} recreated")
+                post_channel(smoke, headers, recreate)
+                print(f"rollback: ch{channel_id} recreated (new id assigned)")
             except Exception as error:
                 print(f"rollback warning: ch{channel_id} recreate failed: {error}")
         if ratio_changed:

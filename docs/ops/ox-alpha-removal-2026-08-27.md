@@ -40,6 +40,9 @@
   `ox-alpha-free`）双匹配剥除 → 剥空渠道改 DELETE → 清 ModelRatio 孤儿条目 →
   readback 验证（channels/mapping/ratio/abilities）→ 失败回滚（PUT/POST 复原渠道、
   复原 option）。
+- dry-run 语义(2026-08-28 review 后核实)：对 NewAPI 零写(API GET + `mode=ro`
+  只读 SELECT)，不产生备份文件(备份仅 `--apply` 时发生)；仅复用
+  `newapi-local-smoke.py` 的本地 token 缓存(运维工具自身缓存，非 NewAPI 状态)。
 - 应用结果：ch96 7→6；ch110 19→18（mapping 剥除）；ch109 11→10；
   `ModelRatio -= x-preview-f-free`。
 - 备份：`<NewAPI DB 目录>/backups/new-api-before-ox-alpha-remove-20260827-182122.db`

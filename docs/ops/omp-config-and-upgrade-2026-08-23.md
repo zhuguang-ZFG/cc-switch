@@ -160,7 +160,8 @@ release `v18.0.7/omp-windows-x64.exe`，SHA-256 `f7de69c5…76f3a8` 与官方
 验证套件全绿：`--version`=18.0.7、`omp models` exit 0、SOTA parity
 `58607dc5…`、扩展单测 25/25、路由门禁 39/39。
 
-18.0.7 关键变更(与本环境相关)：
+18.0.7 关键变更(与本环境相关，出处
+[v18.0.7 release notes](https://github.com/can1357/oh-my-pi/releases/tag/v18.0.7)）：
 - pi-ai：OpenAI 兼容网关流式错误不再被报成"空成功"——队列准入失败现在触发
   重试与模型回退(直接利好本地 NewAPI 429/503 场景)；
 - pi-agent-core：Codex 远程 compaction 保留图像读取工具返回的图片，不再重放
@@ -168,10 +169,19 @@ release `v18.0.7/omp-windows-x64.exe`，SHA-256 `f7de69c5…76f3a8` 与官方
 - 新增按应用用量归因(`OMP_APP_NAME`，默认 omp)；Anthropic 订阅 OAuth 修复(#9801)。
 
 机构知识(新)：**Invoke-WebRequest 下载 150MB 在本链路 ~120KB/s，900s 超时必挂**；
-断点续传配方=`curl.exe -C - --retry 3 -L -o`。脚本
+断点续传配方=`curl.exe -C - --retry 3 -L -o`。手动脚本
 `~/.omp/omp-autoupdate/manual-update-18.0.7-resume.ps1`(首版 IWR 脚本超时后
-弃用)。自动升级器仍用 IWR 且 TimeoutSec 900——若日后链路速度不改善，自动路径
-也会超时失败(失败不动现有二进制，安全)，届时需给 autoupdate 脚本换 curl 续传。
+弃用)。自动升级器本次已换 curl 断点续传并加双保险：第一次尝试续传、
+第二次删旧分片全新下载(防跨版本混合分片)，sha 两次不符即中止
+(失败不动现有二进制，安全)。
+
+PS 陷阱(本次 review 实测)：
+- **双引号串里 `$var:` 的冒号被并入变量名**(PS 变量名可含冒号)
+  → 解析报"无效的':' 语句"；必须写 `${var}`；
+- `Copy-Item` 保留源文件 LastWriteTime → 备份轮转须按 `CreationTime` 排序，
+  不能按 LWT；
+- `EAP=Stop` 下 `Get-ChildItem` 通配无匹配会抛异常 → 轮转逻辑必须带
+  `-ErrorAction SilentlyContinue`(全保留是正常终态)。
 
 生效时机同前：当前运行中宿主仍是 18.0.6，下次重启宿主后 18.0.7 生效。
 
