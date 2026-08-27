@@ -19,9 +19,10 @@ Probe results with this key (2026-08-22, direct, browser UA):
 
 Aggregation plan (single channel p6/w5, auto_ban=1, browser-UA header):
 - Join existing FREE pools via mapping:
-  x-preview-f-free->ox-alpha (pool: zen p10 / 168661 p7 / OR p5 / go p4),
   muse-spark-1.2-contributor-free->muse-spark-1.2-contributor (zen p10 /
   furry p9), hy3-free->hy3 (zen p10).
+  (x-preview-f-free->ox-alpha mapping removed 2026-08-27 — Ox Alpha free
+  tier cancelled and paid Ox Alpha also gone; do NOT re-add.)
 - Join existing PAID pools as free backup (ratio untouched; over-reporting
   cost on yjs-served calls is the conservative direction):
   k3->kimi-k3 (official p50 / whyyin p49), glm-5.2, deepseek-v4-flash,
@@ -69,7 +70,6 @@ OMP_MODELS_YML = Path.home() / ".omp" / "agent" / "models.yml"
 
 # public name -> upstream name (only entries needing a mapping)
 MAPPED_MODELS = {
-    "x-preview-f-free": "ox-alpha",
     "muse-spark-1.2-contributor-free": "muse-spark-1.2-contributor",
     "hy3-free": "hy3",
     "k3": "kimi-k3",

@@ -16,6 +16,8 @@ Later pool changes (handled by dedicated scripts, kept here so MODELS stays
 the live contract):
 - 2026-08-21 x-preview-f-free (Ox Alpha Free) added —
   add_opencode_ox_alpha_model.py; zero-retention provider, no data gate.
+  2026-08-27 removed (free tier cancelled, paid Ox Alpha also gone) —
+  remove_ox_alpha_newapi.py; do NOT re-add.
 - 2026-08-21 deepseek-v4-flash-free removed — its free promotion ended
   (upstream 401 ModelError), see remove_opencode_zen_free_model.py.
 
@@ -75,7 +77,7 @@ CHANNEL_NAME = "opencode-zen-free"
 BASE_URL = "https://opencode.ai/zen"  # NewAPI appends /v1/chat/completions
 MODELS = (
     "big-pickle,mimo-v2.5-free,hy3-free,"
-    "muse-spark-1.2-contributor-free,x-preview-f-free"
+    "muse-spark-1.2-contributor-free"
 )
 TEST_MODEL = "hy3-free"  # the chat model verified 200 during onboarding
 MUSE_FREE_MODEL = "muse-spark-1.2-contributor-free"
