@@ -143,7 +143,7 @@ compactionModel: zg-newapi/deepseek-v4-flash
 ```
 
 Ordinary task work and compaction continue to use the existing Flash, GLM, and
-LongCat policy. Raw `sotamodel*` selectors remain forbidden from roles and
+Qwen 3.8 27B policy. Raw `sotamodel*` selectors remain forbidden from roles and
 fallback chains; only the marked `zg-newapi/omp-sota-*` route can enter SOTA
 discovery after readiness verification.
 

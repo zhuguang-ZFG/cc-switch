@@ -142,7 +142,7 @@ Use `/agent-watchdog-status` for the safe incident snapshot.
 
 ## Model-Specific Compaction Thresholds
 
-The existing background compaction extension keeps its Flash, GLM, and LongCat
+The existing background compaction extension keeps its Flash, GLM, and Qwen 3.8 27B
 candidate order and selected main model. When both native settings remain at
 their defaults (`compaction.thresholdPercent=-1` and
 `compaction.thresholdTokens=-1`), it applies a runtime token threshold based on
