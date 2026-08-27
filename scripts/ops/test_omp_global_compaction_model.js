@@ -132,7 +132,7 @@ test("selects only authenticated registry candidates in priority order", () => {
   );
   assert.equal(
     resolveCompactionTarget(createContext([qwen27b, glm])).target,
-    "zg-newapi/zai-glm-5-2",
+    "zg-newapi/qwen3-8-27b",
   );
   assert.equal(
     resolveCompactionTarget(
@@ -308,7 +308,7 @@ test("records auto-compaction failures without changing the main model", () => {
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
     { provider: "zg-newapi", id: "deepseek-v4-flash" },
-    { provider: "zg-newapi", id: "zai-glm-5-2" },
+    { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];
   const ctx = createContext(models, models[0]);
   const reconciler = createGlobalCompactionReconciler({
@@ -338,7 +338,7 @@ test("records auto-compaction failures without changing the main model", () => {
   assert.equal(ctx.model.id, "claude-opus-5");
 
   const fallback = reconciler.reconcile(ctx, "after-failure");
-  assert.equal(fallback.target, "zg-newapi/zai-glm-5-2");
+  assert.equal(fallback.target, "zg-newapi/qwen3-8-27b");
   currentTime = 711;
   const recovered = reconciler.reconcile(ctx, "cooldown-expired");
   assert.equal(recovered.target, TARGET);
@@ -379,11 +379,11 @@ test("classifies only explicit provider failures as retryable", () => {
 
 test("fails closed when every authenticated candidate is cooling", () => {
   let currentTime = 10;
-  const fallbackTarget = "zg-newapi/zai-glm-5-2";
+  const fallbackTarget = "zg-newapi/qwen3-8-27b";
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
     { provider: "zg-newapi", id: "deepseek-v4-flash" },
-    { provider: "zg-newapi", id: "zai-glm-5-2" },
+    { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];
   const ctx = createContext(models, models[0]);
   const reconciler = createGlobalCompactionReconciler({
@@ -435,13 +435,13 @@ test("fails closed when every authenticated candidate is cooling", () => {
 
 test("schedules one managed fallback attempt and records its success", async () => {
   let currentTime = 100;
-  const fallbackTarget = "zg-newapi/zai-glm-5-2";
+  const fallbackTarget = "zg-newapi/qwen3-8-27b";
   const timers = [];
   let compactCalls = 0;
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
     { provider: "zg-newapi", id: "deepseek-v4-flash" },
-    { provider: "zg-newapi", id: "zai-glm-5-2" },
+    { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];
   let reconciler;
   const ctx = {
@@ -511,12 +511,12 @@ test("schedules one managed fallback attempt and records its success", async () 
 });
 
 test("a failed fallback is terminal and cannot schedule a second retry", async () => {
-  const fallbackTarget = "zg-newapi/zai-glm-5-2";
+  const fallbackTarget = "zg-newapi/qwen3-8-27b";
   const timers = [];
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
     { provider: "zg-newapi", id: "deepseek-v4-flash" },
-    { provider: "zg-newapi", id: "zai-glm-5-2" },
+    { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];
   let reconciler;
   const ctx = {

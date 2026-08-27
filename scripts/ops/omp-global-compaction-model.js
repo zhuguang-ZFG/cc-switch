@@ -1,9 +1,10 @@
-export const EXTENSION_REVISION = "2026.08.28-r5";
+export const EXTENSION_REVISION = "2026.08.28-r6";
 
 const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
   "zg-newapi/deepseek-v4-flash",
+  // reserved: register in models.yml to activate (2026-08-28 re-probe kept it
+  // unregistered: ch15 upstream returned 429 workspace-quota-exceeded)
   "zg-newapi/glm-5.2",
-  "zg-newapi/zai-glm-5-2",
   "zg-newapi/qwen3-8-27b",
 ]);
 const DEFAULT_RECONCILE_INTERVAL_MS = 1000;

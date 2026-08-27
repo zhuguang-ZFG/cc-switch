@@ -241,3 +241,7 @@ NewAPI 侧的 `zg-longcat-2.0`（走 zg 网关的模型）不在本次范围，�
 验证：`node --check` + compaction 单测 22/22；路由门禁 39/39（含
 `omp models` exit 0、default 无模型链、advisor 锁 sota、effort 白名单）；
 live `omp models` 零 longcat，qwen3-8-27b 行 `262K/33K, minimal..high`。
+
+**指针（2026-08-28）**：本节 L210 所述 "runinfra ch88，单源" 已被同日
+NewAPI 侧聚合取代——`qwen3-8-27b` 现为 ch88 + ch112（yjs-qwen3-8-27b）
+1:1 池，见 `docs/ops/qwen38-27b-aggregation-2026-08-28.md`。

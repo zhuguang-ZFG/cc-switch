@@ -21,10 +21,10 @@ scripts/ops/omp-global-compaction-model.js
 
 ## Candidate order
 
-1. `zg-newapi/deepseek-v4-flash` (SenseNova ch15)
-2. `zg-newapi/glm-5.2` (SenseNova ch15, reserved candidate)
-3. `zg-newapi/zai-glm-5-2` (Mistral conversations relay ch85)
-4. `zg-newapi/qwen3-8-27b` (runinfra ch88 + yjs ch112, two-source 1:1 pool)
+1. `zg-newapi/deepseek-v4-flash` (ch15 p50 + ch111 p30 + ch110 p6 pool)
+2. `zg-newapi/glm-5.2` (reserved — registered nowhere in `models.yml`, so the
+   reconciler skips it until an explicit registration activates it)
+3. `zg-newapi/qwen3-8-27b` (runinfra ch88 + yjs ch112, two-source 1:1 pool)
 
 Only models present in OMP's authenticated model list are eligible. DeepSeek
 remains the normal target. A failed automatic compaction cools that target for
@@ -70,6 +70,42 @@ The fourth candidate `longcat/LongCat-2.0` (official provider) was replaced by
   id `qwen-3.8-27b`, 1:1 weight with ch88, auto_ban failover). OMP-side
   candidate list and selectors are unchanged. See
   `qwen38-27b-aggregation-2026-08-28.md`.
+
+## Ladder cleanup and glm-5.2 re-probe (2026-08-28)
+
+Revision `2026.08.28-r5` -> `2026.08.28-r6`; deployed via
+`deploy-omp-global-compaction-model.ps1` (backup directory
+`extension-backups/omp-global-compaction-model-20260828-014931-27168`,
+SHA-256 `3B46166A…F8700`, repo and live copies byte-identical).
+
+- `zg-newapi/zai-glm-5-2` was removed from the candidate list. Its only
+  channel (ch85, Mistral conversations relay) is `status=2` and the 2026-08-18
+  semantic contract check failed, so the registered-but-channel-dead selector
+  was a guaranteed first-attempt failure inside every DeepSeek cooldown
+  window (the reconciler projected it ahead of the live qwen tail before the
+  failure could cool it for five minutes).
+- The reserved `zg-newapi/glm-5.2` was re-probed before registering it. The
+  2026-08-18 429s on ch15 date from the shared-TPM incident, and two newer
+  channels (ch108 whyyin p49, ch110 yjs-free) now list the model, so the
+  exclusion was re-tested live:
+
+  | Probe (2026-08-28) | Result |
+  |---|---|
+  | `glm-5.2`, 24 prompt tokens, max 20 | HTTP 200, TTFT 1.136s, 45 tokens (reasoning consumed the output budget) |
+  | `glm-5.2`, identical request 3s later, max 200 | HTTP 429 `Workspace allocated quota exceeded` in 0.100s |
+
+  ch15 remains the p50 head and NewAPI does not auto-retry 429
+  (`AutomaticRetryStatusCodes=408,500-503`), so registering the selector now
+  would install a target that fails most cooldown-window attempts. It stays
+  reserved in code exactly as the 2026-08-18 decision described: register it
+  only after the ch15 workspace quota is restored or NewAPI routing no longer
+  fronts ch15 for this model.
+- The 21-test compaction suite now uses `zg-newapi/qwen3-8-27b` fixtures in
+  place of the removed zai selector (21/21 + deploy suite 1/1).
+- Running sessions keep the r5 list until `/reload-plugins` or the next
+  process start; under r5 the dead zai entry already self-heals after one
+  cooled failure per cooldown window, so behavior only gets smoother, not
+  different.
 
 ## Upstream and community evidence (2026-08-18)
 
@@ -173,7 +209,7 @@ The extension emits structured background logs for:
 - failed, aborted, skipped, or stale compaction state.
 
 No normal notification is shown. `/compaction-status` is an opt-in command that
-shows extension revision `2026.08.28-r5`, current target, last result, managed
+shows extension revision `2026.08.28-r6`, current target, last result, managed
 retry state/count, and per-candidate availability, cooldown remaining, attempts,
 successes, failures, and retry attempts. Raw upstream error text is discarded;
 only a safe class and optional HTTP status are retained. Status and logs never
