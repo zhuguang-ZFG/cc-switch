@@ -45,6 +45,14 @@ zg-newapi/omp-sota-claude-opus-5:
 - 质量降级（免费小模型给建议）但 advisor 不停机；
 - 门禁兼容性：`validate_sota_upgrade_only` 只禁止 sota 别名作为链候选，
   以 sota 别名为链键指向免费模型是合法方向；test_omp_routes 38 项全绿；
-- **待观察项**：OMP advisor 角色是否消费 fallbackChains 未经实测（此前 advisor
-  503 时无链可走直接 halt）。下次 sota 耗尽时看日志：若 advisor 仍 halt 而非
-  切 muse-free，说明 advisor 不吃链，需另想办法（届时更新本节）。
+- **待观察项（已实测，2026-08-27）**：advisor **不消费** fallbackChains。
+  证据：ch93 当日手动禁用（balance 0，`status_reason=manual operation`）期间，
+  `omp.2026-08-27.*.log` 从 12:44 到 18:36 持续 `advisor turn failed:
+  503 No available channel for model omp-sota-claude-opus-5 under group default
+  (param=model_not_found)`，约每 2 分钟一次，从未切到链上的 muse-free；
+  同期 `omp-sota-escalation.js` 多次 `Extension handler timed out (30s)`。
+  结论：上述兜底链对 advisor 是死配置（对主会话其他角色仍有效）。
+  **2026-08-27 用户决策：维持停机可接受取舍**——不加垫底渠道，噪声日志容忍，
+  ch93 上游充值后自然恢复。若日后重议，候选方向为 NewAPI 层 p0 免费垫底渠道
+  （公开名 omp-sota-claude-opus-5 映射免费上游，零成本、selector 不变、不碰门禁）。
+  见 `docs/ops/ox-alpha-removal-2026-08-27.md` 同日日志审查节。

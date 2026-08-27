@@ -68,3 +68,25 @@
 - `opencode-zen-free-channels-2026-08-20.md` 第二/三/四上游聚合各节转历史档。
 - 历史接入脚本（`add_*ox_alpha*`、`add_opencode_go_oxalpha_channel.py`）保留为
   档案，禁止重跑 `--apply`。
+
+## 同日日志审查（OMP + NewAPI，2026-08-27 晚）
+
+审查 `omp.2026-08-27.*.log` 与 `guardian.log`，发现按重要性：
+
+1. **advisor 整天 503 spam**：ch93 `omp-sota-sotamodel` 手动禁用（balance 0）后，
+   `advisor turn failed: 503 ... model_not_found (group default)` 约每 2 分钟一次
+   （12:44–18:36），且 `omp-sota-escalation.js` 多次 30s 超时。实测证明
+   **advisor 不消费 fallbackChains**——08-20 加的免费兜底链对 advisor 是死配置。
+   用户决策：维持停机可接受取舍，不做配置变更（详见该文档）。
+2. **ch93 恢复前提**：上游余额 0，需充值；不充值则 advisor 停机为既定可接受取舍。
+3. 启动期 `MCP tool load failed mcp:github unknown certificate verification error`
+   单次——瞬态 TLS 抖动，未复发，不处理。
+4. `title-generator: no title returned (model-returned-none)`（agnes-2.5-flash）
+   偶发——浪费单次小调用，无害，不处理。
+5. `ui.loop-blocked` 峰值 4.1s 偶发、`Async job ... yield queue stale`——harness
+   性能/队列噪声，非配置问题。
+6. `qwen3.8-max` 单次 400 `bad_response_status_code`——上游瞬态，已自愈。
+7. ch101 管理探针超时单次——guardian 重试机制内自愈。
+8. opus 空响应率由历史 ~20% 降至 2–4%——健康。
+9. guardian 对本次 96/110/109 变更输出 `identity changed; cleared stale recovery
+   state`——stale state 按设计清理，无残留。
