@@ -51,15 +51,18 @@
 > ch16/ch25（centos.hk 同上游两 key）已于 2026-08-01 禁用：centos 上游账户欠费返 403「预扣费额度失败 用户剩余额度 ¥0.09」（该"用户"指 centos 账户，**非**本地无限钱包），且 NewAPI 对上游 403 默认不 failover，故双保险摘除（status=2 + abilities enabled=0）。
 > **副作用**：gpt-5.6-luna / gpt-5.6-terra 仅挂 centos，摘除后零源，已从 OMP/Kimi 配置移除（避免选到报"无可用渠道"）；centos 充值/换 key 后可恢复 ch16/25。
 
-## 4. claude-opus-5 / claude-opus-4-8 / claude-opus-4-7 聚合池（二源）
+## 4. claude-opus-5 / claude-opus-4-8 聚合池（四源）
 
 | 渠道 | 来源 | 类型 | 权重 | priority | auto_ban | 备注 |
 |------|------|------|------|----------|----------|------|
-| ch45 | agentrouter（本机） | 代理池 | 15 | 50 | 0 | Tailscale 100.83.32.95:8788；主源（权重 15/19 ≈ 79%） |
-| ch57 | gorouter 合并（三 key） | 付费中转 | 4 | 40 | 0 | `https://gorouter.app`；ch26/27/28 三把 key 合并换行分隔；备源（权重 4/19 ≈ 21%）。**多 key 正确姿势**：key 真实换行（0x0A）分隔 + `channel_info` 以 **bytes** 写入（`is_multi_key:true, multi_key_size:3, multi_key_status_list:{"0":1,"1":1,"2":1}, multi_key_mode:"polling"`）——str 写入致 GORM 二次编码、`multi_key_mode` 写数字、key 写 `\n` 字面量，三种坑都导致渠道不可路由 |
+| ch94 | justwoker-opus-1 | 付费中转 | 8 | 50 | 1 | `https://api.justwoker.icu`；主源之一（8/26 ≈ 31%） |
+| ch95 | justwoker-opus-2 | 付费中转 | 8 | 50 | 1 | 同上游第二 key；主源之一（8/26 ≈ 31%） |
+| ch57 | gorouter 合并（三 key） | 付费中转 | 5 | 50 | 0 | `https://gorouter.app`；ch26/27/28 三把 key 合并换行分隔（5/26 ≈ 19%）。**多 key 正确姿势**：key 真实换行（0x0A）分隔 + `channel_info` 以 **bytes** 写入（`is_multi_key:true, multi_key_size:3, multi_key_status_list:{"0":1,"1":1,"2":1}, multi_key_mode:"polling"`）——str 写入致 GORM 二次编码、`multi_key_mode` 写数字、key 写 `\n` 字面量，三种坑都导致渠道不可路由 |
+| ch116 | kktoken | 免费中转 | 5 | 50 | 1 | `https://kktoken.cc`（base_url 不带 `/v1`）；2026-08-28 深夜接入；四模型全 200（opus-5 1.8s / opus-4-8 1.7s / 两 thinking 变体 2.4-3.0s）；Cloudflare UA 门（python 默认 UA 1010，Go/NewAPI UA 放行）（5/26 ≈ 19%） |
 
 > **2026-08-01 整合**：原七源 → 二源。ch26/27/28（gorouter 三把 key 同上游）合并为 ch57；ch45 权重 5→15 成主源；ch3/9/18（baibei/linxi-k40）直测全部 503 `All available accounts exhausted`（上游账户耗尽），ch3 已禁用（status=2 + abilities enabled=0）。
 > **2026-08-02 终态**：ch9/ch18 曾被 auto-ban 赦免回 1 且上游恢复，测得 avg 51-67s 龟速拖慢 claude 池 → **重新禁用**（status=2 + abilities.enabled=0 双保险，防 AutomaticEnableChannelEnabled 再拉回）。claude 池最终二源：ch45 agentrouter（weight=15, priority=50 主源）+ ch57 gorouter（weight=4 备源）。
+> **2026-08-28 深夜 kktoken 第四源（ch116）**：用户给的 `https://kktoken.cc` key 目录 4 模型（`claude-opus-5`、`claude-opus-5-thinking`、`claude-opus-4-8`、`claude-opus-4-8-thinking`），四者直连 completion 全 **200**（pong/stop，1.7-3.0s，thinking 变体带 reasoning）。新建 ch116 `kktoken`（base_url 不带 `/v1`，四模型全挂，p50/w5/auto_ban=1，脚本 `add_kktoken_claude_pool.py`，key 经 KK_KEY 环境变量入渠道行、不落仓库；备份 `new-api-before-kktoken-claude-*.db`）。与 ch94/95 同 p50 → 四源按权重 8:8:5:5 轮询。**Cloudflare UA 门**：python 默认 UA 被 1010 拦，`curl/Go-http-client/new-api/OneAPI/浏览器` UA 全 200——NewAPI 的 Go 客户端天然放行，无需特殊处理；直连探测须带 UA。
 > **重要教训**：NewAPI 渠道禁用**必须双保险**——`status=2`（ManuallyDisabled）+ `abilities.enabled=0`。只改 status 不生效（路由过滤看 abilities 表；status=0 是 Unknown 非 Disabled，更无效）。之前 ch16/25/43 的「status=0 禁用」实际从未生效，靠 abilities 兜底。
 > **保守后备守护**：`/opt/new-api/auto-ban-revive.py` + systemd timer `k40-baibei-revive.timer`（每分钟）赦免**所有**被 auto_ban 的渠道（`status=3 AND auto_ban=1`→1；替代原仅覆盖 ch3/9/18 的 k40-baibei-revive.py）。SQL 带 `AND status=3` 故手动禁用（status=2）不被误赦免；`auto_ban=0` 渠道（免费源）不赦免（有意不禁用）。判活权交 NewAPI 下轮定时测试，零误判。改 DB 后依赖 NewAPI channels sync goroutine（~1-2min）拉入内存。
 
@@ -109,6 +112,7 @@
 - **新渠道不参与路由的三坑修复**（2026-08-01）：新增渠道（ch49/50/53/54/55）创建时 abilities 行 `group` 为空（不在 default 组）、`priority=30`（主渠道为 50）、base_url 带 `/v1`（NewAPI type=1 自动补 `/v1` 拼成 `/v1/v1/...` 404）。修复后 deepseek 十二源全渠道均衡命中（ch15:8 ch42:6 ch37/38:5 ch44:5 ch47:5 ch46:3 ch48:2 ch53:2 ch55:2 ch50:1）。
 - **qwen3-8-27b 三源池验证**（2026-08-28 晚间）：ch113 入池后 12 发网关请求 10 成功（ch88:3 / ch112:4 / ch113:3），2 发上游 500（首 20s，时间相关性指向 ch113 冷启动）；ch113 终态 status=1 未被 auto-ban。
 - **k3 四源池验证**（2026-08-28 深夜）：ch115（sensenova-k3）入池后 12 发网关 10 成功（prompt 91 纯净计数 ch33:7 / ch115:3，全窗口 11:6 含并发大 prompt 流量）、2 发 `TimeoutError`（上游 kimi-k3 瞬时超时，ch115 status=1 未被 auto-ban）；单发网关 `k3→kimi-k3` **200 5.8s**（reasoning 空 content 属思考模型常态）；并发窗口内 ch115 另有 4 次大 prompt 真实命中（312k/163k/315k/316k），确认已入路由。
+- **kktoken claude 四源池验证**（2026-08-28 深夜）：ch116 入池后 12 发网关（`claude-opus-5`）11 成功（ch94:3 / ch95:2 / ch116:3 / ch57:2 + 1 在途），1 发 403 `bad_response_status_code`（归属未知——logs 表不记失败行；kktoken 直连 8/8 200、ch116 status=1 未被 auto-ban，判上游瞬时抖动）。直连四模型全 200（opus-5 1.8s / opus-4-8 1.7s / thinking 变体 2.4-3.0s）。Cloudflare UA 门实测：python 默认 UA `/v1/models` 与 completion 均 1010，`curl/8.5`、`Go-http-client/1.1|2.0`、`new-api`、`OneAPI`、浏览器 UA 全 200——NewAPI Go 客户端放行，直连探测须带 UA。
 - claude-opus-5 Anthropic 格式 10 发：ch26/27/28/45 全部分流。
 - deepseek-v4-flash 隔离验证 ch46/47：base_url 初设 `https://bazaarlink.ai/api/v1` 致 NewAPI 拼成 `/api/v1/v1/...` 返 404，改 `https://bazaarlink.ai/api` 后 `finish:stop content:BZ-OK` 通过。九源全 enabled。
 - ch18 禁用后近 2min 零错误（此前每分钟 10+ 502）。
