@@ -12,7 +12,7 @@
 | ch38 | tokenrhythm-2（基元） | 付费中转 | 20 | 1 | 快源（avg 6s），主源 |
 | ch35 | cline-free 多账号池 | 免费 | 18 | 1 | 快源（avg 7s）；`model_mapping: deepseek-v4-flash→deepseek/deepseek-v4-flash` |
 | ch47 | bazaarlink-flash-2 | 免费 | 12 | 0 | 快源（avg 5s）；base_url `https://bazaarlink.ai/api`（NewAPI 自动补 /v1） |
-| ch15 | sensenova（商汤日日新） | 付费中转 | 10 | 1 | 中速（avg 19s） |
+| ch15 | sensenova（商汤日日新） | 付费中转 | 10 | 1 | **2026-08-28 20:2x 禁用**（status=2 + abilities enabled=0 双保险）：token plan 配额耗尽返 429 `token plan entitlement exhausted`（k3 大 prompt 挤占同计划配额，见当日补记）；配额回血后手动恢复 |
 | ch48 | opencode-go-flash | 订阅 | 8 | 0 | `https://opencode.ai/zen/go`（带 /v1 会 404）；OpenCode Go $10/月订阅；中速（avg 21s），从 22 降权 |
 | ch42 | DeepSeek 官方直连 | 官方 | 8 | 1 | 官方稳定（avg 22s）；models 含裸名，官方别名走 `deepseek-official-v4-flash`；从 1 提权（用户要求） |
 | **ch59** | **nihaox-k3** | **免费** | **0** | **1** | **2026-08-02 新增**：`https://k3.nihaox.cc.cd/v1`；**0731 版本**；**配额已用完，weight=0 禁用** |
@@ -70,7 +70,7 @@
 
 | 模型 | 渠道 |
 |------|------|
-| sensenova-6.7-flash-lite | ch15 |
+| sensenova-6.7-flash-lite | **零源**（仅 ch15 曾挂，2026-08-28 禁用；OMP 链条目命中将 503 后跳下一档，配额回血恢复 ch15 即复活） |
 | grok-4.5 | ch17 (w10) / ch29 (w20) / ch39 (w10) 三源 |
 | gpt-5.5 | ch30 单源（ch2/16/25 已禁、ch41 已删） |
 | gpt-5.6-luna | **零源**（仅 centos ch16/25 曾挂，已禁；ch41 已删） |
@@ -79,7 +79,7 @@
 | qwen3.8-max-preview | ch31 |
 | qwen3-8-27b | ch88 (w1, prio 0) / ch112 (w1, prio 0) / ch113 (w1, prio 0) 三源 1:1:1（2026-08-28 聚合，晚间 B.AI 第三源） |
 | qwen3.8-max-free | ch114（tokenrouter 免费档，2026-08-28 深夜） |
-| k3/kimi-for-coding | ch33 + ch115 1:1（p50/w10）/ ch108（p49/w5）/ ch110（p6/w5） |
+| k3/kimi-for-coding | ch33 主源 + ch115 手动禁用（status=2，2026-08-28 晚）/ ch108（p49/w5）/ ch110（p6/w5） |
 | step-router-v1 | ch36 |
 
 > **2026-08-02 实测更正**：本节原写 gpt-5.5 三源 ch16/25/30、luna 二源 ch16/25、terra 单源 ch25、sonnet-5 二源 ch26/27——均过时（ch16/25 已禁、ch41 已删、ch26/27 已并入 ch57）。以上为实测后版本。
@@ -90,6 +90,7 @@
 > **2026-08-28 晚间 B.AI 第三源（ch113）**：B.AI 免费档目录在 ch111 白名单划界后扩张（`/v1/models` 44 项 vs 白名单 5 项）。实测：ch111 key 直连 `qwen3.8-27b` **HTTP 200**（上游模型 `Qwen/Qwen3.8-27B-FP8`，pong/stop，3.94s），premium ID（claude-opus-5、kimi-k3）仍 403 deposit-required（ch111 remark 边界复核成立）。新增 ch113 `bai-qwen3-27b`（`https://api.b.ai`，复用 ch111 key，上游 id `qwen3.8-27b` 点号形经 mapping 暴露为 `qwen3-8-27b`，weight=1, priority=0, auto_ban=1, group=default，脚本 `add_qwen38_27b_bai_pool.py`，备份 `new-api-before-qwen38-27b-pool-20260828-160158.db`）。三渠道同 p0/w1 → 1:1:1。**已知项**：应用后 12 发功能测试首 20s 内 2 发上游 500 `do request failed`（logs 表不记失败行，渠道归属靠时间相关性：两发均贴首波 ch113 流量，其后 ch113 3/3 全成功，ch88/ch112 窗口内零失败）——B.AI 免费档冷启动/限流行为未压测，auto_ban=1 兜底；若 429/500 持续，处理路径=调 ch113 渠道级 priority 降级为应急档（等价于方案 a），勿直接 SQL 改 abilities。
 > **2026-08-28 深夜 tokenrouter 免费模型（ch114）**：用户提供的 `api.tokenrouter.com` key 为 **token 级目录**（两个 key 各见一个模型）。key2 目录 `qwen/qwen3.8-max-free` 实测 200（上游 `qwen3.8-max-pd`，reasoning，pong/stop 4.3s）→ 新建 ch114 `tokenrouter-qwen3.8-max-free`（**建渠时 base_url 用 `https://api.tokenrouter.com` 去掉用户给的 `/v1`**——NewAPI type=1 自动补 `/v1`，带 `/v1` 会拼成 `/v1/v1/...` 404，ch46/47 bazaarlink 先例见三坑记录；探测直连用完整 `/v1` 无妨；mapping `qwen3.8-max-free -> qwen/qwen3.8-max-free`，p0/w1/auto_ban=1，脚本 `add_tokenrouter_free_model.py`，key 经 TR_KEY 环境变量入渠道行、不落仓库；备份 `new-api-before-tokenrouter-20260828-170559.db`）。新 OMP 模型 `qwen3.8-max-free`（1M/131K，text-only，不入任何角色链/压缩梯——用户仅要求可用）。key1 目录 `moonshotai/kimi-k3-free` 三次 503 "no available channel under group default (distributor)"——死目标不注册（zai 先例）。
 > **2026-08-28 深夜 sensenova-k3 第四源（ch115）**：商汤日日新 token plan（`https://token.sensenova.cn`，**建渠时同样去掉 `/v1`**——同 tokenrouter，type 1 自动补 `/v1`，带 `/v1` 则 404；探测直连用完整 `/v1/chat/completions`）实测目录仅 6 模型（无 K3，需手工 mapping），候选 `kimi-k3` 直连 `POST /v1/chat/completions` **200**（`model:kimi-k3，pong/stop，7.0s`，`k3` 裸名 404）。新建专用单模型渠道 ch115 `sensenova-k3`（复用 ch15 的 key，`models=k3`，`model_mapping k3→kimi-k3`，p50/w10/auto_ban=1，group=default，脚本 `add_sensenova_k3_pool.py`，备份 `new-api-before-sensenova-k3-20260828-172247.db`）。与 ch33 同 p50/w10 → 头部 1:1 分担（ch108 p49/w5、ch110 p6/w5 为降级档）。**验证**：12 发网关功能测试 10 成功（纯净 prompt 91 计数 ch33:7 / ch115:3；全窗口 11:6 含并发用户大 prompt 流量），2 发 `TimeoutError`（上游 kimi-k3 瞬时超时，ch115 status=1 未被 auto-ban，属瞬时抖动；并发窗口内 ch115 另有 4 次大 prompt 真实命中 312k/163k/315k/316k，确认已入路由）。单发网关 `k3→kimi-k3` **200 5.8s**（reasoning 空 content，属 k3 思考模型常态）。**注意**：token plan 工作区配额跨模型共享（此前 ch15 上 glm-5.2 429 "workspace quota exceeded"），k3 流量激增可能波及同计划上 deepseek-v4-flash 压缩头部 Nam-cKdw 的可用性，必要时降 ch115 权重。
+> **2026-08-28 夜间 sensenova 计划配额耗尽事件**：ch115（sensenova-k3）入池后 k3 大 prompt（多次 300k+）与 deepseek 压缩头部共享同一 token plan 工作区配额（ch115 脚注预警的风险兑现）。19:53/20:02 两次自动压缩 `Auto-compaction failed, retrying` ×3 → `ended without a summary aborted`，错误 `429 token plan entitlement exhausted` / `rpm exhausted`（quota_exceeded_error，param=8）——ch15 吸收流量返 429 但 429 不在 `AutomaticRetryStatusCodes`、auto_ban 亦不触发（quota 类 429 非连续失败语义），无 failover（centos 403 先例同款坑）。处置：ch15 双保险禁用（status=2 + abilities enabled=0），流量落 ch111（p30）/ch110（p6），网关 6/6 200 恢复；ch115 此前已被手动禁用（status=2，非 auto-ban）。**教训**：共享配额计划上的渠道，配额耗尽类 429 必须靠人工/守护摘除，NewAPI 自动机制不兜底；恢复路径=配额回血后 ch15/ch115 手动 status=1 + abilities enabled=1。
 
 ## 6. 路由与亲和策略（2026-08-01 生效）
 
