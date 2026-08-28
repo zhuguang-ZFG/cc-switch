@@ -107,3 +107,41 @@ prompt_cache_key + enable_thinking）打 12 发，**12/12 成功**。
   二源 1:1；新增"2026-08-28 聚合落地"注（含机制教训 + param_override 核查）；
   验证记录加一条。
 - 本 runbook；`.trellis/spec/ops/zg-gateway-claude-code.md` 无渠道级描述，未动。
+
+## 追加：B.AI 免费档第三源（2026-08-28 晚间，ch113）
+
+当日二源池落地后，B.AI 免费档（ch111 `bai-free`）复扫发现其免费目录已扩张：
+`/v1/models` 列 44 个 ID，远超建渠时的 5 模型白名单（白名单按当年 403
+边界划定：remark "B.AI free tier (mimo/hy3/deepseek-flash); premium 403
+deposit-required"）。逐族直连复核（ch111 key）：
+
+| 探测 | 结果 |
+|---|---|
+| `qwen3.8-27b`（completion, max 5） | HTTP 200，`model=Qwen/Qwen3.8-27B-FP8`，content 'pong'，finish stop，3.94s |
+| `claude-opus-5` / `kimi-k3` | 403 `access_denied` "Deposit required to unlock premium models" |
+| `mimo-v2.5` / `deepseek-v4-flash`（对照组） | 200（key/鉴权有效，403 归因模型权益分层） |
+
+结论：免费边界确实移动过，`qwen3.8-27b`（上游点号形，同一开源模型第三家
+relay 拼写）现已免费可达。用户选**等权 1:1:1**（非应急第三档）。
+
+应用：脚本 `scripts/ops/add_qwen38_27b_bai_pool.py`（派生自
+`add_qwen38_27b_pool.py`；dry-run 默认；失败自动 DELETE + abilities 清理）：
+
+- 新建 ch113 `bai-qwen3-27b`：`https://api.b.ai`，key 复制自 ch111，
+  `models=qwen3-8-27b`，`model_mapping={"qwen3-8-27b":"qwen3.8-27b"}`，
+  priority=0, weight=1, auto_ban=1, group=default；
+- ch88/ch112 零改动，三渠道同 p0/w1 → 1:1:1；
+- 备份 `new-api-before-qwen38-27b-pool-20260828-160158.db`（131,309,568
+  字节，integrity ok）；verify 三行 abilities 全部 `('default', 1, 0, 1)`；
+- OMP 侧零改动（model id 不变；压缩候选 #3 qwen 的池容量随三源扩大）。
+
+功能验证与已知项：12 发网关请求 10 成功，归属 **ch88:3 / ch112:4 /
+ch113:3**（三源均命中）；**2 发上游 500 `do request failed`** 发生于首
+20s——logs 表不记失败行，渠道归属靠时间相关性（两发均贴首波 ch113
+流量，其后 ch113 3/3 成功，ch88/ch112 窗口内零失败）。B.AI 免费档冷
+启动/限流行为未压测，auto_ban=1 兜底；ch113 终态 status=1 未被禁。
+若 429/500 持续：调 ch113 渠道级 priority 降级为应急档（等价于当日
+讨论的方案 a），勿直接 SQL 改 abilities（goroutine 会还原）。
+
+文档同步：`docs/patches/newapi-aggregation-pools-2026-08-01.md` 表格行改
+三源 + "2026-08-28 晚间 B.AI 第三源"补记 + 验证记录一条。

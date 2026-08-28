@@ -74,7 +74,7 @@
 | gpt-5.6-terra | **零源**（仅 centos ch25 曾挂，已禁） |
 | claude-sonnet-5 | ch57（ch26/27 已合并禁用） |
 | qwen3.8-max-preview | ch31 |
-| qwen3-8-27b | ch88 (w1, prio 0) / ch112 (w1, prio 0) 二源 1:1（2026-08-28 聚合） |
+| qwen3-8-27b | ch88 (w1, prio 0) / ch112 (w1, prio 0) / ch113 (w1, prio 0) 三源 1:1:1（2026-08-28 聚合，晚间 B.AI 第三源） |
 | k3/kimi-for-coding | ch33 |
 | step-router-v1 | ch36 |
 
@@ -82,6 +82,7 @@
 > **2026-08-28 补记**：ch88 `runinfra-qwen3-8-27b`（`https://api.runinfra.ai`，单 key，weight=1，priority=0，auto_ban=1，group=default）后补接入，为 `qwen3-8-27b` **唯一源、未聚合**；该模型现是 OMP default 模型（兼 commit/smol/translator 角色与 compaction 第 4 候选），单源风险点。后续聚合须按三坑教训配置新渠道（group=default、priority=50、正确 weight）。
 > **2026-08-28 聚合落地**：`qwen3-8-27b` 二源池 —— ch88 `runinfra-qwen3-8-27b`（weight=1, priority=0, auto_ban=1，零改动）+ 新增 ch112 `yjs-qwen3-8-27b`（`https://api.yjs.im`，复用 ch110 yjs-free 的 key，上游 id `qwen-3.8-27b` 经 model_mapping 暴露为 `qwen3-8-27b`，weight=1, priority=0, auto_ban=1，group=default）。同优先级按权重 1:1 轮询，auto_ban 容灾。**机制实测（重要教训）**：abilities 表是 channel 行的派生物——行存在性镜像 `channels.models`，(priority,weight) 镜像渠道级字段，sync goroutine 在渠道 API 事件后重新派生（当日对 ch88 行直接 SQL 改 50/50，数秒内被还原为渠道字段 0/1；回滚 ch110 增模后孤儿行亦被 goroutine 清除）——**per-model 权重只能靠渠道级字段控制**；多模型渠道（ch110 挂 19 模型）不能为单个模型调权，故第二源建**专用单模型渠道**（与 ch88 同模式，ch88 单模型、字段无纠缠，零改动即成 1:1）。另坑：Python sqlite3 legacy 事务不显式 commit，DML 在 close 时静默回滚（当日 v1 脚本 verify 抓出，v2 已修）。供应商扫描（当日）：api.yjs.im（既有 key）与 OpenRouter `qwen/qwen3.8-27b`、HF `Qwen/Qwen3.8-27B` 均提供同一开源模型，取既有 key 零新账户。快照：`backups/new-api-before-qwen38-27b-pool-20260828-011003.db`；脚本 `scripts/ops/add_qwen38_27b_pool.py`（dry-run 默认）。OMP 侧零改动。
 > **2026-08-28 param_override 核查**：ch88 带 override 剥 `prompt_cache_key`（runinfra 拒未知参数）；OMP 真实请求体另含 `stream_options`/`enable_thinking`。直连 api.yjs.im 逐参数矩阵实测四变体全 HTTP 200——带 `prompt_cache_key` 时 yjs 切缓存感知后端（响应 `model:"Qwen/Qwen3.8-27B"`+`chatcmpl-` id），剥掉反损失缓存局部性，故 **ch112 不加 override**。经网关完整 OMP 形请求 12/12 成功（同 cache key 被 "qwen trace" 亲和规则粘钉首命中渠道；本会话 key 钉 ch88，不受池变更影响）。
+> **2026-08-28 晚间 B.AI 第三源（ch113）**：B.AI 免费档目录在 ch111 白名单划界后扩张（`/v1/models` 44 项 vs 白名单 5 项）。实测：ch111 key 直连 `qwen3.8-27b` **HTTP 200**（上游模型 `Qwen/Qwen3.8-27B-FP8`，pong/stop，3.94s），premium ID（claude-opus-5、kimi-k3）仍 403 deposit-required（ch111 remark 边界复核成立）。新增 ch113 `bai-qwen3-27b`（`https://api.b.ai`，复用 ch111 key，上游 id `qwen3.8-27b` 点号形经 mapping 暴露为 `qwen3-8-27b`，weight=1, priority=0, auto_ban=1, group=default，脚本 `add_qwen38_27b_bai_pool.py`，备份 `new-api-before-qwen38-27b-pool-20260828-160158.db`）。三渠道同 p0/w1 → 1:1:1。**已知项**：应用后 12 发功能测试首 20s 内 2 发上游 500 `do request failed`（logs 表不记失败行，渠道归属靠时间相关性：两发均贴首波 ch113 流量，其后 ch113 3/3 全成功，ch88/ch112 窗口内零失败）——B.AI 免费档冷启动/限流行为未压测，auto_ban=1 兜底；若 429/500 持续，处理路径=调 ch113 渠道级 priority 降级为应急档（等价于方案 a），勿直接 SQL 改 abilities。
 
 ## 6. 路由与亲和策略（2026-08-01 生效）
 
@@ -102,7 +103,7 @@
 - **ch49/50 inferx 接入验证**：glm-5.2 `finish:stop content:GLM-IX-OK`；deepseek `finish:stop content:DS-IX-OK`。
 - **ch53 本机 bridge 验证**：`finish:stop content:BRIDGE-NEWAPI-OK`（本机 atomgit-opencode-bridge 经 Tailscale 接入）。
 - **新渠道不参与路由的三坑修复**（2026-08-01）：新增渠道（ch49/50/53/54/55）创建时 abilities 行 `group` 为空（不在 default 组）、`priority=30`（主渠道为 50）、base_url 带 `/v1`（NewAPI type=1 自动补 `/v1` 拼成 `/v1/v1/...` 404）。修复后 deepseek 十二源全渠道均衡命中（ch15:8 ch42:6 ch37/38:5 ch44:5 ch47:5 ch46:3 ch48:2 ch53:2 ch55:2 ch50:1）。
-- **qwen3-8-27b 二源池验证**（2026-08-28）：新建 ch112（yjs 专用单模型渠道）后 12 发网关请求实测 ch88:4 / ch112:7（1:1 权重下二源均命中）。
+- **qwen3-8-27b 三源池验证**（2026-08-28 晚间）：ch113 入池后 12 发网关请求 10 成功（ch88:3 / ch112:4 / ch113:3），2 发上游 500（首 20s，时间相关性指向 ch113 冷启动）；ch113 终态 status=1 未被 auto-ban。
 - claude-opus-5 Anthropic 格式 10 发：ch26/27/28/45 全部分流。
 - deepseek-v4-flash 隔离验证 ch46/47：base_url 初设 `https://bazaarlink.ai/api/v1` 致 NewAPI 拼成 `/api/v1/v1/...` 返 404，改 `https://bazaarlink.ai/api` 后 `finish:stop content:BZ-OK` 通过。九源全 enabled。
 - ch18 禁用后近 2min 零错误（此前每分钟 10+ 502）。
