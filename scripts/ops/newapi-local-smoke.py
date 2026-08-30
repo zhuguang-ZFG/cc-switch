@@ -67,6 +67,7 @@ BACKUP_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     95: {"max_priority": 50, "max_weight": 8},   # justwoker-opus-2
     97: {"max_priority": 50, "max_weight": 5},   # tabitoken-1
     98: {"max_priority": 50, "max_weight": 5},   # tabitoken-2
+    123: {"max_priority": 0, "max_weight": 1},   # zzzcoding（zz_gate.py 门控；p0 兜底层，2026-08-30 自 p60 降级：空窗 p60 实测泄漏 500）
 }
 
 # Model isolation is channel-specific. AgentRouter (ch45) serves Sol only
@@ -225,6 +226,7 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
 DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
     45: "agentrouter upstream flapping; disabled 2026-08-10 22:05 by local automation",
     72: "anyrouter Claude upstream 429; disabled 2026-08-09 00:10 by Guardian",
+    123: "zzzcoding claude pool window; auto-gated by zz_gate.py (status=2 while pool empty, auto re-enable on window)",
 }
 
 # opus-5 主池正向姿态（2026-08-24，用户指示启用百倍+林夕负载均衡）：三渠道

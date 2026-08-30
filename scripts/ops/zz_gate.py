@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""zzzcoding claude-opus-5 pool auto-gate for NewAPI ch123 (primary tier).
+"""zzzcoding claude-opus-5 pool auto-gate for NewAPI ch123 (p0 fallback tier).
 
 zzzcoding's claude group is a Claude-subscription account pool: accounts have
 usage windows, so the pool oscillates between 200 (has accounts) and 503
 "No available accounts" (exhausted). This probe tracks the real pool state and
 gates ch123 accordingly:
 
-  pool UP   (200)                  -> enable ch123 (status=1), it is p60/w10
-                                      = primary above the p50 relay mains.
+  pool UP   (200)                  -> enable ch123 (status=1). It is p0/w1:
+                                      fallback tier, only served when the p50
+                                      relay mains are all down. OMP clients can
+                                      also reach zzzcoding directly via the
+                                      zz-coding provider in models.yml.
   pool DOWN (503 no-accounts)      -> disable ch123 (status=2, manual) so real
                                       traffic never wastes a retry on it.
   other errors (DNS/TLS/timeout)   -> inconclusive, keep current gate state.
@@ -39,12 +42,22 @@ INTERVAL_S = 60           # probe every 60s — availability windows are sub-min
 UP_AFTER = 1              # enable on first up-probe to catch transient windows
 DOWN_AFTER = 2            # disable only after 2 consecutive downs (anti-flap)
 LOCK = os.path.expanduser("~/.omp/zz_gate.lock")
+# Lock heartbeat TTL: a live gate rewrites the lock every probe tick (60s);
+# anything older is stale, no matter what PID it claims. Windows supervisors
+# kill via TerminateProcess, which skips finally-blocks, so a killed gate
+# always leaves the file behind — the TTL makes every such case reclaimable,
+# including the recycled-PID wedge (a live unrelated process cannot refresh
+# our mtime).
+LOCK_TTL_S = 180
 STATE = os.path.expanduser("~/.omp/zz_gate_state.json")
 LOG = os.path.expanduser("~/.omp/zz_gate.log")
 MIN_DWELL_S = 60          # min seconds between flips (one cadence tick)
 SETTINGS = os.path.expanduser("~/.claude/zzzcoding-settings.json")
 SECRETS = os.path.expanduser("~/.omp/guardian/secrets.json")
 DB = os.path.expanduser("~/.new-api-local/new-api.db")
+# Remark written by every api_touch() toggle. Must differ from the current
+# remark each time (no-diff PUTs raise no channel event -> no re-derivation).
+GATE_REMARK = "zzzcoding claude-opus-5 p0 fallback tier, auto-gated by zz_gate.py"
 
 
 def pid_alive(pid: int) -> bool:
@@ -153,9 +166,15 @@ def db_remark() -> str:
     return row[0] if row else ""
 
 
-def api_noop(token: str) -> bool:
-    """Fire a channel API event so the sync goroutine re-derives abilities."""
-    payload = {"id": CHANNEL_ID, "remark": db_remark()}
+def api_touch(token: str) -> bool:
+    """PUT a CHANGED remark to fire the sync goroutine's ability re-derivation.
+
+    A no-diff PUT raises no channel event, so abilities are NOT re-derived
+    (verified 2026-08-30: same-remark PUT left ability.enabled=0 for 150s+;
+    a remark diff flipped it within 6s). Always append a monotonic marker.
+    """
+    payload = {"id": CHANNEL_ID,
+               "remark": GATE_REMARK + " @gate:" + str(int(time.time()))}
     req = urllib.request.Request(
         f"{NEWAPI}/api/channel/", data=json.dumps(payload).encode(), method="PUT")
     req.add_header("Authorization", f"Bearer {token}")
@@ -175,36 +194,72 @@ def set_enabled(enabled: bool, token: str) -> bool:
     con.execute("UPDATE channels SET status=? WHERE id=?", (target, CHANNEL_ID))
     con.commit()
     con.close()
-    api_noop(token)
-    time.sleep(6)
-    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-    ch = con.execute("SELECT status FROM channels WHERE id=?", (CHANNEL_ID,)).fetchone()
-    ab = con.execute(
-        "SELECT enabled FROM abilities WHERE channel_id=? AND model='claude-opus-5'",
-        (CHANNEL_ID,)).fetchone()
-    con.close()
-    ok = ch and ch[0] == target and ab and ab[0] == (1 if enabled else 0)
-    log(f"set_enabled({enabled}) -> status={ch and ch[0]} ability={ab and ab[0]} ok={ok}")
-    return bool(ok)
+    api_touch(token)
+    for attempt in (1, 2):
+        time.sleep(6)
+        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        ch = con.execute("SELECT status FROM channels WHERE id=?", (CHANNEL_ID,)).fetchone()
+        ab = con.execute(
+            "SELECT enabled FROM abilities WHERE channel_id=? AND model='claude-opus-5'",
+            (CHANNEL_ID,)).fetchone()
+        con.close()
+        ok = ch and ch[0] == target and ab and ab[0] == (1 if enabled else 0)
+        if ok or attempt == 2:
+            log(f"set_enabled({enabled}) -> status={ch and ch[0]} ability={ab and ab[0]} ok={ok} (attempt {attempt})")
+            return bool(ok)
+    return False
+
+def _lock_is_live() -> bool:
+    """True if the existing lock belongs to a live gate that heartbeated
+    within LOCK_TTL_S. Dead PID, unparseable PID, or expired heartbeat = stale."""
+    if not os.path.exists(LOCK):
+        return False
+    try:
+        pid = int(open(LOCK).read().strip())
+    except (ValueError, OSError):
+        return False
+    if not pid_alive(pid):
+        return False
+    try:
+        return time.time() - os.path.getmtime(LOCK) < LOCK_TTL_S
+    except OSError:
+        return False
+
+
+def take_lock() -> bool:
+    """Acquire the lock via O_EXCL; reclaim stale locks (bounded retry)."""
+    for _ in range(5):
+        if os.path.exists(LOCK):
+            if _lock_is_live():
+                return False
+            try:
+                os.remove(LOCK)
+                log(f"reclaimed stale lock (pid unparseable/dead/heartbeat expired)")
+            except OSError:
+                time.sleep(1)
+                continue
+        try:
+            fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue  # lost the race; re-check staleness
+        with os.fdopen(fd, "w") as f:
+            f.write(str(os.getpid()))
+        return True
+    return False
 
 
 def main() -> int:
     dry = "--once" in sys.argv
-    if not dry:
-        if os.path.exists(LOCK):
-            try:
-                pid = int(open(LOCK).read().strip())
-            except (ValueError, OSError):
-                pid = None
-            if pid is not None and pid_alive(pid):
-                print(f"already running pid={pid}", file=sys.stderr)
-                return 1
-        with open(LOCK, "w") as f:
-            f.write(str(os.getpid()))
-
+    # Load credentials BEFORE taking the lock: a missing settings file must
+    # fail fast without leaving a stale lock (stale lock + recycled PID could
+    # wedge a restart=always supervisor).
     key = load_key()
     token = load_token()
-    log(f"gate start (dry={dry}) ch{CHANNEL_ID} primary-p60w10")
+    if not dry:
+        if not take_lock():
+            print("already running (fresh lock)", file=sys.stderr)
+            return 1
+    log(f"gate start (dry={dry}) ch{CHANNEL_ID} p0-fallback-tier")
 
     streak_kind = None
     streak = 0
@@ -231,13 +286,13 @@ def main() -> int:
                             decision = "ENABLED"
                             last_flip = now
                             toast("zzzcoding Opus ONLINE",
-                                  "Full-capability pool recovered; ch123 primary enabled.")
+                                  "Pool window open; ch123 (p0 fallback) enabled.")
                     elif state == "down" and currently:
                         if set_enabled(False, token):
                             decision = "DISABLED"
                             last_flip = now
                             toast("zzzcoding pool EMPTY",
-                                  "ch123 disabled; relay mains (p50) serving.")
+                                  "ch123 disabled while pool empty; OMP direct path falls back to the NewAPI pool.")
                 record = {
                     "t": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "probe": state, "detail": detail,
@@ -247,6 +302,12 @@ def main() -> int:
                 with open(STATE, "w", encoding="utf-8") as f:
                     json.dump(record, f, ensure_ascii=False)
                 log(f"probe={state} streak={streak} enabled={record['ch123_enabled']} {decision} {detail}")
+                if not dry:
+                    try:
+                        with open(LOCK, "w") as f:
+                            f.write(str(os.getpid()))
+                    except OSError as e:
+                        log(f"lock heartbeat failed: {e}")
                 if dry:
                     return 0
             except Exception as e:
