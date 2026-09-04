@@ -8,39 +8,47 @@ User asked to refresh the Bai free-model list: drop stale models, add new
 free ones. The upstream catalog (https://api.b.ai/v1/models, 47 models)
 was probed per model via chat completions with the ch111 key and browser UA:
 
-- 200 OK (free, usable): mimo-v2.5, hy3, deepseek-v4-flash,
-  deepseek-v4-flash-vision-exp, glm-5.3-flash, qwen3.8-27b, qwen3.8-flash,
-  hy4-preview, minimax-m2.7. (deepseek-v4-flash 429'd on the parallel batch
-  but returned 200 on serial retry = transient rate limit, keep.)
-- 503 "no available channel under group mi": mimo-v2.5-pro  -> STALE, drop.
+- 200 OK: mimo-v2.5, hy3, deepseek-v4-flash, deepseek-v4-flash-vision-exp,
+  glm-5.3-flash, qwen3.8-27b, qwen3.8-flash, hy4-preview, minimax-m2.7.
+  (deepseek-v4-flash 429'd on the parallel batch but returned 200 on serial
+  retry = transient rate limit.)
+- 503 "no available channel under group mi": mimo-v2.5-pro -> STALE, drop.
 - 403 "Deposit required": claude-*/gemini-*/gpt-*/kimi-*,
-  deepseek-v4-pro, glm-5.1/5.2, minimax-m3, qwen3.8-max -> premium, not free.
+  deepseek-v4-pro, glm-5.1/5.2, minimax-m3, qwen3.8-max -> premium.
 - 429 only (no 200 seen): glm-5.3, gpt-5.6-luna -> do NOT add blindly.
 
-Follow-up (same day): hy4-preview started rejecting every request with
-400 "credit insufficient balance: balance~2600 required=5010" — the first
-run's 200 predates the balance threshold enforcement (or the account
-balance dropped below hy4-preview's required credit). A model that 400s
-on every request is a catalog trap -> removed the same day. Re-add ONLY
-after a b.ai recharge AND a fresh direct 200 probe.
+Lesson (same day): "200 OK" does NOT prove free. Two failure modes showed up
+within hours, both caught by a sentinel test (hy4-preview 400s carrying the
+live account balance; balance read before/after each model's request):
 
-Closed single-model bai channels are untouched (all probed OK):
-ch113 qwen3.8-27b, ch121 glm-5.3-flash, ch122 qwen3.8-flash.
+- Credit THRESHOLD models: hy4-preview (required=5010, balance~2600) and
+  minimax-m2.7 (passed at balance~2500+, 400'd at 2362) return 200 until the
+  account balance drops below the model's requirement, then 400 every time.
+- Credit CONSUMING models: deepseek-v4-flash (-9 quota per small probe) and
+  deepseek-v4-flash-vision-exp (-30) measurably drain the b.ai account.
+  Real traffic would drain the account and then break the genuinely free
+  models too (thresholds apply account-wide).
+
+Sentinel-verified FREE (zero balance movement): mimo-v2.5, hy3.
+Re-add criteria for any dropped model: b.ai recharge AND a fresh direct 200
+probe AND a sentinel consumption check (balance unchanged around the probe).
+
+Closed single-model bai channels are untouched (probed OK, freeness NOT
+sentinel-verified): ch113 qwen3.8-27b, ch121 glm-5.3-flash, ch122
+qwen3.8-flash.
 
 Change
 ------
-Final ch111 models: mimo-v2.5,hy3,deepseek-v4-flash,
-deepseek-v4-flash-vision-exp,minimax-m2.7 (5). mimo-v2.5-pro and
-hy4-preview dropped; minimax-m2.7 added. Priority/weight/status/key
-unchanged. ModelRatio: minimax-m2.7 -> 0 (free); stale keys
-(mimo-v2.5-pro, hy4-preview) dropped. Existing ratios (hy3 0.5,
-deepseek-v4-flash 0.5, mimo-v2.5 0) are historical conservative
-over-estimates affecting other pools -> untouched (over-estimation only
-over-charges, never under).
+Final ch111 models: mimo-v2.5,hy3 (2). Removed: mimo-v2.5-pro (503 stale),
+hy4-preview + minimax-m2.7 (credit thresholds), deepseek-v4-flash +
+deepseek-v4-flash-vision-exp (consume credit). Priority/weight/status/key
+unchanged. ModelRatio: drop pool-only keys (mimo-v2.5-pro, hy4-preview,
+minimax-m2.7); deepseek-v4-flash keeps its GLOBAL 0.5 ratio (shared with
+ch110/ch118); vision-exp has no ratio key. Existing ratios (hy3 0.5,
+mimo-v2.5 0) untouched.
 
 Safety: online DB snapshot first, dry-run default, API+DB readback verify,
-relay probes of the added models via the 3002 gateway, full rollback
-(channel models + ModelRatio) on failure. Idempotent.
+full rollback (channel models + ModelRatio) on failure. Idempotent.
 """
 from __future__ import annotations
 
@@ -57,8 +65,14 @@ from pathlib import Path
 SMOKE_PATH = Path(__file__).with_name("newapi-local-smoke.py")
 
 CHANNEL_NAME = "bai-free"
-REMOVE_MODELS = ["mimo-v2.5-pro", "hy4-preview"]
-ADD_MODELS = ["minimax-m2.7"]
+# Channel-list removals (ch111 scope only).
+REMOVE_MODELS = ["mimo-v2.5-pro", "hy4-preview", "minimax-m2.7",
+                 "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]
+# Models whose ModelRatio was introduced for this pool and may be dropped
+# globally. deepseek-v4-flash is served by ch110/ch118 too -> its 0.5 ratio
+# is shared and must survive; vision-exp has no ratio key.
+POOL_ONLY_RATIO_MODELS = ["mimo-v2.5-pro", "hy4-preview", "minimax-m2.7"]
+ADD_MODELS: list[str] = []
 MODEL_RATIO_OPTION = "ModelRatio"
 FREE_MODEL_RATIO = 0
 CACHE_SYNC_SECONDS = 75
@@ -203,7 +217,11 @@ def put_option(smoke, headers: dict[str, str], key: str, value: str) -> None:
 
 
 def merge_ratio(current: str) -> str:
-    """Set ADD_MODELS to 0 and drop REMOVE_MODELS keys; keep everything else."""
+    """Set ADD_MODELS to 0 and drop POOL_ONLY_RATIO_MODELS keys.
+
+    REMOVE_MODELS entries that are served by non-bai channels too
+    (deepseek-v4-flash on ch110/ch118) keep their global ratio.
+    """
     try:
         ratios = json.loads(current)
     except json.JSONDecodeError as error:
@@ -212,7 +230,7 @@ def merge_ratio(current: str) -> str:
         raise RuntimeError(f"{MODEL_RATIO_OPTION} must be a JSON object")
     for model in ADD_MODELS:
         ratios[model] = FREE_MODEL_RATIO
-    for model in REMOVE_MODELS:
+    for model in POOL_ONLY_RATIO_MODELS:
         ratios.pop(model, None)
     return json.dumps(ratios, separators=(",", ":"), sort_keys=True)
 
@@ -248,7 +266,7 @@ def verify(db_path: Path, channel: dict, expected_models: str) -> None:
     for model in ADD_MODELS:
         if ratios.get(model) != FREE_MODEL_RATIO:
             raise RuntimeError(f"ModelRatio for {model} != 0 on readback")
-    for model in REMOVE_MODELS:
+    for model in POOL_ONLY_RATIO_MODELS:
         if model in ratios:
             raise RuntimeError(f"stale ModelRatio key {model} still present")
 
@@ -275,9 +293,9 @@ def main() -> int:
 
     print(f"ch{channel_id} {CHANNEL_NAME} ({len(models_list)} -> {len(unchanged + to_add)}):")
     if to_remove:
-        print(f"  drop: {','.join(to_remove)} (upstream 503 / stale)")
+        print(f"  drop: {','.join(to_remove)} (stale / threshold / consumes credit)")
     if to_add:
-        print(f"  add:  {','.join(to_add)} (probed 200, free)")
+        print(f"  add:  {','.join(to_add)} (probed 200 + sentinel-verified free)")
     for m in (m for m in unchanged if m):
         print(f"  keep: {m}")
     if not (to_remove or to_add):
@@ -312,11 +330,13 @@ def main() -> int:
         original_ratios = json.loads(original_ratio)
         ratio_needed = any(
             original_ratios.get(m) != FREE_MODEL_RATIO for m in ADD_MODELS
-        ) or any(m in original_ratios for m in REMOVE_MODELS)
+        ) or any(m in original_ratios for m in POOL_ONLY_RATIO_MODELS)
         if ratio_needed:
             put_option(smoke, headers, MODEL_RATIO_OPTION, merge_ratio(original_ratio))
             ratio_changed = True
-            print(f"ModelRatio: {','.join(ADD_MODELS)}=0, {','.join(REMOVE_MODELS)} removed")
+            print(f"ModelRatio: {','.join(ADD_MODELS)}=0, "
+                  f"{','.join(POOL_ONLY_RATIO_MODELS)} removed (pool-only; "
+                  f"shared ratios untouched)")
 
         if to_remove or to_add:
             print(f"waiting {CACHE_SYNC_SECONDS}s for channel cache sync")
