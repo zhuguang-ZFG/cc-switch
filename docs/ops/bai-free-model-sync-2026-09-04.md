@@ -39,9 +39,15 @@
   该模型，比率是共享的（脚本以此区分 REMOVE_MODELS 与
   POOL_ONLY_RATIO_MODELS）；vision-exp 无比率键。
   mimo-v2.5=0、hy3=0.5 历史值不动。
-- 封闭式 bai 单模型渠道不动：ch113 qwen3.8-27b、ch121 glm-5.3-flash、
-  ch122 qwen3.8-flash（探活 OK，但**免费性未过哨兵验证**——后续若
-  出现余额异常优先怀疑它们）。
+- 封闭式 bai 单模型渠道哨兵复验（同日，余额基线 2362）：
+  **ch121 glm-5.3-flash、ch122 qwen3.8-flash 均哨兵验证真免费**
+  （200 出文，探针前后余额 2362→2362 零消耗），保持启用；
+  **ch113 上游 qwen3.8-27b 实证门槛型非免费**
+  （400 `balance=2362 required=3202`，`code=insufficient_user_quota`）
+  ——ch113 此前已禁用（status=2，abilities enabled=0），**保持禁用**；
+  该模型对外覆盖由 ch88/ch112/ch124 继续（ch113 映射
+  `qwen3-8-27b→qwen3.8-27b`，非 bai 独源）。ch113 回加条件与其他
+  被摘模型一致（充值+直连200+哨兵零消耗）。
 
 ## 验证（独立 DB 回读 + relay）
 
@@ -50,6 +56,10 @@
   abilities enabled 不变。
 - 3002 relay：mimo-v2.5 200 出文 OK、hy3 200 出文 OK、
   deepseek-v4-flash 200（走 ch110/ch118，计费不受本次影响）。
+- 纯化后当前余额（2362）下哨兵复验：mimo-v2.5、hy3 relay 200 出文，
+  直连哨兵余额 2362→2362（delta=0）——真免费结论在当前余额成立。
+  deepseek-v4-flash 现路由形态：ch118 p30/w3 主 + ch110 p6/w5 备 +
+  ch15 p50 禁用（比率 0.5 全局共享）。
 - 整库快照：`new-api-before-bai-free-sync-20260904-194802.db`
   （154,865,664 B，integrity=ok）；失败全量回滚；幂等
   （重跑 verify-only no-op）。
