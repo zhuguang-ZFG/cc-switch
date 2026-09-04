@@ -105,3 +105,23 @@ NewAPI 自身反而很轻(累计 CPU 秒远低于 webview2/explorer)。单用户
 
 注意:上游 Moonshot 的 `429 engine overloaded`(ch33)是**服务端**负载,
 与本机阈值无关,不可通过本机制消除。
+
+## 附:ch110 摘除 k3 死映射(2026-09-04)
+
+日志排障发现 ch110 `yjs-free` 的 `k3→kimi-k3` 映射上游已死:yjs
+distributor 自身返回 `503 No available channel for model kimi-k3 under
+group Free`(其池已下架该模型)。ch110 p6 是 k3 首选渠道,导致每个 k3
+请求先吃一次必败 503 再重试 ch115/ch33;当 ch115 TPM 429 抖动叠加时,
+三路同时失败,`relay error` 透传到 OMP(当日 20:03 ×3;另有 yjs 传输层
+EOF ×20 + HTTP/2 PROTOCOL_ERROR ×4)。
+
+处置:API PUT 摘除 ch110 models 中的 `k3`(18→17 个模型)及
+model_mapping 的 `"k3":"kimi-k3"` 键;status=1/p6/w5/其余映射
+(hy3-free、muse-spark)不动。快照
+`new-api-before-ch110-k3-removal-20260904-201304.db`
+(155,103,232 B,integrity=ok)。回读:k3 双清零,17 模型;abilities
+即时重生成(k3 只剩 ch33=1、ch115=1、ch108=0 预禁)。75s 缓存同步后
+验证:ch33 k3 管理探针 200、relay k3 探针 200(路由直达 ch33/ch115,
+死跳消除)。
+
+回加条件:yjs 上游恢复 kimi-k3 分销 + 新一轮直连 200 探针。
