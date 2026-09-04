@@ -28,6 +28,15 @@
    会抽干 b.ai 账户，届时门槛/余额归零连真免费模型一起打死。
 
 哨兵验证零消耗：mimo-v2.5（2401→2401）、hy3（2401→2401）。
+方法局限（诚实记录）：上游 `/api/pricing`（NewAPI fork 的权威
+model_ratio/group_ratio 源）对裸 GET/Bearer/浏览器 UA 均回 403 面板级
+门控，比率无法直接核验；余额差哨兵对上游异步 post-consume/预扣退款的
+归因存在理论上的滞后混淆窗口（mimo/hy3 前后窗口 delta 精确为 0，
+两个扣费窗分别 -9/-30，异步滞后需恰好落在扣费窗内才能解释，但未获
+权威源佐证）。摘除决策按非对称风险处理：deepseek-v4-flash 本就由
+ch110/ch118 服务，摘 ch111 仅失去冗余备份源；若误摘（实际免费），
+回加条件（充值+直连200+哨兵零消耗）可低成本恢复。minimax/hy4 归类
+为门槛型（400 响应自带 required 值，服务端计价直接证据）。
 
 ## 变更（最终态）
 
@@ -39,6 +48,11 @@
   该模型，比率是共享的（脚本以此区分 REMOVE_MODELS 与
   POOL_ONLY_RATIO_MODELS）；vision-exp 无比率键。
   mimo-v2.5=0、hy3=0.5 历史值不动。
+- OMP 侧清死条目（同日追补）：`~/.omp/agent/models.yml` zg-newapi 摘
+  `mimo-v2.5-pro`、`deepseek-v4-flash-vision-exp`（abilities 已零渠道，
+  选中即 no available channel；config.yml 零引用，YAML 回读 52 模型
+  可解析）。备份 `models.yml.bak-20260904-bai-dead-entries`；按 OMP
+  进程启动加载惯例，重启生效。
 - 封闭式 bai 单模型渠道哨兵复验（同日，余额基线 2362）：
   **ch121 glm-5.3-flash、ch122 qwen3.8-flash 均哨兵验证真免费**
   （200 出文，探针前后余额 2362→2362 零消耗），保持启用；
@@ -51,9 +65,15 @@
 
 ## 验证（独立 DB 回读 + relay）
 
-- ch111=`mimo-v2.5,hy3` p30/w5 status=1；5 个摘除模型 abilities 零残留；
-  池专属比率键全消失；`deepseek-v4-flash=0.5` 仍在，ch110/ch118
+- ch111 models=`mimo-v2.5,hy3` p30/w5 status=1；5 个摘除模型 abilities
+  零残留；池专属比率键全消失；`deepseek-v4-flash=0.5` 仍在，ch110/ch118
   abilities enabled 不变。
+- **test_model 修正（同日追补）**：纯化后 test_model 残留
+  `deepseek-v4-flash`（auto_ban=1）——该模型已不在 ch111 models，
+  Guardian 错误扫描（每 5 分钟 test_channel）与 NewAPI 自测每轮必失败，
+  3 次软失败即隔离整个免费池。已改 `mimo-v2.5`（API PUT 快照
+  `new-api-before-ch111-testmodel-20260904-195757.db` + 回读 + 管理探针
+  200），models/abilities/status/p30/w5 原样。
 - 3002 relay：mimo-v2.5 200 出文 OK、hy3 200 出文 OK、
   deepseek-v4-flash 200（走 ch110/ch118，计费不受本次影响）。
 - 纯化后当前余额（2362）下哨兵复验：mimo-v2.5、hy3 relay 200 出文，
