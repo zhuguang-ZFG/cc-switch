@@ -37,6 +37,7 @@ def main() -> int:
             "ANTHROPIC_AUTH_TOKEN": key,
             "DISABLE_TELEMETRY": "true",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
         }
     }
     with open(settings_path, "w", encoding="utf-8") as f:
