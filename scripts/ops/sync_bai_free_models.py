@@ -49,6 +49,11 @@ mimo-v2.5 0) untouched.
 
 Safety: online DB snapshot first, dry-run default, API+DB readback verify,
 full rollback (channel models + ModelRatio) on failure. Idempotent.
+test_model is self-healed: if the current test_model is removed (or not in
+the surviving list) it is re-pointed to the first surviving model in the
+same PUT — an out-of-list test_model makes every Guardian error-scan /
+NewAPI auto-test fail and (with auto_ban=1) risks quarantining the whole
+pool. verify() asserts test_model ∈ surviving models.
 """
 from __future__ import annotations
 
@@ -236,6 +241,12 @@ def merge_ratio(current: str) -> str:
 
 
 def verify(db_path: Path, channel: dict, expected_models: str) -> None:
+    surviving = [m for m in expected_models.split(",") if m]
+    test_model = str(channel.get("test_model") or "")
+    if test_model not in surviving:
+        raise RuntimeError(
+            f"test_model {test_model!r} not in surviving models {surviving}"
+        )
     if channel.get("models") != expected_models:
         raise RuntimeError(
             f"readback models mismatch: {channel.get('models')!r} != {expected_models!r}"
@@ -319,6 +330,15 @@ def main() -> int:
         if to_remove or to_add:
             updated_payload = dict(original_payload)
             updated_payload["models"] = updated_models
+            surviving = updated_models.split(",")
+            current_test_model = str(original_payload.get("test_model") or "")
+            if current_test_model not in surviving:
+                fallback_test_model = surviving[0]
+                updated_payload["test_model"] = fallback_test_model
+                print(
+                    f"test_model {current_test_model!r} not in surviving models; "
+                    f"set to {fallback_test_model!r}"
+                )
             put_channel(smoke, headers, updated_payload)
             channel_changed = True
             print(f"ch{channel_id} models updated: {updated_models}")

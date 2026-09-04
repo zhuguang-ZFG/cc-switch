@@ -62,18 +62,25 @@ ch110/ch118 服务，摘 ch111 仅失去冗余备份源；若误摘（实际免�
   该模型对外覆盖由 ch88/ch112/ch124 继续（ch113 映射
   `qwen3-8-27b→qwen3.8-27b`，非 bai 独源）。ch113 回加条件与其他
   被摘模型一致（充值+直连200+哨兵零消耗）。
+- **test_model 修正（同日追补）**：纯化后 test_model 残留
+  `deepseek-v4-flash`（auto_ban=1）——该模型已不在 ch111 models，
+  Guardian 错误扫描（每 5 分钟 test_channel）与 NewAPI 自测每轮必失败，
+  3 次软失败即隔离整个免费池。已改 `mimo-v2.5`（API PUT 快照
+  `new-api-before-ch111-testmodel-20260904-195757.db` + 回读 + 管理探针
+  200），models/abilities/status/p30/w5 原样。脚本已加 **test_model
+  自愈**：`sync_bai_free_models.py` 摘除模型若命中 test_model，同一
+  PUT 改指首个存活模型；`verify()` 断言 test_model ∈ 存活列表；全库
+  校验确认无其他启用渠道存在同类违规。
 
 ## 验证（独立 DB 回读 + relay）
 
 - ch111 models=`mimo-v2.5,hy3` p30/w5 status=1；5 个摘除模型 abilities
   零残留；池专属比率键全消失；`deepseek-v4-flash=0.5` 仍在，ch110/ch118
   abilities enabled 不变。
-- **test_model 修正（同日追补）**：纯化后 test_model 残留
-  `deepseek-v4-flash`（auto_ban=1）——该模型已不在 ch111 models，
-  Guardian 错误扫描（每 5 分钟 test_channel）与 NewAPI 自测每轮必失败，
-  3 次软失败即隔离整个免费池。已改 `mimo-v2.5`（API PUT 快照
-  `new-api-before-ch111-testmodel-20260904-195757.db` + 回读 + 管理探针
-  200），models/abilities/status/p30/w5 原样。
+- test_model 修正回读：`mimo-v2.5` 管理探针 200；models/status/p30/w5/
+  abilities 原样；全库启用渠道 test_model ∈ models 校验通过；
+  脚本 `verify()` 正/负用例通过（错值 test_model 正确 raise）、
+  dry-run 幂等。
 - 3002 relay：mimo-v2.5 200 出文 OK、hy3 200 出文 OK、
   deepseek-v4-flash 200（走 ch110/ch118，计费不受本次影响）。
 - 纯化后当前余额（2362）下哨兵复验：mimo-v2.5、hy3 relay 200 出文，
