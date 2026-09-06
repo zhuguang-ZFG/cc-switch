@@ -37,7 +37,7 @@ LOG_FILE = GUARDIAN_DIR / "anyrouter-canary.log"
 BRIDGE = "http://127.0.0.1:8789/v1/messages"
 BRIDGE_CHAT = "http://127.0.0.1:8789/v1/chat/completions"
 PROBE_MODEL = "claude-haiku-4-5-20251001"  # 池内最便宜模型；429 为全池语义
-SOL_MODEL = "gpt-5.6-sol"  # 唯一在役非 Claude 模型（codex/gemini 已 404 下架）
+SOL_MODEL = "gpt-5.6-sol"  # 未下架：09/06 实证报「负载已经达到上限」=渠道有定义全满（get_channel_failed），与「无可用渠道」（模型不存在）不同；目录（token 分组）看不到它但路由可达，挤入窗口检测仍有效
 PROBE_TIMEOUT = 60
 SOL_TIMEOUT = 120  # 代理内置有界挤（8×5s），单次调用最坏 ~40s+ 请求时间
 BURST_ATTEMPTS = 5   # 多挤：每轮最多尝试次数（429 秒回不耗额度）
@@ -134,7 +134,6 @@ def probe_sol() -> tuple[bool, str]:
     except (OSError, ValueError) as e:
         return False, f"bridge unreachable: {e}"
 
-
 def send_telegram(secrets: dict, text: str) -> bool:
     token = secrets.get("telegram_token", "")
     chat_id = secrets.get("telegram_chat_id", "")
@@ -184,7 +183,7 @@ def main() -> int:
             "🟢 anyrouter 窗口开启\n"
             f"探测 {PROBE_MODEL} 恢复 200。\n"
             "可用法（门禁禁止自动挂链，需人工显式选用）：\n"
-            "OMP 指定 anyrouter/claude-opus-5 或 anyrouter/claude-opus-4-8。\n"
+            "OMP 指定 anyrouter/<模型>（以 models.yml 标注为准，opus-5 已下架）。\n"
             "窗口可能随时关闭（上游池负载），用后请回报结果。",
         )
         log(f"window-open alert sent={ok}")
