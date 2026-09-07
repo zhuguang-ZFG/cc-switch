@@ -42,3 +42,8 @@ NewAPI 进程无 per-channel 代理支持；全局 HTTP(S)_PROXY 会把 kimi（c
   OpenAI 系模型 + anthropic-messages 线制的兼容性要先实测全量 tools）。
   需要时先 `omp -p --model zg-newapi-anthropic/gpt-5.6-sol` 类实测再入册。
 - thinking 档: 上游 Anthropic 面对 thinking 参数的支持未验证。
+
+## 后续同步（09-07 晚）
+- models.yml: `zg-newapi/claude-opus-5-thinking` 条目标注 DEAD（上游 Claude 系全下架）。
+  OMP config 门禁 40 tests OK（`650cd72`, ~/.omp/agent 本地 repo）。
+- gpt-5.6-* 三模型 NewAPI 侧就绪（4/4 渠道测试 PASS）, OMP 入册待全量 tools 实测。
