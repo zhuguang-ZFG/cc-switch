@@ -45,3 +45,4 @@ mainWindow.js
 tmp/
 _dump/
 *.bak*
+.playwright-mcp/
