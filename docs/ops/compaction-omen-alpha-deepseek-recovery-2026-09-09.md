@@ -9,7 +9,7 @@
 
 ## 一、压缩模型切换
 
-### 候选表（r6 源码，repo 与 live 哈希一致 `b4279f21…F638F6`）
+### 候选表（r7 源码，repo 与 live 哈希一致 `b25228dd…CD8DC493B`）
 
 ```text
 zg-newapi/omen-alpha              ← 主压缩模型（用户指令）
@@ -38,7 +38,7 @@ zg-newapi/qwen3-8-27b             ← 尾部兜底
 - `node --test scripts/ops/test_omp_global_compaction_model.js` → 21/21（测试桩 TARGET 全量迁移 omen-alpha；优先序用例覆盖 [omen 头 / agentrouter/deepseek 次 / glm-5.2 预留 / qwen 尾]）。
 - `node --test scripts/ops/test_omp_global_compaction_deploy.js` → 1/1。
 - `python3 -m unittest scripts.ops.test_omp_routes` → 40/40（SOTA 隔离门禁的 compactionModel 钉 deepseek → omen-alpha）。
-- `deploy-omp-global-compaction-model.ps1` → repo/live SHA-256 一致 `b4279f21…`。
+- `deploy-omp-global-compaction-model.ps1` → repo/live SHA-256 一致 `b25228dd…CD8DC493B`（r7 复跑：21/21 + deploy 1/1 + routes 40/40）。
 - 扩展直测（node 内联 import）：全注册→omen-alpha；omen 缺席→agentrouter/deepseek-v4-flash；仅 agentrouter→解析成功。
 
 ## 二、DeepSeek 渠道全景与处置

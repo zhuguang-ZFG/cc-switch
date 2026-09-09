@@ -20,7 +20,7 @@ const NEWAPI_BASE = "http://127.0.0.1:3002";
 const CANARY_MAX_AGE_MS = 10 * 60 * 1000;
 const LUNA_LINES = [
   `    - id: ${LUNA_ID}`,
-  "      compactionModel: zg-newapi/deepseek-v4-flash",
+  "      compactionModel: zg-newapi/omen-alpha",
   "      name: GPT 5.6 Luna (opencode-go ch48)",
   "      reasoning: true",
   "      contextWindow: 272000",
@@ -29,7 +29,7 @@ const LUNA_LINES = [
 const MUSE_LINES = [
   `    - id: ${MUSE_ID}`,
   "      api: openai-responses",
-  "      compactionModel: zg-newapi/deepseek-v4-flash",
+  "      compactionModel: zg-newapi/omen-alpha",
   "      name: Muse Spark 1.2 Contributor (opencode-go ch48)",
   "      reasoning: true",
   "      input:",

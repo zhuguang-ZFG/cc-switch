@@ -14,7 +14,7 @@ const SOURCE = `providers:
     baseUrl: http://127.0.0.1:3003
     models:
     - id: claude-opus-5
-      compactionModel: zg-newapi/deepseek-v4-flash
+      compactionModel: zg-newapi/omen-alpha
       name: Claude Opus 5
       reasoning: true
       input:
@@ -39,7 +39,7 @@ test("clones capability metadata into the marked target model", () => {
     result.output.indexOf("  zg-newapi-anthropic:"),
   );
   assert.match(target, /id: omp-sota-claude-opus-5/);
-  assert.match(target, /compactionModel: zg-newapi\/deepseek-v4-flash/);
+  assert.match(target, /compactionModel: zg-newapi\/omen-alpha/);
   assert.match(target, /name: OMP SOTA escalation \(claude-opus-5, bounded review\)/);
   assert.match(target, /input:\n      - text\n      - image/);
   assert.match(target, /contextWindow: 200000/);

@@ -8,7 +8,7 @@ const DEFAULT_MODELS_PATH = path.join(os.homedir(), ".omp", "agent", "models.yml
 const TARGET_PROVIDER = "zg-newapi";
 const DEFAULT_SOURCE_PROVIDER = "zg-newapi-anthropic";
 const ALIAS_PREFIX = "omp-sota-";
-const COMPACTION_SELECTOR = "zg-newapi/deepseek-v4-flash";
+const COMPACTION_SELECTOR = "zg-newapi/omen-alpha";
 const DEFAULT_SOTA_MAX_TOKENS = 16_384;
 
 function sha256(buffer) {

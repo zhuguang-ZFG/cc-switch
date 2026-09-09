@@ -28,6 +28,7 @@ scripts/ops/omp-global-compaction-model.js
 3. `zg-newapi/glm-5.2` — reserved; registered nowhere in `models.yml`, so the
    reconciler skips it until an explicit registration activates it.
 4. `zg-newapi/qwen3-8-27b` (runinfra ch88 + yjs ch112, two-source 1:1 pool).
+
 Only models present in OMP's authenticated model list are eligible. Omen Alpha
 is the normal target. A failed automatic compaction cools that target for
 five minutes; the one-second reconciler then projects the next eligible target
