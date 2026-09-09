@@ -44,7 +44,7 @@ key 沿用 Go 套餐（ch101 donor），浏览器 UA 必需（裸客户端 CF 10
 
 ```yaml
 - id: omen-alpha
-  compactionModel: zg-newapi/deepseek-v4-flash
+  compactionModel: zg-newapi/deepseek-v4-flash  # 2026-09-09 起为 zg-newapi/omen-alpha（全量压缩切换，见 compaction-omen-alpha-deepseek-recovery-2026-09-09.md）
   name: Omen Alpha (opencode-go ch125)
   reasoning: true
   contextWindow: 200000

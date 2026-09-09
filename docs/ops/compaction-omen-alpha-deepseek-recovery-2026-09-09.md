@@ -26,7 +26,7 @@ zg-newapi/qwen3-8-27b             ← 尾部兜底
 
 | 文件 | 改动 | 备份 |
 |---|---|---|
-| `~/.omp/agent/extensions/omp-global-compaction-model.js` | 候选表 [omen, agentrouter/deepseek, glm-5.2(预留), qwen] | 同目录 `.bak-20260909` + `extension-backups/omp-global-compaction-model-20260909-221013-*`（部署脚本时间戳备份） |
+| `~/.omp/agent/extensions/omp-global-compaction-model.js` | 候选表 [omen, agentrouter/deepseek, glm-5.2(预留), qwen] | 同目录 `.bak-20260909`（改动前原件 r6+deepseek）+ 部署脚本时间戳备份 `extension-backups/…20260909-221013-*` 与 `…-221126-*`（两者内容均为 r6+omen 过渡态且彼此一致；221126 = r7 部署前） |
 | `~/.omp/agent/models.yml` | 88 处 `compactionModel:` deepseek-v4-flash → omen-alpha | `models.yml.bak-20260909` |
 | `~/.omp/agent/config.yml` | fallbackChains 4 处（muse-spark-free / qwen3-8-27b / qwen3.8-max-free 单兜底位 + smol 链首位）deepseek → omen-alpha | `config.yml.bak-20260909-omen-chains` |
 | 仓库 `scripts/ops/omp-global-compaction-model.js` | 源副本同块移植（部署脚本 SHA 双端校验） | git |
@@ -74,7 +74,7 @@ zg-newapi/qwen3-8-27b             ← 尾部兜底
 
 ## 回滚
 
-1. 压缩链：恢复三个 `.bak-20260909` 文件 + 用部署脚本回灌扩展（或 `extension-backups/…221013` 目录内 previous 文件）→ 新会话生效。
+1. 压缩链：恢复三个 `.bak-20260909` 文件（原件）+ 用部署脚本回灌扩展 → 新会话生效。注意两个 `extension-backups/…20260909-221013-*`/`…221126-*` 目录内容相同，均为 r6+omen 过渡态（221126 = r7 部署前），只适合回退到 r7 之前，不是改动前原件。
 2. ch15：`POST /api/channel/15/status {"status":2}`（或 DB 双置回 2/0）→ 恢复 ch118 主路姿态。
 3. 仓库：git revert 本次 docs/scripts 提交即可（源与测试在同一提交内）。
 

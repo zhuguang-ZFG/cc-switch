@@ -139,11 +139,12 @@ remains the detailed SOTA state view.
 Every marked OMP model keeps:
 
 ```yaml
-compactionModel: zg-newapi/deepseek-v4-flash
+compactionModel: zg-newapi/omen-alpha  # 2026-09-09 起（此前 deepseek-v4-flash，全量切 Omen Alpha 见 compaction-omen-alpha-deepseek-recovery-2026-09-09.md）
 ```
 
-Ordinary task work and compaction continue to use the existing Flash, GLM, and
-Qwen 3.8 27B policy. Raw `sotamodel*` selectors remain forbidden from roles and
+Ordinary task work keeps the Flash/GLM/Qwen 3.8 27B policy; compaction has been
+switched to Omen Alpha (`zg-newapi/omen-alpha`, 2026-09-09). Raw `sotamodel*`
+selectors remain forbidden from roles and
 fallback chains; only the marked `zg-newapi/omp-sota-*` route can enter SOTA
 discovery after readiness verification.
 
@@ -310,6 +311,8 @@ direct DB write plus a cache-sync wait). `create_omp_sota_channel.py` /
 - `omp models` resolved exactly one `omp-sota-claude-opus-5` registration.
   Route gates confirmed it is absent from roles and fallback chains and keeps
   DeepSeek Flash as its compaction model.
+  [2026-09-09: the compaction stamp is now `zg-newapi/omen-alpha`; this line
+  records the 2026-08-18 state.]
 - The first full OMP probe exposed a real operational constraint: copying the
   base 128K output maximum required a `$0.80` NewAPI precharge while the local
   user had about `$0.21`. The dedicated alias was corrected to a 16K review
