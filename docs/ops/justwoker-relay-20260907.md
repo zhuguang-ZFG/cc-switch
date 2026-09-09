@@ -47,3 +47,13 @@ NewAPI 进程无 per-channel 代理支持；全局 HTTP(S)_PROXY 会把 kimi（c
 - models.yml: `zg-newapi/claude-opus-5-thinking` 条目标注 DEAD（上游 Claude 系全下架）。
   OMP config 门禁 40 tests OK（`650cd72`, ~/.omp/agent 本地 repo）。
 - gpt-5.6-* 三模型 NewAPI 侧就绪（4/4 渠道测试 PASS）, OMP 入册待全量 tools 实测。
+
+## opencode.go / zen 渠道修复（09-07 深夜, 同日第二次）
+- **根因**: opencode.ai Console Go 09-07 中午起强制 `x-opencode-session` 头（400
+  MissingSessionID）。该头是路由提示（非鉴权/非一次性）——**静态值可重复用**，
+  实测同值 ×2 + 换值全 200。
+- **修复**: ch48/96/101/117/125（全部 opencode 渠道, 含禁用的一并修防复用踩坑）
+  header_override 统一加 `"x-opencode-session": "newapi-local-relay"` + Chrome UA。
+- **验证**: ch101 mimo-v2.5 PASS 3.0s, ch125 omen-alpha PASS 2.5s（NewAPI 渠道测试）;
+  `omp -p zg-newapi/omen-alpha` pong 52s（端到端, smol 角色恢复真路由不再靠 fallback）。
+- OMP 同日 18.1.13 → 18.1.15。
