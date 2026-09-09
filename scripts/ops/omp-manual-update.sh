@@ -8,9 +8,9 @@
 #   下载(断点续传x2) -> SHA 校验 -> 备份 rename-aside -> 换入 -> 版本复核(不符回滚) -> 备份轮转(留3)
 # 注意: 用 Git 的 bash 跑(工具 shell 的 `bash` 解析到 WSL): C:/PROGRA~1/Git/usr/bin/bash.exe <script>
 set -u
-VER='18.1.14'
-CUR='18.1.13'
-EXPECTED='f5b46850f92ad2c2aa337b094fbf51742417ecdd808c088e24bb3d21b19e5177'
+VER='18.1.15'
+CUR='18.1.14'
+EXPECTED='3c6856f4fe2aa77007a60a48dabdf66aaa4c5b5e108223d2cbf6807608401b8e'
 
 BIN=/c/Users/zhugu/.bun/bin
 EXE="$BIN/omp.exe"
