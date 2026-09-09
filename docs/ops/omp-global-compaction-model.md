@@ -21,13 +21,15 @@ scripts/ops/omp-global-compaction-model.js
 
 ## Candidate order
 
-1. `zg-newapi/deepseek-v4-flash` (ch15 p50 + ch111 p30 + ch110 p6 pool)
-2. `zg-newapi/glm-5.2` (reserved — registered nowhere in `models.yml`, so the
-   reconciler skips it until an explicit registration activates it)
-3. `zg-newapi/qwen3-8-27b` (runinfra ch88 + yjs ch112, two-source 1:1 pool)
-
-Only models present in OMP's authenticated model list are eligible. DeepSeek
-remains the normal target. A failed automatic compaction cools that target for
+1. `zg-newapi/omen-alpha` — primary compaction target (user-directed
+   2026-09-09).
+2. `agentrouter/deepseek-v4-flash` — first fallback, direct Tailscale upstream
+   `100.83.32.95:8788` (bypasses NewAPI; live probes 2/3 success, 4-9s).
+3. `zg-newapi/glm-5.2` — reserved; registered nowhere in `models.yml`, so the
+   reconciler skips it until an explicit registration activates it.
+4. `zg-newapi/qwen3-8-27b` (runinfra ch88 + yjs ch112, two-source 1:1 pool).
+Only models present in OMP's authenticated model list are eligible. Omen Alpha
+is the normal target. A failed automatic compaction cools that target for
 five minutes; the one-second reconciler then projects the next eligible target
 onto every model. For a strict provider failure (explicit retryable HTTP status
 or transport failure), the extension schedules at most one managed backup
@@ -47,6 +49,36 @@ an upstream failure is learned only from OMP's real auto-compaction result. OMP
 core may perform its own bounded provider handling before that terminal event;
 `extensionRetries` reports only the extension's extra call, not the total number
 of upstream requests made inside OMP.
+
+## Omen Alpha primary and agentrouter fallback (2026-09-09)
+
+Revision `2026.08.28-r6` -> `2026.09.09-r7`; repo and live copies byte-identical
+(SHA-256 `B25228DD…CD8DC493B`, deployer backup
+`extension-backups/omp-global-compaction-model-20260909-221126-*`).
+
+- `zg-newapi/deepseek-v4-flash` left the candidate list entirely. Its head
+  channel ch118 (seeseed) sits in a 720-hour rolling request quota
+  (18001/18000) with chronic 429s plus intermittent 500s (268 ERR lines that
+  day), so it could no longer carry the primary compaction role. The morning
+  iteration removed it; the evening iteration re-added DeepSeek through a
+  different path per user direction.
+- `zg-newapi/omen-alpha` is the new primary (same channel ch125 that already
+  serves the commit/smol roles since 2026-09-04 — no new dependency).
+- `agentrouter/deepseek-v4-flash` is the new first fallback: direct upstream,
+  independent of NewAPI channel routing entirely.
+- Same day the NewAPI side re-enabled ch15 (sensenova, priority 50) which now
+  fronts `deepseek-v4-flash` ahead of the degraded ch118 (priority 30);
+  relay-verified HTTP 200 in 2s. See
+  `compaction-omen-alpha-deepseek-recovery-2026-09-09.md`.
+- `models.yml` `compactionModel:` fields (88) and the four `config.yml`
+  fallback-chain entries moved off deepseek-v4-flash onto omen-alpha the same
+  day. The smol chain now repeats its primary in the first fallback slot
+  (user-accepted hollow chain); the route gate keeps an explicit
+  `ACCEPTED_PRIMARY_REPEAT = {"smol"}` allowance and still enforces the
+  no-repeat invariant for every other role.
+- The 21-test suite migrated its fixtures to the omen-alpha target
+  (21/21) and `test_omp_routes.py` pins `omp-sota-*` compaction to
+  `zg-newapi/omen-alpha` (40/40).
 
 ## Candidate replacement (2026-08-28)
 
@@ -109,10 +141,11 @@ SHA-256 `3B46166A…F8700`, repo and live copies byte-identical).
 
 ## Candidate curation constraints (2026-08-28)
 
-Output budget is a curation-time constraint, not a runtime sort key. The
-ladder is already ordered by output cap (deepseek-v4-flash 131072 ->
-qwen3-8-27b 32768), and the ordering encodes cost intent (free pools first);
-spec-based ranking would let paid or free-relay entries overtake the curated
+Output budget is a curation-time constraint, not a runtime sort key. Since
+2026-09-09 the ladder encodes user-directed priority (omen-alpha head, 128K
+output) rather than pure output-cap ordering; the agentrouter fallback keeps
+the 131072 cap, and the ordering still encodes cost intent (free pools first).
+Spec-based ranking would let paid or free-relay entries overtake the curated
 order.
 
 - Weakest link: the `qwen3-8-27b` tail has the ladder's smallest output cap
@@ -230,7 +263,7 @@ The extension emits structured background logs for:
 - failed, aborted, skipped, or stale compaction state.
 
 No normal notification is shown. `/compaction-status` is an opt-in command that
-shows extension revision `2026.08.28-r6`, current target, last result, managed
+shows extension revision `2026.09.09-r7`, current target, last result, managed
 retry state/count, and per-candidate availability, cooldown remaining, attempts,
 successes, failures, and retry attempts. Raw upstream error text is discarded;
 only a safe class and optional HTTP status are retained. Status and logs never

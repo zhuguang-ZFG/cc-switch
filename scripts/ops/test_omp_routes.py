@@ -480,9 +480,9 @@ def validate_sota_upgrade_only(config_text: str, models_text: str) -> list[str]:
             if provider != "zg-newapi":
                 violations.append(f"SOTA alias must use zg-newapi, got {provider}/{model_id}")
             compaction = compaction_target(provider, model_id)
-            if compaction != "zg-newapi/deepseek-v4-flash":
+            if compaction != "zg-newapi/omen-alpha":
                 violations.append(
-                    f"{provider}/{model_id} compactionModel must remain DeepSeek Flash, got {compaction!r}"
+                    f"{provider}/{model_id} compactionModel must remain Omen Alpha, got {compaction!r}"
                 )
     return violations
 
@@ -701,6 +701,10 @@ class OmpRouteGateTests(unittest.TestCase):
         )
         self.assertEqual(orphaned, [], f"unresolvable fallback chain keys: {orphaned}")
 
+    # 2026-09-09 用户明示接受：smol 链主备同为 omen-alpha（空心链），
+    # 充当同渠道一次链内重试；其余角色保持"兜底不重复主模型"硬门禁。
+    ACCEPTED_PRIMARY_REPEAT = {"smol"}
+
     def test_role_fallbacks_do_not_repeat_their_primary_model(self):
         text = CONFIG_FILE.read_text(encoding="utf-8")
         roles = _model_role_entries(text)
@@ -711,6 +715,8 @@ class OmpRouteGateTests(unittest.TestCase):
             primary = _base_selector(roles[role])
             fallback_models = {_base_selector(candidate) for candidate in candidates}
             with self.subTest(role=role):
+                if role in self.ACCEPTED_PRIMARY_REPEAT:
+                    continue
                 self.assertNotIn(
                     primary,
                     fallback_models,
@@ -748,7 +754,7 @@ class OmpRouteGateTests(unittest.TestCase):
             "sotamodel is an untrusted manual canary and must not enter OMP routing",
         )
 
-    def test_marked_sota_alias_is_upgrade_only_and_keeps_flash_compaction(self):
+    def test_marked_sota_alias_is_upgrade_only_and_keeps_omen_compaction(self):
         config = _config_yml(
             {"default": ["zg-newapi/deepseek-v4-flash"]},
             roles={
@@ -759,7 +765,7 @@ class OmpRouteGateTests(unittest.TestCase):
         models = _models_yml(
             _model_block(
                 "omp-sota-claude-opus-5",
-                compactionModel="zg-newapi/deepseek-v4-flash",
+                compactionModel="zg-newapi/omen-alpha",
                 contextWindow=200000,
                 maxTokens=128000,
             )
@@ -772,7 +778,7 @@ class OmpRouteGateTests(unittest.TestCase):
         )
         self.assertTrue(validate_sota_upgrade_only(routed_config, models))
         wrong_compaction = models.replace(
-            "compactionModel: zg-newapi/deepseek-v4-flash",
+            "compactionModel: zg-newapi/omen-alpha",
             "compactionModel: omp-sota-claude-opus-5",
         )
         self.assertTrue(validate_sota_upgrade_only(config, wrong_compaction))

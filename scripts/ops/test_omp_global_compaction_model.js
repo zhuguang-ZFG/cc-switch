@@ -14,7 +14,7 @@ import globalCompactionModel, {
   resolveCompactionTarget,
 } from "./omp-global-compaction-model.js";
 
-const TARGET = "zg-newapi/deepseek-v4-flash";
+const TARGET = "zg-newapi/omen-alpha";
 
 function createThresholdSettings() {
   const values = {
@@ -78,6 +78,7 @@ function createContext(models, current = models[0]) {
 test("binds every available model without changing model identity", () => {
   const models = [
     { provider: "zg-newapi", id: "gpt-5.6-sol" },
+    { provider: "zg-newapi", id: "omen-alpha" },
     {
       provider: "zg-newapi",
       id: "deepseek-v4-flash",
@@ -96,20 +97,21 @@ test("binds every available model without changing model identity", () => {
     models.map(({ provider, id }) => `${provider}/${id}`),
     [
       "zg-newapi/gpt-5.6-sol",
+      "zg-newapi/omen-alpha",
       "zg-newapi/deepseek-v4-flash",
       "agentrouter/claude-opus-5",
     ],
   );
   assert.ok(models.every((model) => model.compactionModel === TARGET));
   assert.deepEqual(result, {
-    inspected: 3,
-    updated: 2,
+    inspected: 4,
+    updated: 3,
     alreadyBound: 1,
     failed: [],
   });
 });
 test("also binds a current model that is not in the registry snapshot", () => {
-  const registered = { provider: "zg-newapi", id: "k3" };
+  const registered = { provider: "zg-newapi", id: "omen-alpha" };
   const current = { provider: "future-provider", id: "future-model" };
 
   const result = applyGlobalCompactionModel(
@@ -122,13 +124,20 @@ test("also binds a current model that is not in the registry snapshot", () => {
 });
 
 test("selects only authenticated registry candidates in priority order", () => {
+  const omen = { provider: "zg-newapi", id: "omen-alpha" };
   const qwen27b = { provider: "zg-newapi", id: "qwen3-8-27b" };
   const glm = { provider: "zg-newapi", id: "zai-glm-5-2" };
-  const deepseek = { provider: "zg-newapi", id: "deepseek-v4-flash" };
+  const routerDeepseek = { provider: "agentrouter", id: "deepseek-v4-flash" };
 
   assert.equal(
-    resolveCompactionTarget(createContext([qwen27b, glm, deepseek])).target,
+    resolveCompactionTarget(createContext([qwen27b, glm, omen])).target,
     TARGET,
+  );
+  assert.equal(
+    resolveCompactionTarget(
+      createContext([qwen27b, glm, routerDeepseek]),
+    ).target,
+    "agentrouter/deepseek-v4-flash",
   );
   assert.equal(
     resolveCompactionTarget(createContext([qwen27b, glm])).target,
@@ -196,7 +205,7 @@ test("clears only bindings owned by the managed candidate policy", () => {
 test("reconciles models added after session start", () => {
   const models = [
     { provider: "zg-newapi", id: "gpt-5.6-sol" },
-    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    { provider: "zg-newapi", id: "omen-alpha" },
   ];
   const ctx = createContext(models);
   const reconciler = createGlobalCompactionReconciler();
@@ -212,7 +221,7 @@ test("reconciles models added after session start", () => {
 test("the managed interval closes the immediate switch then compact gap", () => {
   const models = [
     { provider: "zg-newapi", id: "gpt-5.6-sol" },
-    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    { provider: "zg-newapi", id: "omen-alpha" },
   ];
   let intervalCallback;
   const ctx = {
@@ -264,7 +273,7 @@ test("tracks compaction start, success, duration, and redacted image policy", ()
   };
   const models = [
     { provider: "zg-newapi", id: "gpt-5.6-sol" },
-    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    { provider: "zg-newapi", id: "omen-alpha" },
   ];
   const reconciler = createGlobalCompactionReconciler({
     now: () => currentTime,
@@ -307,7 +316,8 @@ test("records auto-compaction failures without changing the main model", () => {
   let currentTime = 10;
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
-    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    { provider: "zg-newapi", id: "omen-alpha" },
+    { provider: "agentrouter", id: "deepseek-v4-flash" },
     { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];
   const ctx = createContext(models, models[0]);
@@ -338,7 +348,7 @@ test("records auto-compaction failures without changing the main model", () => {
   assert.equal(ctx.model.id, "claude-opus-5");
 
   const fallback = reconciler.reconcile(ctx, "after-failure");
-  assert.equal(fallback.target, "zg-newapi/qwen3-8-27b");
+  assert.equal(fallback.target, "agentrouter/deepseek-v4-flash");
   currentTime = 711;
   const recovered = reconciler.reconcile(ctx, "cooldown-expired");
   assert.equal(recovered.target, TARGET);
@@ -382,6 +392,7 @@ test("fails closed when every authenticated candidate is cooling", () => {
   const fallbackTarget = "zg-newapi/qwen3-8-27b";
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
+    { provider: "zg-newapi", id: "omen-alpha" },
     { provider: "zg-newapi", id: "deepseek-v4-flash" },
     { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];
@@ -440,6 +451,7 @@ test("schedules one managed fallback attempt and records its success", async () 
   let compactCalls = 0;
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
+    { provider: "zg-newapi", id: "omen-alpha" },
     { provider: "zg-newapi", id: "deepseek-v4-flash" },
     { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];
@@ -515,6 +527,7 @@ test("a failed fallback is terminal and cannot schedule a second retry", async (
   const timers = [];
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
+    { provider: "zg-newapi", id: "omen-alpha" },
     { provider: "zg-newapi", id: "deepseek-v4-flash" },
     { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];
@@ -568,7 +581,7 @@ test("aborted, skipped, and local failures neither cool nor retry", () => {
     const timers = [];
     const models = [
       { provider: "agentrouter", id: "claude-opus-5" },
-      { provider: "zg-newapi", id: "deepseek-v4-flash" },
+      { provider: "zg-newapi", id: "omen-alpha" },
     ];
     const ctx = {
       ...createContext(models, models[0]),
@@ -604,7 +617,7 @@ test("status and logs discard raw provider, transcript, URL, and credential text
   };
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
-    { provider: "zg-newapi", id: "deepseek-v4-flash" },
+    { provider: "zg-newapi", id: "omen-alpha" },
   ];
   const ctx = createContext(models, models[0]);
   const reconciler = createGlobalCompactionReconciler({
@@ -681,7 +694,7 @@ test("emits one success record when compaction completion is repeated", () => {
   try {
     const handlers = new Map();
     const model = { provider: "zg-newapi", id: "main", contextWindow: 400000 };
-    const target = { provider: "zg-newapi", id: "deepseek-v4-flash", contextWindow: 1000000 };
+    const target = { provider: "zg-newapi", id: "omen-alpha", contextWindow: 1000000 };
     globalCompactionModel({
       pi: { settings: createThresholdSettings(), getAgentDir: () => "agent-dir" },
       on(event, handler) { handlers.set(event, handler); },

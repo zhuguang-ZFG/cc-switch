@@ -1,7 +1,10 @@
-export const EXTENSION_REVISION = "2026.08.28-r6";
+export const EXTENSION_REVISION = "2026.09.09-r7";
 
 const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
-  "zg-newapi/deepseek-v4-flash",
+  // primary: user-directed 2026-09-09 — Omen Alpha as global compaction model
+  "zg-newapi/omen-alpha",
+  // fallback: agentrouter direct, user-directed 2026-09-09 (NewAPI ch118 seeseed quota-dead, ch15 re-enabled)
+  "agentrouter/deepseek-v4-flash",
   // reserved: register in models.yml to activate (2026-08-28 re-probe kept it
   // unregistered: ch15 upstream returned 429 workspace-quota-exceeded)
   "zg-newapi/glm-5.2",

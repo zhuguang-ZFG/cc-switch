@@ -224,6 +224,7 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 - OMP LSP 三件套与 duckdb 工具装填：runbook `docs/ops/omp-lsp-duckdb-tooling-2026-09-04.md`（rust-analyzer 走 scoop（机内无 rustup/cargo）、ts/pyright 走 npm -g；新增 ~/.omp/agent/lsp.json 扩展 rootMarkers（rust-toolchain.toml 命中 cc-switch 根/*.py 命中 Guardian 目录）——cwd-only 探测的必要补偿；新会话端到端验证 main.tsx→ts-server ready、src-tauri/main.rs→rust-analyzer ready；**运行中会话持启动快照，变更需新会话生效**；duckdb 1.5.5 + duckdb-skills@claude-plugins-official 0.2.4（GIN 日志/SQLite 挂载分析）；官方 marketplace 291 插件筛完 0 个可装——`*-lsp` 系列对 OMP 原生 LSP 冗余，其余与既有技能/工具重叠，勿装）
 - 嵌入式工具链 PATH 挂载与 OMP clangd 接入：runbook `docs/ops/omp-embedded-toolchain-2026-09-04.md`（11 目录入用户注册表 PATH（xtensa/riscv gcc 15.2.0 v6.0.1 配对、双 gdb 16.3、openocd 20260304、esp-clang 20.1.1、idf.py/ninja/cmake3.30.2/dfu-util）+ WM_SETTINGCHANGE 广播，新终端生效；两个关键 quirk：**OMP bash 执行层只认 PATH 解析（绝对路径直呼必 command not found）**、**wrapper 向原生子进程传 POSIX PATH 不转换（从 OMP bash 测新会话必须注入注册表 PATH 的 Windows 格式）**；lsp.json 增 clangd 覆盖（rootMarkers 命中 CMakeLists/sdkconfig，command 继承内置经 PATH 解析），throwaway C 工程 `int x = "type-mismatch"` e2e 实证报出 -Wint-conversion；**DAP esp-gdb 阻断**：esp-gdb 16.3 Windows 构建无 threading→`-i dap` 不可用（上游缺陷），dap.json 已撤，板级调试走 openocd gdbserver+手动 gdb；`idf-exe` 二进制名是 `idf.py.exe` 命令名 `idf.py`；本地仓 commit ced7eb2）
 - agentrouter WAF 挑战终局修复（glm-5.3 全链恢复）：runbook `docs/ops/agentrouter-waf-glm53-2026-09-04.md`（09/04 ~22:30 起双域 ps.air-outer.com/agentrouter.org 对家宽 IP 触发阿里云 WAF 全量 JS 挑战，上游返回 200+HTML 假成功/旧代理 500；先做了代理诚实化（200 体校验+诚实 502，备份 `.bak-20260904-waf`）与 Guardian file-tail 错误侧观测，再三层门定案：**WAF=出口 IP 级**（家宽被封，香港02直连/香港05原生穿透，其余 HK/JP 节点 TLS 直接被掐，与 TLS 指纹无关）+ **UA 必须 claude-cli 样**（裸 UA→401 unauthorized client）+ **池 key 健康**（代理 keys.json 4 把 sk- 轮换转发；NewAPI ch45/120 的 64 字符 key 仅是本地鉴权不透传上游）；终局修复=Clash `Agentrouter-EG` 专属组（双域 DOMAIN-SUFFIX 置顶，默认香港02直连）+ supervisor 给代理注入 `HTTP(S)_PROXY=7897`（代理本就 trust_env；改 env 必须重启 supervisor 本体，旧进程内存不重读）；端到端验证：NewAPI glm-5.3 非流式 200/c=35 真实消费 + 流式 177 chunks/finish=stop；**Verge 重生成 runtime 会丢注入**→ `scripts/ops/apply-agentrouter-egress-rules.py` 幂等补回（py launcher 认不了脚本 shebang，须 `py -V:Astral/CPython3.12.13` 跑）；附带发现：全局 Merge.yaml（sharedchat/linux.do 规则）是孤儿文件从未进过 runtime，mihomo 只是容忍未知键忽略之——sharedchat 系一直按 profile 默认规则路由，独立问题未动）
+- 压缩模型切 omen-alpha 与 DeepSeek 渠道复活重组：runbook `docs/ops/compaction-omen-alpha-deepseek-recovery-2026-09-09.md`（压缩候选 [omen-alpha, agentrouter/deepseek-v4-flash 直连兜底, glm-5.2 预留, qwen3-8-27b]，revision r7，repo/live SHA `b25228dd…`；models.yml 88 处 compactionModel + config.yml 4 处 fallbackChains deepseek→omen-alpha；ch15 sensenova 经 DB 双置复活接管 deepseek-v4-flash 主路（pri50>ch118 的 30，relay 200/2s 实证），ch118 seeseed 429 配额 720h 窗口+500 抖动由 Guardian 降权 5→2 压制；ch110 403 封禁、ch107 token 池空、ch108 whyyin 死、deepseek-v4-pro-0813 成死端；**NewAPI 渠道 API 契约**：PUT /api/channel/ 体禁带 status（Invalid parameters），启停用走 POST /api/channel/{id}/status，渠道 ops 自动 UpdateAbilities，/api/channel/fix 兜底，GET 抹 key 勿回 PUT；smol 空心链主备同 omen-alpha 由用户明示接受，route 门禁加 ACCEPTED_PRIMARY_REPEAT 显式豁免）
 
 ## sol 链劣化与亲和迁移（2026-08-16/17）
 
@@ -296,9 +297,10 @@ Production copy: `~/.omp/agent/extensions/omp-unexpected-stop-guard.js`. See `do
 
 `omp-global-compaction-model.js` keeps the selected main model unchanged while
 projecting an authenticated background target onto every available model as
-its runtime `compactionModel`. The ordered candidates are SenseNova DeepSeek V4
-Flash, a reserved SenseNova GLM 5.2 selector, Mistral-relay GLM 5.2, then
-runinfra Qwen 3.8 27B (ch88). It reconciles at
+its runtime `compactionModel`. Since 2026-09-09 the ordered candidates are
+Omen Alpha (primary), agentrouter DeepSeek V4 Flash (direct Tailscale
+fallback), a reserved SenseNova GLM 5.2 selector, then runinfra Qwen 3.8 27B
+(ch88). It reconciles at
 session start, before each agent turn, before compaction, and once per second so
 models added or refreshed in a running OMP session inherit the policy without
 per-model maintenance. A strict provider failure cools the failed target for
