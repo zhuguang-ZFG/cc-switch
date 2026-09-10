@@ -5,11 +5,12 @@
 用户需求：把 any 渠道（anyrouter，经 8789 桥）与 agent 渠道（agentrouter）的 Claude 模型配置进 Claude Code CLI。
 
 结论：**聚合池早已登记这两条 Claude 路，缺的只是 Claude Code CLI 到 NewAPI 3002 的接线**。
+- any 目录实测（21:35，8789 桥 `GET /v1/models`）：15 个模型中 12 个为 Claude（opus-4-1/4/4-5/4-6/4-7、sonnet-4/4-5、haiku-4-5、3-5/3-7 代、fable-5-1）。目录名与 ch72 登记名（claude-opus-5/4-8）不一致：08-06 指纹门修复后逐字重放 200 证明上游真服务 claude-opus-5（不在目录中），故**目录 ≠ 实际可服务**；ch72 模型清单维持 smoke 门禁契约（`ANYROUTER_CLAUDE_MODELS`），不扩目录名。
 
 - any-Claude = ch72 `anyrouter`（type 14 → `127.0.0.1:8789` 桥，p40/w5，test_model=claude-opus-5，Guardian `DEGRADED_ACCEPTED_DISABLED[72]` 治理：上游 429 期间保持禁用、恢复后自动重启入池）。
 - agent-Claude = ch86 `agentrouter-claude`（type 14 直连 `ps.air-outer.com`，p50/w≤13 垫底备份档）+ ch45 `agentrouter`（8788 桥；2026-08-14 起 Claude 迁出、只留 Sol——隔离过载 Sol 恢复探针对 Claude 容量的连坐）。
 - 另有 ch116 `kktoken`（p50/w1，当前唯一启用）、ch123 `zzzcoding`（zz_gate 池窗门控）。
-- Claude Code CLI 此前指向 cc-switch 代理 `127.0.0.1:15721`（PROXY_MANAGED），该链当晚 405（与 codex 侧同症状），CLI 实际不可用。
+- Claude Code CLI 此前指向 cc-switch 代理 `127.0.0.1:15721`（PROXY_MANAGED）。**该链当晚实测仍活着**（21:50 直验：`claude -p` 走 15721 → OK，11.2s）——此前据 `claude config list` 的 405 推断"已死"系误判（该子命令打的是其他端点）。本次切换动因是用户要求接入 any/agent 源，非故障迁移；新链用 3002 聚合池换多源 failover。
 
 本次**只动 `~/.claude/settings.json`**，不动任何渠道状态：ch72/ch86 当前均为上游侧降级，Guardian 已按既有治理自动恢复，手工启用只会造成"3 探失败→auto-ban→恢复队列"空转。
 
@@ -43,9 +44,10 @@
 | 3002 `/v1/messages` claude-haiku-4-5-20251001（直探） | 200 / 0.8s | ch68/69 agnes 替身（映射 agnes-2.0-flash），claude→openai 转换正常 |
 | **真实 CLI 端到端 haiku**：`claude -p "Reply with the single word OK" --model claude-haiku-4-5-20251001` | **OK / 8.7s** | 完整 agentic 流（流式 + 工具）走 3002 全通 |
 | 3002 `/v1/messages` claude-opus-5（直探） | 503 | **路由正确**：guardian file-tail 捕获本次请求命中 channel #116，上游 kktoken 自身返回 503 `No available channel for model claude-opus-5 under group default`（kktoken 是 NewAPI 系转售商，报错文本同源冒泡） |
-| 真实 CLI opus-5 同探针 | 挂起重试后终止 | NewAPI 503 → CLI 5xx 退避重试，无可用上游时表现为长时间无响应 |
-| ch72 any 桥（8789）上游 | 全天 429 | 当日 429×168（08:06–21:24 本地），`load-cap squeeze 1/8…8` 后 500；与 §any-gpt-cutover 记录的 gpt-6-astra 风暴同源同日 |
-| ch45/86 agentrouter 上游 | 预算池 402 | 21:40 实测 claude-opus-5：4 把 key 全部 `402 Budget pool quota has been exhausted → key cooled`；ch86 直连域同池，同命运 |
+| 真实 CLI opus-5 同探针 | 挂起重试后终止（人为截止） | NewAPI 503 → CLI 5xx 退避重试超出合理探测窗；直探 503 + guardian channel-#116 跟踪已足证 |
+| ch72 any 桥（8789）上游 | 全天 429，**上游级非 per-model** | 当日 429×168（08:06–21:24 本地），`load-cap squeeze 1/8…8` 后 500；换 sonnet-4-5/haiku-4-5 目录名重探仍 429，排除单模型限流 |
+| ch45/86 agentrouter 上游 | 预算池 402，**两域同池实锤** | 21:40 经 8788 实测：4 把 key 全部 `402 Budget pool quota has been exhausted → key cooled`；21:51 直连 `ps.air-outer.com`（ch86 key + claude-cli UA）返回逐字相同 402（request id 同源）。注意：无 UA 裸探被 `401 unauthorized client` 指纹门拦——两个域都有 client 门，8788 桥的 UA 注入不可省 |
+| 旧链 15721（cc-switch Sub2API） | 存活 | 21:50 直验 `claude -p`（env 覆盖 15721+PROXY_MANAGED）→ OK / 11.2s；`config list` 405 不能代表 messages 链路 |
 | ch123 zzzcoding | 池窗门控 | `DEGRADED_ACCEPTED_DISABLED[123]`：池空 status=2，zz_gate 自动开合 |
 
 ### 当晚 claude-opus-5 可用性矩阵
@@ -72,4 +74,4 @@
 cp ~/.claude/settings.json.bak.pre-any-agent-3002-20260910-214529 ~/.claude/settings.json
 ```
 
-回到 cc-switch 15721/PROXY_MANAGED（注意该链当晚 405）。
+回到 cc-switch 15721/PROXY_MANAGED（该链当晚实测存活，回滚低风险）。
