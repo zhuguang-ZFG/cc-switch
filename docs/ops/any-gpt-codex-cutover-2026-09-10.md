@@ -73,6 +73,8 @@ experimental_bearer_token = "<newapi 客户端 key 明文，51 字符>"  # 文�
 - `experimental_bearer_token` 明文 key 与文件既有明文先例一致；如轮换 NewAPI 客户端 key，需同步改本行。
 - gpt-5-codex / gemini-2.5-pro 故意不配置：上游 404 死列表，配置即静默失败。
 - **OMP 不可用（2026-09-10 实测+结构）**：上游 Codex-only 门仅认真 Codex CLI 请求——6 次手搓 `/v1/responses`（minimal / string-input / codex 指纹头 / codex 形 body 含 tools+reasoning+include）经 3002 全 400 `invalid codex request`，仅真 Codex CLI 过门。OMP 无 instructions/header/body 覆写能力（models.yml 仅 api 类型切换；extensions 仅 4 个路由/守护钩子，无请求中间件），同型门 09-05 zzzcoding 会话已实测「OMP 全过不了」。结论：gpt-6-astra 仅供 Codex CLI，OMP 不建条目；若要 OMP 使用需自建 codex 指纹转换桥（项目级工作，门禁漂移风险高，未立项）。
+- **codex CLI 环境修复（当晚 ~20:00）**：~19:47 起本机 codex.CMD 全挂（`系统找不到指定的路径`），根因是外部触发的 npm 重装（0.153.4→0.154.0 再回退）过程中**npm 静默跳过别名列可选依赖** `@openai/codex-win32-x64`（两次 `npm i -g @openai/codex@0.15x.0` 均复现，与 alias-form optionalDependencies 已知缺陷一致）。修复 = `npm pack @openai/codex@0.153.4-win32-x64` 手动解压到 `%APPDATA%\npm\node_modules\@openai\codex-win32-x64\`（codex.js 用 `require.resolve` 寻址该兄弟包）。验证：node 直跑 / python subprocess / cmd `/d /s /c` 三路 `codex-cli 0.153.4` 全通；git-bash 直调 .CMD 仍报路径错误属 MSYS 执行层怪癖，不影响用户原生终端。回归：20:09:12 经默认链（3002→ch126）真实 Codex 请求 12,122pt/162ct 干净入账——修复后链路畅通。
+- **any 上游间歇断流（当晚在发生）**：ch126 当晚 8 行消费中 4 行异常（`上游没有返回计费信息（可能是上游超时）`，含用户 110k-token 真实会话 2 次中断 19:49–19:50、回归请求后 2 次重试 20:09:18/44 失败）——codex 表现为 `error: interrupted / Reconnecting 1/5`。属 any 负载窗口的流中断形态，非本地问题；持续恶化则触发 §4 的 ch92 复活预案（先探活上游）。
 
 ## 5. 回滚
 
