@@ -72,6 +72,7 @@ experimental_bearer_token = "<newapi 客户端 key 明文，51 字符>"  # 文�
 - any 上游仍有负载上限窗口（500「负载已经达到上限」/429 拥堵式拒绝）；**astra 当前唯一活跃源 = ch126**——ch92（zzzcoding）2026-09-05 晚被手动禁用（other_info `status_reason=manual operation`，status_time=1788608094），且近 14 天零消费记录、最近管理测试停在 08-19。any 撞负载窗口期间 astra 无 failover 兄弟；复活 ch92 前必须先探活其上游（zzzcoding 同域 sub2api 面 09-10 实测 405），禁止未探活直接 status=1。
 - `experimental_bearer_token` 明文 key 与文件既有明文先例一致；如轮换 NewAPI 客户端 key，需同步改本行。
 - gpt-5-codex / gemini-2.5-pro 故意不配置：上游 404 死列表，配置即静默失败。
+- **OMP 不可用（2026-09-10 实测+结构）**：上游 Codex-only 门仅认真 Codex CLI 请求——6 次手搓 `/v1/responses`（minimal / string-input / codex 指纹头 / codex 形 body 含 tools+reasoning+include）经 3002 全 400 `invalid codex request`，仅真 Codex CLI 过门。OMP 无 instructions/header/body 覆写能力（models.yml 仅 api 类型切换；extensions 仅 4 个路由/守护钩子，无请求中间件），同型门 09-05 zzzcoding 会话已实测「OMP 全过不了」。结论：gpt-6-astra 仅供 Codex CLI，OMP 不建条目；若要 OMP 使用需自建 codex 指纹转换桥（项目级工作，门禁漂移风险高，未立项）。
 
 ## 5. 回滚
 
