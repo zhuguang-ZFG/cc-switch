@@ -82,3 +82,59 @@ experimental_bearer_token = "<newapi 客户端 key 明文，51 字符>"  # 文�
 ~/.codex/config.toml.bak-20260910-any-cutover   # 恢复 Codex 默认链（注意：该链本身 405 断）
 ch126: PUT /api/channel/ status=2 或直接删除     # 摘除 NewAPI 侧
 ```
+
+## 6. 附录：Codex TUI 进程静默退出调查（当晚 19:40–20:45）
+
+**Status:** 结论收敛，触发者待退出码裁决。用户症状：TUI 会话运行几分钟后自行消失、无错误提示。
+
+### 6.1 进程普查（`~/.codex/logs_2.sqlite`，今日 7 次启动）
+
+| pid | 存活 | 日志行 | 性质 |
+|---|---|---|---|
+| 8148 | 19:40:09→19:44:55 | 1159 | 真实会话，中途消失（无任何收尾行） |
+| 14208 | 19:48:37→19:50:33 | 1063 | 真实会话，中途消失 |
+| 6840 | 19:51:04→19:51:08 | **3** | 启动 4 秒即退：仅公告拉取 + OTEL flush，未进会话 |
+| 17052 | 20:12:22→20:12:29 | **4** | 启动 7 秒即退，末行 `failed to finish interactive telemetry shutdown (exceeded time budget)` |
+| 12292 | 20:12:41→20:19:00 | 1248 | 真实会话，死在 commandExecution 流中间 |
+| 22848 | 20:19:59→20:27:05 | 1185 | 真实会话，死在重试 2/5 中间 |
+| 17848 | 20:27:27→20:41+ | 1264+ | **存活**，期间经历同样错误风暴（13 次重试） |
+
+死进程全部**没有** `Shutting down Codex instance` 行——未走任何关闭路径。turn 层：thread 01a08b3c 的全部 turn 永久 `inProgress`（17 个悬挂 turn，`codex resume` 可能恢复不回，#37754）。
+
+### 6.2 已排除项（本地证据）
+
+- **非崩溃**：48h 事件日志无 codex 的 Application Error/Hang；`%LOCALAPPDATA%\CrashDumps` 空；WER ReportQueue/Archive 空；日志库无 panic。
+- **非 OMP/harness 杀**：codex 挂在普通 PowerShell 标签（WT，cwd `D:\Users\hutuji`）→ node npm shim → codex.exe；`~/.new-api-local/watchdog.ps1` 只保 new-api/guardian/supervisor，不碰 codex。
+- **非网关重启**：本地 new-api（PID 17056）12:55 启动至今未重启。
+- **非更新瞬间**：0.153.4→0.154.0 自动升级在 20:12–20:14，但 19:40/19:48 的死亡在其之前。
+- **非 `--disable tui_app_server` 可救**：0.154 `codex features list` 显示 `tui_app_server  removed  true`，开关已移除。
+
+### 6.3 turn 级归因：上游风暴不杀进程
+
+| 进程 | 临死时重试的 turn | 重试次数 | turn 起始 rollout 字节 |
+|---|---|---|---|
+| 12292（死） | `4cd6`（5/5 前） | 5 | 22 KB（最小） |
+| 22848（死） | `1629`（3/5） | 3 | 1.96 MB |
+| 17848（**存活**） | `d857` ×8 + `df32` ×5 | **13** | **2.71 MB（最大）** |
+
+存活者跑在最大 turn、扛最多重试仍活着 → 死亡与具体请求/体积/重试次数**无相关**。上游问题是并发的病（见 6.4），不是杀手。
+
+### 6.4 上游实况（当日全量，修正 §4 的抽样表述）
+
+- 中转侧（new-api.db，token `local-windows-clients`，channel 126 anyrouter.top）：gpt-6-astra **62 次请求 / 20 次被上游截断（32%）**，日志 `上游没有返回计费信息，无法扣费（可能是上游超时）`。
+- codex 侧今日：`stream disconnected` 重试告警 26、限流相关 27（其中 `rate limit exceeded … eastus2` 14）、`high demand` 13。
+- turn 结局：`completed 119 / failed 89 / inProgress 17 / interrupted 5`。
+- ch92（zzzcoding，astra 备用渠道）仍禁用；复活前须先探活其上游（§4 约定不变）。
+
+### 6.5 判定与待办
+
+**判定（ranked）**：进程被终止时未走任何关闭路径、无崩溃记录 → ① 外部/控制台级终止（Ctrl+C×2、TerminateProcess、控制台关闭）或 ② 0.154 TUI/App-Server 静默自退（与 Windows 静默退出家族 #40576 签名一致：末行正常→无声消失，无 WER 无 dump）。上游断流列为并发问题，已排除为杀手。
+
+**待办（一次裁决）**：
+```powershell
+codex; "exit=$LASTEXITCODE"
+# 3221225786 (0xC000013A) → 外部终结 | 101 → panic | 0/1 → 自身退出
+```
+隔离试验：同终端 `codex exec "ping"` 循环 10 分钟，exec 活得比 TUI 久 → TUI 层问题。若为 0xC000013A 需 ETW/ProcMon 追终止者。
+
+**顺带卫生**：`C:\Users\zhugu\.cc-switch\skills\ecc\SKILL.md` 缺 YAML frontmatter（每次启动报 ERROR）；`~/.codex` 175 个 rollout 共 506MB + 日志库 398MB 可清；17 个悬挂 `inProgress` turn 待归档。
