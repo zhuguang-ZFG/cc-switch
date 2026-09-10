@@ -119,9 +119,9 @@ ch126: PUT /api/channel/ status=2 或直接删除     # 摘除 NewAPI 侧
 
 存活者跑在最大 turn、扛最多重试仍活着 → 死亡与具体请求/体积/重试次数**无相关**。上游问题是并发的病（见 6.4），不是杀手。
 
-### 6.4 上游实况（当日全量，修正 §4 的抽样表述）
+### 6.4 上游实况（当日全量，补全 §4 的抽样窗口）
 
-- 中转侧（new-api.db，token `local-windows-clients`，channel 126 anyrouter.top）：gpt-6-astra **62 次请求 / 20 次被上游截断（32%）**，日志 `上游没有返回计费信息，无法扣费（可能是上游超时）`。
+- 中转侧（new-api.db，token `local-windows-clients`，channel 126 anyrouter.top）：gpt-6-astra **62 次请求 / 20 次被上游截断（32%）**，日志 `上游没有返回计费信息，无法扣费（可能是上游超时）`；与 §4 当晚抽样（8 行中 4 行异常）一致，此处为全日补全。
 - codex 侧今日：`stream disconnected` 重试告警 26、限流相关 27（其中 `rate limit exceeded … eastus2` 14）、`high demand` 13。
 - turn 结局：`completed 119 / failed 89 / inProgress 17 / interrupted 5`。
 - ch92（zzzcoding，astra 备用渠道）仍禁用；复活前须先探活其上游（§4 约定不变）。
@@ -137,4 +137,4 @@ codex; "exit=$LASTEXITCODE"
 ```
 隔离试验：同终端 `codex exec "ping"` 循环 10 分钟，exec 活得比 TUI 久 → TUI 层问题。若为 0xC000013A 需 ETW/ProcMon 追终止者。
 
-**顺带卫生**：`C:\Users\zhugu\.cc-switch\skills\ecc\SKILL.md` 缺 YAML frontmatter（每次启动报 ERROR）；`~/.codex` 175 个 rollout 共 506MB + 日志库 398MB 可清；17 个悬挂 `inProgress` turn 待归档。
+**顺带卫生**：`C:\Users\zhugu\.cc-switch\skills\ecc\SKILL.md` 缺 YAML frontmatter（每次启动报 ERROR）；`~/.codex` 175 个 rollout 共 506MB、`logs_2.sqlite` 277MB、`thread_history_1.sqlite` 121MB 可清；17 个悬挂 `inProgress` turn 待归档。
