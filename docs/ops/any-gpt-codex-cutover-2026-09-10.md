@@ -1,0 +1,81 @@
+# any 渠道 GPT 接入 Codex——ch126 + 默认供应商切换（2026-09-10）
+
+**Status:** 已生效（Codex 默认配置实弹验证通过）
+**Scope:** NewAPI 渠道 ch126、`~/.codex/config.toml` 默认 provider 切换。未触碰 cc-switch 本体、8789 桥、OMP 配置、ch72/ch92。
+
+## 1. 背景与触发
+
+- 用户指令：把 any（anyrouter.top）渠道的 GPT 模型配置到 Codex。
+- 现场证据：当前 Codex 默认链（15721 → cc-switch 现役 provider `Sub2API` → 上游）**已断**——`codex exec` 默认配置报 `405 Method Not Allowed`（nginx），重试 5/5 全挂。切换 any 属修复而非增强。
+- any 目录（经 8789 桥 `GET /v1/models`，2026-09-10）：15 个模型。真实可用的 GPT 模型只有 **gpt-6-astra**；`gpt-5-codex` 为死列表（上游 404「当前 API 不支持所选模型」，与 2026-08-15 窗口调查一致），**未配置，避免静默失败**；`gemini-2.5-pro` 非 GPT，出范围。
+
+## 2. 上游门禁结论（实测）
+
+- 上游 codex 通道对**合成请求**拒绝：`POST 8789/v1/responses {model:gpt-6-astra, input:string, stream:false}` → 400 `invalid codex request (invalid_responses_request)`——与 2026-09-06 结论一致。
+- **真 Codex CLI 请求原生可过**：`codex exec`（0.153.4）直连 `https://anyrouter.top/v1` + 明文 Bearer（any key）→ `ANY_CODEX_OK`，8.4s / 12,172 tokens。门禁只验 body 形状，不要求 codex 指纹头。
+- NewAPI 3002 透传真 Codex 请求到 type-1 渠道**无需** ch91 式 param_override/header_override（jianzhile 需要头注入是其自身门禁，any 不需要）。
+
+## 3. 变更
+
+### 3.1 NewAPI 渠道 ch126 `any-gpt-6-astra`
+
+`POST /api/channel/`（mode single）：
+
+| 字段 | 值 |
+|---|---|
+| type | 1（OpenAI） |
+| base_url | `https://anyrouter.top` |
+| key | any key（`~/.omp/guardian/secrets.json` 的 `anyrouter_proxy_key`，未落仓库） |
+| models | `gpt-6-astra` |
+| group / priority / weight | default / 50 / 5 |
+| auto_ban / status | 0（公益站挤窗语义，同 ch45/ch72 先例）/ 1 |
+| test_model | `gpt-6-astra`（ch72 故障域拆分教训：必填） |
+| model_mapping / param_override / header_override | 空（实测不需要） |
+
+- **管理端测试是假阴性**：`GET /api/channel/test/126?model=gpt-6-astra` → 404「当前 API 不支持所选模型」——管理测试走合成 chat 面请求，被上游 codex 门拒，与真 Codex 路径无关。ch126 的可用性以 Codex 实弹为准。
+- 未动 ModelRatio：沿用 ch92 时代现状（fallback 计价，12k-token 请求 quota≈571341）。如需对齐 bai-free 式免费置 0，另起变更（注意 ratio 是模型全局，会影响将来复活的 ch92 计费显示）。
+- ch72（Anthropic 故障域，仅 Claude）与 ch92（zzzcoding，status=2 未动）保持原状；astra 聚合池当前唯一活跃渠 = ch126。
+
+### 3.2 Codex 默认供应商切换（`~/.codex/config.toml`）
+
+```toml
+model_provider = "any"          # 原 "custom"（cc-switch 15721，已断）
+model = "gpt-6-astra"           # 不变
+model_reasoning_effort = "high" # 不变
+disable_response_storage = true # 不变
+
+[model_providers.any]
+name = "Any-GPT"
+base_url = "http://127.0.0.1:3002/v1"   # 经 NewAPI：usage 计费入账 + 聚合池 failover
+wire_api = "responses"
+experimental_bearer_token = "<newapi 客户端 key 明文，51 字符>"  # 文件内已有同类明文先例（GitHub PAT）
+```
+
+- `[model_providers.custom]`（cc-switch 15721）块**保留**作回滚载体。
+- 备份：`~/.codex/config.toml.bak-20260910-any-cutover`（切换前完整副本）。
+
+### 3.3 验证
+
+| 步骤 | 证据 |
+|---|---|
+| 直连上游 | `ANY_CODEX_OK`，8.4s（codex exec + `-c` 覆盖 → https://anyrouter.top/v1） |
+| 经 NewAPI 3002 | `ANY_NEWAPI_OK`，6.9s（codex exec + `-c` 覆盖 → 3002，ch126） |
+| 消费归因 | NewAPI log：`channel=126, model=gpt-6-astra, is_stream=true, use_time=5s` |
+| 默认配置实弹 | `ANY_CUTOVER_OK`，6.7s（无任何 `-c` 覆盖，走 config.toml） |
+| 仓库门禁 | `newapi-local-smoke.py`：`channel model isolation — violations=none`；unexpected_disabled 不含 126 |
+
+冒烟门禁当轮另有 **9 个存量 FAIL**（与本变更无关，均先于本变更存在）：opus 主池 ch3/ch9/ch18 被禁与容量 1<2、ch78 缺失、`AutomaticRetryStatusCodes=400,408,429,500-503` 漂移、ch87 零输出计费、ch45/ch92 abilities 缺失（ch92 模型槽 09-05 改 astra 所致）、sensenova-6.7-flash-lite 404。**未做批处理修复**（保守变更纪律），需另行立项。
+
+## 4. 风险与边界
+
+- **cc-switch 改写覆盖**：config.toml 是 cc-switch codex 供应商投影；用户下次在 cc-switch 里切 Codex 供应商会整体覆写本文件（any 块消失，回到断链的 custom）。恢复方法：重放本文件 3.2 节（或恢复 bak）。cc-switch 本体在禁区，无法从根上消除此漂移。
+- any 上游仍有负载上限窗口（500「负载已经达到上限」/429 拥堵式拒绝）；聚合池内 ch92 复活后可承接 failover（当前 status=2）。
+- `experimental_bearer_token` 明文 key 与文件既有明文先例一致；如轮换 NewAPI 客户端 key，需同步改本行。
+- gpt-5-codex / gemini-2.5-pro 故意不配置：上游 404 死列表，配置即静默失败。
+
+## 5. 回滚
+
+```text
+~/.codex/config.toml.bak-20260910-any-cutover   # 恢复 Codex 默认链（注意：该链本身 405 断）
+ch126: PUT /api/channel/ status=2 或直接删除     # 摘除 NewAPI 侧
+```
