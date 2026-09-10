@@ -62,14 +62,14 @@ experimental_bearer_token = "<newapi 客户端 key 明文，51 字符>"  # 文�
 | 经 NewAPI 3002 | `ANY_NEWAPI_OK`，6.9s（codex exec + `-c` 覆盖 → 3002，ch126） |
 | 消费归因 | NewAPI log：`channel=126, model=gpt-6-astra, is_stream=true, use_time=5s` |
 | 默认配置实弹 | `ANY_CUTOVER_OK`，6.7s（无任何 `-c` 覆盖，走 config.toml） |
-| 仓库门禁 | `newapi-local-smoke.py`：`channel model isolation — violations=none`；unexpected_disabled 不含 126 |
+| 仓库门禁 | `newapi-local-smoke.py` 手动跑（19:36）：`channel model isolation — violations=none`；unexpected_disabled 不含 126 |
 
-冒烟门禁当轮另有 **9 个存量 FAIL**（与本变更无关，均先于本变更存在）：opus 主池 ch3/ch9/ch18 被禁与容量 1<2、ch78 缺失、`AutomaticRetryStatusCodes=400,408,429,500-503` 漂移、ch87 零输出计费、ch45/ch92 abilities 缺失（ch92 模型槽 09-05 改 astra 所致）、sensenova-6.7-flash-lite 404。**未做批处理修复**（保守变更纪律），需另行立项。
+门禁当轮 **9 个存量 FAIL 有直接前置证据**：`.tmp-newapi-dx-ops.log` 中 19:25:01 定时冒烟（ch126 创建前，`total=64 enabled=21`）与 15:25:01 两轮摘要与 19:36（`total=65 enabled=22`，+ch126）完全一致——ch126 零新增违规。9 项：opus 主池 ch3/ch9/ch18 被禁与容量 1<2、ch78 缺失、`AutomaticRetryStatusCodes=400,408,429,500-503` 漂移、ch87 零输出计费、ch45/ch92 abilities 缺失（ch92 模型槽 09-05 改 astra 所致）、sensenova-6.7-flash-lite 404。**未做批处理修复**（保守变更纪律），需另行立项。
 
 ## 4. 风险与边界
 
 - **cc-switch 改写覆盖**：config.toml 是 cc-switch codex 供应商投影；用户下次在 cc-switch 里切 Codex 供应商会整体覆写本文件（any 块消失，回到断链的 custom）。恢复方法：重放本文件 3.2 节（或恢复 bak）。cc-switch 本体在禁区，无法从根上消除此漂移。
-- any 上游仍有负载上限窗口（500「负载已经达到上限」/429 拥堵式拒绝）；聚合池内 ch92 复活后可承接 failover（当前 status=2）。
+- any 上游仍有负载上限窗口（500「负载已经达到上限」/429 拥堵式拒绝）；**astra 当前唯一活跃源 = ch126**——ch92（zzzcoding）2026-09-05 晚被手动禁用（other_info `status_reason=manual operation`，status_time=1788608094），且近 14 天零消费记录、最近管理测试停在 08-19。any 撞负载窗口期间 astra 无 failover 兄弟；复活 ch92 前必须先探活其上游（zzzcoding 同域 sub2api 面 09-10 实测 405），禁止未探活直接 status=1。
 - `experimental_bearer_token` 明文 key 与文件既有明文先例一致；如轮换 NewAPI 客户端 key，需同步改本行。
 - gpt-5-codex / gemini-2.5-pro 故意不配置：上游 404 死列表，配置即静默失败。
 
