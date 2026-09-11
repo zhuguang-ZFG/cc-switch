@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 
+from codex_window_pool import is_codex_probe_incompatible, is_window_budget_exhausted
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置
 # ═══════════════════════════════════════════════════════════════════════════
@@ -184,6 +186,10 @@ CHANNEL_TEST_PATH_OVERRIDES = {
         "/api/channel/test/92?model=zzzcoding-codex-gpt-5.6-sol"
         "&endpoint_type=openai-response&stream=true"
     ),
+    128: (
+        "/api/channel/test/128?model=gpt-5.6-sol"
+        "&endpoint_type=openai-response&stream=true"
+    ),
 }
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）
@@ -322,6 +328,9 @@ PROBE_INCOMPATIBLE_MARKERS = (
     "non_agentic_blocked",
     "only serves agentic",
     "agentic (tool-calling) clients",
+    # 2026-09-09：opencode-go(ch125) 探针不带 x-opencode-session，Console Go 一律
+    # 400 MissingSessionID 拒收——真实流量正常（session 头由 OMP 注入），探针无结论。
+    "missing x-opencode-session",
 )
 
 
@@ -1540,6 +1549,13 @@ class AutoFixEngine:
             if test_ok:
                 self._probe_soft_failures.pop(channel_id, None)
                 continue
+            if is_window_budget_exhausted(channel, test_msg) or is_codex_probe_incompatible(channel, test_msg):
+                self._probe_soft_failures.pop(channel_id, None)
+                logger.info(
+                    f"Channel {channel_id} resource quota or native Codex probe unavailable; "
+                    "keeping bounded Codex failover eligible; native CLI verification required"
+                )
+                continue
             # 日额度耗尽类 429 优先于瞬态限流判定：有明确重置点，挂墓碑禁用
             cap_until = _daily_cap_reset_iso(test_msg)
             if cap_until is not None:
@@ -2219,6 +2235,13 @@ class AutoFixEngine:
             self._full_scan_offset = (offset + scanned) % n
             if test_ok:
                 self._probe_soft_failures.pop(channel_id, None)
+                continue
+            if is_window_budget_exhausted(channel, test_msg) or is_codex_probe_incompatible(channel, test_msg):
+                self._probe_soft_failures.pop(channel_id, None)
+                logger.info(
+                    f"Channel {channel_id} resource quota or native Codex probe unavailable; "
+                    "keeping bounded Codex failover eligible; native CLI verification required"
+                )
                 continue
             # 限流与探针形态不相容都不提供渠道健康结论，不累计破坏性失败。
             # 日额度耗尽类 429 例外：有明确重置点，挂墓碑禁用（见 error scan）。

@@ -138,3 +138,97 @@ codex; "exit=$LASTEXITCODE"
 隔离试验：同终端 `codex exec "ping"` 循环 10 分钟，exec 活得比 TUI 久 → TUI 层问题。若为 0xC000013A 需 ETW/ProcMon 追终止者。
 
 **顺带卫生**：`C:\Users\zhugu\.cc-switch\skills\ecc\SKILL.md` 缺 YAML frontmatter（每次启动报 ERROR）；`~/.codex` 175 个 rollout 共 506MB、`logs_2.sqlite` 277MB、`thread_history_1.sqlite` 121MB 可清；17 个悬挂 `inProgress` turn 待归档。
+
+## 7. 附录：2026-09-11 恢复与复核（config.toml 重放 + 重试码漂移修复 + 双上游探活）
+
+**Status:** 已生效。触发：cc-switch 覆写漂移如期发生（§4 预言），用户指令"继续"授权 a/b/c 三项。
+
+### 7.1 Codex 默认链恢复（重放 §3.2）
+
+- `~/.codex/config.toml` 当日实况：`model_provider="custom"`（15721 Sub2API 断链），`[model_providers.any]` 整块消失。
+- 处置：备份 `config.toml.bak-20260911-before-restore-any` 后重放 3.2 节（`model_provider="any"` + any 块 + `newapi_probe_key` 明文注入；custom 块保留作回滚载体）。
+- 验证：`codex exec` 默认配置 → provider=any 生效，NewAPI log 6 行 astra 记录（1789119429–1789119454）确认路由经 3002→ch126；**接线正确但上游全失败**（见 7.3）。
+
+### 7.2 重试码漂移修复（§3.3 存量 FAIL 之一）
+
+```text
+python3 scripts/ops/update_newapi_retry_budget.py --apply
+→ backup=newapi-retry-budget-20260911-174113.json（~/.new-api-local/backups/）
+→ AutomaticRetryStatusCodes: 400,408,429,500-503 → 408,500-503（readback verified ok=True）
+```
+
+后续冒烟门禁（17:41）：FAIL 9→7（清除 ①漂移项 ②ch87 零输出计费——后者外部自行恢复，非本次改动）；`channel model isolation violations=none`，零新增违规。其余 7 项存量 FAIL 未动（opus 主池 ch3/9/18、ch78 缺失、pool capacity、ch45/92 sol 别名 abilities、sensenova 404）。
+
+### 7.3 双上游探活（密钥经 env_key 注入，未进 argv/config）
+
+| 上游 | 方法 | 结果 |
+|---|---|---|
+| any（直连 `https://anyrouter.top/v1`，绕过 NewAPI） | codex exec `-c` 覆盖 + env key | 401 排除后复现 **Azure 部署级错误**：`Could not find an existing deployment to match the model`——`gpt-6-astra` 部署已被上游移除/改名；目录 `GET /v1/models` 仍列 15 模型（目录≠可服务，§1 同款教训）。昨日 32% 截断已恶化为 100% 失败。 |
+| zzzcoding（直连 `https://api.zzzcoding.org/v1`，绕过 NewAPI） | 同上 | **503 Service temporarily unavailable**（上游自有 request id，非 NewAPI 冒泡）——codex 门面存在但服务不可用；与 §4「sub2api 面 405」不同面。**09-11 复核（17:5x）**：目录仅 `gpt-6-astra`（sol 已下架，探之 404 `not supported by any configured account in this group`——对照证明网关存活、认证通过、路由正常）；astra 503 为上游账号池级不可用，两轮间隔约 1h 同签名复现，非瞬时抖动。 |
+
+- **按 §4 纪律：ch92 探活失败，保持 status=2，不复活**（复活时还须同步改过期 test_model `zzzcoding-codex-gpt-5.6-sol`→`gpt-6-astra`，并决策 priority：p60 复活即成 astra 主路，any 主/zz 兜底则须降 priority<50）。
+- **当前态：astra 池内 ch126 仍 status=1（唯一活跃渠，auto_ban=0 不自禁），但其上游部署失效；ch92 禁用。gpt-6-astra 实质无可用源，恢复依赖上游侧修复。**
+
+### 7.4 过程教训
+
+- **密钥经 `-c env_key=VAR` 探活时**：env 值须 `tr -d '\r\n'` 清洗（secrets.json 读取自带尾换行 → 401「未提供令牌」，与 memory「CRLF 授权头污染」同类）；且 bash 多行脚本会被分段执行导致 env 不达子进程，须单行 `&&` 链。
+- codex `env_key` 机制本身可用（0.154.0）；排除 401 后错误形态即上游真实错误。
+
+## 8. 2026-09-11 晚间全池 GPT 实弹普查（codex 0.154.0，探活先行纪律）
+
+**结论：池内无任何可用 GPT 源；codex CLI 当晚不可用 GPT。ch126 未动、ch91 探测后已还原，净 DB 变更为零。**
+
+### 8.1 实弹结果（全部真 `codex exec` 直连，key 经 env_key 注入）
+
+| 源 | 模型 | 错误形态（原样） | 判定 |
+|---|---|---|---|
+| ch126 any（默认链 3002） | gpt-6-astra | `Could not find an existing deployment to match the model in the request`（5/5 Reconnecting） | 上游 Azure 部署被摘 |
+| any 直连 | gpt-5-codex | `404 当前 API 不支持所选模型 gpt-5-codex` | 死列表，08-15 起未复活 |
+| ch92 zzzcoding | gpt-6-astra | `/v1/responses` 返回 **nginx HTML 错误页**（12.8s，非 JSON） | 门面已死 |
+| ch83 muyuan | gpt-5.6-sol | `503 No available channel for model gpt-5.6-sol under group default (distributor)`（上游自有路由器透传） | 上游池空 |
+| ch87 ooioo | gpt-5.6-sol | `403 预扣费额度失败, 用户剩余额度: ＄0.000006, 需要预扣费额度: ＄0.018980` | 余额枯竭（≈签到可回血） |
+| ch30 fastaitoken | gpt-5.6-sol | `403 INSUFFICIENT_BALANCE` | 余额枯竭 |
+| ch62/63/65 centos 全家 | gpt-5.6-sol | `403 用户额度不足, 剩余额度: ¥-0.008314`（三域名同账户同余额） | 单账户余额枯竭 |
+| ch70 vip.j3gb | gpt-5.6-sol | `403 INSUFFICIENT_BALANCE` | 余额枯竭 |
+| ch82 7758 | gpt-5.6-sol | `401 Invalid token`（目录仍列 gpt-5.4/5.5/5.6-luna/sol/terra） | key 失效 |
+| ch91 jianzhile（经 3002，DB 直启 channels+abilities） | gpt-5.6-sol | `503 No available channel for model gpt-5.6-sol under group GPT (distributor)`——stderr 归因 `channel error (channel #91, status code: 503)` = **ch91 上游自己的 GPT 池空** | 上游池空；**已还原 status=2 + abilities enabled=0**（备份 `channel-91-before-probe-20260911-202924.json`，readback 零 diff） |
+
+### 8.2 agentrouter GPT 新路（用户线报"agent渠道加了gpt模型"，已核实 + 受阻）
+
+- 8788 本地 agentrouter-proxy 目录（`GET /v1/models`，client key=ch45）：新增 **`gpt-5.6-sol`、`gpt-6-astra`**（连同 claude-opus-4-8/5、glm-5.3、deepseek-v4-flash 共 6 模型）。
+- 直连核实：`https://agentrouter.org/v1` 与镜像 `https://ps.air-outer.com/v1` 同目录，**且 `/v1/responses` 端点真实存在**（402 说明请求已穿透认证与路由，进入计费层）。
+- **阻断**：GPT 预算池枯竭——pool keys ×4 + ch86 key 全部 `402 Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool.`（gpt-5.6-sol / gpt-6-astra 均 402）。glm-5.3 流不受影响（另一预算池）。
+- 门禁细节：两上游有 **UA 门**——python-urllib UA → 401；`claude-cli/2.1.158` 与 `codex_cli_rs` UA 均放行。8788 代理出站带 `claude-cli` UA（`agentrouter-proxy.py` `_headers()`）；codex 实弹若接 agentrouter，需 NewAPI 渠道 header_override 注入 codex UA 或经 8788（8788 仅 `/v1/chat` 无 `/v1/responses`，而本机 codex 0.154.0 已移除 wire_api=chat——`-c wire_api=chat` 报错指向 discussion 7782）。
+
+### 8.3 复活路径（按优先级）
+
+1. **agentrouter GPT 池回血**（基建已就绪：responses 面 + 目录 + UA 门已知解法）→ 用户侧动作：agentrouter.org 面板查看预算池/换池/充值；恢复后新建 NewAPI 渠道（type=openai, base_url=`https://agentrouter.org/v1` 或 ps.air-outer.com, header_override 注入 codex UA, test_model=gpt-5.6-sol, 探活先行），codex 默认链仅改 `model=`。
+2. **any 重铺 astra 部署**：ch126 配置原封不动（auto_ban=0），上游恢复即自动可用，无需变更。
+3. 公益站回血（ooioo/centos/fastaitoken 签到或充值）→ 渠道探活后启用。
+
+### 8.4 过程教训（本轮新增）
+
+- 本 fork 渠道更新 API `PUT /api/channel/` 对最小体 `{id,status}` 与全量/slim 对象均返回 `Invalid parameters`（与 memory「最小体可用」记录不符——fork 版本行为变化）；**启用/禁用走 DB 直写须同时改 `channels.status` 与 `abilities.enabled`**（abilities 不动则路由池不生效）。
+- ch91 上游 503 报文含 `under group GPT`：该 "GPT" 是 **上游 jianzhile 自有分组**，非本地 NewAPI 分组（本地 token/abilities 全为 default）——读上游错误时先归因再动手。
+
+## 9. 2026-09-12 affinity 换绑打断无状态 reasoning 回放（会话变砖 + rollout 修复程序）
+
+**Status:** 会话已修复并实弹验证通过；NewAPI 侧零变更（复用 §7/repair 已生效的 affinity 配置）。
+
+### 9.1 症状与归因
+
+- 症状：会话 `01a090de`（09-11 晚大配置会话）每轮报 `stream disconnected before completion: Item with id 'rs_0434bea8...' not found. Items are not persisted when store is set to false`，重试必现。
+- 机制：codex `disable_response_storage=true`（无状态回放），每轮请求携带全部历史 reasoning 项（id + `encrypted_content`）；**加密 reasoning 与产出它的上游账号绑定**——换账号回放即被 OpenAI 拒绝（`encrypted content could not be verified` 或 `Item with id ... not found`）。毒项一旦进入 rollout，该会话对任何新账号永久 400。
+- 触发链（NewAPI log 佐证）：00:47 drill 清 affinity 缓存 → 会话从账号 A（`016aa4...` 前缀）换绑账号 B（`06aa4...` 前缀）→ 历史里同时存在 A/B 两账号的 reasoning 项 → 00:53 起报 verify 失败；01:05:34 `repair_codex_sharedchat.py --apply` 再次清缓存 → 换绑 ch128 SharedChat（p60 优先）→ 全部旧 reasoning 项皆外来 → 01:05–01:13 该会话所有请求 ch128 记 0/0「上游没有返回计费信息」即此病；新会话（`16c1f64e`）01:15 也吃到一次 103s 上游挂起。
+- 教训：**探活/修复脚本禁止在 codex 会话活跃时清 `channel_affinity_cache`**（TTL 300s 到期重绑同理，依赖 SharedChat 侧经透传的 `Session_id/Thread_id` 头保持其内部账号粘性）。
+
+### 9.2 会话修复程序（可复用）
+
+```text
+python3 scripts/ops/codex-resume-scrub.py <rollout.jsonl> --apply
+# 备份 <rollout>.bak-reasoning-scrub-<ts> 后剔除全部 response_item/payload.type=reasoning 行
+codex exec resume <SESSION_ID> -c sandbox_mode="read-only" "<最小探针>"
+```
+
+- 本次：剔除 186 个 reasoning 项（1233→1047 行），备份 `rollout-2026-09-11T22-28-40-...jsonl.bak-reasoning-scrub-20260912-012342`；探针 `codex exec resume 01a090de-... "只回复OK"` → 17.7s 完成，链路 3002→ch128→SharedChat 实弹通过。
+- 边界：仅清客户端 rollout 投影；已混杂多账号历史的会话只有此法可救（affinity 救不了存量污染）；TUI 恢复该会话即可继续（resumed 模型若与录制模型不符会有 warning，属预期）。
