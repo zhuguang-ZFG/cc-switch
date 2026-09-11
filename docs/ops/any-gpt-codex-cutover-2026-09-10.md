@@ -232,3 +232,9 @@ codex exec resume <SESSION_ID> -c sandbox_mode="read-only" "<最小探针>"
 
 - 本次：剔除 186 个 reasoning 项（1233→1047 行），备份 `rollout-2026-09-11T22-28-40-...jsonl.bak-reasoning-scrub-20260912-012342`；探针 `codex exec resume 01a090de-... "只回复OK"` → 17.7s 完成，链路 3002→ch128→SharedChat 实弹通过。
 - 边界：仅清客户端 rollout 投影；已混杂多账号历史的会话只有此法可救（affinity 救不了存量污染）；TUI 恢复该会话即可继续（resumed 模型若与录制模型不符会有 warning，属预期）。
+
+## 10. codex 环境杂项（2026-09-12 核查）
+
+- **skill 加载机制**：codex 只扫 `~/.codex/skills/`（+ 内置 `.system/`）；cc-switch skills 经 **symlink 投影**进入（如 `ecc -> ~/.cc-switch/skills/ecc`），未投影的 skill 不被 codex 加载。报 `missing YAML frontmatter` 时只需给被投影的那份补最小 frontmatter（`name`+`description`）；`~/.cc-switch/skills/` 其余未投影文件无需处理。cc-switch「启用到 codex」生成新 junction 前先确认源 SKILL.md 有 frontmatter。
+- **hooks**：`~/.codex/hooks.json` 的 hook command 必须用绝对路径——`python` 裸名不在 PATH（exit 127），相对路径依赖会话 cwd 恰在 `~` 下。脚本本体 CWD-robust（自带 trellis root 向上查找）。备份 `hooks.json.bak-20260912-absolute-hook`。
+- **`stream disconnected: Could not find an existing deployment to match the model`** ≠ 变砖：是上游模型部署移除（09-11 gpt-6-astra 实例，请求模型全为 astra），rollout 无 reasoning 项则无回放毒化，单轮探针会话无恢复价值，`codex resume` 即可继续。
