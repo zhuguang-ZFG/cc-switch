@@ -163,7 +163,7 @@ completed 128 / failed 130 / inProgress 23 / interrupted 7 —— 失败率近�
 
 **误判根因**：NewAPI SYS 管理探测走 **chat/completions 面**，3×404「当前 API 不支持所选模型 gpt-6-astra」；而 codex 真实流量走 **`/v1/responses` 面**——13:59 的 400 `invalid_encrypted_content` 只可能出自**模型层已放行之后**的内容校验（模型不支持时会回 404-style 不支持错误，而非内容校验 400）。渠道配置佐证：ch126（any，base_url `https://anyrouter.top`）models 表就一行 `gpt-6-astra`，专为该模型而建。**教训：跨 API 面的探测结果不能用来判定模型不存在；类型 1（OpenAI 兼容）渠道的 SYS 探测面 ≠ codex/responses 面。**
 
-**处置**：ch126 重新启用（14:14 status=1）。当前 astra rung：126（responses 面可用）+ 128（15:00 额度重置后恢复循环自动回池）+ 127（agentrouter 放量后）。干净会话在 126/128 上均可用；混合上游历史的会话在任何上游都会 400，新会话是唯一解。运行时冒烟已验 `_is_probe_incompatible` 收紧后四例全过；引擎 PID 20204 @14:16:08 载入全部修复；`test_guardian.py` 190 用例全绿。
+**处置**：ch126 重新启用（14:14 status=1）。当前 astra rung：126（responses 面可用）+ 128（15:00 额度重置后恢复循环自动回池）+ 127（agentrouter 放量后）。干净会话在 126/128 上均可用；混合上游历史的会话在任何上游都会 400，急救路径：`scripts/ops/codex-resume-scrub.py` 清除外来 reasoning 项后原会话可续用（新会话是兜底）。运行时冒烟已验 `_is_probe_incompatible` 收紧后四例全过；引擎 PID 20204 @14:16:08 载入全部修复；`test_guardian.py` 190 用例全绿。
 
 ### 亲和粘住加固（14:22，用户批准）
 
@@ -172,3 +172,16 @@ completed 128 / failed 130 / inProgress 23 / interrupted 7 —— 失败率近�
 **刻意不改**（运营史证据）：`switch_on_success=true`（2026-08-16 muyuan 停摆反例：false 时成功 failover 不迁钉，会话整 TTL 钉死劣化渠道）、`keep_on_channel_disabled=false`（ch75 立即接管依赖它；改 true 换来"钉死禁用渠道硬报错"，且是全局开关会波及 claude/glm 等全部家族）。全局翻动 = 复现已知事故；活跃失败切换（pin 随成功迁移）保留为可用性优先，**中毒后果的可修复路径 = `scripts/ops/codex-resume-scrub.py`**（清外来 reasoning 项后原会话续用，不必弃会话）。
 
 **剩余风险**：空闲 >30min 的重钉、活跃 failover 迁钉，仍可能跨上游 org → 400；急救 = scrub 或新会话。**回滚**：`C:\Users\zhugu\.omp\guardian\affinity-options-backup-20260912.json`（本次变更前快照，ttl=300），PUT 回写即可；更早基线 `C:\Users\zhugu\.new-api-local\backups\channel-affinity-20260912-034402.json`。
+
+### 源码语义核验 + TTL 终值（14:45 追加，advisory 驱动）
+
+**源码身份**：运行二进制 = QuantumNous/new-api v1.0.0-rc.23（`go version -m` 实证）；channel affinity 为上游功能。关键源：`middleware/distributor.go`（pin 消费方）、`service/channel_affinity.go`（RecordChannelAffinity / GetPreferredChannelByAffinity）——切片存于 `D:/Users/cc-switch/.tmp-newapi-*.go`。
+
+**三问实证**：
+1. `switch_on_success=false`：记录只在响应 <400 时发生（distributor 尾部）；false 时记录的是**原始选中渠道**而非最终成功渠道（channel_affinity.go 721-725 的 success 迁移分支被关闭）→ 钉住的会话在渠道劣化（status 仍 Enabled）时每请求都被重钉回死渠道，直到 auto-ban 禁用才解套——muyuan「一挂就停」的代码级机制（sol-chain-muyuan-degradation-2026-08-16.md 行 28-33）。**保持 true。**
+2. `keep_on_channel_disabled=true`：pin 命中但渠道禁用 → `affinityUsable=false` → **不报错，直接 fall through 到加权随机重选**（distributor.go）；true/false 唯一差别是陈旧条目保留 vs 删除。上节「改 true 换来钉死禁用渠道硬报错」对 rc.23 **不成立，勘误**——claude 死粘的真实根因是 `switch_on_success=false` + `skip_retry_on_failure=true`（zg-claude-routing.md 行 124/132）。**保持 false**（行为近等价，翻动无收益）。
+3. TTL 语义：**touch-refresh**——每次成功请求 RecordChannelAffinity 全量重置 TTL（`SetWithTTL`，channel_affinity.go 行 737）。过期只发生在空闲断档；any-gpt-codex-cutover 行 223「TTL 到期重绑换桩」仅适用于跨空闲窗口的会话，活跃会话永不重钉。
+
+**终值**：codex 规则 `ttl_seconds` **1800 → 86400**（24h 空闲窗口；回读验证。其余规则原样：glm/grok/deepseek/longcat/qwen=300、claude=60）。效果：午休/会议/隔夜回来仍回原 org；中毒只剩「>24h 空闲」与「failover 迁钉」两路（急救 = scrub）。escape hatches（auto-ban 禁用、成功迁钉、disable 清条目）全部基于渠道状态而非 TTL，与 24h 无冲突；首次分配仍走权重，跨会话负载均衡不受影响。**快照**：`C:\Users\zhugu\.new-api-local\backups\channel-affinity-20260912-ttl1800-pre-86400.json`（回滚 = PUT 回写）。
+
+**模型名分离方案（advisory 提出，评估后暂缓）**：astra 双上游拆成两个模型别名各钉一个渠道，NewAPI 层即不存在跨 org 选择——根治但代价 = 单别名渠道故障/额度耗尽时直接 503（无 failover），可见中断违背无感使用目标，且需改客户端模型名。留作用户显式要确定性时的备选。
