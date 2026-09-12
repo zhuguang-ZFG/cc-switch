@@ -123,3 +123,24 @@ completed 128 / failed 130 / inProgress 23 / interrupted 7 —— 失败率近�
 ### 遗留：仓库副本漂移
 
 `scripts/ops/guardian.py`（repo）落后线上 ~119 行（file-tail 错误侧观测、预算感知扫描偏移等 09-12 凌晨特性 live-only）；本次三处修复已双端同步（线上先行重启、仓库镜像）。待单独开任务做一次全量 diff 对齐后再清理旧 `.bak`。
+
+## 附 3：busy ≠ 死——上游容量信号的探测分类（当日 13:40–13:50 追加）
+
+### 现场因果链（13:26–13:40）
+
+1. ch128 于 13:22 恢复探测未过稳定闸（上游当时 1/3 抖动）→ **闸门正确再禁**（13:23:40 "auto-enabled before stable; disabled again"）；用户侧 503 实为路由沿梯级走到 ch127 后冒泡的最后错误（"Budget pool"），ch128 真实错误 = 503 `Only one Codex conversation can run at a time`（公益站**单 Codex 会话并发**硬上限）+ `Codex model price is temporarily unavailable`（价格表抖动）。
+2. 13:29:31 人工启用（当时 3/3 管理探测通过）；13:33–13:35 用户侧真实流量恢复（流式 chunk received=78–143）。
+3. 13:38:51 引擎恢复探测时**用户会话正占住单会话槽** → 3 探全报 "Only one Codex conversation" → 稳定闸门把"忙"判成"不稳定" → **把唯一活渠道再禁**。这是误分类：忙应答是上游**带内协议应答**，恰证明链路与协议存活。
+
+### 修复（13:44 双端同步，回滚 `guardian.py.bak-20260912-busy-probe`）
+
+- `UPSTREAM_BUSY_MARKERS` + `_is_probe_busy()`：`only one codex conversation` / `model price is temporarily unavailable` 归类为容量信号。
+- 恢复判定放宽：`stable_count + probe_busy_count == RECOVERY_TEST_COUNT` 即视为上游存活 → 走恢复路径（启用/入池/清记录），日志带 `N busy-alive`；**busy 与硬失败混合时仍走原路径**（硬失败优先，不掩盖滚动消费 403 等）。
+- 两条扫描（error/full）的软失败豁免分支加入 busy：忙渠道不累积软失败，不触发 disable_slow_channel。
+
+### 验证与当前池状态（13:44–13:47）
+
+- `test_guardian.py` **186 用例全绿**（新增 2：全 busy 恢复且零禁用调用、busy+硬失败混合仍再禁——后者对旧实现行为一致，前者是防回归）。
+- 引擎重启后三连探测 3/3（<1s）→ ch128 重新启用（status=1, weight=5）；下一恢复窗口自动清算 state 记录（busy 亦算存活，不再自禁）。
+- 池状态：ch128 启用（唯一健康 rung，单会话并发=上游硬约束）；ch127 agentrouter 预算池等定时放量（放量后自动成为第二 rung）；ch126 上游无 astra 模型已禁用（404 "当前 API 不支持所选模型"，结构性）。
+- 遗留后手：zzz(ch92) 405 重接、justwoker 8790 桥加 responses 面、仓库↔线上全量 diff 对齐。

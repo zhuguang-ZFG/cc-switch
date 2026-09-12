@@ -383,6 +383,21 @@ def _is_probe_incompatible(message: str) -> bool:
     # A channel test can choose an endpoint the provider does not implement.
     # That is not evidence that real traffic or credentials are unhealthy.
     return "invalid_request_error" in msg and ("404" in msg or "not found" in msg)
+
+UPSTREAM_BUSY_MARKERS = (
+    # 上游容量/配置信号的带内应答：能回这些话，链路与协议都是活的，不得
+    # 当作禁用依据（2026-09-12 现场：用户会话占住 SharedChat 单会话槽，
+    # 3 次探测全报 "Only one Codex conversation"，稳定闸门把唯一活渠道禁了，
+    # 用户侧反而只剩 budget pool 503）。
+    "only one codex conversation",
+    "model price is temporarily unavailable",
+)
+
+
+def _is_probe_busy(message: str) -> bool:
+    """探针收到上游忙/容量信号：上游存活，不计健康失败。"""
+    msg = (message or "").lower()
+    return any(marker in msg for marker in UPSTREAM_BUSY_MARKERS)
 TEST_CHANNEL_TIMEOUT = 30  # test_channel 独立超时（秒）：上游实测 6-30s 常见，15s 在慢 opus 渠道下误报（2026-08-07 现场 test/3/9/18/33 timed out）
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
@@ -1595,7 +1610,11 @@ class AutoFixEngine:
             if test_ok:
                 self._probe_soft_failures.pop(channel_id, None)
                 continue
-            if is_window_budget_exhausted(channel, test_msg) or is_codex_probe_incompatible(channel, test_msg):
+            if (
+                is_window_budget_exhausted(channel, test_msg)
+                or is_codex_probe_incompatible(channel, test_msg)
+                or _is_probe_busy(test_msg)
+            ):
                 self._probe_soft_failures.pop(channel_id, None)
                 logger.info(
                     f"Channel {channel_id} resource quota or native Codex probe unavailable; "
@@ -1931,6 +1950,7 @@ class AutoFixEngine:
 
             stable_count = 0
             probe_incompatible_count = 0
+            probe_busy_count = 0
             test_msg = "无响应"
             for attempt in range(RECOVERY_TEST_COUNT):
                 # 单条记录最坏 RECOVERY_TEST_COUNT × RECOVERY_PROBE_TIMEOUT 秒；
@@ -1940,6 +1960,7 @@ class AutoFixEngine:
                 test_ok, test_msg = self.newapi.test_channel(channel_id, timeout=RECOVERY_PROBE_TIMEOUT)
                 stable_count += int(test_ok)
                 probe_incompatible_count += int(not test_ok and _is_probe_incompatible(test_msg))
+                probe_busy_count += int(not test_ok and _is_probe_busy(test_msg))
                 if attempt + 1 < RECOVERY_TEST_COUNT:
                     time.sleep(1)
 
@@ -1954,14 +1975,20 @@ class AutoFixEngine:
                     "status left unchanged"
                 )
                 continue
-            if stable_count >= RECOVERY_TEST_PASS_MIN:
+            if stable_count >= RECOVERY_TEST_PASS_MIN or (
+                stable_count + probe_busy_count == RECOVERY_TEST_COUNT
+            ):
+                # 忙应答是带内协议应答（上游在正常说话），忙 ≠ 死：
+                # 通过 + busy 覆盖全部探测即视为上游存活，走恢复路径。
                 enabled = already_enabled or self.newapi.enable_channel(channel_id)
                 if enabled and self._auto_join_pool(channel_id, name):
                     self.state["disabled_channels"].remove(record)
                     self._save_state()
                     logger.info(
                         f"Channel {channel_id} ({name}) recovered "
-                        f"({stable_count}/{RECOVERY_TEST_COUNT} checks passed)"
+                        f"({stable_count}/{RECOVERY_TEST_COUNT} checks passed"
+                        + (f", {probe_busy_count} busy-alive" if probe_busy_count else "")
+                        + ")"
                     )
                     continue
                 test_msg = "聚合池加入失败" if enabled else "渠道启用失败"
@@ -2291,7 +2318,11 @@ class AutoFixEngine:
             if test_ok:
                 self._probe_soft_failures.pop(channel_id, None)
                 continue
-            if is_window_budget_exhausted(channel, test_msg) or is_codex_probe_incompatible(channel, test_msg):
+            if (
+                is_window_budget_exhausted(channel, test_msg)
+                or is_codex_probe_incompatible(channel, test_msg)
+                or _is_probe_busy(test_msg)
+            ):
                 self._probe_soft_failures.pop(channel_id, None)
                 logger.info(
                     f"Channel {channel_id} resource quota or native Codex probe unavailable; "

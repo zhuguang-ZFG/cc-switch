@@ -4008,3 +4008,79 @@ class DailyQuotaCapTests(unittest.TestCase):
         # failures=6 → 32min 退避，20 分钟后仍跳过
         self.assertEqual(engine.newapi.test_calls, [])
         self.assertEqual(len(engine.state["disabled_channels"]), 1)
+
+    def test_busy_probes_recover_channel_without_disable(self):
+        # 2026-09-12 ch128 现场：用户会话占住 SharedChat 单会话槽，恢复探测
+        # 3 连报 "Only one Codex conversation"；忙应答是上游带内协议应答，
+        # 证明链路存活——稳定闸门不得再禁用唯一活渠道，应视为恢复清记录。
+        record = {
+            "id": 128,
+            "name": "sharedchat-codex-astra",
+            "reason": "error_scan: quota — bad response status code 403",
+            "time": (datetime.now() - timedelta(hours=2)).isoformat(),
+            "recovery_failures": 8,
+            "last_recovery_attempt": (datetime.now() - timedelta(minutes=20)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[128] = {
+            "id": 128, "name": "sharedchat-codex-astra", "status": 1,
+            "auto_ban": 1, "weight": 5, "priority": 7,
+            "models": "gpt-5.6-sol",
+        }
+        busy_msg = (
+            "503: gpt-6-astra: Only one Codex conversation can run at a time. "
+            "Please wait for the current conversation to finish."
+        )
+        engine.newapi.test_results.extend([(False, busy_msg)] * 3)
+
+        engine.check_and_enable_recovered_channels()
+
+        # 全 busy → 上游存活证据 → 保持已启用 + 入池 + 清记录；绝不 re-disable
+        self.assertEqual(engine.newapi.test_calls, [128, 128, 128])
+        self.assertEqual(engine.newapi.enable_calls, [])
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertEqual(engine.state["disabled_channels"], [])
+
+    def test_busy_probe_mixed_with_hard_failure_still_re_disables(self):
+        # busy 不掩盖硬失败：2 busy + 1 硬失败（滚动消费限额 403）→ 旧路径再禁。
+        record = {
+            "id": 128,
+            "name": "sharedchat-codex-astra",
+            "reason": "error_scan: quota — bad response status code 403",
+            "time": (datetime.now() - timedelta(hours=2)).isoformat(),
+            "recovery_failures": 8,
+            "last_recovery_attempt": (datetime.now() - timedelta(minutes=20)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[128] = {
+            "id": 128, "name": "sharedchat-codex-astra", "status": 1,
+            "auto_ban": 1, "weight": 5, "priority": 7,
+            "models": "gpt-5.6-sol",
+        }
+        engine.newapi.test_results.extend(
+            [
+                (False, "503: Only one Codex conversation can run at a time."),
+                (False, "503: Codex model price is temporarily unavailable."),
+                (False, "403: rolling spend limit exceeded, please wait 30 minutes."),
+            ]
+        )
+
+        engine.check_and_enable_recovered_channels()
+
+        self.assertEqual(engine.newapi.enable_calls, [])
+        self.assertEqual(engine.newapi.disable_calls, [128])
+        self.assertEqual(len(engine.state["disabled_channels"]), 1)
