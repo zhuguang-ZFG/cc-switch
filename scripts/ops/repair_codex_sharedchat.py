@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Repair Codex Responses affinity and add SharedChat's Sol capability."""
+"""Repair Codex Responses affinity and add SharedChat's Sol capability.
+
+2026-09-12 policy (user directive, supersedes the same-day anti-brick pin):
+the codex cli trace rule MUST allow cross-channel failover
+(skip_retry_on_failure=false) so the same model keeps serving from the next
+live channel when a pinned channel fails (e.g. SharedChat rolling spend
+limit). Brick-risk of a cross-upstream switch is accepted; recovery paths:
+affinity switch_on_success keeps failed retries unpinned, and
+codex-resume-scrub.py can clear poisoned sessions."""
 
 from __future__ import annotations
 
@@ -45,7 +53,7 @@ def repaired_rules(rules: list[dict]) -> list[dict]:
     result = []
     for rule in rules:
         if rule.get("name") == "codex cli trace":
-            rule = {**rule, "skip_retry_on_failure": True}
+            rule = {**rule, "skip_retry_on_failure": False}
         result.append(rule)
     return result
 
@@ -62,9 +70,9 @@ def verify(api) -> dict:
     if abilities != expected:
         raise RuntimeError(f"SharedChat abilities drifted: {abilities!r}")
     rules, target = read_affinity(api)
-    if target.get("skip_retry_on_failure") is not True:
-        raise RuntimeError("Codex affinity still permits cross-channel retry")
-    return {"channel_id": SHAREDCHAT_CHANNEL_ID, "models": channel.get("models"), "test_model": channel.get("test_model"), "abilities": abilities, "codex_skip_retry_on_failure": True}
+    if target.get("skip_retry_on_failure") is not False:
+        raise RuntimeError("Codex affinity must allow cross-channel failover")
+    return {"channel_id": SHAREDCHAT_CHANNEL_ID, "models": channel.get("models"), "test_model": channel.get("test_model"), "abilities": abilities, "codex_skip_retry_on_failure": False}
 
 
 def main() -> int:
@@ -76,7 +84,7 @@ def main() -> int:
     channel = channel_tools.hydrate_key(api("GET", f"/api/channel/{SHAREDCHAT_CHANNEL_ID}"), pool.DB_PATH)
     rules, target = read_affinity(api)
     proposed_rules = repaired_rules(rules)
-    print(json.dumps({"channel": {"id": SHAREDCHAT_CHANNEL_ID, "name": channel.get("name"), "before_models": channel.get("models"), "after_models": ",".join(MODELS), "before_test_model": channel.get("test_model"), "after_test_model": MODELS[1]}, "affinity": {"before_skip_retry_on_failure": target.get("skip_retry_on_failure"), "after_skip_retry_on_failure": True}}, ensure_ascii=True))
+    print(json.dumps({"channel": {"id": SHAREDCHAT_CHANNEL_ID, "name": channel.get("name"), "before_models": channel.get("models"), "after_models": ",".join(MODELS), "before_test_model": channel.get("test_model"), "after_test_model": MODELS[1]}, "affinity": {"before_skip_retry_on_failure": target.get("skip_retry_on_failure"), "after_skip_retry_on_failure": False}}, ensure_ascii=True))
     if not args.apply:
         return 0
     if args.snapshot_dir is None:
