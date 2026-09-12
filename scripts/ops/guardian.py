@@ -372,6 +372,11 @@ PROBE_INCOMPATIBLE_MARKERS = (
     # 2026-09-09：opencode-go(ch125) 探针不带 x-opencode-session，Console Go 一律
     # 400 MissingSessionID 拒收——真实流量正常（session 头由 OMP 注入），探针无结论。
     "missing x-opencode-session",
+    # 2026-09-12 ch128 现场：SharedChat 对非真实 codex 客户端一律 403
+    # 「请使用最新版的codex客户端或codex cli调用」；应答体时带时不带
+    # invalid_request_error 字段、traceid 可能恰好含 "404" 子串，兜底条款
+    # 判定靠运气。探针不是 codex 客户端，此 403 无健康结论。
+    "请使用最新版的codex客户端",
 )
 
 
@@ -2125,9 +2130,17 @@ class AutoFixEngine:
 
             join_info["stability_checks"] = join_info.get("stability_checks", 0) + 1
             test_ok, test_msg = self.newapi.test_channel(channel_id)
-            if not test_ok and _is_probe_incompatible(test_msg):
+            if (
+                not test_ok
+                and (
+                    _is_probe_incompatible(test_msg)
+                    or _is_probe_busy(test_msg)
+                    or _daily_cap_reset_iso(test_msg) is not None
+                )
+            ):
                 logger.info(
-                    f"Channel {channel_id} stability probe-incompatible, skipped: {test_msg[:100]}"
+                    f"Channel {channel_id} stability probe "
+                    f"incompatible/busy/self-healing, skipped: {test_msg[:100]}"
                 )
                 self._save_state()
                 continue

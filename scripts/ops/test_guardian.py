@@ -1684,6 +1684,106 @@ class PoolJoinTests(unittest.TestCase):
         self.assertEqual(engine.newapi.disable_calls, [])
         self.assertEqual(engine.state.get("disabled_channels", []), [])
 
+    def test_stability_busy_probe_does_not_count_as_failure(self):
+        """稳定性窗口中的上游忙信号（单会话占用）不累计回滚失败。"""
+        engine = make_engine(
+            {
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {
+                    "128": {
+                        "time": datetime.now().isoformat(),
+                        "models": ["gpt-6-astra"],
+                        "weight": 5,
+                        "priority": 60,
+                        "stability_checks": 0,
+                        "stability_fails": 1,
+                    }
+                },
+            }
+        )
+        engine.newapi.test_results.append(
+            (False, "403 Only one Codex conversation is allowed per API key")
+        )
+        engine._stability_count = guardian.JOIN_STABILITY_CHECK_INTERVAL - 1
+
+        engine._check_joined_channels_stability()
+
+        self.assertEqual(engine.state["joined_channels"]["128"]["stability_fails"], 1)
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertEqual(engine.state.get("disabled_channels", []), [])
+
+    def test_stability_self_healing_quota_does_not_rollback(self):
+        """稳定性窗口中的自愈型额度提示（带重置时间）不累计回滚失败。"""
+        engine = make_engine(
+            {
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {
+                    "128": {
+                        "time": datetime.now().isoformat(),
+                        "models": ["gpt-6-astra"],
+                        "weight": 5,
+                        "priority": 60,
+                        "stability_checks": 0,
+                        "stability_fails": 1,
+                    }
+                },
+            }
+        )
+        engine.newapi.test_results.append(
+            (
+                False,
+                "403 当前公益站使用人数较多，本时段全站额度已用完，请在 今天 15:00 后再试。（traceid: 56574af1）",
+            )
+        )
+        engine._stability_count = guardian.JOIN_STABILITY_CHECK_INTERVAL - 1
+
+        engine._check_joined_channels_stability()
+
+        self.assertEqual(engine.state["joined_channels"]["128"]["stability_fails"], 1)
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertEqual(engine.state.get("disabled_channels", []), [])
+
+    def test_stability_codex_client_rejection_does_not_count_as_failure(self):
+        """SharedChat「请使用最新版 codex 客户端」探针拒收不累计回滚失败。
+
+        现场：同一应答文本，13:55:36 因应答体恰好含 invalid_request_error 且
+        traceid 含 "404" 被兜底条款误判 incompatible 跳过，13:56:27 换应答形状
+        后计入 stability_fails 并触发 stability_rollback。显式 marker 兜住。
+        """
+        engine = make_engine(
+            {
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {
+                    "128": {
+                        "time": datetime.now().isoformat(),
+                        "models": ["gpt-6-astra"],
+                        "weight": 5,
+                        "priority": 60,
+                        "stability_checks": 0,
+                        "stability_fails": 1,
+                    }
+                },
+            }
+        )
+        engine.newapi.test_results.append(
+            (
+                False,
+                "bad response status code 403, message: 请使用最新版的codex客户端"
+                "或codex cli调用（traceid: 56574af1-e731-4768-8624-33e17df3eb）",
+            )
+        )
+        engine._stability_count = guardian.JOIN_STABILITY_CHECK_INTERVAL - 1
+
+        engine._check_joined_channels_stability()
+
+        self.assertEqual(engine.state["joined_channels"]["128"]["stability_fails"], 1)
+        self.assertEqual(engine.newapi.disable_calls, [])
+        self.assertEqual(engine.state.get("disabled_channels", []), [])
+
+
     def test_re_disables_channel_when_pool_join_fails(self):
         record = {
             "id": 7,
