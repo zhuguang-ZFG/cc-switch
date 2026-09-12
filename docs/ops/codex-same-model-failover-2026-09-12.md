@@ -142,19 +142,25 @@ completed 128 / failed 130 / inProgress 23 / interrupted 7 —— 失败率近�
 
 - `test_guardian.py` **186 用例全绿**（新增 2：全 busy 恢复且零禁用调用、busy+硬失败混合仍再禁——后者对旧实现行为一致，前者是防回归）。
 - 引擎重启后三连探测 3/3（<1s）→ ch128 重新启用（status=1, weight=5）；下一恢复窗口自动清算 state 记录（busy 亦算存活，不再自禁）。
-- 池状态：ch128 启用（唯一健康 rung，单会话并发=上游硬约束）；ch127 agentrouter 预算池等定时放量（放量后自动成为第二 rung）；ch126 上游无 astra 模型已禁用（404 "当前 API 不支持所选模型"，结构性）。
+- 池状态：ch128 启用（唯一健康 rung，单会话并发=上游硬约束）；ch127 agentrouter 预算池等定时放量（放量后自动成为第二 rung）；ch126 判"结构性死渠道"（404 "当前 API 不支持所选模型"）——**此结论 14:15 被用户推翻，见续篇勘误**。
 - 遗留后手：zzz(ch92) 405 重接、justwoker 8790 桥加 responses 面、仓库↔线上全量 diff 对齐。
 
 ### 续篇：stability 回滚 flap + ch126 复活调查（14:04–14:12 追加）
 
 **13:55–13:57 flap 因果链**：13:55:02 busy≠死修复生效，ch128 恢复入池并注册 stability 窗口 → 13:55:36 稳定性监控探到 403「请使用最新版的codex客户端或codex cli调用」被 `_is_probe_incompatible` 兜底条款**碰巧跳过**（应答体恰好含 `invalid_request_error` 且 traceid `20dfdc97-a2ab-4404-…` 含 "404" 子串）→ 13:56:27 同文案但应答换形状（无该字段），未命中兜底 → 记 stability_fails=1 → 13:57:34 全站额度 403 记 fails=2 → **stability_rollback 再禁**（无墓碑字段）。三个独立缺陷叠加：应答形状抖动致分类靠运气；忙/自愈额度未纳入 skip；回滚记录不带 `daily_cap_until`。
 
-**ch126 复活者定性**：GIN 日志全天 `/api/channel/126` 仅 12×GET（面板轮询）+ 2×POST/status——13:29:47 为 Guardian 自身禁用；**13:42:43（11.5ms）为唯一启用事件**，来自 127.0.0.1 管理端 API。旧引擎（PID 28484）已排除：`_sync_newapi_auto_bans` 只导入 status==3（全文核过），恢复循环只对 state 记录内的渠道动作（13:29/13:39 state 快照均无 126 记录），13:41–13:44 引擎日志无任何 enable 动作；file-tail 观察器只读。结论：**面板人工点击启用**（当时面板正开着，GET /api/channel/?p=4 于 14:01 仍在轮询）。已重新禁用（14:05 readback status=2）。⚠️ NewAPI `AutomaticEnableChannelEnabled=true` 只碰 status==3 自动禁渠道，与 status=2 人工禁无关，未动；请勿再启用 ch126（其上游无 astra 模型，刚三连 404 复核）。
+**ch126 复活者定性**：GIN 日志全天 `/api/channel/126` 仅 12×GET（面板轮询）+ 2×POST/status——13:29:47 为 Guardian 自身禁用；**13:42:43（11.5ms）为唯一启用事件**，来自 127.0.0.1 管理端 API。旧引擎（PID 28484）已排除：`_sync_newapi_auto_bans` 只导入 status==3（全文核过），恢复循环只对 state 记录内的渠道动作（13:29/13:39 state 快照均无 126 记录），13:41–13:44 引擎日志无任何 enable 动作；file-tail 观察器只读。结论：**面板人工点击启用**（当时面板正开着，GET /api/channel/?p=4 于 14:01 仍在轮询）。已重新禁用（14:05 readback status=2）。⚠️ NewAPI `AutomaticEnableChannelEnabled=true` 只碰 status==3 自动禁渠道，与 status=2 人工禁无关，未动。
 
 **stability 监控补丁（14:09 双端同步部署，引擎 PID 5392）**：skip 分支扩为 `_is_probe_incompatible or _is_probe_busy or _daily_cap_reset_iso is not None`（探针拒收 / 上游忙 / 自愈型额度提示均不累计回滚失败、不回滚——渠道保持启用，真实流量拿诚实 403，15:00 重置即秒回）；`PROBE_INCOMPATIBLE_MARKERS` 增 `"请使用最新版的codex客户端"`（SharedChat 对非真实 codex 客户端一律此 403，探针无健康结论）。`test_guardian.py` **189 用例全绿**（新增 3：busy 不计数、自愈额度不回滚、codex-client 拒收不计数）。
 
-**400 `invalid_encrypted_content` 最终定性（答用户）**：13:59:46 codex 请求路由 127（预算池 503）→ **126（已复活的空渠道）→ 上游 400 外来加密 reasoning 块**。codex Responses 无状态模式会全量回放含加密 reasoning 块的历史（按上游 org 加密）；会话中途换上游 → 外来块被 400 拒收。126 挡在 128 前时 400 冒泡直达用户（NewAPI 视 400 为终端错误不再 failover）。**处置**：126 已再禁，重试后路由落 128；若历史纯 128 产出即成功；若会话中途混过 126/其它上游的块 → 双上游全拒 = 会话永久中毒，**唯一解=新会话**。15:00 前全站额度空窗为结构性现实（SharedChat 上游整时段耗尽），恢复循环将自动回池。
+**400 `invalid_encrypted_content` 定性（14:14 修订）**：13:59:46 codex 请求路由 127（预算池 503）→ **126（当时已复活）→ 上游 400 外来加密 reasoning 块**。codex Responses 无状态模式会全量回放含加密 reasoning 块的历史（按上游 org 加密）；会话中途换上游 → 外来块被 400 拒收。126 挡在 128 前时 400 冒泡直达用户（NewAPI 视 400 为终端错误不再 failover）。**处置修订**：126 的 400 是内容校验（模型层已放行），非模型缺失——**14:14 应用户指正重新启用 ch126（readback status=1）**；"上游不供 astra"为误判，见勘误。若会话中途混过 126/其它上游的块 → 双上游全拒 = 会话永久中毒，**唯一解=新会话**。15:00 前全站额度空窗为结构性现实（SharedChat 上游整时段耗尽），恢复循环将自动回池。
 
 **备份/回滚基线**：本次补丁前未新建独立 pre-patch bak（协议偏差；最近回滚点为 `bak-20260912-busy-probe`，缺 busy hunks 需按本文档重打），已落 post-patch 已知良好快照 `guardian.py.bak-20260912-stability-postpatch`。
 
 **进程管理教训**：schtasks 任务真名 `\NewAPI Guardian`（非 omp_guardian）；`/end` 不杀孤儿 pythonw（PID 24908 存活至手工 taskkill），重启后必须按 PID+CreationDate 复核单实例（新实例 5392 @14:09:48）。
+
+### 勘误：ch126「上游无 astra」结论推翻（14:14–14:16，应户指正）
+
+**误判根因**：NewAPI SYS 管理探测走 **chat/completions 面**，3×404「当前 API 不支持所选模型 gpt-6-astra」；而 codex 真实流量走 **`/v1/responses` 面**——13:59 的 400 `invalid_encrypted_content` 只可能出自**模型层已放行之后**的内容校验（模型不支持时会回 404-style 不支持错误，而非内容校验 400）。渠道配置佐证：ch126（any，base_url `https://anyrouter.top`）models 表就一行 `gpt-6-astra`，专为该模型而建。**教训：跨 API 面的探测结果不能用来判定模型不存在；类型 1（OpenAI 兼容）渠道的 SYS 探测面 ≠ codex/responses 面。**
+
+**处置**：ch126 重新启用（14:14 status=1）。当前 astra rung：126（responses 面可用）+ 128（15:00 额度重置后恢复循环自动回池）+ 127（agentrouter 放量后）。干净会话在 126/128 上均可用；混合上游历史的会话在任何上游都会 400，新会话是唯一解。运行时冒烟已验 `_is_probe_incompatible` 收紧后四例全过；引擎 PID 20204 @14:16:08 载入全部修复；`test_guardian.py` 190 用例全绿。

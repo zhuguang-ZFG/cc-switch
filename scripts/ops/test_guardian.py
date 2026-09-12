@@ -3868,6 +3868,26 @@ class DailyQuotaCapTests(unittest.TestCase):
         self.assertIsNone(guardian._daily_cap_reset_iso("503 Endpoint is unavailable"))
         self.assertIsNone(guardian._daily_cap_reset_iso(""))
 
+    def test_incompatible_fallback_requires_real_404_status(self):
+        """兜底条款不得被 traceid 十六进制里的 "404" 子串伪造（13:55:36 误判根因）。"""
+        self.assertFalse(
+            guardian._is_probe_incompatible(
+                "bad response status code 403, message: quota exhausted "
+                "（traceid: 20dfdc97-a2ab-4404-80c3）invalid_request_error"
+            )
+        )
+        self.assertTrue(
+            guardian._is_probe_incompatible(
+                'bad response status code 404, body: {"error":{"type":"invalid_request_error"}}'
+            )
+        )
+        self.assertTrue(
+            guardian._is_probe_incompatible(
+                "404 not found, body: invalid_request_error — provider lacks endpoint"
+            )
+        )
+
+
     def test_error_scan_disables_and_tombstones_daily_cap(self):
         engine = make_engine()
         engine._scan_offset = 0
