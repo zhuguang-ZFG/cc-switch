@@ -388,8 +388,10 @@ def _is_probe_incompatible(message: str) -> bool:
     # A channel test can choose an endpoint the provider does not implement.
     # That is not evidence that real traffic or credentials are unhealthy.
     # 2026-09-12 收紧：裸 "404" 子串会命中 traceid 十六进制（13:55:36 误判根因）。
+    # "not found" 泛匹配保留（traceid 十六进制不可能含它），兼容
+    # "404 page not found" / "404 not found" 等真实形状。
     return "invalid_request_error" in msg and (
-        "status code 404" in msg or "404 not found" in msg or "no available endpoints" in msg
+        "status code 404" in msg or "not found" in msg
     )
 
 UPSTREAM_BUSY_MARKERS = (

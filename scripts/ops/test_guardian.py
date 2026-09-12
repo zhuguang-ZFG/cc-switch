@@ -3878,6 +3878,11 @@ class DailyQuotaCapTests(unittest.TestCase):
         )
         self.assertTrue(
             guardian._is_probe_incompatible(
+                "400 bad request, body: invalid_request_error — upstream 404 page not found"
+            )
+        )
+        self.assertTrue(
+            guardian._is_probe_incompatible(
                 'bad response status code 404, body: {"error":{"type":"invalid_request_error"}}'
             )
         )
