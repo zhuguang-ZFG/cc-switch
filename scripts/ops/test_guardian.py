@@ -3850,3 +3850,161 @@ class DailyQuotaCapTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["daily_cap_until"], new_until)
         self.assertIn("daily_quota_cap", records[0]["reason"])
+
+    def test_self_healing_reset_iso_uses_message_reset_hint(self):
+        # 2026-09-12 ch128：全站时段额度报文带 "请在 今天 HH:MM 后再试"，
+        # 必须按报文重置点挂墓碑（而非进指数退避），到点即恢复探测。
+        class Pinned(datetime):
+            @classmethod
+            def now(cls):
+                return cls(2026, 9, 12, 11, 30, 0)
+
+        real_dt = guardian.datetime
+        try:
+            guardian.datetime = Pinned
+            msg = (
+                "渠道错误 — bad response status code 403, message: "
+                "当前公益站使用人数较多，本时段全站额度已用完，请在 今天 12:00 后再试。"
+                "（traceid: 69fbeef2）"
+            )
+            self.assertEqual(guardian._daily_cap_reset_iso(msg), "2026-09-12T12:00:00")
+
+            class PinnedPast(datetime):
+                @classmethod
+                def now(cls):
+                    return cls(2026, 9, 12, 13, 19, 0)
+
+            guardian.datetime = PinnedPast
+            self.assertEqual(guardian._daily_cap_reset_iso(msg), "2026-09-12T13:19:00")
+        finally:
+            guardian.datetime = real_dt
+
+    def test_self_healing_reset_iso_uses_retry_after_seconds(self):
+        class Pinned(datetime):
+            @classmethod
+            def now(cls):
+                return cls(2026, 9, 12, 11, 30, 0)
+
+        real_dt = guardian.datetime
+        try:
+            guardian.datetime = Pinned
+            msg = (
+                "unexpected status 503: rolling spend limit exceeded. "
+                "Used $15.05 in the last 3 hours, limit is $15.00. "
+                "Please retry after 3854 seconds.（traceid: x）"
+            )
+            iso = guardian._daily_cap_reset_iso(msg)
+            delta = datetime.fromisoformat(iso) - datetime(2026, 9, 12, 11, 30, 0)
+            self.assertGreaterEqual(delta, timedelta(seconds=3854))
+            self.assertLessEqual(delta, timedelta(seconds=3854 + 120))
+        finally:
+            guardian.datetime = real_dt
+
+    def test_self_healing_reset_iso_ignores_hintless_and_transient(self):
+        # 无时间提示的预算池 402：不墓碑，走 quota 退避上限路径
+        self.assertIsNone(
+            guardian._daily_cap_reset_iso("402 Budget pool quota has been exhausted")
+        )
+        # 普通瞬态 429 的 retry-after 不墓碑（否则 2 秒限流也进禁用）
+        self.assertIsNone(
+            guardian._daily_cap_reset_iso("429 too many requests, retry after 2 seconds")
+        )
+
+    def test_tombstone_expiry_clears_stale_backoff(self):
+        # 2026-09-12 ch128 现场：12:00 重置后探测失败一次，60min 封顶退避把
+        # 下次尝试拖到 13:25；墓碑到点必须清掉陈旧退避计数立即重试。
+        engine = make_engine(
+            {
+                "disabled_channels": [
+                    {
+                        "id": 128,
+                        "name": "sharedchat-codex-astra",
+                        "reason": "error_scan: quota — bad response status code 403, "
+                        "message: 本时段全站额度已用完，请在 今天 12:00 后再试。",
+                        "time": (datetime.now() - timedelta(hours=2)).isoformat(),
+                        "daily_cap_until": (datetime.now() - timedelta(minutes=1)).isoformat(),
+                        "recovery_failures": 6,
+                        "last_recovery_attempt": (
+                            datetime.now() - timedelta(minutes=6)
+                        ).isoformat(),
+                    }
+                ],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[128] = {
+            "id": 128, "name": "sharedchat-codex-astra", "status": 2,
+            "auto_ban": 1, "weight": 5, "priority": 7,
+            "models": "gpt-5.6-sol",
+        }
+        engine.newapi.test_results.extend([(True, "ok")] * 3)
+
+        engine.check_and_enable_recovered_channels()
+
+        # 若沿用旧 60min 退避（last_recovery_attempt 6 分钟前），此周期必然跳过
+        self.assertEqual(engine.newapi.test_calls, [128, 128, 128])
+        self.assertEqual(engine.newapi.enable_calls, [128])
+        self.assertEqual(engine.state["disabled_channels"], [])
+
+    def test_quota_reason_backoff_capped_at_15min(self):
+        # 定时放量/额度重置类上游（quota/额度原因）回池快，退避封顶 15min
+        record = {
+            "id": 33,
+            "name": "kimi-official-k3",
+            "reason": "error_scan: quota — bad response status code 403, "
+            "message: You've reached your weekly (7-day) usage.",
+            "time": (datetime.now() - timedelta(hours=5)).isoformat(),
+            "recovery_failures": 6,
+            "last_recovery_attempt": (datetime.now() - timedelta(minutes=20)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[33] = {
+            "id": 33, "name": "kimi-official-k3", "status": 2,
+            "auto_ban": 1, "weight": 5, "priority": 7,
+            "models": "kimi-k3",
+        }
+        engine.newapi.test_results.extend([(True, "ok")] * 3)
+
+        engine.check_and_enable_recovered_channels()
+
+        # failures=6 → 通用退避 32min；quota 原因封顶 15min，20 分钟后必须重试
+        self.assertEqual(engine.newapi.test_calls, [33, 33, 33])
+        self.assertEqual(engine.newapi.enable_calls, [33])
+
+    def test_non_quota_reason_keeps_long_backoff(self):
+        record = {
+            "id": 44,
+            "name": "some-broken-upstream",
+            "reason": "error_scan: bad response status code 500",
+            "time": (datetime.now() - timedelta(hours=5)).isoformat(),
+            "recovery_failures": 6,
+            "last_recovery_attempt": (datetime.now() - timedelta(minutes=20)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[44] = {
+            "id": 44, "name": "some-broken-upstream", "status": 2,
+            "auto_ban": 1, "weight": 5, "priority": 7,
+            "models": "model-x",
+        }
+
+        engine.check_and_enable_recovered_channels()
+
+        # failures=6 → 32min 退避，20 分钟后仍跳过
+        self.assertEqual(engine.newapi.test_calls, [])
+        self.assertEqual(len(engine.state["disabled_channels"]), 1)

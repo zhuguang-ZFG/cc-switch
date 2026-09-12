@@ -297,10 +297,51 @@ _DAILY_CAP_RESET_RE = re.compile(r"X-RateLimit-Reset.{0,12}?(\d{10,13})", re.IGN
 # reset 头的渠道会过冲数小时（日额度 ~08:00 重置、~01:00 耗尽）；
 # 3h 在"免白试"与"及时回池"间取平衡，恢复探测本身有退避兜底。
 DAILY_CAP_FALLBACK_HOURS = 3
+# 自愈型限额错误（按时间窗自动重置的上游）：报文自带显式重置时间。
+# 命中即挂墓碑，到点走正常恢复探测，不进指数退避长眠（2026-09-12
+# ch128 现场：全站时段额度 12:00 重置，60min 封顶退避把恢复拖到 13:25）。
+SELF_HEALING_QUOTA_MARKERS = (
+    "全站额度已用完",        # SharedChat 公益站全站时段额度（"请在 今天 HH:MM 后再试"）
+    "rolling spend limit",   # Codex 上游滚动消费限额（"Please retry after N seconds"）
+    "spend limit exceeded",
+)
+_SELF_HEAL_TIME_RE = re.compile(r"请在\s*今天\s*(\d{1,2}):(\d{2})\s*后再试")
+_RETRY_AFTER_SECONDS_RE = re.compile(r"retry\s+after\s+(\d+)\s+seconds", re.IGNORECASE)
+
+
+def _self_healing_reset_iso(message: str) -> Optional[str]:
+    """自愈型限额报文 → 显式重置点 ISO；无时间提示返回 None（不墓碑）。"""
+    if not any(marker in (message or "").lower() for marker in SELF_HEALING_QUOTA_MARKERS):
+        return None
+    now = datetime.now()
+    m = _SELF_HEAL_TIME_RE.search(message or "")
+    if m:
+        hour, minute = int(m.group(1)), int(m.group(2))
+        try:
+            candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:
+            candidate = None
+        if candidate is not None:
+            # 时间点已过（例如告警延迟）：立即进入恢复探测
+            return (candidate if candidate > now else now).isoformat()
+    m = _RETRY_AFTER_SECONDS_RE.search(message or "")
+    if m:
+        seconds = int(m.group(1))
+        if 0 < seconds <= 36 * 3600:
+            return (now + timedelta(seconds=seconds + 60)).isoformat()
+    return None
+
+
 
 
 def _daily_cap_reset_iso(message: str) -> Optional[str]:
-    """日额度耗尽 → 恢复时间点 ISO 字符串；非日额度类错误返回 None。"""
+    """日额度耗尽 → 恢复时间点 ISO 字符串；非日额度类错误返回 None。
+
+    自愈型限额报文（全站时段额度/滚动消费限额）优先按显式重置时间墓碑。
+    """
+    hinted = _self_healing_reset_iso(message)
+    if hinted is not None:
+        return hinted
     lowered = (message or "").lower()
     if not any(marker in lowered for marker in DAILY_QUOTA_CAP_MARKERS):
         return None
@@ -346,6 +387,8 @@ TEST_CHANNEL_TIMEOUT = 30  # test_channel 独立超时（秒）：上游实测 6
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
 RECOVERY_BACKOFF_MAX = 60  # 失败退避上限（分钟）
+RECOVERY_BACKOFF_MAX_QUOTA = 15  # quota/额度类退避上限：自愈型上游按时间窗重置，
+                                # 60min 封顶把回池拖后（2026-09-12 ch128/ch33 现场）
 RECOVERY_PROBE_TIMEOUT = 12  # 恢复探测独立短超时（秒）：慢渠道 30s 会把恢复周期拖到预算截断；
                              # 恢复探测只需判断是否恢复，12s 未回即按失败进入指数退避
 OMP_ROLE_CHECK_INTERVAL = 80  # 每 N 周期主动检测 OMP 角色（80*15s=20min）
@@ -1486,6 +1529,9 @@ class AutoFixEngine:
         )
         if existing is not None:
             existing.update(record)
+            # 新墓碑事件生效：清旧恢复计数，避免陈旧退避延迟到点探测
+            existing.pop("recovery_failures", None)
+            existing.pop("last_recovery_attempt", None)
         else:
             self._append_disabled(record)
         self.state.setdefault("degraded_channels", {})
@@ -1848,6 +1894,11 @@ class AutoFixEngine:
                 try:
                     if datetime.now() < datetime.fromisoformat(cap_until):
                         continue
+                    # 到点：清墓碑与陈旧退避计数，按新冷却周期重试（否则
+                    # 重置点后仍背着旧 60min 退避，恢复被延迟）
+                    record.pop("daily_cap_until", None)
+                    record.pop("recovery_failures", None)
+                    record.pop("last_recovery_attempt", None)
                 except (ValueError, TypeError):
                     pass
 
@@ -1858,9 +1909,13 @@ class AutoFixEngine:
             cooldown_from = last_attempt or record.get("time")
             backoff_min = RECOVERY_COOLDOWN_MIN
             if last_attempt and failures > 0:
+                backoff_max = RECOVERY_BACKOFF_MAX
+                reason_l = (record.get("reason") or "").lower()
+                if "quota" in reason_l or "额度" in reason_l:
+                    backoff_max = RECOVERY_BACKOFF_MAX_QUOTA
                 backoff_min = max(
                     RECOVERY_COOLDOWN_MIN,
-                    min(RECOVERY_BACKOFF_BASE * (2 ** (failures - 1)), RECOVERY_BACKOFF_MAX),
+                    min(RECOVERY_BACKOFF_BASE * (2 ** (failures - 1)), backoff_max),
                 )
             if cooldown_from:
                 try:

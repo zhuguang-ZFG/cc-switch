@@ -95,3 +95,31 @@ completed 128 / failed 130 / inProgress 23 / interrupted 7 —— 失败率近�
 - 探活先行；改 affinity 不清 cache（活跃会话在场）；key 只读不打印。
 - 回滚路径：把备份 JSON 的 rules 经同一 admin PUT 写回（或手工把 codex 规则 skip_retry_on_failure 改回 true——但那是被 supersede 的旧策略）。
 
+## 附 2：限额类禁用的全流程自动化（当日 13:00–13:40 追加）
+
+### 背景：限额禁用 ≠ 渠道死亡，但恢复引擎当成了死亡
+
+- **ch128 sharedchat-codex-astra**（11:13 事件）：上游报「本时段全站额度已用完，请在 今天 12:00 后再试」——**报文自带重置点**，自愈型限额。Guardian 关键词命中 "quota" → 通用禁用 → 指数退避。12:00 上游重置；12:25 首次探测失败一次 → 60min 封顶退避 → 下次 13:25；13:10 人工启用，仅抢回 ~15 分钟。
+- **agentrouter ch127 预算池**：402 "Budget pool quota has been exhausted" = **定时放量**（预算池按计划 refill），402 属自愈型；重试风暴期间 Guardian 的窗口预算分类正确**保持启用**（is_window_budget_exhausted），无需禁用；报文无重置时间，不宜墓碑。
+- **kimi ch33 周额度 / aliyun ch31 token-plan 周额度**：同类 quota 原因，长退避让额度重置后的回池最多延迟 1 小时。
+
+### 修复（2026-09-12 13:22 部署 `~/.omp/guardian/guardian.py`，仓库镜像同步）
+
+1. **自愈型限额报文的显式重置点解析**（`_self_healing_reset_iso` + `SELF_HEALING_QUOTA_MARKERS`）：「请在 今天 HH:MM 后再试」→ 墓碑到该时刻（已过则立即探测）；「rolling spend limit … Please retry after N seconds」→ 墓碑到 now+N+60s；无时间提示（agentrouter 预算池）与瞬态 429 retry-after **不墓碑**。
+2. **墓碑到点清陈旧退避**：`daily_cap_until` 过期即清 `recovery_failures`/`last_recovery_attempt`，按新冷却周期起步（修 ch128「重置后仍背 60min 旧债」）；重复限额事件原地刷新墓碑时同样清计数。
+3. **quota/额度类退避封顶 15min**（`RECOVERY_BACKOFF_MAX_QUOTA`，原 60min）：定时放量/额度重置类上游回池快；非配额原因仍 60min。
+
+### 验证
+
+- `test_guardian.py` 184 用例全绿（新增 6：报文重置点解析固定时钟双相位、retry-after 解析、无提示/瞬态负例、墓碑到点清退避、quota 15min 封顶、非配额仍 60min——后三对旧实现必失败）。
+- 线上重启（PID 28484，13:22:03）后 state.json 证实 ch31/ch75/ch97/ch98（quota/额度类）立即恢复探测（旧代码需等到 13:49–13:53）；ch33/ch128 按每周期 2 个的批处理队列陆续轮到。
+- 回滚：`guardian.py.bak-20260912-recovery-auto`。
+
+### 充值指导修订
+
+- SharedChat 全站时段额度 / agentrouter 预算池（定时放量）/ kimi·aliyun 周额度：**无需充值干预**，禁用后由恢复引擎按报文重置点（或 ≤15min 退避）自动回池；人工启用仅在想提前回池时才需要。
+- 仍需人工干预：**余额耗尽类**（预扣费额度失败、credit insufficient balance）与结构故障（405 线路错、key 失效）。
+
+### 遗留：仓库副本漂移
+
+`scripts/ops/guardian.py`（repo）落后线上 ~119 行（file-tail 错误侧观测、预算感知扫描偏移等 09-12 凌晨特性 live-only）；本次三处修复已双端同步（线上先行重启、仓库镜像）。待单独开任务做一次全量 diff 对齐后再清理旧 `.bak`。
