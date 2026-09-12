@@ -164,3 +164,11 @@ completed 128 / failed 130 / inProgress 23 / interrupted 7 —— 失败率近�
 **误判根因**：NewAPI SYS 管理探测走 **chat/completions 面**，3×404「当前 API 不支持所选模型 gpt-6-astra」；而 codex 真实流量走 **`/v1/responses` 面**——13:59 的 400 `invalid_encrypted_content` 只可能出自**模型层已放行之后**的内容校验（模型不支持时会回 404-style 不支持错误，而非内容校验 400）。渠道配置佐证：ch126（any，base_url `https://anyrouter.top`）models 表就一行 `gpt-6-astra`，专为该模型而建。**教训：跨 API 面的探测结果不能用来判定模型不存在；类型 1（OpenAI 兼容）渠道的 SYS 探测面 ≠ codex/responses 面。**
 
 **处置**：ch126 重新启用（14:14 status=1）。当前 astra rung：126（responses 面可用）+ 128（15:00 额度重置后恢复循环自动回池）+ 127（agentrouter 放量后）。干净会话在 126/128 上均可用；混合上游历史的会话在任何上游都会 400，新会话是唯一解。运行时冒烟已验 `_is_probe_incompatible` 收紧后四例全过；引擎 PID 20204 @14:16:08 载入全部修复；`test_guardian.py` 190 用例全绿。
+
+### 亲和粘住加固（14:22，用户批准）
+
+**变更**：`channel_affinity_setting.rules` 中 `codex cli trace` 规则 `ttl_seconds` **300 → 1800**（PUT /api/option/ 热加载，回读验证 1800；未清 affinity cache——纪律 §9.1，活跃会话不受影响；未重启）。效果：codex 会话空闲 ≤30min 内不重钉——消除「暂停 >5min 回来落在另一个上游 org → 历史 reasoning 块全外来 → 400」这一中毒路径。
+
+**刻意不改**（运营史证据）：`switch_on_success=true`（2026-08-16 muyuan 停摆反例：false 时成功 failover 不迁钉，会话整 TTL 钉死劣化渠道）、`keep_on_channel_disabled=false`（ch75 立即接管依赖它；改 true 换来"钉死禁用渠道硬报错"，且是全局开关会波及 claude/glm 等全部家族）。全局翻动 = 复现已知事故；活跃失败切换（pin 随成功迁移）保留为可用性优先，**中毒后果的可修复路径 = `scripts/ops/codex-resume-scrub.py`**（清外来 reasoning 项后原会话续用，不必弃会话）。
+
+**剩余风险**：空闲 >30min 的重钉、活跃 failover 迁钉，仍可能跨上游 org → 400；急救 = scrub 或新会话。**回滚**：`C:\Users\zhugu\.omp\guardian\affinity-options-backup-20260912.json`（本次变更前快照，ttl=300），PUT 回写即可；更早基线 `C:\Users\zhugu\.new-api-local\backups\channel-affinity-20260912-034402.json`。
