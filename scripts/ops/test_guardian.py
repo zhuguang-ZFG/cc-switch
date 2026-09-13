@@ -4289,3 +4289,96 @@ class WindowBudgetQuotaTests(unittest.TestCase):
         self.assertTrue(
             self.cwp.is_codex_probe_incompatible(ch128, "403 codex_access_restricted")
         )
+
+
+class PoolLegsAlertTests(unittest.TestCase):
+    """模型池单腿告警：enabled 模型活跃渠道从 >=2 塌到 1 时 edge-trigger。"""
+
+    @staticmethod
+    def _make_db(channels, abilities):
+        """channels: [(id, status)]; abilities: [(model, channel_id, enabled)]"""
+        tmp = tempfile.TemporaryDirectory()
+        db = Path(tmp.name) / "new-api.db"
+        with closing(sqlite3.connect(db)) as conn:
+            conn.execute("CREATE TABLE channels (id INTEGER PRIMARY KEY, status INTEGER)")
+            conn.execute(
+                "CREATE TABLE abilities (model TEXT, channel_id INTEGER, enabled INTEGER)"
+            )
+            conn.executemany("INSERT INTO channels VALUES (?, ?)", channels)
+            conn.executemany("INSERT INTO abilities VALUES (?, ?, ?)", abilities)
+            conn.commit()
+        return db, tmp
+
+    @staticmethod
+    def _guardian(legs, prev):
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.autofix = Mock()
+        g.autofix.check_pool_legs.return_value = legs
+        g.autofix.state = {"pool_legs": prev}
+        g.alerts = Mock()
+        g.alerts.should_alert.return_value = True
+        g.telegram = Mock()
+        return g
+
+    def test_query_counts_only_active(self):
+        """JOIN 语义：status=1 渠道 + enabled=1 ability 才计入腿数。"""
+        db, tmp = self._make_db(
+            channels=[(1, 1), (2, 1), (3, 2)],
+            abilities=[
+                ("m", 1, 1),
+                ("m", 2, 1),
+                ("m", 3, 1),   # channel disabled -> not counted
+                ("m", 1, 0),   # duplicate ability row disabled -> deduped by DISTINCT
+            ],
+        )
+        self.assertEqual(guardian._query_pool_legs(db), {"m": 2})
+        tmp.cleanup()
+
+    def test_query_db_missing_returns_none(self):
+        self.assertIsNone(
+            guardian._query_pool_legs(Path("/nonexistent/new-api.db"))
+        )
+
+    def test_first_scan_single_leg_no_alert(self):
+        """首次扫描即单腿（本就单渠道设计的模型）不算塌陷，不告警。"""
+        g = self._guardian({"m": 1}, {})
+        g._step_pool_legs()
+        g.telegram.send_alert.assert_not_called()
+        self.assertEqual(g.autofix.state["pool_legs"], {"m": 1})
+
+    def test_two_to_one_alerts_once(self):
+        g = self._guardian({"m": 1}, {"m": 2})
+        g._step_pool_legs()
+        g.telegram.send_alert.assert_called_once()
+        self.assertIn("pool_legs:m", g.alerts.should_alert.call_args[0][0])
+        self.assertEqual(g.autofix.state["pool_legs"], {"m": 1})
+
+    def test_persistent_single_leg_no_repeat(self):
+        """持续单腿：state 已记录 prev=1，before>=2 条件不满足，不重复告警。"""
+        g = self._guardian({"m": 1}, {"m": 1})
+        g._step_pool_legs()
+        g.telegram.send_alert.assert_not_called()
+
+    def test_recovery_then_recollapse_realerts(self):
+        """单腿恢复双腿后再塌，重新告警（edge-trigger 恢复记忆）。"""
+        g = self._guardian({"m": 2}, {"m": 1})
+        g._step_pool_legs()
+        g.telegram.send_alert.assert_not_called()
+        self.assertEqual(g.autofix.state["pool_legs"], {"m": 2})
+        g2 = self._guardian({"m": 1}, dict(g.autofix.state["pool_legs"]))
+        g2._step_pool_legs()
+        g2.telegram.send_alert.assert_called_once()
+
+    def test_multi_model_only_collapsed_alerted(self):
+        """多模型同扫：只有发生塌陷的那个告警。"""
+        g = self._guardian({"a": 1, "b": 3, "c": 2}, {"a": 2, "b": 3, "c": 4})
+        g._step_pool_legs()
+        g.telegram.send_alert.assert_called_once()
+        self.assertIn("pool_legs:a", g.alerts.should_alert.call_args[0][0])
+
+    def test_query_failure_silent(self):
+        """DB 查询失败（返回 None）时不告警也不崩。"""
+        g = self._guardian(None, {"m": 2})
+        g._step_pool_legs()
+        g.telegram.send_alert.assert_not_called()
+        self.assertEqual(g.autofix.state["pool_legs"], {"m": 2})

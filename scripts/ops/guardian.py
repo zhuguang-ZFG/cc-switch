@@ -1111,6 +1111,37 @@ def _query_opus_empty_response_rate(
     return {"total": total, "empty": empty, "rate": empty / total}
 
 
+def _query_pool_legs(db_path: Path) -> Optional[dict]:
+    """只读统计：每个 enabled 模型的活跃渠道数（channel status=1 且 ability enabled）。
+
+    2026-09-13 教训：多处聚合池（deepseek-v4-flash、qwen3-8-27b、glm-5.3）
+    建成后都塌缩成单腿而无人察觉，直到用户体感报错。返回值
+    {model: active_channel_count}；DB 不可用或查询失败返回 None，避免误告警。
+    """
+    if not db_path.exists():
+        return None
+    sql = """
+        SELECT a.model, COUNT(DISTINCT a.channel_id)
+        FROM abilities a
+        JOIN channels c ON c.id = a.channel_id AND c.status = 1
+        WHERE a.enabled = 1
+        GROUP BY a.model
+    """
+    try:
+        with closing(
+            sqlite3.connect(
+                f"file:{db_path.expanduser().resolve().as_posix()}?mode=ro",
+                uri=True,
+                timeout=5,
+            )
+        ) as conn:
+            rows = conn.execute(sql).fetchall()
+    except (OSError, sqlite3.Error) as e:
+        logger.error(f"模型池腿数查询失败: {e}")
+        return None
+    return {model: n for model, n in rows}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 自愈引擎
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1252,6 +1283,10 @@ class AutoFixEngine:
     def check_opus_empty_response_rate(self) -> Optional[dict]:
         """查询 justwoker opus 线空响应率，供主循环告警决策。"""
         return _query_opus_empty_response_rate(NEWAPI_DB)
+
+    def check_pool_legs(self) -> Optional[dict]:
+        """查询每个 enabled 模型的活跃渠道数，供单腿告警决策。"""
+        return _query_pool_legs(NEWAPI_DB)
 
     @staticmethod
     def _channel_identity(channel: dict) -> str:
@@ -3144,6 +3179,7 @@ class Guardian:
 
         # 7.5 justwoker opus 空响应率监控（本地 NewAPI DB 只读查询）
         self._run_step("opus empty response", self._step_opus_empty_response)
+        self._run_step("pool legs", self._step_pool_legs)
 
         # 8. 余额 + P2: 趋势分析（get_user_info 网络调用，预算守卫）
         def _balance():
@@ -3212,6 +3248,32 @@ class Guardian:
                 f"模型：{', '.join(OPUS_EMPTY_RESPONSE_MODELS)}",
                 "warning",
             )
+
+    def _step_pool_legs(self) -> None:
+        """模型池单腿告警：enabled 模型活跃渠道从 >=2 塌到 1 时 edge-trigger。
+
+        2026-09-13 教训：deepseek-v4-flash / qwen3-8-27b / glm-5.3 聚合池
+        建成后均塌缩成单腿而无人察觉，直到用户体感报错才补腿。state 里的
+        pool_legs 快照只在变化时更新；告警冷却兜底防抖动重报。
+        """
+        legs = self.autofix.check_pool_legs()
+        if not isinstance(legs, dict):
+            return
+        prev = self.autofix.state.get("pool_legs") or {}
+        for model, n in sorted(legs.items()):
+            before = prev.get(model) or 0
+            if n == 1 and before >= 2:
+                body = (
+                    f"模型 {model} 活跃渠道 {before} → 1，聚合已降级为单腿。\n"
+                    f"补腿流程参考 runbook：探活禁用渠道 → 启用 + abilities sync → "
+                    f"readback；封号/欠费类先入 AUTO_BAN_RECOVERY_EXCLUSIONS。"
+                )
+                logger.warning(f"pool legs: {body.splitlines()[0]}")
+                if self.alerts.should_alert(f"pool_legs:{model}", "warning"):
+                    self.telegram.send_alert("模型池单腿", body, "warning")
+        if legs != prev:
+            self.autofix.state["pool_legs"] = legs
+            self.autofix._save_state()
 
     def _check_channels_health(self, channels):
         """P1: 慢渠道检测 + 性能记录。
