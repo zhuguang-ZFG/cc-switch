@@ -54,7 +54,7 @@ SMOKE_PROBES: tuple[tuple[str, str], ...] = (
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
 # Channel 74 is held out until its shared upstream quota recovers and a real
 # relay + aggregate smoke passes. Channel 45 remains a live fallback.
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 9/18 于 2026-08-24 移出：linxi 同账号余额恢复（管理探测双双 200），重新入池参与 opus-5 负载均衡；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse RegionError 振荡（2026-08-21 复活即超时再禁用），付费 muse 上游已收回，无复活价值；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中；75: tabitoken 多 key 拆分后保留的禁用 tombstone（2026-08-20，单 key 欠费拖垮整渠道，拆为 ch97/98/99）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20 16:25 实测 403 预扣费失败，$0.21/$0.61 < $0.8），充值前保持禁用；98: tabitoken-2 key#2 欠费 $0.22，充值前保持禁用（小探针假活，见 runbook docs/ops/tabitoken-split-single-key-2026-08-20.md）；57/75/97/98 同日移出：网关自带 /test 实测 claude-opus-5 通过，转 p50 备份次档
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 78 deleted from DB 2026-09-13 but kept in quarantine set for Guardian exclusion parity  # 9/18 于 2026-08-24 移出：linxi 同账号余额恢复（管理探测双双 200），重新入池参与 opus-5 负载均衡；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse RegionError 振荡（2026-08-21 复活即超时再禁用），付费 muse 上游已收回，无复活价值；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中；75: tabitoken 多 key 拆分后保留的禁用 tombstone（2026-08-20，单 key 欠费拖垮整渠道，拆为 ch97/98/99）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20 16:25 实测 403 预扣费失败，$0.21/$0.61 < $0.8），充值前保持禁用；98: tabitoken-2 key#2 欠费 $0.22，充值前保持禁用（小探针假活，见 runbook docs/ops/tabitoken-split-single-key-2026-08-20.md）；57/75/97/98 同日移出：网关自带 /test 实测 claude-opus-5 通过，转 p50 备份次档
 
 # opus-5 备份档（2026-08-24 起）：主池 3/9/18（p52/p52/p50）之下的一层，
 # 只许低优先级存在——启用状态下 priority 越过 MAX_PRIORITY（进入主池档）即违规。
@@ -70,10 +70,9 @@ BACKUP_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     123: {"max_priority": 0, "max_weight": 1},   # zzzcoding（zz_gate.py 门控；p0 兜底层，2026-08-30 自 p60 降级：空窗 p60 实测泄漏 500）
 }
 
-# Model isolation is channel-specific. AgentRouter (ch45) serves Sol only
-# (Claude moved to AnyRouter ch72 on 2026-08-14 so an overloaded Sol recovery
-# probe cannot keep independent Claude capacity disabled). CodeBuddy (ch44)
-# keeps its Sol exclusion contract.
+# Model isolation is channel-specific. AgentRouter (ch45) is GLM-only as of
+# 2026-09 (Claude on AnyRouter ch72 since 2026-08-14; Sol selectors retired from
+# ch45). CodeBuddy (ch44) keeps its Sol exclusion contract.
 CHANNEL_MODEL_EXCLUSIONS: dict[int, set[str]] = {
     44: {"gpt-5.6-sol", "zg-wb-gpt-5.6-sol"},
 }
@@ -172,6 +171,9 @@ TEAMOROUTER_FREE_CONTRACT: dict[str, object] = {
 # channels so a revoked family key cannot silently poison unrelated models.
 # NewAPI's OpenAI channel appends /v1 itself, so base_url must remain the host
 # root even though direct upstream probes use https://ai.168661.xyz/v1.
+# ch78 ai-168661-deepseek-0731 was deleted from the live DB (absent as of
+# 2026-09-13 smoke); do not require a missing row. Re-add a contract only if
+# the channel is re-imported. ch39 remains the quarantined Grok recovery point.
 AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
     39: {
         "name": "ai-168661-grok",
@@ -193,22 +195,6 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
         "weight": 0,
         # The temporary 2026-08-16 revival regressed to INVALID_API_KEY.
         # Keep the recovery point quarantined and do not expose Grok in OMP.
-        "status": 2,
-    },
-    78: {
-        "name": "ai-168661-deepseek-0731",
-        "models": (
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-0731",
-            "zg-deepseek-v4-flash-0731",
-        ),
-        "mapping": {
-            "deepseek-v4-flash-0731": "deepseek-v4-flash",
-            "zg-deepseek-v4-flash-0731": "deepseek-v4-flash",
-        },
-        "test_model": "deepseek-v4-flash",
-        "priority": 50,
-        "weight": 0,
         "status": 2,
     },
 }
@@ -285,19 +271,16 @@ AFFINITY_REQUIRED_MODELS: dict[str, tuple[str, ...]] = {
 # NewAPI channel PUT rebuilds abilities and can reset model-level routing
 # posture. These rows are the deliberate pool/diagnostic selectors.
 CRITICAL_ABILITY_POSTURES: dict[tuple[int, str], tuple[int, int]] = {
-    # (48, "muse-spark-1.2-contributor") 于 2026-08-24 移出（同上）。
-    (45, "gpt-5.6-sol"): (40, 5),
-    (45, "zg-gpt-5.6-sol"): (40, 5),
-    (45, "zg-agent-gpt-5.6-sol"): (40, 5),
+    # (48, "muse-spark-1.2-contributor") retired 2026-08-24.
+    # ch45 agentrouter is GLM-only as of 2026-09 (sol abilities removed); do not
+    # pin sol selectors there. ch92 zzzcoding now carries gpt-6-astra only and is
+    # intentionally disabled — drop its sol ability pins (2026-09-13 false-red fix).
     (83, "gpt-5.6-sol"): (50, 5),
     (83, "zg-gpt-5.6-sol"): (50, 5),
     (83, "zg-agent-gpt-5.6-sol"): (50, 5),
     (91, "gpt-5.6-sol"): (55, 5),
     (91, "zg-gpt-5.6-sol"): (55, 5),
     (91, "zg-agent-gpt-5.6-sol"): (55, 5),
-    (92, "gpt-5.6-sol"): (60, 15),
-    (92, "zg-gpt-5.6-sol"): (60, 15),
-    (92, "zg-agent-gpt-5.6-sol"): (60, 15),
 }
 
 
@@ -751,7 +734,7 @@ def channel_policy_violations(channels: list[dict]) -> list[str]:
 
 
 def ai168661_channel_violations(channels: list[dict]) -> list[str]:
-    """Pin the three independently authenticated ai.168661 channel families."""
+    """Pin the remaining independently authenticated ai.168661 channel families."""
     by_id = {channel.get("id"): channel for channel in channels}
     violations: list[str] = []
     for channel_id, expected in AI168661_CHANNEL_CONTRACTS.items():

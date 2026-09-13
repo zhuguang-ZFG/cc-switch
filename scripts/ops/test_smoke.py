@@ -453,8 +453,11 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual(smoke.ai168661_channel_violations(channels), [])
 
     def test_ai168661_channel_drift_and_missing_family_are_rejected(self):
+        # ch78 contract retired 2026-09-13 (channel deleted). Drift checks cover
+        # the remaining ch39 quarantine row only; a deleted family must not be
+        # required as a live DB row.
+        self.assertNotIn(78, smoke.AI168661_CHANNEL_CONTRACTS)
         expected39 = smoke.AI168661_CHANNEL_CONTRACTS[39]
-        expected78 = smoke.AI168661_CHANNEL_CONTRACTS[78]
         channels = [
             {
                 "id": 39,
@@ -469,28 +472,30 @@ class AdminAuthTests(unittest.TestCase):
                 "models": ",".join((*expected39["models"], "grok-imagine-video")),
                 "model_mapping": json.dumps(expected39["mapping"]),
             },
+        ]
+
+        violations = smoke.ai168661_channel_violations(channels)
+        self.assertEqual(len(violations), 1)
+        self.assertNotIn("status=2", violations[0])
+        self.assertIn("base_url=https://ai.168661.xyz/v1", violations[0])
+        self.assertIn("grok-imagine-video", violations[0])
+        # Fabricated ch78 in the channel list is ignored (no contract).
+        channels.append(
             {
                 "id": 78,
-                "name": expected78["name"],
+                "name": "ai-168661-deepseek-0731",
                 "type": 1,
                 "status": 1,
                 "auto_ban": 1,
                 "base_url": "https://ai.168661.xyz",
-                "priority": expected78["priority"],
-                "weight": expected78["weight"],
-                "test_model": expected78["test_model"],
-                "models": ",".join(expected78["models"]),
+                "priority": 50,
+                "weight": 0,
+                "test_model": "deepseek-v4-flash",
+                "models": "deepseek-v4-flash",
                 "model_mapping": "{}",
-            },
-        ]
-
-        violations = smoke.ai168661_channel_violations(channels)
-        self.assertEqual(len(violations), 2)
-        self.assertNotIn("status=2", violations[0])
-        self.assertIn("base_url=https://ai.168661.xyz/v1", violations[0])
-        self.assertIn("grok-imagine-video", violations[0])
-        self.assertIn("status=1", violations[1])
-        self.assertIn("model_mapping=drifted", violations[1])
+            }
+        )
+        self.assertEqual(smoke.ai168661_channel_violations(channels), violations)
 
     def test_live_agentrouter_fallback_is_not_expected_disabled(self):
         channels = [
@@ -901,19 +906,20 @@ class AdminAuthTests(unittest.TestCase):
             in smoke.CRITICAL_ABILITY_POSTURES.items()
         ]
         self.assertEqual(smoke.critical_ability_posture_violations(rows), [])
-        rows = [row for row in rows if row[:2] != (45, "gpt-5.6-sol")]
+        # ch45/ch92 sol pins retired 2026-09-13; exercise missing/drift on ch83.
+        rows = [row for row in rows if row[:2] != (83, "gpt-5.6-sol")]
         rows = [
-            (45, "zg-gpt-5.6-sol", 1, 39, 5)
-            if row[:2] == (45, "zg-gpt-5.6-sol")
+            (83, "zg-gpt-5.6-sol", 1, 49, 5)
+            if row[:2] == (83, "zg-gpt-5.6-sol")
             else row
             for row in rows
         ]
         self.assertEqual(
             smoke.critical_ability_posture_violations(rows),
             [
-                "45:gpt-5.6-sol=missing",
-                "45:zg-gpt-5.6-sol=expected:enabled=1,priority=40,weight=5;"
-                "actual=[(1, 39, 5)]",
+                "83:gpt-5.6-sol=missing",
+                "83:zg-gpt-5.6-sol=expected:enabled=1,priority=50,weight=5;"
+                "actual=[(1, 49, 5)]",
             ],
         )
 
