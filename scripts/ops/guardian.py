@@ -168,7 +168,7 @@ RECOVERY_COOLDOWN_MIN = 5  # 恢复冷却时间（分钟）
 RECOVERY_TEST_COUNT = 3  # 恢复验证测试次数
 RECOVERY_TEST_PASS_MIN = 2  # 恢复验证最少通过次数
 # 明确隔离且不应自动恢复的本地渠道；与 newapi-local-smoke.py 策略保持一致。
-AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 9/18 已于 2026-08-24 移出（余额恢复，管理探测双双 200，重新入池参与 opus-5 负载均衡）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse 上游账号级 RegionError 振荡——2026-08-21 恢复探测假活复活进池后真实流量连续超时再禁用，且付费 muse 模型已被上游收回，无复活价值，账号恢复后手工移出；57: gorouter 余额不足（$0.05<预扣$0.30）；70: vip-j3gb-gpt 上游 15 次恢复失败；71: hugai-claude-opus5 上游网关 routing group 坏（非本机配置）；73: zzzcoding-codex-relay 上游 405 真死（2026-08-08）；74: sharedchat-codex-sol 同源禁用；75: tabitoken 多 key 已拆分为 ch97/98/99 单 key 渠道（2026-08-20），保留为禁用 tombstone，绝不可复活（轮询会再撞欠费 key 再触发整渠道 auto_ban）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20，$0.21/$0.61 < 预扣$0.8，403 不触发 auto_ban 需手动双锁）；98: tabitoken-2 key#2 欠费（$0.22<预扣$0.8），小探针能过但真实流量必失败，充值后手工 enable + 重跑 split 脚本验证；57/75/97/98 于 2026-08-24 晚移出：网关自带 /test 实测 claude-opus-5 通过，转 p50 备份次档（选路严格分档已对源码核实），恢复探测重新交给 Guardian
+AUTO_BAN_RECOVERY_EXCLUSIONS = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99, 110}  # 9/18 已于 2026-08-24 移出（余额恢复，管理探测双双 200，重新入池参与 opus-5 负载均衡）；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策）；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse 上游账号级 RegionError 振荡——2026-08-21 恢复探测假活复活进池后真实流量连续超时再禁用，且付费 muse 模型已被上游收回，无复活价值，账号恢复后手工移出；57: gorouter 余额不足（$0.05<预扣$0.30）；70: vip-j3gb-gpt 上游 15 次恢复失败；71: hugai-claude-opus5 上游网关 routing group 坏（非本机配置）；73: zzzcoding-codex-relay 上游 405 真死（2026-08-08）；74: sharedchat-codex-sol 同源禁用；75: tabitoken 多 key 已拆分为 ch97/98/99 单 key 渠道（2026-08-20），保留为禁用 tombstone，绝不可复活（轮询会再撞欠费 key 再触发整渠道 auto_ban）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20，$0.21/$0.61 < 预扣$0.8，403 不触发 auto_ban 需手动双锁）；98: tabitoken-2 key#2 欠费（$0.22<预扣$0.8），小探针能过但真实流量必失败，充值后手工 enable + 重跑 split 脚本验证；57/75/97/98 于 2026-08-24 晚移出：网关自带 /test 实测 claude-opus-5 通过，转 p50 备份次档（选路严格分档已对源码核实），恢复探测重新交给 Guardian；110: yjs-free 上游 403 "User has been banned" 账号封禁（2026-09-13 直探定性），恢复循环已空转 123 次，无本地复活路径，移出后如上游解封需手工 enable
 # ch91's upstream only implements the streaming Codex Responses wire shape
 # reliably. Keep it under normal health/recovery governance, but make every
 # Guardian probe exercise the same protocol as OMP instead of the admin API's
@@ -187,7 +187,7 @@ CHANNEL_TEST_PATH_OVERRIDES = {
         "&endpoint_type=openai-response&stream=true"
     ),
     128: (
-        "/api/channel/test/128?model=gpt-5.6-sol"
+        "/api/channel/test/128?model=gpt-6-astra"
         "&endpoint_type=openai-response&stream=true"
     ),
 }
@@ -342,6 +342,7 @@ def _daily_cap_reset_iso(message: str) -> Optional[str]:
     hinted = _self_healing_reset_iso(message)
     if hinted is not None:
         return hinted
+
     lowered = (message or "").lower()
     if not any(marker in lowered for marker in DAILY_QUOTA_CAP_MARKERS):
         return None
@@ -364,6 +365,21 @@ def _daily_cap_reset_iso(message: str) -> Optional[str]:
     if reset is None:
         reset = now + timedelta(hours=DAILY_CAP_FALLBACK_HOURS)
     return reset.isoformat()
+
+UPSTREAM_BUSY_MARKERS = (
+    # 上游容量/配置信号的带内应答：能回这些话，链路与协议都是活的，不得
+    # 当作禁用依据（2026-09-12 现场：用户会话占住 SharedChat 单会话槽，
+    # 3 次探测全报 "Only one Codex conversation"，稳定闸门把唯一活渠道禁了，
+    # 用户侧反而只剩 budget pool 503）。
+    "only one codex conversation",
+    "model price is temporarily unavailable",
+)
+
+
+def _is_probe_busy(message: str) -> bool:
+    """探针收到上游忙/容量信号：上游存活，不计健康失败。"""
+    msg = (message or "").lower()
+    return any(marker in msg for marker in UPSTREAM_BUSY_MARKERS)
 
 PROBE_INCOMPATIBLE_MARKERS = (
     "non_agentic_blocked",
@@ -393,21 +409,6 @@ def _is_probe_incompatible(message: str) -> bool:
     return "invalid_request_error" in msg and (
         "status code 404" in msg or "not found" in msg
     )
-
-UPSTREAM_BUSY_MARKERS = (
-    # 上游容量/配置信号的带内应答：能回这些话，链路与协议都是活的，不得
-    # 当作禁用依据（2026-09-12 现场：用户会话占住 SharedChat 单会话槽，
-    # 3 次探测全报 "Only one Codex conversation"，稳定闸门把唯一活渠道禁了，
-    # 用户侧反而只剩 budget pool 503）。
-    "only one codex conversation",
-    "model price is temporarily unavailable",
-)
-
-
-def _is_probe_busy(message: str) -> bool:
-    """探针收到上游忙/容量信号：上游存活，不计健康失败。"""
-    msg = (message or "").lower()
-    return any(marker in msg for marker in UPSTREAM_BUSY_MARKERS)
 TEST_CHANNEL_TIMEOUT = 30  # test_channel 独立超时（秒）：上游实测 6-30s 常见，15s 在慢 opus 渠道下误报（2026-08-07 现场 test/3/9/18/33 timed out）
 RECOVERY_BATCH_SIZE = 2  # 每周期最多验证 N 个禁用渠道
 RECOVERY_BACKOFF_BASE = 2  # 失败退避基数（分钟，NewAPI 也会自动启用，Guardian 不必太急）
@@ -1148,6 +1149,7 @@ class AutoFixEngine:
             "degraded_channels": {},
             "channel_identities": {},
             "newapi_fail_streak": 0,
+            "file_tail": {},
         }
         if STATE_FILE.exists():
             try:
@@ -1574,7 +1576,89 @@ class AutoFixEngine:
             "warning",
         )
 
-    def scan_error_channels(self):
+    # ---- 错误侧观测补盲 --------------------------------------------------
+    # 背景：NewAPI DB 错误日志(type=5)自 2026-08-01 停写（上游缺陷），Guardian
+    # 的 DB 错误率检查恒为 0 → 假绿。NewAPI 文件日志的 [ERR] 行（channel error /
+    # relay error / channel test bad response）与本地 agentrouter-proxy 的
+    # "200 non-json"（WAF 挑战判定）行是仅存的错误信号源。
+    NEWAPI_LOG_GLOB = Path.home() / ".new-api-local" / "logs" / "oneapi-*.log"
+    PROXY_LOG_PATH = Path.home() / ".kimi-code" / "proxies" / "agentrouter-proxy" / "proxy.log"
+    FILE_TAIL_MAX_BYTES = 262144  # 单文件单轮回看上限（轮转/截断时只补尾部窗口）
+    FILE_TAIL_PATTERNS = (
+        "channel test bad response",  # NewAPI 主动测试失败
+        "channel error (channel #",   # NewAPI 中继按渠道错误
+        "relay error",                # NewAPI 中继最终失败
+        "200 non-json",               # agentrouter-proxy WAF 挑战判定
+        "流中断",                      # agentrouter-proxy 流式中断
+    )
+    FILE_TAIL_CHANNEL_RE = re.compile(r"channel #(\d+)")
+
+    def tail_external_error_logs(self, deadline: Optional[float] = None):
+        """增量回看外部日志错误行，聚合告警（只记录，不自动处置）。
+
+        按文件偏移增量读取；文件轮转/重建时只回看尾部窗口防洪泛。
+        """
+        sources = []
+        try:
+            logs = sorted(self.NEWAPI_LOG_GLOB.parent.glob(self.NEWAPI_LOG_GLOB.name))
+            if logs:
+                sources.append(("newapi", logs[-1]))
+        except OSError:
+            pass
+        sources.append(("proxy", self.PROXY_LOG_PATH))
+
+        tails = self.state.setdefault("file_tail", {})
+        changed = False
+        for label, path in sources:
+            if deadline is not None and deadline - time.monotonic() <= 1.0:
+                break
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            prev = tails.get(label) or {}
+            offset = int(prev.get("offset") or 0)
+            if offset > size or offset == 0:
+                offset = max(0, size - self.FILE_TAIL_MAX_BYTES)
+            if offset >= size:
+                continue
+            try:
+                with open(path, "rb") as f:
+                    f.seek(offset)
+                    chunk = f.read(size - offset)
+            except OSError as e:
+                logger.warning(f"[file-tail:{label}] read failed: {e}")
+                continue
+            text = chunk.decode("utf-8", errors="replace")
+            if not text.endswith("\n"):
+                cut = text.rfind("\n")
+                if cut <= 0:
+                    continue  # 只有半行，留给下轮
+                text = text[: cut + 1]
+            matched = [ln for ln in text.splitlines()
+                       if any(p in ln for p in self.FILE_TAIL_PATTERNS)]
+            new_offset = offset + len(text.encode("utf-8", errors="replace"))
+            tails[label] = {"offset": new_offset, "size": size,
+                            "mtime": datetime.now().isoformat(timespec="seconds")}
+            changed = True
+            if not matched:
+                continue
+            per_channel: Dict[str, int] = {}
+            for ln in matched:
+                m = self.FILE_TAIL_CHANNEL_RE.search(ln)
+                key = m.group(1) if m else "-"
+                per_channel[key] = per_channel.get(key, 0) + 1
+            logger.warning(
+                f"[file-tail:{label}] {len(matched)} error lines since last cycle "
+                f"(by channel: {per_channel})"
+            )
+            if len(matched) <= 50:
+                for ln in matched[-2:]:
+                    logger.warning(f"[file-tail:{label}] sample: {ln.strip()[:240]}")
+        if changed:
+            self._save_state()
+
+    def scan_error_channels(self, deadline: Optional[float] = None):
         """定期扫描启用渠道，检测瞬间返回的错误（402 余额不足、401 无效令牌等）
 
         check_channel 只看 response_time，402 瞬间返回（rt<1s）永远不触发慢渠道检测。
@@ -1602,21 +1686,40 @@ class AutoFixEngine:
             pinned_offset = self._pinned_scan_offset % len(pinned)
             pinned_limit = min(ERROR_SCAN_PINNED_BATCH_SIZE, len(pinned))
             pinned_batch = (pinned[pinned_offset:] + pinned[:pinned_offset])[:pinned_limit]
-            self._pinned_scan_offset = (pinned_offset + pinned_limit) % len(pinned)
 
         regular_batch = []
         regular_slots = ERROR_SCAN_BATCH_SIZE - len(pinned_batch)
         if regular and regular_slots > 0:
             offset = self._scan_offset % len(regular)
             regular_batch = (regular[offset:] + regular[:offset])[:regular_slots]
-            self._scan_offset = (offset + regular_slots) % len(regular)
         batch = pinned_batch + regular_batch
 
+        scanned = 0
         for channel in batch:
             channel_id = channel["id"]
             name = channel["name"]
 
-            test_ok, test_msg = self.newapi.test_channel(channel_id)
+            # 预算感知（对齐 full_health_scan）：慢上游逐个 30s 探测最坏
+            # 5×30s>90s 周期预算，导致后续低优先级步骤整轮跳过（2026-09-04
+            # 复盘：预算超限 10-30 次/天）。剩余预算不足时整批推迟，下轮
+            # 轮转从已扫描处继续。
+            test_timeout = TEST_CHANNEL_TIMEOUT
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 1.0:
+                    logger.warning(
+                        "Error scan budget exhausted after "
+                        f"{scanned}/{len(batch)} channels; remaining channels deferred"
+                    )
+                    break
+                test_timeout = max(1, min(TEST_CHANNEL_TIMEOUT, int(remaining)))
+            test_ok, test_msg = self.newapi.test_channel(channel_id, timeout=test_timeout)
+            scanned += 1
+            # 偏移按实际扫描数推进（预算截断时未扫渠道下轮优先）
+            if _pinned_channel_weight(channel) is None:
+                self._scan_offset = (self._scan_offset + 1) % max(1, len(regular))
+            else:
+                self._pinned_scan_offset = (self._pinned_scan_offset + 1) % max(1, len(pinned))
             if test_ok:
                 self._probe_soft_failures.pop(channel_id, None)
                 continue
@@ -1631,7 +1734,6 @@ class AutoFixEngine:
                     "keeping bounded Codex failover eligible; native CLI verification required"
                 )
                 continue
-            # 日额度耗尽类 429 优先于瞬态限流判定：有明确重置点，挂墓碑禁用
             cap_until = _daily_cap_reset_iso(test_msg)
             if cap_until is not None:
                 self._disable_for_daily_cap(channel, test_msg, cap_until, "error_scan")
@@ -2543,7 +2645,8 @@ class AutoFixEngine:
             ps_cmd = f'Get-CimInstance Win32_Process -Filter "Name=\'{proc_name}\'" | Where-Object {{ $_.CommandLine -match \'{script_pattern}\' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}'
             subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
-                shell=False, capture_output=True, timeout=10
+                shell=False, capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
 
             time.sleep(2)
@@ -2984,7 +3087,16 @@ class Guardian:
         )
 
         # 2.5 P0: 错误渠道扫描（402/401/502 等瞬间返回的错误）
-        self._run_step("error scan", self.autofix.scan_error_channels)
+        self._run_step(
+            "error scan",
+            lambda: self.autofix.scan_error_channels(self._cycle_deadline),
+        )
+
+        # 2.6 错误侧观测补盲：DB type=5 停写后，文件日志是唯一错误信号源（只记录）
+        self._run_step(
+            "file log error tail",
+            lambda: self.autofix.tail_external_error_logs(self._cycle_deadline),
+        )
 
         # 3. P1: 权重自动调整（根据性能历史）
         def _weight_adjust():

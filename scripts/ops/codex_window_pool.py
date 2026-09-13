@@ -57,11 +57,18 @@ def is_window_budget_exhausted(channel: dict, message: str) -> bool:
     except ValueError:
         return False
     models = {item.strip() for item in (channel.get("models") or "").split(",") if item.strip()}
+    window_quota_markers = (
+        # 402 预算池（09-12 起豁免）+ 403 账号时段配额（09-13 现场：投放窗口外
+        # agentrouter 对 test/real 流量均可返回 "user quota is not enough"，
+        # 同属 0/8/16 投放制，保持启用让流量自然等到投放点，禁用只会制造空洞）。
+        "budget pool quota has been exhausted",
+        "user quota is not enough",
+    )
     return (
         host in {"agentrouter.org", "ps.air-outer.com"}
         and bool(models)
         and models.issubset(MODELS)
-        and "budget pool quota has been exhausted" in (message or "").lower()
+        and any(marker in lowered for marker in window_quota_markers)
     )
 
 

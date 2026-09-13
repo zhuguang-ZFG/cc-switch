@@ -4209,3 +4209,83 @@ class DailyQuotaCapTests(unittest.TestCase):
         self.assertEqual(engine.newapi.enable_calls, [])
         self.assertEqual(engine.newapi.disable_calls, [128])
         self.assertEqual(len(engine.state["disabled_channels"]), 1)
+
+
+class WindowBudgetQuotaTests(unittest.TestCase):
+    """codex_window_pool: 投放制额度文案豁免（402 budget pool / 403 user quota）。"""
+
+    def setUp(self):
+        import codex_window_pool
+
+        self.cwp = codex_window_pool
+        self.ch127 = {
+            "id": 127,
+            "name": "agentrouter-codex-gpt",
+            "tag": "codex-resource-window",
+            "type": 1,
+            "auto_ban": "0",
+            "base_url": "https://agentrouter.org",
+            "models": "gpt-6-astra,gpt-5.6-sol",
+        }
+
+    def test_ch127_budget_pool_402_exempt(self):
+        self.assertTrue(
+            self.cwp.is_window_budget_exhausted(
+                self.ch127, "bad response status code 402, Budget pool quota has been exhausted"
+            )
+        )
+
+    def test_ch127_user_quota_403_exempt(self):
+        # 2026-09-13 现场：投放窗口外 agentrouter 对 test/real 流量均可返回
+        # 403 "user quota is not enough"（账号时段配额），必须与 402 同豁免，
+        # 否则软失败累积会把投放制额度误当渠道故障。
+        self.assertTrue(
+            self.cwp.is_window_budget_exhausted(
+                self.ch127, "bad response status code 403, message: user quota is not enough"
+            )
+        )
+
+    def test_credential_failures_never_exempt(self):
+        for msg in (
+            "401 invalid api key",
+            "403 invalid_token",
+            "Insufficient account balance",
+            "account suspended",
+        ):
+            self.assertFalse(
+                self.cwp.is_window_budget_exhausted(self.ch127, msg),
+                msg=msg,
+            )
+
+    def test_exemption_does_not_leak_to_other_channels(self):
+        ch86 = {
+            "id": 86,
+            "name": "agentrouter-claude",
+            "tag": "",
+            "type": 14,
+            "auto_ban": "0",
+            "base_url": "https://agentrouter.org",
+            "models": "claude-opus-5",
+        }
+        self.assertFalse(
+            self.cwp.is_window_budget_exhausted(
+                ch86, "bad response status code 403, message: user quota is not enough"
+            )
+        )
+
+    def test_sharedchat_dual_models_probe_incompatible(self):
+        # ch128 配置为 astra+sol 双模型后，单模型等值判断会让
+        # is_sharedchat_pool 失效、探针拒收 403 失去豁免——回归防护。
+        ch128 = {
+            "id": 128,
+            "name": "sharedchat-codex-astra",
+            "tag": "codex-sitewide-pool",
+            "type": 1,
+            "auto_ban": "0",
+            "base_url": "https://new.sharedchat.cc/codex",
+            "models": "gpt-6-astra,gpt-5.6-sol",
+        }
+        self.assertTrue(self.cwp.is_sharedchat_pool(ch128))
+        self.assertTrue(
+            self.cwp.is_codex_probe_incompatible(ch128, "403 codex_access_restricted")
+        )

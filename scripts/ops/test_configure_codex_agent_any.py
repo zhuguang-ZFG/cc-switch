@@ -51,10 +51,10 @@ multi_agent = true\r
     def test_empty_or_masked_key_fails_before_channel_creation(self):
         for key in ("", " ", "sk-***masked***"):
             with self.subTest(key=key), self.assertRaises(ValueError):
-                configure.agent_payload(key)
+                configure.agent_payload([key])
 
     def create_database(self, path):
-        agent = configure.agent_payload("fixture-agent-key")
+        agent = {**configure.agent_payload(["fixture-agent-key"]), "channel_info": None}
         any_channel = {**agent, "name": "any-gpt-6-astra", "models": "gpt-6-astra", "priority": 50}
         with closing(sqlite3.connect(path)) as db:
             fields = ",".join(f'"{key}"' for key in agent)
@@ -91,6 +91,37 @@ multi_agent = true\r
                     self.assertEqual(result["agent_id"], 127)
                     self.assertEqual(len(result["abilities"]), 3)
 
+
+    def test_projection_multi_key_health(self):
+        healthy_info = json.dumps({"is_multi_key": True, "multi_key_size": 2, "multi_key_mode": "polling"}).encode()
+        for mutation in (
+            None,
+            "UPDATE channels SET key='sk-fixture-a' WHERE id=127",
+            "UPDATE channels SET key='sk-fixture-a\nsk-fixture-b\nsk-fixture-c' WHERE id=127",
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "fixture.db"
+                self.create_database(path)
+                with closing(sqlite3.connect(path)) as db:
+                    db.execute("UPDATE channels SET key='sk-fixture-a\nsk-fixture-b' WHERE id=127", ())
+                    db.execute("UPDATE channels SET channel_info=? WHERE id=127", (healthy_info,))
+                    if mutation:
+                        db.execute(mutation)
+                    db.commit()
+                if mutation:
+                    with self.assertRaises(RuntimeError):
+                        configure.verify_projection(path, 127)
+                else:
+                    configure.verify_projection(path, 127)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "fixture.db"
+            self.create_database(path)
+            with closing(sqlite3.connect(path)) as db:
+                db.execute("UPDATE channels SET key='sk-fixture-a\nsk-fixture-b', channel_info=? WHERE id=127",
+                           (json.dumps({"is_multi_key": True, "multi_key_size": 2}),))
+                db.commit()
+            with self.assertRaisesRegex(RuntimeError, "BLOB"):
+                configure.verify_projection(path, 127)
 
 if __name__ == "__main__":
     unittest.main()

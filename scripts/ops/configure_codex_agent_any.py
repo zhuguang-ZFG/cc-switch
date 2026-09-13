@@ -60,12 +60,12 @@ def merge_retry_mapping(raw: str | None) -> str:
     return json.dumps(result, sort_keys=True, separators=(",", ":"))
 
 
-def agent_payload(key: str) -> dict:
-    if not channel_tools.usable_key(key):
+def agent_payload(keys: list[str]) -> dict:
+    if not keys or not all(channel_tools.usable_key(key) for key in keys):
         raise ValueError("AgentRouter credential is missing or masked")
     return {
         "name": CHANNEL_NAME, "type": 1, "status": 1,
-        "base_url": "https://agentrouter.org", "key": key.strip(),
+        "base_url": "https://agentrouter.org", "key": "\n".join(keys),
         "models": ",".join(MODELS), "group": "default",
         "priority": PRIORITY, "weight": WEIGHT, "auto_ban": 0,
         "test_model": MODELS[0], "model_mapping": "",
@@ -115,7 +115,7 @@ def verify_projection(db_path: Path, agent_id: int) -> dict:
         db.row_factory = sqlite3.Row
         agent = dict(db.execute("SELECT * FROM channels WHERE id=?", (agent_id,)).fetchone())
         any_channel = dict(db.execute("SELECT * FROM channels WHERE id=?", (ANY_CHANNEL_ID,)).fetchone())
-        expected = agent_payload("fixture-key-for-configuration-only")
+        expected = agent_payload(["fixture-key-for-configuration-only"])
         for key in ("name", "type", "status", "base_url", "models", "group", "priority", "weight", "auto_ban", "test_model", "tag"):
             if agent.get(key) != expected[key]:
                 raise RuntimeError(f"AgentRouter readback mismatch: {key}")
@@ -129,6 +129,19 @@ def verify_projection(db_path: Path, agent_id: int) -> dict:
             raise RuntimeError("AnyRouter tier drifted")
         if json.loads(agent.get("header_override") or "{}").get("User-Agent") != "codex_cli_rs/0.154.0":
             raise RuntimeError("AgentRouter Codex header missing")
+        stored_key = agent.get("key") or ""
+        key_lines = [line for line in str(stored_key).split("\n") if line.strip()]
+        storage = db.execute("SELECT typeof(channel_info) FROM channels WHERE id=?", (agent_id,)).fetchone()
+        if storage is not None and storage[0] not in ("null",):
+            if storage[0] != "blob":
+                raise RuntimeError("channel_info must be stored as BLOB for the fork's []byte scan path")
+            info = json.loads(bytes(agent["channel_info"]))
+            if info.get("is_multi_key") and len(key_lines) != int(info.get("multi_key_size") or 0):
+                raise RuntimeError("multi-key metadata does not match the stored key line count")
+        elif len(key_lines) != 1:
+            raise RuntimeError("single-key channel must store exactly one key line")
+        if not all(channel_tools.usable_key(line) for line in key_lines):
+            raise RuntimeError("stored AgentRouter credential is missing or masked")
         abilities = [dict(row) for row in db.execute(
             "SELECT channel_id,model,enabled,priority,weight FROM abilities WHERE channel_id IN (?,?) ORDER BY channel_id,model",
             (ANY_CHANNEL_ID, agent_id),
@@ -164,7 +177,7 @@ def main() -> int:
 
     original_config = CODEX_CONFIG.read_bytes()
     updated_config = config_with_pool_label(original_config)
-    print(json.dumps({"plan": channel_tools.safe_channel_summary(agent_payload("fixture-key-for-plan-only")), "any_primary": ANY_CHANNEL_ID, "channel_retry_mapping": RETRY_MAPPING, "codex_provider_label": POOL_LABEL}, ensure_ascii=False))
+    print(json.dumps({"plan": channel_tools.safe_channel_summary(agent_payload(["fixture-key-for-plan-only"])), "any_primary": ANY_CHANNEL_ID, "channel_retry_mapping": RETRY_MAPPING, "codex_provider_label": POOL_LABEL}, ensure_ascii=False))
     if not args.apply:
         return 0
     if args.snapshot_dir is None:
@@ -202,8 +215,8 @@ def main() -> int:
     original_mapping = original_any.get("status_code_mapping")
     keys_file = HOME_DIR / ".kimi-code/proxies/agentrouter-proxy/keys.json"
     keys = json.loads(keys_file.read_text(encoding="utf-8-sig"))["keys"]
-    key = keys[0] if isinstance(keys[0], str) else keys[0].get("key", keys[0].get("api_key"))
-    desired_agent = agent_payload(key)
+    pool_keys = [item if isinstance(item, str) else item.get("key", item.get("api_key")) for item in keys]
+    desired_agent = agent_payload(pool_keys)
     candidate_config = CODEX_CONFIG.with_name("config.toml.codex-pool-new")
     if candidate_config.exists():
         raise RuntimeError("an unfinished Codex config candidate already exists")
@@ -211,7 +224,7 @@ def main() -> int:
     any_changed = False
     config_changed = False
     try:
-        api("POST", "/api/channel/", {"mode": "single", "channel": desired_agent})
+        api("POST", "/api/channel/", {"mode": "multi" if len(pool_keys) > 1 else "single", "channel": desired_agent})
         with read_only(DB_PATH) as db:
             rows = db.execute("SELECT id FROM channels WHERE name=?", (CHANNEL_NAME,)).fetchall()
         if len(rows) != 1:

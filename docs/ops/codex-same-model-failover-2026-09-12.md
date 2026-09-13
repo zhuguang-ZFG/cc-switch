@@ -124,6 +124,8 @@ completed 128 / failed 130 / inProgress 23 / interrupted 7 —— 失败率近�
 
 `scripts/ops/guardian.py`（repo）落后线上 ~119 行（file-tail 错误侧观测、预算感知扫描偏移等 09-12 凌晨特性 live-only）；本次三处修复已双端同步（线上先行重启、仓库镜像）。待单独开任务做一次全量 diff 对齐后再清理旧 `.bak`。
 
+**2026-09-13 已对齐**：仓库 `guardian.py` 全量替换为线上运行版（pre-sync 备份 `scripts/ops/guardian.py.bak-20260913-presync`），`diff` 归零，`py_compile` 通过，`test_guardian.py` 190 用例全绿。`test_guardian.py` 反向差异（repo 09-12 版含 `NewAPIClientUpdateTests` 等新于线上 09-09 版）已于同日同步到线上（线上 pre-sync 备份 `test_guardian.py.bak-20260913-presync`），线上目录重跑 190 用例全绿。线上 `guardian.py.bak-20260912-{recovery-auto,busy-probe,stability-postpatch}` 三个中间补丁备份已于同日删除（9/12 三处修复已稳定运行 32h+，190 用例背书）；更老的 8 月 `.bak` 未动。
+
 ## 附 3：busy ≠ 死——上游容量信号的探测分类（当日 13:40–13:50 追加）
 
 ### 现场因果链（13:26–13:40）
