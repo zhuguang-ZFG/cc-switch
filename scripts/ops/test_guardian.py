@@ -1054,6 +1054,25 @@ class WeightAdjustmentTests(unittest.TestCase):
         self.assertEqual(engine.newapi.updates, [])
         self.assertEqual(channel["weight"], 15)
 
+    def test_any_pool_contract_weight_is_not_dynamically_reweighted(self):
+        # configure_codex_agent_any.py's verify_projection asserts ch126
+        # weight == 5; a degrade/boost cycle drifted it to 4 and turned the
+        # projection gate red. Pinning makes weight a contract, not a knob.
+        engine = make_engine()
+        channel = {
+            "id": 126,
+            "name": "any-gpt-6-astra",
+            "status": 1,
+            "weight": 5,
+        }
+        for healthy in (False, True):
+            with self.subTest(healthy=healthy):
+                engine.channel_perf.pop(126, None)
+                add_samples(engine, 126, guardian.WEIGHT_ADJUST_WINDOW, healthy=healthy)
+                engine._auto_adjust_weights([channel])
+                self.assertEqual(engine.newapi.updates, [])
+                self.assertEqual(channel["weight"], 5)
+
     def test_records_each_newapi_test_result_once(self):
         engine = make_engine()
         channel = {"id": 7, "test_time": 100, "response_time": 900}
@@ -3823,6 +3842,134 @@ class OpusEmptyResponseTests(unittest.TestCase):
             g._step_opus_empty_response()
         self.assertEqual(g.telegram.send_alert.call_count, 1)
         tmp.cleanup()
+
+
+class UnbilledEmptyRoundsTests(unittest.TestCase):
+    """未计费空回监控：按渠道+模型分组的口径、阈值、分组冷却。"""
+
+    @staticmethod
+    def _make_db(rows):
+        tmp = tempfile.TemporaryDirectory()
+        db = Path(tmp.name) / "new-api.db"
+        with closing(sqlite3.connect(db)) as conn:
+            conn.execute(
+                "CREATE TABLE logs ("
+                "id INTEGER PRIMARY KEY, created_at INTEGER, type INTEGER, "
+                "model_name TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, "
+                "quota INTEGER, channel_id INTEGER, channel_name TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO logs (created_at, type, model_name, prompt_tokens, "
+                "completion_tokens, quota, channel_id, channel_name) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            conn.commit()
+        return db, tmp
+
+    @staticmethod
+    def _rows(total, empty, now, channel_id=126, name="any-gpt-6-astra", model="gpt-6-astra"):
+        rows = []
+        for i in range(total):
+            if i < empty:
+                prompt, completion, quota = 0, 0, 0
+            else:
+                prompt, completion, quota = 1500, 800, 4200
+            rows.append(
+                (int(now) - i * 60, 2, model, prompt, completion, quota, channel_id, name)
+            )
+        return rows
+
+    def _guardian(self, db, alerts=None):
+        g = guardian.Guardian.__new__(guardian.Guardian)
+        g.autofix = guardian.AutoFixEngine.__new__(guardian.AutoFixEngine)
+        g.alerts = alerts if alerts is not None else Mock(**{"should_alert.return_value": True})
+        g.telegram = Mock()
+        return g
+
+    def test_zero_token_zero_quota_rounds_are_counted_as_empty(self):
+        # ch126 的空回形状：prompt/completion/quota 全 0（上游超时未回计费信息）。
+        # opus 那条口径要求 prompt_tokens >= 1000，整类看不见，7 天 21.8% 长期显示 0.0%。
+        now = time.time()
+        db, tmp = self._make_db(self._rows(100, 30, now))
+        with patch.object(guardian, "NEWAPI_DB", db):
+            self.assertIsNone(guardian._query_opus_empty_response_rate(db, now=now))
+            offenders = guardian._query_unbilled_empty_rounds(db, now=now)
+        self.assertEqual(len(offenders), 1)
+        self.assertEqual(offenders[0]["channel_id"], 126)
+        self.assertEqual(offenders[0]["model"], "gpt-6-astra")
+        self.assertEqual(offenders[0]["empty"], 30)
+        self.assertAlmostEqual(offenders[0]["rate"], 0.30)
+        tmp.cleanup()
+
+    def test_rate_and_sample_floor_gate_the_alert(self):
+        now = time.time()
+        for total, empty, expected in ((100, 30, True), (100, 15, False), (10, 9, False)):
+            with self.subTest(total=total, empty=empty):
+                db, tmp = self._make_db(self._rows(total, empty, now))
+                with patch.object(guardian, "NEWAPI_DB", db):
+                    g = self._guardian(db)
+                    g._step_unbilled_empty_rounds()
+                self.assertEqual(g.telegram.send_alert.called, expected)
+                if not expected:
+                    g.alerts.should_alert.assert_not_called()
+                tmp.cleanup()
+
+    def test_alert_names_the_offending_channel_and_model(self):
+        now = time.time()
+        db, tmp = self._make_db(self._rows(100, 52, now))
+        with patch.object(guardian, "NEWAPI_DB", db):
+            g = self._guardian(db)
+            g._step_unbilled_empty_rounds()
+        title, message, level = g.telegram.send_alert.call_args.args
+        self.assertIn("未计费空回超标", title)
+        self.assertIn("ch126", message)
+        self.assertIn("any-gpt-6-astra", message)
+        self.assertIn("gpt-6-astra", message)
+        self.assertIn("52.0%", message)
+        self.assertEqual(level, "warning")
+        tmp.cleanup()
+
+    def test_each_channel_model_group_keeps_its_own_cooldown(self):
+        # 一个渠道的故障段不得压掉另一个渠道的首次告警。
+        now = time.time()
+        rows = self._rows(100, 30, now) + self._rows(
+            100, 30, now, channel_id=3, name="justwoker", model="claude-opus-5"
+        )
+        db, tmp = self._make_db(rows)
+        with patch.object(guardian, "NEWAPI_DB", db):
+            g = self._guardian(db, alerts=guardian.AlertManager(Mock()))
+            g._step_unbilled_empty_rounds()
+            g._step_unbilled_empty_rounds()
+        self.assertEqual(g.telegram.send_alert.call_count, 2)
+        alerted = " ".join(
+            call.args[1] for call in g.telegram.send_alert.call_args_list
+        )
+        self.assertIn("ch126", alerted)
+        self.assertIn("ch3", alerted)
+        tmp.cleanup()
+
+    def test_window_excludes_older_rounds(self):
+        now = time.time()
+        stale = [
+            (
+                int(now) - (guardian.UNBILLED_EMPTY_WINDOW_HOURS * 3600 + 600),
+                2, "gpt-6-astra", 0, 0, 0, 126, "any-gpt-6-astra",
+            )
+        ] * 80
+        db, tmp = self._make_db(self._rows(40, 0, now) + stale)
+        with patch.object(guardian, "NEWAPI_DB", db):
+            offenders = guardian._query_unbilled_empty_rounds(db, now=now)
+        self.assertEqual(offenders, [])
+        tmp.cleanup()
+
+    def test_missing_database_returns_none_instead_of_alerting(self):
+        missing = Path(tempfile.gettempdir()) / "cc-switch-no-such-newapi.db"
+        self.assertIsNone(guardian._query_unbilled_empty_rounds(missing))
+        with patch.object(guardian, "NEWAPI_DB", missing):
+            g = self._guardian(missing)
+            g._step_unbilled_empty_rounds()
+        g.telegram.send_alert.assert_not_called()
 
 
 class DailyQuotaCapTests(unittest.TestCase):

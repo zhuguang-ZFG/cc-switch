@@ -138,6 +138,18 @@ OPUS_EMPTY_RESPONSE_WINDOW_HOURS = 6  # 统计窗口：最近 6 小时
 OPUS_EMPTY_RESPONSE_MIN_SAMPLES = 30  # 样本不足时不告警，避免小样本抖动
 OPUS_EMPTY_RESPONSE_THRESHOLD = 0.20  # 告警阈值 20%，高于基线并留足抖动余量
 
+# 未计费空回监控（2026-09-14）：上游流以 200 结束但既无内容也无计费信息，
+# NewAPI 记为 type=2 且 prompt_tokens=0 AND completion_tokens=0 AND quota=0，
+# content 形如「上游没有返回计费信息，无法扣费（可能是上游超时）」。
+# 上面的 opus 口径要求 prompt_tokens >= 1000，会把这类行整体过滤掉：ch126
+# any-gpt-6-astra 7 天 21.8%（423/1941）的空回在原监控里恒为 0.0%，结构性隐形。
+# 按 (channel, model) 分组，任一腿劣化都能定位到具体渠道而不是整条模型线。
+# 阈值沿用 20%/30 样本：7 天实测 19 个 (channel, model) 组合里只有 ch126
+# （峰值 51.7%）与 ch3 claude-opus-5（峰值 30.1%）会触发，不会刷群。
+UNBILLED_EMPTY_WINDOW_HOURS = 6
+UNBILLED_EMPTY_MIN_SAMPLES = 30
+UNBILLED_EMPTY_THRESHOLD = 0.20
+
 # 降权/禁用阈值（P1: 渐进式处理）
 WEIGHT_DEGRADE_FACTOR = 0.5  # 降权到原来的 50%
 MIN_WEIGHT = 1  # 最小权重
@@ -154,6 +166,13 @@ PINNED_CHANNEL_WEIGHTS = {
     83: ("muyuan-sol", 5),
     91: ("jianzhile-gpt-5.6-sol", 5),
     92: ("zzzcoding-gpt-5.6-sol", 15),
+    # configure_codex_agent_any.py's verify_projection asserts weight == 5 and
+    # status == 1 on ch126, so weight drift is a gate failure, not a tuning
+    # knob. 09-13: a recurring probe-shape 404 degraded it 5->2 and left the
+    # projection contract violated. Safe only alongside the any-pool probe
+    # exemption in codex_window_pool; without it, pinning turns that same
+    # false failure into repeated disables.
+    126: ("any-gpt-6-astra", 5),
 }
 
 
@@ -1111,6 +1130,74 @@ def _query_opus_empty_response_rate(
     return {"total": total, "empty": empty, "rate": empty / total}
 
 
+def _query_unbilled_empty_rounds(
+    db_path: Path, now: Optional[float] = None
+) -> Optional[list[dict]]:
+    """只读查询每个渠道+模型最近窗口内的「未计费空回」占比。
+
+    与 opus 空响应率互补：那条口径要求 prompt_tokens >= 1000，只看得见
+    「有输入、无输出」的计费轮；ch126 的空回是 prompt/completion/quota 全 0
+    （上游超时未回计费信息），被 >= 1000 的门槛整类过滤掉，7 天 21.8%
+    在监控里始终是 0.0%。这里按 (channel_id, model_name) 分组，谁空回谁暴露，
+    不再依赖预先写死的模型名单。
+
+    返回按占比降序的 [{channel_id, channel_name, model, total, empty, rate}]，
+    只含样本足量且超阈值的组；DB 不可用或查询失败返回 None，避免误告警。
+    """
+    if not db_path.exists():
+        return None
+    cutoff = int((now or time.time()) - UNBILLED_EMPTY_WINDOW_HOURS * 3600)
+    sql = """
+        SELECT
+            channel_id,
+            COALESCE(MAX(channel_name), '') AS channel_name,
+            model_name,
+            COUNT(*) AS total,
+            SUM(
+                CASE WHEN prompt_tokens = 0 AND completion_tokens = 0 AND quota = 0
+                THEN 1 ELSE 0 END
+            ) AS empty
+        FROM logs
+        WHERE type = 2
+          AND created_at >= ?
+        GROUP BY channel_id, model_name
+        HAVING total >= ?
+    """
+    try:
+        with closing(
+            sqlite3.connect(
+                f"file:{db_path.expanduser().resolve().as_posix()}?mode=ro",
+                uri=True,
+                timeout=5,
+            )
+        ) as conn:
+            rows = conn.execute(sql, (cutoff, UNBILLED_EMPTY_MIN_SAMPLES)).fetchall()
+    except (OSError, sqlite3.Error) as e:
+        logger.error(f"未计费空回率查询失败: {e}")
+        return None
+    offenders = []
+    for channel_id, channel_name, model, total, empty in rows:
+        total = total or 0
+        empty = empty or 0
+        if total < UNBILLED_EMPTY_MIN_SAMPLES:
+            continue
+        rate = empty / total
+        if rate <= UNBILLED_EMPTY_THRESHOLD:
+            continue
+        offenders.append(
+            {
+                "channel_id": channel_id,
+                "channel_name": channel_name or "",
+                "model": model or "",
+                "total": total,
+                "empty": empty,
+                "rate": rate,
+            }
+        )
+    offenders.sort(key=lambda item: item["rate"], reverse=True)
+    return offenders
+
+
 def _query_pool_legs(db_path: Path) -> Optional[dict]:
     """只读统计：每个 enabled 模型的活跃渠道数（channel status=1 且 ability enabled）。
 
@@ -1283,6 +1370,10 @@ class AutoFixEngine:
     def check_opus_empty_response_rate(self) -> Optional[dict]:
         """查询 justwoker opus 线空响应率，供主循环告警决策。"""
         return _query_opus_empty_response_rate(NEWAPI_DB)
+
+    def check_unbilled_empty_rounds(self) -> Optional[list]:
+        """查询各渠道+模型的未计费空回占比，供主循环告警决策。"""
+        return _query_unbilled_empty_rounds(NEWAPI_DB)
 
     def check_pool_legs(self) -> Optional[dict]:
         """查询每个 enabled 模型的活跃渠道数，供单腿告警决策。"""
@@ -3179,6 +3270,7 @@ class Guardian:
 
         # 7.5 justwoker opus 空响应率监控（本地 NewAPI DB 只读查询）
         self._run_step("opus empty response", self._step_opus_empty_response)
+        self._run_step("unbilled empty rounds", self._step_unbilled_empty_rounds)
         self._run_step("pool legs", self._step_pool_legs)
 
         # 8. 余额 + P2: 趋势分析（get_user_info 网络调用，预算守卫）
@@ -3248,6 +3340,36 @@ class Guardian:
                 f"模型：{', '.join(OPUS_EMPTY_RESPONSE_MODELS)}",
                 "warning",
             )
+
+    def _step_unbilled_empty_rounds(self) -> None:
+        """未计费空回告警：按渠道+模型暴露「200 但无内容无计费」的空回占比。
+
+        每组独立冷却 key，避免一个渠道的故障段压掉另一个渠道的首次告警。
+        """
+        offenders = self.autofix.check_unbilled_empty_rounds()
+        if not isinstance(offenders, list):
+            return
+        for item in offenders:
+            channel_id = item["channel_id"]
+            model = item["model"]
+            rate = item["rate"]
+            logger.warning(
+                f"未计费空回：ch{channel_id} {item['channel_name']} {model} "
+                f"{rate:.1%} ({item['empty']}/{item['total']})"
+            )
+            if self.alerts.should_alert(
+                f"unbilled_empty:{channel_id}:{model}", "warning"
+            ):
+                self.telegram.send_alert(
+                    "未计费空回超标",
+                    f"渠道 ch{channel_id}（{item['channel_name']}）模型 {model} "
+                    f"最近 {UNBILLED_EMPTY_WINDOW_HOURS} 小时空回率 {rate:.1%}"
+                    f"（{item['empty']}/{item['total']}），高于阈值 "
+                    f"{UNBILLED_EMPTY_THRESHOLD:.0%}\n"
+                    f"口径：上游以 200 结束但未回内容与计费信息，用户侧表现为空回。\n"
+                    f"NewAPI 无法对静默空回重试，需查上游或降低该腿权重。",
+                    "warning",
+                )
 
     def _step_pool_legs(self) -> None:
         """模型池单腿告警：enabled 模型活跃渠道从 >=2 塌到 1 时 edge-trigger。

@@ -8,13 +8,16 @@ from unittest.mock import Mock
 from scripts.ops.test_guardian import guardian, make_engine
 from scripts.ops.codex_window_pool import (
     CHANNEL_NAME,
+    ANY_CHANNEL_NAME,
     MODELS,
     WINDOW_POOL_TAG,
     SHAREDCHAT_CHANNEL_NAME,
     SHAREDCHAT_POOL_TAG,
     SHAREDCHAT_BASE_URL,
+    is_any_pool,
     is_codex_probe_incompatible,
     is_window_budget_exhausted,
+    pool_model_drift,
 )
 
 # Close the imported Guardian fixture's file handler before Windows removes
@@ -34,6 +37,25 @@ def channel(**changes):
     }
 
 
+# Verbatim shape of the recurring ch126 probe failure (09-13/09-14, every
+# ~30-40 min). It carries "status code 404" but no "invalid_request_error",
+# which is exactly why Guardian's generic check missed it.
+ANY_PROBE_404 = (
+    "bad response status code 404, message: 当前 API 不支持所选模型 gpt-6-astra, "
+    'body: {"error":"当前 API 不支持所选模型 gpt-6-astra","type":"error"}'
+)
+
+
+def any_channel(**changes):
+    return channel(
+        **{
+            "id": 126, "name": ANY_CHANNEL_NAME, "tag": None,
+            "base_url": "https://anyrouter.top", "models": "gpt-6-astra",
+            **changes,
+        }
+    )
+
+
 class WindowPoolPolicyTests(unittest.TestCase):
     def test_resource_shortage_survives_channel_local_status_mapping(self):
         for status in (402, 503):
@@ -44,12 +66,25 @@ class WindowPoolPolicyTests(unittest.TestCase):
         cases = (
             {"name": "agentrouter"}, {"tag": ""}, {"auto_ban": 1},
             {"type": 14}, {"base_url": "https://agentrouter.org.example.com"},
-            {"base_url": "https://example.com"}, {"models": "claude-opus-5"},
-            {"models": "gpt-6-astra,glm-5.3"}, {"models": ""},
+            {"base_url": "https://example.com"}, {"models": ""},
         )
         for change in cases:
             with self.subTest(change=change):
                 self.assertFalse(is_window_budget_exhausted(channel(**change), QUOTA_ERROR))
+
+    def test_roster_drift_keeps_exemption_and_is_reported_instead(self):
+        # A roster edit must not silently revoke the exemption: that is how a
+        # scheduled 0/8/16 shortage turned into a quarantine on 09-12.
+        for models in ("gpt-6-astra", "gpt-6-astra,glm-5.3", "claude-opus-5"):
+            with self.subTest(models=models):
+                self.assertTrue(is_window_budget_exhausted(channel(models=models), QUOTA_ERROR))
+        shared = channel(id=128, name=SHAREDCHAT_CHANNEL_NAME, tag=SHAREDCHAT_POOL_TAG, base_url=SHAREDCHAT_BASE_URL, models="gpt-6-astra")
+        self.assertTrue(is_window_budget_exhausted(shared, "503 global_fixed_window_quota_exhausted"))
+        self.assertEqual(pool_model_drift(channel()), ())
+        self.assertEqual(pool_model_drift(channel(models="gpt-6-astra,glm-5.3")), ("glm-5.3",))
+        self.assertEqual(pool_model_drift(channel(models="glm-5.3,claude-opus-5")), ("claude-opus-5", "glm-5.3"))
+        self.assertEqual(pool_model_drift(channel(models="")), ())
+        self.assertEqual(pool_model_drift(channel(name="agentrouter", models="glm-5.3")), ())
 
     def test_real_authentication_and_balance_failures_remain_fatal(self):
         for error in ("401 invalid_api_key", "402 insufficient balance", "403 account suspended", "503 upstream unavailable"):
@@ -127,10 +162,74 @@ class WindowPoolPolicyTests(unittest.TestCase):
                         engine.telegram.send_alert.assert_not_called()
 
     def test_sharedchat_admin_probe_uses_streaming_responses(self):
+        # The probe must exercise the model configure_codex_agent_any pins as
+        # test_model (MODELS[0]) over native Codex streaming, not whichever
+        # roster entry was hardcoded when this test was written: 556e5d83 moved
+        # the override and left this assert pinned to the old literal.
         client = guardian.NewAPIClient("http://127.0.0.1:3002", "fixture-token", "1")
         client._request = Mock(return_value={"success": False, "message": "codex_access_restricted"})
         self.assertEqual(client.test_channel(128), (False, "codex_access_restricted"))
-        client._request.assert_called_once_with("GET", "/api/channel/test/128?model=gpt-5.6-sol&endpoint_type=openai-response&stream=true", timeout=guardian.TEST_CHANNEL_TIMEOUT)
+        client._request.assert_called_once_with(
+            "GET",
+            f"/api/channel/test/128?model={MODELS[0]}&endpoint_type=openai-response&stream=true",
+            timeout=guardian.TEST_CHANNEL_TIMEOUT,
+        )
+
+    def test_any_pool_probe_shape_is_not_a_health_verdict(self):
+        # ch126 answers the generic admin probe by rejecting the request
+        # (upstream gpt-6-astra is Codex-client only) while real billed traffic
+        # was 0% empty in the same window: no health conclusion either way.
+        self.assertTrue(is_codex_probe_incompatible(any_channel(), ANY_PROBE_404))
+        self.assertTrue(is_any_pool(any_channel()))
+        # The exemption is probe-shape only: it must not launder credential or
+        # balance failures, nor stand in for a resource-window shortage.
+        self.assertFalse(is_codex_probe_incompatible(any_channel(), f"401 invalid_api_key {ANY_PROBE_404}"))
+        self.assertFalse(is_codex_probe_incompatible(any_channel(), "402 insufficient_balance"))
+        self.assertFalse(is_window_budget_exhausted(any_channel(), ANY_PROBE_404))
+        # Every other channel keeps that 404 fatal, including the sibling pools.
+        self.assertFalse(is_codex_probe_incompatible(channel(), ANY_PROBE_404))
+        self.assertFalse(
+            is_codex_probe_incompatible(
+                channel(id=128, name=SHAREDCHAT_CHANNEL_NAME, tag=SHAREDCHAT_POOL_TAG, base_url=SHAREDCHAT_BASE_URL),
+                ANY_PROBE_404,
+            )
+        )
+
+    def test_any_pool_identity_requires_deployment_id_name_and_host(self):
+        # A renamed, re-numbered, retyped, or moved channel must lose the
+        # exemption rather than inherit it from a look-alike.
+        cases = (
+            {"id": 129}, {"name": "any-gpt-6"}, {"type": 14}, {"models": ""},
+            {"base_url": "https://anyrouter.top.example.com"},
+            {"base_url": "https://example.com"},
+        )
+        for change in cases:
+            with self.subTest(change=change):
+                self.assertFalse(is_any_pool(any_channel(**change)))
+                self.assertFalse(is_codex_probe_incompatible(any_channel(**change), ANY_PROBE_404))
+
+    def test_both_scanners_keep_any_pool_channel_and_clear_failure_streak(self):
+        # The 404 previously accumulated soft failures until degrade_channel_weight
+        # dropped ch126 from its contract weight 5 to 2.
+        for full_scan in (False, True):
+            with self.subTest(full_scan=full_scan):
+                engine = make_engine()
+                engine._scan_offset = engine._full_scan_offset = 0
+                engine._pinned_scan_offset = 0
+                engine.newapi.channels[126] = any_channel()
+                engine.newapi.test_results.append((False, ANY_PROBE_404))
+                engine._probe_soft_failures[126] = 2
+                engine.telegram = Mock()
+                if full_scan:
+                    engine._full_scan_count = guardian.FULL_SCAN_INTERVAL - 1
+                    engine.full_health_scan()
+                else:
+                    engine._scan_count = guardian.ERROR_SCAN_INTERVAL - 1
+                    engine.scan_error_channels()
+                self.assertEqual(engine.newapi.disable_calls, [])
+                self.assertEqual(engine.newapi.updates, [])
+                self.assertNotIn(126, engine._probe_soft_failures)
+                engine.telegram.send_alert.assert_not_called()
 
 
 if __name__ == "__main__":
