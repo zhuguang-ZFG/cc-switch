@@ -1,5 +1,9 @@
 # OMP GitNexus and task verification
 
+The later [bug-fix loop upgrade](omp-bugfix-loop-2026-09-25.md) adds safe failure
+locations and one opt-in repair continuation. Its stop behavior and rollback
+instructions supersede the corresponding original-deployment details below.
+
 ## Deployed behavior
 
 OMP can inspect indexed callers/dependencies through GitNexus MCP and run

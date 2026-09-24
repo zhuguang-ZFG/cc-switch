@@ -3,9 +3,10 @@ import { execFile, spawn } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { acquireCanaryLease } from "./omp-model-routing-observability.js";
 
-export const EXTENSION_REVISION = "2026.09.25-task-verification-r1";
+export const EXTENSION_REVISION = "2026.09.25-task-verification-r2";
 export const POLICY_NAME = "task-verification-policy.json";
 const exec = promisify(execFile);
 const digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -43,6 +44,11 @@ export function readVerificationPolicy(agentDir, cwd) {
   });
   if (projects.length !== 1) throw new Error("project-not-configured");
   const project = projects[0];
+  if (
+    project.repairOnFailure !== undefined &&
+    typeof project.repairOnFailure !== "boolean"
+  )
+    throw new Error("invalid-repair-policy");
   if (!Array.isArray(project.checks) || project.checks.length > 12)
     throw new Error("invalid-checks");
   const ids = new Set();
@@ -188,6 +194,120 @@ export function testEvidence(check, result) {
     : { status: "unverified", reason: "no-passing-test-evidence" };
 }
 
+// Return categories and existing repository locations, never assertion messages,
+// source excerpts, test names, environment values or raw subprocess output.
+export function failureDiagnostic(result, root) {
+  const output = String(result.output ?? "")
+    .slice(-64 * 1024)
+    .replace(/\x1b\[[0-9;]*m/g, "");
+  const category = result.aborted
+    ? "cancelled"
+    : result.timedOut
+      ? "timeout"
+      : result.startFailed
+        ? "command-unavailable"
+        : /\b(?:EACCES|EPERM|Unauthorized|Forbidden)\b|HTTP\s+(?:401|403)\b/i.test(
+              output,
+            )
+          ? "permission-or-auth"
+          : /\b(?:MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND|ModuleNotFoundError)\b/.test(
+                output,
+              )
+            ? "missing-dependency"
+            : /\bSyntaxError\b|error TS\d+/.test(output)
+              ? "syntax-or-type-error"
+              : /\b(?:ERR_ASSERTION|AssertionError)\b/.test(output)
+                ? "assertion-failure"
+                : /^# fail [1-9]\d*\s*$|^FAILED \((?:failures|errors)=/m.test(
+                      output,
+                    )
+                  ? "test-failure"
+                  : "command-failure";
+  const locations = [];
+  const candidates = [
+    ...output.matchAll(/^\s*location:\s*['"](.+?):(\d+)(?::(\d+))?['"]\s*$/gm),
+    ...output.matchAll(
+      /^\s*at .*?\(?((?:file:\/\/\/|[A-Za-z]:[\\/]|\/)[^\r\n]+?):(\d+):(\d+)\)?\s*$/gm,
+    ),
+    ...output.matchAll(/^\s*File "([^"]+)", line (\d+)/gm),
+  ];
+  for (const match of candidates) {
+    if (locations.length >= 6) break;
+    try {
+      const path = match[1].startsWith("file:")
+        ? fileURLToPath(match[1])
+        : resolve(root, match[1]);
+      if (!inside(root, canonical(path)) || !statSync(path).isFile()) continue;
+      const name = normalize(relative(root, path));
+      // Restrict diagnostics to ordinary code paths, not secret/config files.
+      if (
+        !/\.(?:[cm]?[jt]sx?|py|rs|go|java|c|h|cpp|cs)$/.test(name) ||
+        /(?:^|\/)\./.test(name)
+      )
+        continue;
+      const line = Number(match[2]);
+      if (!Number.isSafeInteger(line) || line < 1) continue;
+      const item = { path: name, line };
+      if (!locations.some((x) => x.path === name && x.line === line))
+        locations.push(item);
+    } catch {
+      /* Invalid/external paths are deliberately omitted. */
+    }
+  }
+  const nextStep = {
+    "permission-or-auth":
+      "Resolve the permission or credential blocker through the authorized path; do not change application logic to bypass it.",
+    "missing-dependency":
+      "Inspect the declared dependency and environment before changing source; do not install or upgrade blindly.",
+    "syntax-or-type-error":
+      "Inspect the reported code location and relevant interface, make the smallest correction, then rerun the check.",
+    "assertion-failure":
+      "Read the failing test and its implementation; compare expected behavior with the actual data flow. Fix the cause without weakening the test.",
+    "test-failure":
+      "Inspect the failing test location and reproduce narrowly. Add or preserve a regression that fails before the fix and passes after it.",
+    timeout:
+      "Inspect the hang or resource contention before rerunning; the timeout is not evidence of a source-code defect.",
+    cancelled: "The check was cancelled; report it as unverified.",
+    "command-unavailable":
+      "Check the configured executable and working environment.",
+    "command-failure":
+      "Inspect the configured check locally; its raw output is withheld. Establish a cause before editing.",
+  }[category];
+  return { category, locations, nextStep };
+}
+
+export function repairContinuation(report, project, event, used) {
+  if (
+    used ||
+    project?.repairOnFailure !== true ||
+    event?.signal?.aborted ||
+    event?.stop_hook_active ||
+    event?.last_assistant_message?.stopReason !== "stop" ||
+    report?.status !== "failed" ||
+    report.uncovered?.length
+  )
+    return;
+  const failed = report.checks.filter((check) => check.status === "failed");
+  if (
+    !failed.length ||
+    !failed.every((check) =>
+      ["assertion-failure", "syntax-or-type-error", "test-failure"].includes(
+        check.diagnostic?.category,
+      ),
+    )
+  )
+    return;
+  return {
+    continue: true,
+    additionalContext:
+      "Verification of the current changes failed. This is the single automatic repair continuation for this user turn. " +
+      "Within the existing user authorization, inspect the diagnostic locations, establish a falsifiable cause, make the smallest justified fix, and call task_verify again. " +
+      "Do not weaken/delete tests, change the verification policy, install dependencies, change routing, or bypass permissions to obtain a pass. " +
+      "If blocked or outside the authorized scope, report the blocker and stop. Verification evidence: " +
+      JSON.stringify(report),
+  };
+}
+
 // No shell interpolation and no model-supplied command. Policy is user-owned,
 // outside repositories. Raw command output stays in memory and is never sent
 // to the model/logs: failing assertions may contain live credentials.
@@ -317,6 +437,9 @@ export async function executeVerification(
         ...testEvidence(check, result),
         exitCode: result.code,
         durationMs: result.durationMs,
+        ...(result.code !== 0 || result.timedOut || result.aborted
+          ? { diagnostic: failureDiagnostic(result, project.root) }
+          : {}),
       });
     }
     const after = await snapshot(project.root, baseHead);
@@ -519,5 +642,21 @@ export default function taskVerificationExtension(pi) {
         },
         { triggerTurn: false },
       );
+    if (report && state === turn) {
+      try {
+        const continuation = repairContinuation(
+          report,
+          readVerificationPolicy(agentDir, ctx.cwd),
+          event,
+          turn.repairUsed,
+        );
+        if (continuation) {
+          turn.repairUsed = true;
+          return continuation;
+        }
+      } catch {
+        /* Invalid policy never authorizes repair. */
+      }
+    }
   });
 }

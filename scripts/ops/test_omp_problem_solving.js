@@ -6,6 +6,7 @@ import test from "node:test";
 import extension, {
   checkpointPath,
   createFailureTracker,
+  classifyFailure,
   loadCheckpoint,
   normalizeCheckpoint,
   saveCheckpoint,
@@ -134,6 +135,38 @@ test("repeated failed action prompts once, success resets, different arguments s
   assert.equal(tracker.observe(event), true);
   tracker.reset();
   assert.equal(tracker.observe(event), false);
+});
+
+test("different failing commands share actionable categories without leaking output", () => {
+  const tracker = createFailureTracker();
+  const failure = (command) => ({
+    toolName: "bash",
+    input: { command },
+    isError: false,
+    details: { exitCode: 1 },
+    content: [{ type: "text", text: "ENOENT secret=do-not-emit" }],
+  });
+  assert.equal(tracker.observe(failure("first")), false);
+  assert.equal(tracker.observe(failure("second")), false);
+  assert.equal(tracker.observe(failure("third")), true);
+  assert.equal(tracker.observe(failure("fourth")), false);
+  assert.deepEqual(classifyFailure(failure("third")), {
+    failed: true,
+    category: "missing-resource",
+  });
+  tracker.observe({
+    toolName: "bash",
+    input: { command: "working" },
+    details: { exitCode: 0 },
+  });
+  assert.equal(tracker.observe(failure("fifth")), false);
+  assert.deepEqual(
+    classifyFailure({
+      isError: false,
+      content: [{ type: "text", text: "document mentions ENOENT" }],
+    }),
+    { failed: false },
+  );
 });
 
 test(

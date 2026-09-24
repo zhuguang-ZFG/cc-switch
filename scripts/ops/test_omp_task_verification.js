@@ -18,6 +18,8 @@ import extension, {
   snapshotWorkspace,
   testEvidence,
   verificationPlan,
+  failureDiagnostic,
+  repairContinuation,
 } from "./omp-task-verification.js";
 import { acquireCanaryLease } from "./omp-model-routing-observability.js";
 import { createHash } from "node:crypto";
@@ -145,6 +147,103 @@ test("test evidence rejects zero tests, all-skipped tests, failures, timeout and
   assert.equal(
     testEvidence(py, { code: 0, output: "Ran 2 tests in 0.02s\n\nOK\n" }).tests,
     2,
+  );
+});
+
+test(
+  "failure diagnostics expose only existing code locations and categories",
+  fixture((root) => {
+    const file = join(root, "regression.test.js");
+    writeFileSync(file, "// fixture");
+    const output = `  location: '${file}:1:2'\nerror: secret=do-not-emit\ncode: 'ERR_ASSERTION'\n  location: '/outside/secret.js:8:1'\n`;
+    const diagnostic = failureDiagnostic({ code: 1, output }, root);
+    assert.equal(diagnostic.category, "assertion-failure");
+    assert.deepEqual(diagnostic.locations, [
+      { path: "regression.test.js", line: 1 },
+    ]);
+    assert.doesNotMatch(JSON.stringify(diagnostic), /do-not-emit|outside/);
+    assert.equal(
+      failureDiagnostic(
+        { code: 1, output: "ModuleNotFoundError: private" },
+        root,
+      ).category,
+      "missing-dependency",
+    );
+    assert.equal(
+      failureDiagnostic({ code: 1, output: "ERR_ASSERTION HTTP 403" }, root)
+        .category,
+      "permission-or-auth",
+    );
+    assert.equal(
+      failureDiagnostic({ code: null, timedOut: true, output }, root).category,
+      "timeout",
+    );
+  }),
+);
+
+test("repair continuation is opt-in, code-failure-only and bounded", () => {
+  const report = {
+    status: "failed",
+    checks: [
+      { status: "failed", diagnostic: { category: "assertion-failure" } },
+    ],
+    uncovered: [],
+  };
+  const event = { last_assistant_message: { stopReason: "stop" } };
+  assert.equal(
+    repairContinuation(report, { repairOnFailure: true }, event, false)
+      .continue,
+    true,
+  );
+  assert.equal(repairContinuation(report, {}, event, false), undefined);
+  assert.equal(
+    repairContinuation(report, { repairOnFailure: true }, event, true),
+    undefined,
+  );
+  assert.equal(
+    repairContinuation(
+      report,
+      { repairOnFailure: true },
+      { ...event, stop_hook_active: true },
+      false,
+    ),
+    undefined,
+  );
+  assert.equal(
+    repairContinuation(
+      { ...report, uncovered: ["unknown.js"] },
+      { repairOnFailure: true },
+      event,
+      false,
+    ),
+    undefined,
+  );
+  for (const category of [
+    "permission-or-auth",
+    "missing-dependency",
+    "timeout",
+    "command-failure",
+  ]) {
+    assert.equal(
+      repairContinuation(
+        { ...report, checks: [{ status: "failed", diagnostic: { category } }] },
+        { repairOnFailure: true },
+        event,
+        false,
+      ),
+      undefined,
+    );
+  }
+  const controller = new AbortController();
+  controller.abort();
+  assert.equal(
+    repairContinuation(
+      report,
+      { repairOnFailure: true },
+      { ...event, signal: controller.signal },
+      false,
+    ),
+    undefined,
   );
 });
 
