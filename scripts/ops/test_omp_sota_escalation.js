@@ -501,7 +501,7 @@ test("child invocation is ephemeral, bounded, read-only, and redacted", () => {
       },
     ],
   );
-  assert.deepEqual(args.slice(-2), ["--tools", "read,grep,glob,lsp"]);
+  assert.deepEqual(args.slice(-2), ["--tools", "read,grep,glob"]);
   assert.equal(args.includes("--no-session"), true);
   assert.equal(args.includes("--no-extensions"), true);
   assert.equal(args.includes("--no-skills"), true);

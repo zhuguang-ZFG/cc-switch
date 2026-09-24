@@ -1,5 +1,11 @@
 # OMP SOTA escalation layer
 
+> Current September 25 policy: the original dedicated channel is absent. The
+> user approved the existing slow/Opus 5 selector for on-demand review, but live
+> upstream routing-group errors keep that policy disabled. See
+> [problem-solving support](omp-problem-solving-2026-09-25.md) for current limits,
+> tests and activation requirements. Older deployment notes below are historical.
+
 ## Purpose
 
 OMP uses SOTA models as a bounded upgrade layer for complex or risky work. It
