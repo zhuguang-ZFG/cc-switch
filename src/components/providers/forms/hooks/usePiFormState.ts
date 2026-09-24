@@ -80,7 +80,10 @@ function parseModelsForUi(raw: unknown): string[] {
   return mapped.map((m) => String(m));
 }
 
-function normalizeDefaultModel(models: string[], currentDefault: string): string {
+function normalizeDefaultModel(
+  models: string[],
+  currentDefault: string,
+): string {
   const trimmed = currentDefault.trim();
   if (trimmed && models.includes(trimmed)) return trimmed;
   return models[0] ?? "";
@@ -114,7 +117,9 @@ export function usePiFormState({
   const { data: piProvidersData } = useProvidersQuery("pi");
   const existingPiKeys = useMemo(() => {
     if (!piProvidersData?.providers) return [];
-    return Object.keys(piProvidersData.providers).filter((k) => k !== providerId);
+    return Object.keys(piProvidersData.providers).filter(
+      (k) => k !== providerId,
+    );
   }, [piProvidersData?.providers, providerId]);
 
   const initialModels = useMemo(
@@ -223,9 +228,7 @@ export function usePiFormState({
             baseUrl,
             api: PI_DEFAULT_API,
             apiKey,
-            models: models
-              .filter(Boolean)
-              .map((id) => ({ id, name: id })),
+            models: models.filter(Boolean).map((id) => ({ id, name: id })),
             defaultModel,
             compat: {
               supportsStore: false,

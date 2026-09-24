@@ -140,17 +140,26 @@ impl ConfigService {
                 // 接管期间跳过：写 switch defaults 会把 default 改离 cc-switch-proxy，
                 // 绕过接管且代理层无感知（该函数目前无生产调用方，守卫防未来接线踩雷）
                 if !crate::kimi_config::is_proxy_takeover_active().unwrap_or(false) {
-                    crate::kimi_config::apply_switch_defaults(&current_id, &provider.settings_config)?;
+                    crate::kimi_config::apply_switch_defaults(
+                        &current_id,
+                        &provider.settings_config,
+                    )?;
                 }
             }
             AppType::Reasonix => {
                 if !crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false) {
-                    crate::reasonix_config::apply_switch_defaults(&current_id, &provider.settings_config)?;
+                    crate::reasonix_config::apply_switch_defaults(
+                        &current_id,
+                        &provider.settings_config,
+                    )?;
                 }
             }
             AppType::Pi => {
                 if !crate::pi_config::is_proxy_takeover_active().unwrap_or(false) {
-                    crate::pi_config::apply_switch_defaults(&current_id, &provider.settings_config)?;
+                    crate::pi_config::apply_switch_defaults(
+                        &current_id,
+                        &provider.settings_config,
+                    )?;
                 }
             }
         }

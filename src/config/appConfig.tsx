@@ -138,14 +138,7 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
   },
   pi: {
     label: "Pi",
-    icon: (
-      <ProviderIcon
-        icon="pi"
-        name="Pi"
-        size={14}
-        showFallback={false}
-      />
-    ),
+    icon: <ProviderIcon icon="pi" name="Pi" size={14} showFallback={false} />,
     activeClass:
       "bg-emerald-500/10 ring-1 ring-emerald-500/20 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400",
     badgeClass:

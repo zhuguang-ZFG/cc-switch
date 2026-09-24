@@ -40,8 +40,7 @@ export function parseKimiThinkingState(snippet: string): KimiThinkingState {
       return { enabled: null, effort: "" };
     }
     const table = thinking as Record<string, unknown>;
-    const enabled =
-      typeof table.enabled === "boolean" ? table.enabled : null;
+    const enabled = typeof table.enabled === "boolean" ? table.enabled : null;
     const effortRaw = table.effort;
     const effort = isKimiThinkingEffort(effortRaw) ? effortRaw : "";
     return { enabled, effort };

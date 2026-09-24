@@ -257,11 +257,7 @@ pub fn generate_api_key_env(name: &str) -> String {
         format!("CUSTOM_{}_API_KEY", hash_label(trimmed))
     };
 
-    if env_name
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_digit())
-    {
+    if env_name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         env_name = format!("CUSTOM_{env_name}");
     }
 
@@ -369,7 +365,9 @@ fn models_from_provider_table(table: &Table) -> Vec<String> {
             .filter_map(|item| item.as_str().map(str::to_string))
             .collect();
     }
-    table_str(table, "model").map(|model| vec![model]).unwrap_or_default()
+    table_str(table, "model")
+        .map(|model| vec![model])
+        .unwrap_or_default()
 }
 
 fn default_model_from_provider_table(table: &Table) -> Option<String> {
@@ -463,12 +461,7 @@ fn models_array_from_settings(settings: &Value) -> Vec<String> {
                 model
                     .as_str()
                     .map(str::to_string)
-                    .or_else(|| {
-                        model
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    })
+                    .or_else(|| model.get("id").and_then(Value::as_str).map(str::to_string))
             })
             .filter(|value| !value.trim().is_empty())
             .collect();
@@ -687,7 +680,10 @@ fn upsert_provider_into_document(
         table.insert("models", Item::Value(TomlEditValue::Array(array)));
         table.remove("model");
         if let Some(default) = resolve_default_model(settings_config) {
-            table.insert("default", Item::Value(TomlEditValue::from(default.as_str())));
+            table.insert(
+                "default",
+                Item::Value(TomlEditValue::from(default.as_str())),
+            );
         } else if let Some(first) = models.first() {
             table.insert("default", Item::Value(TomlEditValue::from(first.as_str())));
         }
@@ -761,8 +757,7 @@ fn first_remaining_provider_name(doc: &DocumentMut) -> Option<String> {
         .and_then(Item::as_array_of_tables)
         .and_then(|providers| {
             providers.iter().find_map(|table| {
-                table_str(table, "name")
-                    .filter(|n| n != REASONIX_PROXY_PROVIDER && !n.is_empty())
+                table_str(table, "name").filter(|n| n != REASONIX_PROXY_PROVIDER && !n.is_empty())
             })
         })
 }
@@ -890,8 +885,8 @@ pub fn custom_proxy_lacks_loopback_bypass() -> bool {
     let Some(network) = doc.get("network").and_then(Item::as_table) else {
         return false;
     };
-    let is_custom = table_str(network, "proxy_mode")
-        .is_some_and(|mode| mode.eq_ignore_ascii_case("custom"));
+    let is_custom =
+        table_str(network, "proxy_mode").is_some_and(|mode| mode.eq_ignore_ascii_case("custom"));
     if !is_custom {
         return false;
     }
@@ -926,10 +921,7 @@ pub fn apply_proxy_takeover(proxy_base_url: &str) -> Result<ReasonixWriteOutcome
         Item::Value(TomlEditValue::from(REASONIX_PROXY_PROVIDER)),
     );
     table.insert("kind", Item::Value(TomlEditValue::from("openai")));
-    table.insert(
-        "base_url",
-        Item::Value(TomlEditValue::from(proxy_base_url)),
-    );
+    table.insert("base_url", Item::Value(TomlEditValue::from(proxy_base_url)));
 
     let mut models = Array::new();
     models.push(REASONIX_PROXY_MODEL);
@@ -978,9 +970,10 @@ pub fn is_proxy_takeover_active_for_url(expected_base_url: Option<&str>) -> Resu
         return Ok(false);
     };
 
-    let Some(table) = providers.iter().find(|table| {
-        table_str(table, "name").as_deref() == Some(REASONIX_PROXY_PROVIDER)
-    }) else {
+    let Some(table) = providers
+        .iter()
+        .find(|table| table_str(table, "name").as_deref() == Some(REASONIX_PROXY_PROVIDER))
+    else {
         return Ok(false);
     };
 
@@ -996,12 +989,10 @@ pub fn is_proxy_takeover_active_for_url(expected_base_url: Option<&str>) -> Resu
         }
     });
 
-    Ok(
-        table_str(table, "kind").as_deref() == Some("openai")
-            && table_str(table, "api_key_env").as_deref() == Some(REASONIX_PROXY_API_KEY_ENV)
-            && env_managed
-            && url_ok,
-    )
+    Ok(table_str(table, "kind").as_deref() == Some("openai")
+        && table_str(table, "api_key_env").as_deref() == Some(REASONIX_PROXY_API_KEY_ENV)
+        && env_managed
+        && url_ok)
 }
 
 /// Clear or restore the managed proxy env placeholder after restoring a
@@ -1051,7 +1042,8 @@ fn stash_proxy_env_previous_if_needed() -> Result<(), AppError> {
 pub fn restore_proxy_env_placeholder() -> Result<(), AppError> {
     let backup_path = proxy_env_backup_path();
     if backup_path.exists() {
-        let content = fs::read_to_string(&backup_path).map_err(|e| AppError::io(&backup_path, e))?;
+        let content =
+            fs::read_to_string(&backup_path).map_err(|e| AppError::io(&backup_path, e))?;
         let trimmed = content.trim();
         if trimmed.is_empty() || trimmed == PROXY_ENV_ABSENT_MARKER {
             clear_env_key(REASONIX_PROXY_API_KEY_ENV)?;
@@ -1142,11 +1134,15 @@ pub fn clear_proxy_takeover() -> Result<ReasonixWriteOutcome, AppError> {
         changed = true;
     }
 
-    if doc.get("default_model").and_then(Item::as_str).is_some_and(|value| {
-        value == REASONIX_PROXY_PROVIDER
-            || value == REASONIX_PROXY_MODEL
-            || value == "cc-switch-proxy/cc-switch-proxy-default"
-    }) {
+    if doc
+        .get("default_model")
+        .and_then(Item::as_str)
+        .is_some_and(|value| {
+            value == REASONIX_PROXY_PROVIDER
+                || value == REASONIX_PROXY_MODEL
+                || value == "cc-switch-proxy/cc-switch-proxy-default"
+        })
+    {
         // Prefer provider name (switch semantics), not a bare model id.
         if let Some(fallback) = first_remaining_provider_name(&doc) {
             doc["default_model"] = Item::Value(TomlEditValue::from(fallback.as_str()));
@@ -1444,10 +1440,7 @@ api_key_env = "LEGACY_API_KEY"
             upsert_env_key("LEGACY_API_KEY", "legacy-key").unwrap();
             let providers = get_providers().unwrap();
             let provider = providers.get("legacy").unwrap().as_object().unwrap();
-            assert_eq!(
-                provider.get("models").unwrap(),
-                &json!(["old-model"])
-            );
+            assert_eq!(provider.get("models").unwrap(), &json!(["old-model"]));
             assert_eq!(provider.get("default").unwrap(), "old-model");
             assert_eq!(provider.get("api_key").unwrap(), "legacy-key");
         });
@@ -1716,14 +1709,14 @@ api_key_env = "CC_SWITCH_PROXY_API_KEY"
 
             apply_proxy_takeover("http://127.0.0.1:15721/reasonix/v1").unwrap();
             assert!(is_proxy_takeover_active().unwrap());
-            assert!(is_proxy_takeover_active_for_url(Some(
-                "http://127.0.0.1:15721/reasonix/v1"
-            ))
-            .unwrap());
-            assert!(!is_proxy_takeover_active_for_url(Some(
-                "http://127.0.0.1:9999/reasonix/v1"
-            ))
-            .unwrap());
+            assert!(
+                is_proxy_takeover_active_for_url(Some("http://127.0.0.1:15721/reasonix/v1"))
+                    .unwrap()
+            );
+            assert!(
+                !is_proxy_takeover_active_for_url(Some("http://127.0.0.1:9999/reasonix/v1"))
+                    .unwrap()
+            );
         });
     }
 

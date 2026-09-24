@@ -108,7 +108,10 @@ pub fn apply_role_route(mut body: Value) -> Value {
     }
 
     if let Some(model) = routed {
-        log::info!("[role_router] request model rewritten by route marker -> {}", model);
+        log::info!(
+            "[role_router] request model rewritten by route marker -> {}",
+            model
+        );
         body["model"] = Value::String(model);
     }
     body

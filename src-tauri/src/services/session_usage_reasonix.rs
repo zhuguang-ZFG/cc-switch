@@ -69,10 +69,7 @@ pub fn sync_reasonix_usage(db: &Database) -> Result<SessionSyncResult, AppError>
                 result.skipped += skipped;
             }
             Err(e) => {
-                let msg = format!(
-                    "Reasonix 会话文件解析失败 {}: {e}",
-                    file_path.display()
-                );
+                let msg = format!("Reasonix 会话文件解析失败 {}: {e}", file_path.display());
                 log::warn!("[REASONIX-SYNC] {msg}");
                 result.errors.push(msg);
             }
@@ -389,45 +386,40 @@ fn insert_reasonix_session_entry(
         message_id: None,
     };
 
-    let (
-        input_cost,
-        output_cost,
-        cache_read_cost,
-        cache_creation_cost,
-        total_cost,
-    ) = if let Some(cost) = reported_cost_usd {
-        // Trust upstream costUsd for total; leave component costs at 0 to avoid
-        // double-counting when the dashboard sums components.
-        (
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            "0".to_string(),
-            format!("{cost}"),
-        )
-    } else {
-        let pricing = find_model_pricing(&conn, model);
-        match pricing {
-            Some(p) => {
-                let cost =
-                    CostCalculator::calculate_for_app("reasonix", &usage, &p, Decimal::from(1));
-                (
-                    cost.input_cost.to_string(),
-                    cost.output_cost.to_string(),
-                    cost.cache_read_cost.to_string(),
-                    cost.cache_creation_cost.to_string(),
-                    cost.total_cost.to_string(),
-                )
+    let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) =
+        if let Some(cost) = reported_cost_usd {
+            // Trust upstream costUsd for total; leave component costs at 0 to avoid
+            // double-counting when the dashboard sums components.
+            (
+                "0".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+                format!("{cost}"),
+            )
+        } else {
+            let pricing = find_model_pricing(&conn, model);
+            match pricing {
+                Some(p) => {
+                    let cost =
+                        CostCalculator::calculate_for_app("reasonix", &usage, &p, Decimal::from(1));
+                    (
+                        cost.input_cost.to_string(),
+                        cost.output_cost.to_string(),
+                        cost.cache_read_cost.to_string(),
+                        cost.cache_creation_cost.to_string(),
+                        cost.total_cost.to_string(),
+                    )
+                }
+                None => (
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                    "0".to_string(),
+                ),
             }
-            None => (
-                "0".to_string(),
-                "0".to_string(),
-                "0".to_string(),
-                "0".to_string(),
-                "0".to_string(),
-            ),
-        }
-    };
+        };
 
     let inserted_rows = conn
         .execute(

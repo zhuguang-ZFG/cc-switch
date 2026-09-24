@@ -97,9 +97,7 @@ export function PiFormFields({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <FormLabel>
-            {t("pi.form.models", { defaultValue: "模型" })}
-          </FormLabel>
+          <FormLabel>{t("pi.form.models", { defaultValue: "模型" })}</FormLabel>
           <Button
             type="button"
             variant="outline"

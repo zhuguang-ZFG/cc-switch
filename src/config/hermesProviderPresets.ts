@@ -132,4 +132,3 @@ export interface HermesProviderSettingsConfig {
   rate_limit_delay?: number;
   [key: string]: unknown;
 }
-

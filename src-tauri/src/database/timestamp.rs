@@ -116,10 +116,11 @@ mod tests {
     #[test]
     fn decodes_sqlite_datetime_text() {
         let ms = decode_optional_unix_millis(ValueRef::Text(b"2026-07-25 12:25:03"));
-        let expected = chrono::NaiveDateTime::parse_from_str("2026-07-25 12:25:03", "%Y-%m-%d %H:%M:%S")
-            .unwrap()
-            .and_utc()
-            .timestamp_millis();
+        let expected =
+            chrono::NaiveDateTime::parse_from_str("2026-07-25 12:25:03", "%Y-%m-%d %H:%M:%S")
+                .unwrap()
+                .and_utc()
+                .timestamp_millis();
         assert_eq!(ms, Some(expected));
     }
 

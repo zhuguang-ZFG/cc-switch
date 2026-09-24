@@ -261,7 +261,9 @@ impl ProfileService {
                 .map(|(name, _)| name.to_string())
                 .unwrap_or(provider_id);
             let providers = state.db.get_all_providers(app.as_str())?;
-            return Ok(providers.contains_key(&provider_key).then_some(provider_key));
+            return Ok(providers
+                .contains_key(&provider_key)
+                .then_some(provider_key));
         }
 
         if matches!(app, AppType::Pi) {
@@ -454,6 +456,12 @@ impl ProfileService {
                 "no {} configuration captured in this project yet; marked as current without changes (it will be saved automatically when you switch away)",
                 scope.as_str()
             ));
+            state
+                .db
+                .set_current_profile_id(scope.as_str(), Some(profile_id))?;
+            // No snapshot means no config changes, including takeover and
+            // server state. Autosave above still preserves the previous project.
+            return Ok((warnings, false));
         }
 
         for app in scope.apps().iter() {

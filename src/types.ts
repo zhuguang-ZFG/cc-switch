@@ -782,4 +782,3 @@ export interface OpenClawToolsConfig {
   deny?: string[];
   [key: string]: unknown; // preserve unknown fields
 }
-

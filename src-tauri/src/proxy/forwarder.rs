@@ -1244,19 +1244,18 @@ impl RequestForwarder {
         // Reasonix openai `chat_url` fully overrides the Chat Completions URL
         // (same contract as Reasonix CLI openai.go). Live proxy ingress strips
         // this field; only DB upstream providers may set it.
-        let reasonix_chat_url_override = if matches!(app_type, AppType::Reasonix)
-            && !reasonix_chat_to_anthropic_early
-        {
-            provider
-                .settings_config
-                .get("chat_url")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|url| !url.is_empty())
-                .map(|url| url.trim_end_matches('/').to_string())
-        } else {
-            None
-        };
+        let reasonix_chat_url_override =
+            if matches!(app_type, AppType::Reasonix) && !reasonix_chat_to_anthropic_early {
+                provider
+                    .settings_config
+                    .get("chat_url")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(|url| url.trim_end_matches('/').to_string())
+            } else {
+                None
+            };
         if let Some(chat_url) = reasonix_chat_url_override {
             base_url = chat_url;
             is_full_url = true;
@@ -2265,8 +2264,7 @@ impl RequestForwarder {
         // of anthropic-beta: the Claude Code-specific beta is only sent when
         // impersonation is on (handled above); on the plain Codex→Anthropic path
         // (impersonation off) anthropic-version is still required but no beta is sent.
-        if (should_send_anthropic_headers || anthropic_upstream_bridge) && !saw_anthropic_version
-        {
+        if (should_send_anthropic_headers || anthropic_upstream_bridge) && !saw_anthropic_version {
             ordered_headers.append(
                 "anthropic-version",
                 http::HeaderValue::from_static("2023-06-01"),
@@ -4774,7 +4772,10 @@ mod tests {
         for attempts in 1..=8 {
             let d = failover_backoff_delay(attempts);
             assert!(d >= Duration::from_millis(25), "attempts={attempts} {d:?}");
-            assert!(d <= Duration::from_millis(1000), "attempts={attempts} {d:?}");
+            assert!(
+                d <= Duration::from_millis(1000),
+                "attempts={attempts} {d:?}"
+            );
         }
         // After a few failures the base hits the 1s cap (jitter keeps ≥ half).
         let late = failover_backoff_delay(6);
@@ -5340,9 +5341,11 @@ mod tests {
 
         let openai_captured = Arc::new(tokio::sync::Mutex::new(None));
         let anthropic_captured = Arc::new(tokio::sync::Mutex::new(None));
-        let (openai_base, openai_handle) =
-            spawn_status_upstream(axum::http::StatusCode::INTERNAL_SERVER_ERROR, openai_captured)
-                .await;
+        let (openai_base, openai_handle) = spawn_status_upstream(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            openai_captured,
+        )
+        .await;
         let (anthropic_base, anthropic_handle) =
             spawn_status_upstream(axum::http::StatusCode::OK, anthropic_captured.clone()).await;
 
@@ -5401,7 +5404,11 @@ mod tests {
         assert_eq!(result.provider.id, "reasonix-anthropic");
         assert_eq!(result.response.status(), 200);
 
-        let captured = anthropic_captured.lock().await.clone().expect("anthropic request");
+        let captured = anthropic_captured
+            .lock()
+            .await
+            .clone()
+            .expect("anthropic request");
         assert!(
             captured.0.contains("messages"),
             "anthropic attempt must hit Messages path, got {}",

@@ -1115,10 +1115,8 @@ impl Database {
         let needs_rebuild =
             Self::table_exists(conn, "proxy_config")? && !Self::proxy_config_supports_pi(conn)?;
 
-        conn.execute_batch(
-            "SAVEPOINT fork_pi_proxy_migration; PRAGMA defer_foreign_keys = ON;",
-        )
-        .map_err(|e| AppError::Database(format!("开启 Pi 代理配置迁移失败: {e}")))?;
+        conn.execute_batch("SAVEPOINT fork_pi_proxy_migration; PRAGMA defer_foreign_keys = ON;")
+            .map_err(|e| AppError::Database(format!("开启 Pi 代理配置迁移失败: {e}")))?;
         let result = (|| {
             if needs_rebuild {
                 conn.execute("DROP TABLE IF EXISTS proxy_config_pi", [])?;

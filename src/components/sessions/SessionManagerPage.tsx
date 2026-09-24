@@ -1141,11 +1141,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                             </SelectItem>
                             <SelectItem value="pi">
                               <div className="flex items-center gap-2">
-                                <ProviderIcon
-                                  icon="pi"
-                                  name="pi"
-                                  size={14}
-                                />
+                                <ProviderIcon icon="pi" name="pi" size={14} />
                                 <span>Pi</span>
                               </div>
                             </SelectItem>

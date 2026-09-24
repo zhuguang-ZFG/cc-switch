@@ -101,6 +101,21 @@ Guardian 依赖以下 NewAPI 设置（已通过 API 配置）：
 
 计划任务 `CCSwitch-NewAPI-DX-Ops` 每轮运行 `newapi-local-smoke.py`。`newapi-smoke-alert.py` 在首次失败和失败后的首次恢复时发送一次 Telegram 告警；投递失败不落状态，下一轮继续尝试，避免“任务一直红但无人知道”。容量门禁只计算 `status=1 && weight>0` 的真实可路由渠道。
 
+仓库中的 `proxies-supervisor.py` 仅在 Telegram 返回 `ok=true` 后记录 30 分钟告警冷却；
+投递失败按服务最多每 60 秒重试一次。`anyrouter-window-canary.py` 的 JSON 探针要求非空文本
+和正常结束原因；直连 SSE 探针要求文本与正常 `message_stop`，HTTP 200、空流、流内错误或
+截断均不能单独证明可用。响应读取限制为 64 KiB，直连流另有时间预算。
+
+回归测试从仓库加载 supervisor，并隔离 HOME、日志与网络。可分别运行：
+
+```powershell
+python3 -B -m unittest discover -s scripts/ops -p test_anyrouter_window_canary.py
+python3 -B -m unittest discover -s scripts/ops -p test_proxies_supervisor_status.py
+python3 -B -m unittest discover -s scripts/ops -p test_supervisor_session_cleanup.py
+```
+
+上述为仓库行为约定；生产副本是否已部署须另行核验，不能由仓库测试通过推断。
+
 ## 安装
 
 ### 1. 配置

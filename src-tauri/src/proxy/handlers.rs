@@ -25,12 +25,11 @@ use super::{
             create_responses_sse_stream_from_anthropic_with_context,
             responses_sse_events_from_anthropic_message,
         },
-        streaming_reasonix_anthropic::{
-            chat_sse_events_from_anthropic_message,
-            create_openai_chat_sse_stream_from_anthropic,
-        },
         streaming_codex_chat::create_responses_sse_stream_from_chat_with_context,
         streaming_gemini::create_anthropic_sse_stream_from_gemini,
+        streaming_reasonix_anthropic::{
+            chat_sse_events_from_anthropic_message, create_openai_chat_sse_stream_from_anthropic,
+        },
         streaming_responses::create_anthropic_sse_stream_from_responses,
         transform, transform_codex_anthropic, transform_codex_chat, transform_gemini,
         transform_responses,
@@ -705,8 +704,7 @@ pub async fn handle_reasonix_chat_completions(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
-    handle_chat_completions_for_app(state, request, AppType::Reasonix, "Reasonix", "reasonix")
-        .await
+    handle_chat_completions_for_app(state, request, AppType::Reasonix, "Reasonix", "reasonix").await
 }
 
 /// Pi agent always enters through the local OpenAI Chat Completions boundary.
@@ -880,8 +878,8 @@ async fn handle_reasonix_anthropic_to_chat(
     response_headers.remove(axum::http::header::CONTENT_TYPE);
 
     let _connection_guard = connection_guard;
-    if let Some(usage) = TokenUsage::from_openai_response(&chat_value)
-        .filter(TokenUsage::has_billable_tokens)
+    if let Some(usage) =
+        TokenUsage::from_openai_response(&chat_value).filter(TokenUsage::has_billable_tokens)
     {
         let model = chat_value
             .get("model")
@@ -958,8 +956,7 @@ fn build_reasonix_anthropic_chat_sse_response(
             start_time,
             OPENAI_PARSER_CONFIG.stream_event_filter,
             move |events, first_token_ms| {
-                let usage =
-                    TokenUsage::from_openai_stream_events(&events).unwrap_or_default();
+                let usage = TokenUsage::from_openai_stream_events(&events).unwrap_or_default();
                 if !usage.has_billable_tokens() {
                     log::debug!(
                         "[Reasonix] Anthropic streaming response usage is all-zero or missing, skipping usage recording"
@@ -1207,9 +1204,7 @@ pub async fn handle_reasonix_models(
 }
 
 /// GET /pi/v1/models — stable catalog for the local Pi proxy ingress.
-pub async fn handle_pi_models(
-    State(state): State<ProxyState>,
-) -> Result<Json<Value>, ProxyError> {
+pub async fn handle_pi_models(State(state): State<ProxyState>) -> Result<Json<Value>, ProxyError> {
     let db_enabled = state
         .db
         .get_proxy_config_for_app("pi")

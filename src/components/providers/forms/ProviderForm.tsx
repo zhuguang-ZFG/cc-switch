@@ -2522,8 +2522,7 @@ function ProviderFormFull({
                       <p className="text-xs text-muted-foreground">
                         {isEditMode
                           ? t("reasonix.form.providerNameLockedHint", {
-                              defaultValue:
-                                "编辑模式下供应商标识不可修改。",
+                              defaultValue: "编辑模式下供应商标识不可修改。",
                             })
                           : t("reasonix.form.providerNameHint", {
                               defaultValue:
@@ -2749,9 +2748,7 @@ function ProviderFormFull({
               env={hermesForm.hermesEnv}
               onEnvFieldChange={hermesForm.handleHermesEnvFieldChange}
               customHeaders={hermesForm.hermesCustomHeaders}
-              onCustomHeadersChange={
-                hermesForm.handleHermesCustomHeadersChange
-              }
+              onCustomHeadersChange={hermesForm.handleHermesCustomHeadersChange}
               models={hermesForm.hermesModels}
               onModelsChange={hermesForm.handleHermesModelsChange}
               rateLimitDelay={hermesForm.hermesRateLimitDelay}

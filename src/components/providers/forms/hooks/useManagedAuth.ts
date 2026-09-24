@@ -151,7 +151,10 @@ export function useManagedAuth(
 
       void pollOnce();
       pollingIntervalRef.current = setInterval(pollOnce, interval);
-      pollingTimeoutRef.current = setTimeout(restartOrExpire, response.expires_in * 1000);
+      pollingTimeoutRef.current = setTimeout(
+        restartOrExpire,
+        response.expires_in * 1000,
+      );
     },
     onError: (e) => {
       setPollingState("error");

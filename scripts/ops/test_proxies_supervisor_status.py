@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
 import sys
@@ -8,12 +7,11 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
-SUPERVISOR = Path.home() / ".omp" / "guardian" / "proxies-supervisor.py"
-spec = importlib.util.spec_from_file_location("proxies_supervisor", SUPERVISOR)
-assert spec and spec.loader
-supervisor = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(supervisor)
+from supervisor_test_support import isolated_import_source, load_supervisor
+
+supervisor = load_supervisor("proxies_supervisor")
 
 
 class SupervisorStatusTests(unittest.TestCase):
@@ -91,13 +89,12 @@ class SupervisorSingleInstanceTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.mutex_name = f"Local\\OMPProxiesSupervisorTest-{uuid.uuid4()}"
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
 
     def probe_source(self, tail: str) -> str:
         return (
-            "import importlib.util;"
-            f"spec = importlib.util.spec_from_file_location('s', r'{SUPERVISOR}');"
-            "m = importlib.util.module_from_spec(spec);"
-            "spec.loader.exec_module(m);"
+            isolated_import_source(self.tempdir.name) +
             f"h = m.acquire_single_instance({self.mutex_name!r});" + tail
         )
 
@@ -171,13 +168,10 @@ class PythonwFaulthandlerRegressionTests(unittest.TestCase):
         import ctypes
         from ctypes import wintypes
 
-        code = (
-            "import importlib.util;"
-            f"spec = importlib.util.spec_from_file_location('s', r'{SUPERVISOR}');"
-            "m = importlib.util.module_from_spec(spec);"
-            "spec.loader.exec_module(m)"
-        )
-        cmdline = f'"{self.pythonw}" -c "{code}"'
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        code = isolated_import_source(directory.name)
+        cmdline = subprocess.list2cmdline([str(self.pythonw), "-c", code])
 
         class SI(ctypes.Structure):
             _fields_ = [
@@ -219,6 +213,63 @@ class PythonwFaulthandlerRegressionTests(unittest.TestCase):
             rc.value, 0,
             f"supervisor module died at import under pythonw (rc={rc.value})",
         )
+        self.assertTrue((Path(directory.name) / ".omp/guardian/proxies-supervisor-crash.log").is_file())
+
+
+class SupervisorAlertTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.enterContext(patch.object(supervisor, "_alert_times", {}))
+        self.enterContext(patch.object(supervisor, "_alert_attempt_times", {}))
+        self.enterContext(patch.object(supervisor, "TELEGRAM_TOKEN", "fixture"))
+        self.enterContext(patch.object(supervisor, "TELEGRAM_CHAT_ID", "fixture"))
+        self.enterContext(patch.object(supervisor, "log"))
+
+    def test_failed_delivery_retries_then_success_enters_cooldown(self) -> None:
+        with (
+            patch.object(supervisor, "send_telegram", side_effect=[False, True]) as send,
+            patch.object(supervisor.time, "time", side_effect=[10000, 10030, 10060, 10061]),
+        ):
+            supervisor.alert("proxy", "down")
+            self.assertNotIn("proxy", supervisor._alert_times)
+            supervisor.alert("proxy", "down")
+            self.assertEqual(send.call_count, 1, "bound retries while delivery is down")
+            supervisor.alert("proxy", "down")
+            self.assertEqual(supervisor._alert_times["proxy"], 10060)
+            supervisor.alert("proxy", "down")
+            self.assertEqual(send.call_count, 2, "successful delivery starts the long cooldown")
+
+    def test_cooldown_is_per_service_and_expires(self) -> None:
+        with (
+            patch.object(supervisor, "send_telegram", return_value=True) as send,
+            patch.object(supervisor.time, "time", side_effect=[10000, 10000, 11799, 11800]),
+        ):
+            supervisor.alert("proxy-a", "down")
+            supervisor.alert("proxy-b", "down")
+            supervisor.alert("proxy-a", "down")
+            supervisor.alert("proxy-a", "down")
+            self.assertEqual(send.call_count, 3)
+
+    def test_transport_failure_reports_failed_delivery(self) -> None:
+        with patch.object(supervisor.urllib.request, "urlopen", side_effect=OSError("offline")):
+            self.assertFalse(supervisor.send_telegram("down"))
+
+    def test_telegram_requires_application_acknowledgement(self) -> None:
+        from io import BytesIO
+
+        for body, expected in [(b'{"ok":true}', True), (b'{"ok":false}', False), (b'not json', False)]:
+            with self.subTest(body=body):
+                response = BytesIO(body)
+                response.status = 200
+                with patch.object(supervisor.urllib.request, "urlopen", return_value=response):
+                    self.assertEqual(supervisor.send_telegram("down"), expected)
+
+    def test_missing_credentials_do_not_send(self) -> None:
+        with (
+            patch.object(supervisor, "TELEGRAM_TOKEN", ""),
+            patch.object(supervisor.urllib.request, "urlopen") as send,
+        ):
+            self.assertFalse(supervisor.send_telegram("down"))
+            send.assert_not_called()
 
 
 if __name__ == "__main__":

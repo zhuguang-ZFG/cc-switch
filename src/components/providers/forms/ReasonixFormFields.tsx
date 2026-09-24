@@ -153,7 +153,15 @@ export function ReasonixFormFields({
         showFetchModelsError(err, t);
       })
       .finally(() => setIsFetchingModels(false));
-  }, [apiKey, baseUrl, models, modelsUrl, onDefaultModelChange, onModelsChange, t]);
+  }, [
+    apiKey,
+    baseUrl,
+    models,
+    modelsUrl,
+    onDefaultModelChange,
+    onModelsChange,
+    t,
+  ]);
 
   const nonEmptyModels = models.map((model) => model.trim()).filter(Boolean);
 
@@ -163,7 +171,10 @@ export function ReasonixFormFields({
         <FormLabel htmlFor="reasonix-kind">
           {t("reasonix.form.kind", { defaultValue: "API 协议" })}
         </FormLabel>
-        <Select value={kind} onValueChange={(v) => onKindChange(v as ReasonixProviderKind)}>
+        <Select
+          value={kind}
+          onValueChange={(v) => onKindChange(v as ReasonixProviderKind)}
+        >
           <SelectTrigger id="reasonix-kind">
             <SelectValue />
           </SelectTrigger>
@@ -236,8 +247,7 @@ export function ReasonixFormFields({
           />
           <p className="text-xs text-muted-foreground">
             {t("reasonix.form.modelsUrlHint", {
-              defaultValue:
-                "可选：覆盖 /models 探测 URL；留空则自动推导。",
+              defaultValue: "可选：覆盖 /models 探测 URL；留空则自动推导。",
             })}
           </p>
         </div>
@@ -377,7 +387,8 @@ export function ReasonixFormFields({
         )}
         <p className="text-xs text-muted-foreground">
           {t("reasonix.form.defaultHint", {
-            defaultValue: "切换到此供应商时写入 default_model；留空则取 models 第一项。",
+            defaultValue:
+              "切换到此供应商时写入 default_model；留空则取 models 第一项。",
           })}
         </p>
       </div>

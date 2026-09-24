@@ -159,13 +159,20 @@ fn backup_file_if_exists(path: &Path, prefix: &str) -> Result<Option<String>, Ap
     Ok(Some(backup.to_string_lossy().to_string()))
 }
 
-fn write_json_file(path: &Path, value: &Value, backup_prefix: &str) -> Result<Option<String>, AppError> {
+fn write_json_file(
+    path: &Path,
+    value: &Value,
+    backup_prefix: &str,
+) -> Result<Option<String>, AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
     let backup_path = backup_file_if_exists(path, backup_prefix)?;
     let text = serde_json::to_string_pretty(value).map_err(|e| {
-        AppError::Message(format!("Failed to serialize Pi config {}: {e}", path.display()))
+        AppError::Message(format!(
+            "Failed to serialize Pi config {}: {e}",
+            path.display()
+        ))
     })?;
     // Pretty-print ends without trailing newline sometimes; keep stable JSON.
     let payload = if text.ends_with('\n') {
@@ -267,9 +274,7 @@ fn providers_map_mut(models: &mut Value) -> Result<&mut Map<String, Value>, AppE
 }
 
 fn providers_map_ref(models: &Value) -> Option<&Map<String, Value>> {
-    models
-        .get("providers")
-        .and_then(Value::as_object)
+    models.get("providers").and_then(Value::as_object)
 }
 
 pub fn get_providers() -> Result<IndexMap<String, Value>, AppError> {
@@ -353,9 +358,9 @@ fn normalize_models_array(settings_config: &Value) -> Vec<Value> {
                 model
                     .entry("maxTokens".to_string())
                     .or_insert_with(|| json!(8192));
-                model.entry("cost".to_string()).or_insert_with(|| {
-                    json!({ "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 })
-                });
+                model.entry("cost".to_string()).or_insert_with(
+                    || json!({ "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }),
+                );
                 Some(Value::Object(model))
             })
             .collect(),
@@ -464,7 +469,10 @@ fn merge_models_by_id(old: &[Value], new: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-fn build_provider_entry(name: &str, settings_config: &Value) -> Result<(Value, Option<String>), AppError> {
+fn build_provider_entry(
+    name: &str,
+    settings_config: &Value,
+) -> Result<(Value, Option<String>), AppError> {
     let object = settings_config.as_object().ok_or_else(|| {
         AppError::localized(
             "provider.pi.settings.not_object",
@@ -511,10 +519,7 @@ fn build_provider_entry(name: &str, settings_config: &Value) -> Result<(Value, O
     }
 
     let api_key = extract_api_key(settings_config);
-    let compat = object
-        .get("compat")
-        .cloned()
-        .unwrap_or_else(default_compat);
+    let compat = object.get("compat").cloned().unwrap_or_else(default_compat);
 
     let mut entry = Map::new();
     entry.insert("name".into(), Value::String(display_name.to_string()));
@@ -749,9 +754,8 @@ pub fn upsert_provider_into_snapshot_text(
     provider_id: &str,
     settings_config: &Value,
 ) -> Result<String, AppError> {
-    let mut snap: PiSnapshot = serde_json::from_str(text).map_err(|e| {
-        AppError::Message(format!("Invalid Pi snapshot: {e}"))
-    })?;
+    let mut snap: PiSnapshot = serde_json::from_str(text)
+        .map_err(|e| AppError::Message(format!("Invalid Pi snapshot: {e}")))?;
     let (entry, api_key) = build_provider_entry(provider_id.trim(), settings_config)?;
     providers_map_mut(&mut snap.models)?.insert(provider_id.trim().to_string(), entry);
     if let Some(key) = api_key {
@@ -766,9 +770,8 @@ pub fn apply_switch_defaults_to_snapshot_text(
     provider_id: &str,
     settings_config: &Value,
 ) -> Result<String, AppError> {
-    let mut snap: PiSnapshot = serde_json::from_str(text).map_err(|e| {
-        AppError::Message(format!("Invalid Pi snapshot: {e}"))
-    })?;
+    let mut snap: PiSnapshot = serde_json::from_str(text)
+        .map_err(|e| AppError::Message(format!("Invalid Pi snapshot: {e}")))?;
     let provider_id = provider_id.trim();
     let (entry, api_key) = build_provider_entry(provider_id, settings_config)?;
     let models_list = normalize_models_array(settings_config);
@@ -782,24 +785,15 @@ pub fn apply_switch_defaults_to_snapshot_text(
         .map_err(|e| AppError::Message(format!("Failed to serialize Pi snapshot: {e}")))
 }
 
-pub fn remove_provider_from_snapshot_text(
-    text: &str,
-    name: &str,
-) -> Result<String, AppError> {
-    let mut snap: PiSnapshot = serde_json::from_str(text).map_err(|e| {
-        AppError::Message(format!("Invalid Pi snapshot: {e}"))
-    })?;
+pub fn remove_provider_from_snapshot_text(text: &str, name: &str) -> Result<String, AppError> {
+    let mut snap: PiSnapshot = serde_json::from_str(text)
+        .map_err(|e| AppError::Message(format!("Invalid Pi snapshot: {e}")))?;
     let name = name.trim();
     let providers = providers_map_mut(&mut snap.models)?;
     providers.remove(name);
     remove_auth_key(&mut snap.auth, name);
 
-    if snap
-        .settings
-        .get("defaultProvider")
-        .and_then(Value::as_str)
-        == Some(name)
-    {
+    if snap.settings.get("defaultProvider").and_then(Value::as_str) == Some(name) {
         let fallback = providers
             .keys()
             .find(|k| k.as_str() != PI_PROXY_PROVIDER)
@@ -825,11 +819,9 @@ pub fn remove_provider_from_snapshot_text(
 }
 
 pub fn provider_exists_in_snapshot_text(text: &str, name: &str) -> Result<bool, AppError> {
-    let snap: PiSnapshot = serde_json::from_str(text).map_err(|e| {
-        AppError::Message(format!("Invalid Pi snapshot: {e}"))
-    })?;
-    Ok(providers_map_ref(&snap.models)
-        .is_some_and(|p| p.contains_key(name.trim())))
+    let snap: PiSnapshot = serde_json::from_str(text)
+        .map_err(|e| AppError::Message(format!("Invalid Pi snapshot: {e}")))?;
+    Ok(providers_map_ref(&snap.models).is_some_and(|p| p.contains_key(name.trim())))
 }
 
 // ============================================================================
@@ -869,8 +861,10 @@ pub fn apply_proxy_takeover(proxy_base_url: &str) -> Result<PiWriteOutcome, AppE
         .map_err(|_| AppError::Message("Pi config write lock poisoned".into()))?;
 
     let mut models = read_models()?;
-    providers_map_mut(&mut models)?
-        .insert(PI_PROXY_PROVIDER.to_string(), proxy_provider_entry(proxy_base_url));
+    providers_map_mut(&mut models)?.insert(
+        PI_PROXY_PROVIDER.to_string(),
+        proxy_provider_entry(proxy_base_url),
+    );
 
     let mut auth = read_auth()?;
     upsert_auth_key(&mut auth, PI_PROXY_PROVIDER, PI_PROXY_API_KEY)?;
@@ -954,11 +948,7 @@ pub fn clear_proxy_takeover() -> Result<PiWriteOutcome, AppError> {
 
     let mut settings = read_settings()?;
     let mut settings_changed = false;
-    if settings
-        .get("defaultProvider")
-        .and_then(Value::as_str)
-        == Some(PI_PROXY_PROVIDER)
-    {
+    if settings.get("defaultProvider").and_then(Value::as_str) == Some(PI_PROXY_PROVIDER) {
         let fallback = providers
             .keys()
             .find(|k| k.as_str() != PI_PROXY_PROVIDER)
@@ -1058,9 +1048,7 @@ mod tests {
         set_provider("demo", sample_settings("gpt-test")).unwrap();
 
         let models = read_models().unwrap();
-        let provider = models
-            .pointer("/providers/demo")
-            .expect("provider written");
+        let provider = models.pointer("/providers/demo").expect("provider written");
         assert_eq!(provider["baseUrl"], "https://api.example.com/v1");
         assert_eq!(provider["apiKey"], "sk-demo");
         assert_eq!(provider["models"][0]["id"], "gpt-test");
@@ -1100,19 +1088,16 @@ mod tests {
         let models = read_models().unwrap();
         assert!(models.pointer("/providers/cc-switch-proxy").is_some());
         assert!(models.pointer("/providers/demo").is_some());
-        assert!(is_proxy_takeover_active_for_url(Some(
-            "http://127.0.0.1:15721/pi/v1"
-        ))
-        .unwrap());
-        assert!(!is_proxy_takeover_active_for_url(Some(
-            "http://127.0.0.1:9999/pi/v1"
-        ))
-        .unwrap());
+        assert!(is_proxy_takeover_active_for_url(Some("http://127.0.0.1:15721/pi/v1")).unwrap());
+        assert!(!is_proxy_takeover_active_for_url(Some("http://127.0.0.1:9999/pi/v1")).unwrap());
 
         // Localhost without /pi/v1 must not count as takeover.
         {
             let mut m = read_models().unwrap();
-            if let Some(p) = providers_map_mut(&mut m).unwrap().get_mut(PI_PROXY_PROVIDER) {
+            if let Some(p) = providers_map_mut(&mut m)
+                .unwrap()
+                .get_mut(PI_PROXY_PROVIDER)
+            {
                 p["baseUrl"] = json!("http://127.0.0.1:9999/v1");
             }
             write_json_file(&get_models_path(), &m, "models.json").unwrap();

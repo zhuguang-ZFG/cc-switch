@@ -18,7 +18,9 @@ use serde_json::Value;
 
 use crate::session_manager::{SessionMessage, SessionMeta};
 
-use super::utils::{extract_text, parse_timestamp_to_ms, truncate_summary, TITLE_MAX_CHARS};
+use super::utils::{
+    extract_text, parse_timestamp_to_ms, path_basename, truncate_summary, TITLE_MAX_CHARS,
+};
 
 const PROVIDER_ID: &str = "pi";
 
@@ -130,10 +132,7 @@ fn first_user_preview(path: &Path) -> Option<String> {
         if role != "user" {
             continue;
         }
-        let content = message
-            .get("content")
-            .map(extract_text)
-            .unwrap_or_default();
+        let content = message.get("content").map(extract_text).unwrap_or_default();
         let trimmed = content.trim();
         if trimmed.is_empty() {
             continue;
@@ -166,11 +165,7 @@ fn parse_session_file(path: &Path) -> Option<SessionMeta> {
     // Qualify id with the project basename so two workspaces with the same
     // session id don't collide in the UI (mirrors the reasonix scanner).
     let session_id = if let Some(ref project) = project_dir {
-        if let Some(slug) = Path::new(project)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(slug) = path_basename(project) {
             format!("{slug}/{base_id}")
         } else {
             base_id
@@ -215,10 +210,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         if role.is_empty() {
             continue;
         }
-        let content = message
-            .get("content")
-            .map(extract_text)
-            .unwrap_or_default();
+        let content = message.get("content").map(extract_text).unwrap_or_default();
         // Keep assistant rows even when content is empty if toolCalls exist.
         let has_tool_calls = message
             .get("toolCalls")
@@ -253,10 +245,7 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("Invalid Pi session path: {}", path.display()))?;
     if !is_transcript_jsonl(file_name) {
-        return Err(format!(
-            "Unexpected Pi session source: {}",
-            path.display()
-        ));
+        return Err(format!("Unexpected Pi session source: {}", path.display()));
     }
     let stem = file_name.strip_suffix(".jsonl").unwrap_or(file_name);
     // Session id is the header uuid (possibly qualified `project-slug/id`);
@@ -314,21 +303,15 @@ mod tests {
         let path = slug.join("2026-07-21T12-46-58-014Z_019f84b7-11de-785e-9d53-3ef83bd59d23.jsonl");
         write_session(&path);
 
-        let previous = std::env::var_os("PI_AGENT_HOME");
-        std::env::set_var("PI_AGENT_HOME", dir.path());
-        let scanned = scan_sessions();
-        match previous {
-            Some(v) => std::env::set_var("PI_AGENT_HOME", v),
-            None => std::env::remove_var("PI_AGENT_HOME"),
-        }
+        // Scan an explicit root rather than racing the config tests over
+        // process-wide PI_AGENT_HOME.
+        let mut scanned = Vec::new();
+        collect_jsonl_sessions(&sessions, &sessions, &mut scanned);
 
         assert_eq!(scanned.len(), 1);
         let meta = &scanned[0];
         assert_eq!(meta.provider_id, "pi");
-        assert_eq!(
-            meta.session_id,
-            "demo/019f84b7-11de-785e-9d53-3ef83bd59d23"
-        );
+        assert_eq!(meta.session_id, "demo/019f84b7-11de-785e-9d53-3ef83bd59d23");
         assert_eq!(meta.project_dir.as_deref(), Some("D:\\Users\\demo"));
         assert!(meta.title.as_deref().unwrap_or("").contains("say hi"));
 
@@ -341,6 +324,19 @@ mod tests {
     }
 
     #[test]
+    fn session_ids_support_windows_and_unix_project_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chat.jsonl");
+        for cwd in ["D:\\Users\\demo", "/home/user/demo", "D:/Users/demo/"] {
+            let header = serde_json::json!({"type": "session", "id": "session-1", "cwd": cwd});
+            fs::write(&path, format!("{header}\n{USER_MSG}\n")).unwrap();
+            let meta = parse_session_file(&path).unwrap();
+            assert_eq!(meta.session_id, "demo/session-1", "cwd={cwd}");
+            assert_eq!(meta.project_dir.as_deref(), Some(cwd));
+        }
+    }
+
+    #[test]
     fn delete_session_removes_transcript() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("sessions");
@@ -348,12 +344,8 @@ mod tests {
         let path = root.join("chat.jsonl");
         write_session(&path);
 
-        let deleted = delete_session(
-            &root,
-            &path,
-            "demo/019f84b7-11de-785e-9d53-3ef83bd59d23",
-        )
-        .expect("delete session");
+        let deleted = delete_session(&root, &path, "demo/019f84b7-11de-785e-9d53-3ef83bd59d23")
+            .expect("delete session");
         assert!(deleted);
         assert!(!path.exists());
     }

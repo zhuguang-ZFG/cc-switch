@@ -137,9 +137,7 @@ pub async fn get_config_status(
         }
         AppType::Pi => {
             let exists = crate::pi_config::has_live_config();
-            let path = crate::pi_config::get_pi_dir()
-                .to_string_lossy()
-                .to_string();
+            let path = crate::pi_config::get_pi_dir().to_string_lossy().to_string();
 
             Ok(ConfigStatus { exists, path })
         }
@@ -360,8 +358,8 @@ pub async fn set_common_config_snippet(
     // - detect && backup → strip/merge 写 backup
     // - detect && !backup → 孤儿：DB 已落库，返回错误（禁止写 live）
     // - !detect → 写 live（即使仍有陈旧 backup）
-    let kimi_live_detect_takeover = app_type == "kimicode"
-        && crate::kimi_config::is_proxy_takeover_active().unwrap_or(false);
+    let kimi_live_detect_takeover =
+        app_type == "kimicode" && crate::kimi_config::is_proxy_takeover_active().unwrap_or(false);
     if app_type == "kimicode" {
         if kimi_live_detect_takeover {
             let backup = futures::executor::block_on(state.db.get_live_backup("kimicode"))

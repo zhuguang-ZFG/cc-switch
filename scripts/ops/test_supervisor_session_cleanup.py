@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
 import sqlite3
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-SUPERVISOR = Path.home() / ".omp" / "guardian" / "proxies-supervisor.py"
-spec = importlib.util.spec_from_file_location("proxies_supervisor_cleanup", SUPERVISOR)
-assert spec and spec.loader
-supervisor = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(supervisor)
+from supervisor_test_support import load_supervisor
+
+supervisor = load_supervisor("proxies_supervisor_cleanup")
 
 SCHEMA = (
     "CREATE TABLE user_sessions ("
@@ -29,7 +27,8 @@ class SessionCleanupTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.db = Path(self.tempdir.name) / "test.db"
-        supervisor.NEWAPI_DB = self.db
+        self.enterContext(patch.object(supervisor, "NEWAPI_DB", self.db))
+        self.enterContext(patch.object(supervisor, "LOG_FILE", Path(self.tempdir.name) / "supervisor.log"))
         conn = sqlite3.connect(str(self.db))
         conn.execute(SCHEMA)
         now = int(time.time())

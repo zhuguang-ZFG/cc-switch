@@ -51,7 +51,9 @@ export interface ReasonixFormState {
   handleReasonixModelsUrlChange: (modelsUrl: string) => void;
   handleReasonixModelsChange: (models: string[]) => void;
   handleReasonixDefaultChange: (model: string) => void;
-  resetReasonixState: (config?: Partial<ReasonixProviderSettingsConfig>) => void;
+  resetReasonixState: (
+    config?: Partial<ReasonixProviderSettingsConfig>,
+  ) => void;
 }
 
 function parseReasonixField<T>(
@@ -120,14 +122,12 @@ export function useReasonixFormState({
     [appId, initialData],
   );
 
-  const [reasonixProviderName, setReasonixProviderNameState] =
-    useState<string>(() => {
+  const [reasonixProviderName, setReasonixProviderNameState] = useState<string>(
+    () => {
       if (appId !== "reasonix") return "";
-      return (
-        providerId ||
-        parseReasonixField<string>(initialData, "name", "")
-      );
-    });
+      return providerId || parseReasonixField<string>(initialData, "name", "");
+    },
+  );
 
   const [reasonixKind, setReasonixKind] = useState<ReasonixProviderKind>(() => {
     if (appId !== "reasonix") return REASONIX_DEFAULT_KIND;
@@ -155,19 +155,24 @@ export function useReasonixFormState({
     return parseReasonixField(initialData, "models_url", "");
   });
 
-  const [reasonixModels, setReasonixModels] =
-    useState<string[]>(initialModels);
+  const [reasonixModels, setReasonixModels] = useState<string[]>(initialModels);
 
   const [reasonixDefault, setReasonixDefault] = useState<string>(() => {
     if (appId !== "reasonix") return "";
-    const parsedDefault = parseReasonixField<string>(initialData, "default", "");
+    const parsedDefault = parseReasonixField<string>(
+      initialData,
+      "default",
+      "",
+    );
     return normalizeDefaultModel(initialModels, parsedDefault);
   });
 
   const updateReasonixConfig = useCallback(
     (updater: (config: Record<string, unknown>) => void) => {
       try {
-        const config = JSON.parse(getSettingsConfig() || REASONIX_DEFAULT_CONFIG);
+        const config = JSON.parse(
+          getSettingsConfig() || REASONIX_DEFAULT_CONFIG,
+        );
         updater(config);
         onSettingsConfigChange(JSON.stringify(config, null, 2));
       } catch {

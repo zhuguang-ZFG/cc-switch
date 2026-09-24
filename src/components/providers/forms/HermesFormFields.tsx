@@ -775,9 +775,7 @@ export function HermesFormFields({
               <Input
                 className="h-8 font-mono text-xs"
                 value={key}
-                onChange={(e) =>
-                  upsertCustomHeader(e.target.value, value, key)
-                }
+                onChange={(e) => upsertCustomHeader(e.target.value, value, key)}
                 placeholder="X-Custom-Header"
               />
               <Input

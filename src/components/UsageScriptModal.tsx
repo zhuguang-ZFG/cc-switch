@@ -562,7 +562,10 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             duration: 3000,
             closeButton: true,
           });
-          queryClient.setQueryData(usageKeys.script(provider.id, appId), result);
+          queryClient.setQueryData(
+            usageKeys.script(provider.id, appId),
+            result,
+          );
         } else {
           toast.error(
             `${t("usageScript.testFailed")}: ${result.error || t("endpointTest.noResult")}`,

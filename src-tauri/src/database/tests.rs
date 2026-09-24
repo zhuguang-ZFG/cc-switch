@@ -935,7 +935,10 @@ fn fork_migration_rebuilds_proxy_config_for_pi() -> Result<(), AppError> {
         [],
         |row| row.get(0),
     )?;
-    assert!(table_sql.contains("'pi'"), "CHECK constraint must include 'pi'");
+    assert!(
+        table_sql.contains("'pi'"),
+        "CHECK constraint must include 'pi'"
+    );
     Ok(())
 }
 

@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Save, Package, Info, AlertCircle, Sparkles, Code2 } from "lucide-react";
+import {
+  Save,
+  Package,
+  Info,
+  AlertCircle,
+  Sparkles,
+  Code2,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { Button } from "@/components/ui/button";
@@ -239,7 +246,9 @@ export const KimiCommonConfigModal: React.FC<KimiCommonConfigModalProps> = ({
             <p className="text-sm font-medium">
               {t("commonConfig.emptyTitle")}
             </p>
-            <p className="text-xs mt-1">{t("kimicode.commonConfig.emptyHint")}</p>
+            <p className="text-xs mt-1">
+              {t("kimicode.commonConfig.emptyHint")}
+            </p>
           </div>
         )}
 

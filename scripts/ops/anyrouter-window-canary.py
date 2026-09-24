@@ -10,8 +10,8 @@
 - 探测走本地指纹桥 127.0.0.1:8789（claude-haiku-4-5-20251001，max_tokens=16，
   单次 < $0.001；429 不消耗额度）。桥自身读 secrets.json 里的上游 key。
 - 多挤策略（2026-08-20，社区情报：anyrouter 429 是拥堵式、持续有界重试可挤入）：
-  每轮最多 5 次尝试、间隔 10s，首次 200 即判 open；429 秒回不耗额度，
-  总量有界（每 30min 至多 5 次），不构成重试风暴。桥不可达（本地故障）不挤，直接判 closed。
+  每轮每个桥接模型最多 5 次尝试、间隔 10s，收到完整有效输出才判 open；429 秒回不耗额度，
+  每 5min 触发、总量有界。桥不可达（本地故障）不挤，直接判 closed。
 - sol 探测（2026-08-20 同批）：每轮附带探测 gpt-5.6-sol（chat/completions 路径，
   代理内置有界挤 8×5s，单次调用即"挤完后可用性"，不叠加 canary burst 防嵌套放大），
   独立 sol_state 状态与 closed→open 告警。
@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import os
 import sys
 import time
@@ -54,6 +55,120 @@ SOL_TIMEOUT = 120  # 代理内置有界挤（8×5s），单次调用最坏 ~40s+
 BURST_ATTEMPTS = 5   # 多挤：每轮最多尝试次数（429 秒回不耗额度）
 BURST_INTERVAL = 10  # 多挤：尝试间隔（秒）
 MAX_LOG_BYTES = 512 * 1024
+MAX_RESPONSE_BYTES = 64 * 1024  # 16-token probes must not read unbounded bodies.
+
+
+def validate_json_response(resp, *, chat: bool = False) -> tuple[bool, str]:
+    """A successful status alone does not prove that inference succeeded."""
+    if resp.status != 200:
+        return False, f"unexpected HTTP {resp.status}"
+    raw = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        return False, "response exceeds probe size limit"
+    try:
+        payload = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return False, "invalid JSON response"
+    if not isinstance(payload, dict) or "error" in payload:
+        return False, "upstream error or invalid response"
+    if chat:
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            return False, "missing completion choice"
+        choice = choices[0]
+        message = choice.get("message")
+        if not isinstance(message, dict) or choice.get("finish_reason") not in ("stop", "length"):
+            return False, "incomplete chat completion"
+        content = message.get("content")
+    else:
+        if payload.get("type") != "message" or payload.get("stop_reason") not in (
+            "end_turn", "max_tokens", "stop_sequence",
+        ):
+            return False, "incomplete Anthropic message"
+        content = payload.get("content")
+    has_text = (
+        isinstance(content, str) and bool(content.strip())
+    ) or (
+        isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") == "text"
+            and isinstance(block.get("text"), str) and bool(block["text"].strip())
+            for block in content
+        )
+    )
+    return (True, "HTTP 200 with completed text") if has_text else (False, "empty completion")
+
+
+def validate_anthropic_stream(resp) -> tuple[bool, str]:
+    """Require text and a normal message_stop; reject SSE errors and truncation."""
+    if resp.status != 200:
+        return False, f"unexpected HTTP {resp.status}"
+    deadline = time.monotonic() + DIRECT_TIMEOUT
+    remaining = MAX_RESPONSE_BYTES
+    data: list[str] = []
+    event = ""
+    started = False
+    has_text = False
+    stop_reason = None
+    buffer = b""
+    while time.monotonic() < deadline:
+        if b"\n" not in buffer:
+            # read1 returns after one socket read, so a peer trickling bytes
+            # without newlines cannot hide the total deadline inside readline.
+            raw = resp.read1(min(4096, remaining + 1))
+            if not raw:
+                return False, "stream ended before message_stop"
+            remaining -= len(raw)
+            if remaining < 0:
+                return False, "stream exceeds probe size limit"
+            buffer += raw
+            continue
+        raw, buffer = buffer.split(b"\n", 1)
+        try:
+            line = raw.decode("utf-8").rstrip("\r\n")
+        except UnicodeError:
+            return False, "invalid SSE encoding"
+        if line.startswith("event:"):
+            event = line[6:].strip()
+        elif line.startswith("data:"):
+            data.append(line[5:].lstrip(" "))
+        elif not line:
+            if event == "error":
+                return False, "upstream SSE error"
+            if not data:
+                event = ""
+                continue
+            try:
+                payload = json.loads("\n".join(data))
+            except ValueError:
+                return False, "invalid SSE JSON"
+            data = []
+            event = ""
+            if not isinstance(payload, dict):
+                return False, "invalid SSE payload"
+            kind = payload.get("type")
+            if kind == "error" or "error" in payload:
+                return False, "upstream SSE error"
+            if kind == "message_start":
+                started = True
+            elif kind == "content_block_start":
+                block = payload.get("content_block")
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text")
+                    has_text = has_text or (isinstance(text, str) and bool(text.strip()))
+            elif kind == "content_block_delta":
+                delta = payload.get("delta")
+                if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                    text = delta.get("text")
+                    has_text = has_text or (isinstance(text, str) and bool(text.strip()))
+            elif kind == "message_delta":
+                delta = payload.get("delta")
+                if isinstance(delta, dict):
+                    stop_reason = delta.get("stop_reason")
+            elif kind == "message_stop":
+                if started and has_text and stop_reason in ("end_turn", "max_tokens", "stop_sequence"):
+                    return True, "HTTP 200 with completed SSE text"
+                return False, "empty or incomplete SSE message"
+    return False, "stream exceeded probe time or size limit"
 
 
 def log(msg: str) -> None:
@@ -88,7 +203,7 @@ def probe_once(model: str) -> tuple[bool, str]:
     )
     try:
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
-            return True, f"HTTP {resp.status}"
+            return validate_json_response(resp)
     except urllib.error.HTTPError as e:
         detail = ""
         try:
@@ -96,14 +211,14 @@ def probe_once(model: str) -> tuple[bool, str]:
         except OSError:
             pass
         return False, f"HTTP {e.code} {detail}"
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, http.client.HTTPException) as e:
         return False, f"bridge unreachable: {e}"
 
 
 def probe(model: str) -> tuple[bool, str]:
-    """有界多挤：最多 BURST_ATTEMPTS 次、间隔 BURST_INTERVAL 秒，首次 200 即 open。
+    """有界多挤：最多 BURST_ATTEMPTS 次、间隔 BURST_INTERVAL 秒，首次有效完整输出即 open。
 
-    桥不可达属本地故障，挤无意义，直接判 closed；HTTP 错误（429/5xx）才继续挤。
+    桥不可达属本地故障，挤无意义，直接判 closed；上游 HTTP/内容错误继续有界重试。
     """
     last = ""
     for attempt in range(1, BURST_ATTEMPTS + 1):
@@ -134,7 +249,7 @@ def probe_sol() -> tuple[bool, str]:
     )
     try:
         with urllib.request.urlopen(req, timeout=SOL_TIMEOUT) as resp:
-            return True, f"HTTP {resp.status}"
+            return validate_json_response(resp, chat=True)
     except urllib.error.HTTPError as e:
         detail = ""
         try:
@@ -142,7 +257,7 @@ def probe_sol() -> tuple[bool, str]:
         except OSError:
             pass
         return False, f"HTTP {e.code} {detail}"
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, http.client.HTTPException) as e:
         return False, f"bridge unreachable: {e}"
 
 
@@ -184,14 +299,17 @@ def probe_opus_direct() -> tuple[bool, str, str]:
         })
         try:
             with urllib.request.urlopen(req, timeout=DIRECT_TIMEOUT) as resp:
-                return True, "open", f"attempt {attempt}/{DIRECT_ATTEMPTS}: HTTP {resp.status}"
+                valid, detail = validate_anthropic_stream(resp)
+                if valid:
+                    return True, "open", f"attempt {attempt}/{DIRECT_ATTEMPTS}: {detail}"
+                last = detail
         except urllib.error.HTTPError as e:
             try:
                 detail = e.read().decode("utf-8", "replace")[:150]
             except OSError:
                 detail = ""
             last = f"HTTP {e.code} {detail}"
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, http.client.HTTPException) as e:
             last = f"error: {e}"
         if attempt < DIRECT_ATTEMPTS:
             time.sleep(DIRECT_INTERVAL)
@@ -255,7 +373,7 @@ def main() -> int:
         ok = send_telegram(
             secrets,
             "🟢 anyrouter 窗口开启\n"
-            f"探测 {PROBE_MODEL} 恢复 200。\n"
+            f"探测 {PROBE_MODEL} 返回完整有效文本。\n"
             "可用法（门禁禁止自动挂链，需人工显式选用）：\n"
             "OMP 指定 anyrouter/<模型>（以 models.yml 标注为准，opus-5 已下架）。\n"
             "窗口可能随时关闭（上游池负载），用后请回报结果。",
@@ -269,7 +387,7 @@ def main() -> int:
         ok = send_telegram(
             secrets,
             "🟢 anyrouter sol 窗口开启\n"
-            f"探测 {SOL_MODEL} 挤入成功（代理有界挤 8×5s 内恢复 200）。\n"
+            f"探测 {SOL_MODEL} 挤入成功（代理有界挤 8×5s 内返回完整有效文本）。\n"
             "可用法（门禁禁止自动挂链，需人工显式选用）：\n"
             "OMP 指定 anyrouter-sol/gpt-5.6-sol。\n"
             "窗口可能随时关闭（模型负载上限），用后请回报结果。",
@@ -287,7 +405,7 @@ def main() -> int:
         ok = send_telegram(
             secrets,
             "🟢 anyrouter opus-5-5 窗口开启\n"
-            f"探测 {OPUS_MODEL} 恢复 200（{paths}）。\n"
+            f"探测 {OPUS_MODEL} 返回完整有效文本（{paths}）。\n"
             "Claude Code 直接重发提示词即可（MAX_RETRIES=15 抽签，429/503 不耗额度）。\n"
             "窗口可能随时关闭（上游池负载），用后请回报结果。",
         )

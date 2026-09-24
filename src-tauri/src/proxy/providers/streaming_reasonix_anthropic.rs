@@ -404,7 +404,10 @@ fn extract_anthropic_sse_error(value: &Value) -> String {
         .unwrap_or_else(|| error.to_string())
 }
 
-fn process_anthropic_sse_block(state: &mut AnthropicToOpenAiChatState, block: &str) -> (Vec<Bytes>, bool) {
+fn process_anthropic_sse_block(
+    state: &mut AnthropicToOpenAiChatState,
+    block: &str,
+) -> (Vec<Bytes>, bool) {
     if block.trim().is_empty() {
         return (Vec::new(), false);
     }
@@ -547,9 +550,7 @@ fn split_stream_pieces(text: &str) -> Vec<String> {
     if text.chars().count() <= 1 {
         return vec![text.to_string()];
     }
-    text.chars()
-        .map(|ch| ch.to_string())
-        .collect::<Vec<_>>()
+    text.chars().map(|ch| ch.to_string()).collect::<Vec<_>>()
 }
 
 /// Convert upstream Anthropic Messages SSE into OpenAI Chat Completions SSE.
@@ -690,7 +691,10 @@ mod tests {
                     .map(str::to_string)
             })
             .collect();
-        assert!(content_chunks.len() >= 2, "expected multiple content deltas");
+        assert!(
+            content_chunks.len() >= 2,
+            "expected multiple content deltas"
+        );
         assert_eq!(content_chunks.join(""), "Hello");
         assert!(merged.contains("data: [DONE]"));
         assert_eq!(

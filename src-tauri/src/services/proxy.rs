@@ -1291,7 +1291,15 @@ impl ProxyService {
             .map_err(|e| format!("清除接管状态失败: {e}"))?;
 
         // 4. 清除所有应用的 enabled 状态（用户手动关闭，不需要下次自动恢复）
-        for app_type in ["claude", "codex", "gemini", "grokbuild", "kimicode", "reasonix", "pi"] {
+        for app_type in [
+            "claude",
+            "codex",
+            "gemini",
+            "grokbuild",
+            "kimicode",
+            "reasonix",
+            "pi",
+        ] {
             if let Ok(mut config) = self.db.get_proxy_config_for_app(app_type).await {
                 if config.enabled {
                     config.enabled = false;
@@ -1631,10 +1639,8 @@ impl ProxyService {
             .map(|text| !text.trim().is_empty())
             .unwrap_or(false)
         {
-            crate::reasonix_config::apply_proxy_takeover(&format!(
-                "{proxy_url}/reasonix/v1"
-            ))
-            .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
+            crate::reasonix_config::apply_proxy_takeover(&format!("{proxy_url}/reasonix/v1"))
+                .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
             log::info!("Reasonix Live 配置已接管，代理地址: {proxy_url}/reasonix/v1");
         }
 
@@ -1693,10 +1699,8 @@ impl ProxyService {
                 log::info!("Kimi Code Live 配置已接管，代理地址: {proxy_url}/kimicode/v1");
             }
             AppType::Reasonix => {
-                crate::reasonix_config::apply_proxy_takeover(&format!(
-                    "{proxy_url}/reasonix/v1"
-                ))
-                .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
+                crate::reasonix_config::apply_proxy_takeover(&format!("{proxy_url}/reasonix/v1"))
+                    .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
                 log::info!("Reasonix Live 配置已接管，代理地址: {proxy_url}/reasonix/v1");
             }
             AppType::Pi => {
@@ -1776,10 +1780,8 @@ impl ProxyService {
                     .map(|text| !text.trim().is_empty())
                     .unwrap_or(false) =>
             {
-                crate::reasonix_config::apply_proxy_takeover(&format!(
-                    "{proxy_url}/reasonix/v1"
-                ))
-                .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
+                crate::reasonix_config::apply_proxy_takeover(&format!("{proxy_url}/reasonix/v1"))
+                    .map_err(|e| format!("更新 Reasonix 接管配置失败: {e}"))?;
             }
             AppType::Pi if crate::pi_config::has_live_config() => {
                 crate::pi_config::apply_proxy_takeover(&format!("{proxy_url}/pi/v1"))
@@ -2017,7 +2019,9 @@ impl ProxyService {
                 Err(_) => false,
             },
             AppType::KimiCode => crate::kimi_config::is_proxy_takeover_active().unwrap_or(false),
-            AppType::Reasonix => crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false),
+            AppType::Reasonix => {
+                crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false)
+            }
             AppType::Pi => crate::pi_config::is_proxy_takeover_active().unwrap_or(false),
             _ => false,
         }
@@ -2222,15 +2226,17 @@ impl ProxyService {
             }
             AppType::Reasonix => {
                 let expected = format!("{proxy_url}/reasonix/v1");
-                Ok(crate::reasonix_config::is_proxy_takeover_active_for_url(Some(
-                    &expected,
-                ))
-                .unwrap_or(false))
+                Ok(
+                    crate::reasonix_config::is_proxy_takeover_active_for_url(Some(&expected))
+                        .unwrap_or(false),
+                )
             }
             AppType::Pi => {
                 let expected = format!("{proxy_url}/pi/v1");
-                Ok(crate::pi_config::is_proxy_takeover_active_for_url(Some(&expected))
-                    .unwrap_or(false))
+                Ok(
+                    crate::pi_config::is_proxy_takeover_active_for_url(Some(&expected))
+                        .unwrap_or(false),
+                )
             }
             _ => Ok(false),
         }
@@ -2478,10 +2484,7 @@ impl ProxyService {
                     return true;
                 }
                 // DB / JSON settings_config form (SSOT pollution check)
-                let base_url = config
-                    .get("base_url")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let base_url = config.get("base_url").and_then(Value::as_str).unwrap_or("");
                 let api_key = config.get("api_key").and_then(Value::as_str).unwrap_or("");
                 base_url.contains("/reasonix/v1") || api_key == PROXY_TOKEN_PLACEHOLDER
             }
@@ -3389,8 +3392,7 @@ impl ProxyService {
                     updated_any = true;
                 }
                 if takeover.pi {
-                    self.takeover_live_config_best_effort(&AppType::Pi)
-                        .await?;
+                    self.takeover_live_config_best_effort(&AppType::Pi).await?;
                     updated_any = true;
                 }
 
@@ -3694,21 +3696,15 @@ model = "model"
         );
         let taken_models = crate::pi_config::read_models().expect("read taken models");
         assert!(
-            taken_models
-                .pointer("/providers/cc-switch-proxy")
-                .is_some(),
+            taken_models.pointer("/providers/cc-switch-proxy").is_some(),
             "proxy provider must be projected"
         );
         assert_eq!(
-            crate::pi_config::get_default_provider()
-                .unwrap()
-                .as_deref(),
+            crate::pi_config::get_default_provider().unwrap().as_deref(),
             Some(crate::pi_config::PI_PROXY_PROVIDER)
         );
         assert!(
-            taken_models
-                .pointer("/providers/demo")
-                .is_some(),
+            taken_models.pointer("/providers/demo").is_some(),
             "user provider must remain during takeover"
         );
 
@@ -3735,18 +3731,14 @@ model = "model"
             restored_val["settings"]["defaultModel"],
             original["settings"]["defaultModel"]
         );
-        assert!(
-            restored_val
-                .pointer("/models/providers/demo")
-                .is_some()
-        );
-        assert!(
-            restored_val
-                .pointer("/models/providers/cc-switch-proxy")
-                .is_none()
-        );
+        assert!(restored_val.pointer("/models/providers/demo").is_some());
+        assert!(restored_val
+            .pointer("/models/providers/cc-switch-proxy")
+            .is_none());
         assert_eq!(
-            restored_val.pointer("/auth/demo/key").and_then(|v| v.as_str()),
+            restored_val
+                .pointer("/auth/demo/key")
+                .and_then(|v| v.as_str()),
             Some("secret")
         );
 
@@ -4076,8 +4068,7 @@ api_key_env = "DEMO_API_KEY"
 "#,
         )
         .expect("seed reasonix");
-        crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret")
-            .expect("seed env");
+        crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret").expect("seed env");
 
         let db = Arc::new(Database::memory().expect("init db"));
         use_ephemeral_proxy_port(&db).await;
@@ -4327,12 +4318,7 @@ api_key_env = "DEMO_API_KEY"
             .set_takeover_for_app("reasonix", true)
             .await
             .expect("enable takeover");
-        let first_port = state
-            .proxy_service
-            .get_status()
-            .await
-            .expect("status")
-            .port;
+        let first_port = state.proxy_service.get_status().await.expect("status").port;
         let live_first = crate::reasonix_config::read_config_text().expect("live first");
         assert!(
             live_first.contains(&format!(":{first_port}/reasonix/v1")),
@@ -4352,7 +4338,10 @@ api_key_env = "DEMO_API_KEY"
             .await
             .expect("status after")
             .port;
-        assert_ne!(first_port, second_port, "ephemeral restart should pick a new port");
+        assert_ne!(
+            first_port, second_port,
+            "ephemeral restart should pick a new port"
+        );
 
         let live_second = crate::reasonix_config::read_config_text().expect("live second");
         assert!(
@@ -4390,8 +4379,7 @@ models = ["demo-model"]
 default = "demo-model"
 api_key_env = "DEMO_API_KEY"
 "#;
-        std::fs::write(crate::reasonix_config::get_reasonix_config_path(), original)
-            .expect("seed");
+        std::fs::write(crate::reasonix_config::get_reasonix_config_path(), original).expect("seed");
         crate::reasonix_config::upsert_env_key("DEMO_API_KEY", "secret").expect("seed env");
 
         let db = Arc::new(Database::memory().expect("init db"));
@@ -4410,7 +4398,8 @@ api_key_env = "DEMO_API_KEY"
             None,
         );
         db.save_provider("reasonix", &provider).expect("save");
-        db.set_current_provider("reasonix", "demo").expect("current");
+        db.set_current_provider("reasonix", "demo")
+            .expect("current");
         crate::settings::set_current_provider(&AppType::Reasonix, Some("demo"))
             .expect("local current");
 
@@ -4469,8 +4458,7 @@ api_key_env = "DEMO_API_KEY"
         crate::settings::reload_settings().expect("reload settings");
 
         let captured = Arc::new(tokio::sync::Mutex::new(None::<(String, Value)>));
-        let (upstream_base, upstream_handle) =
-            spawn_openai_chat_upstream(captured.clone()).await;
+        let (upstream_base, upstream_handle) = spawn_openai_chat_upstream(captured.clone()).await;
 
         std::fs::write(
             crate::reasonix_config::get_reasonix_config_path(),
@@ -4676,9 +4664,7 @@ api_key_env = "DEMO_API_KEY"
                             "finish_reason": "stop"
                         }]
                     });
-                    let sse = format!(
-                        "data: {chunk1}\n\ndata: {chunk2}\n\ndata: [DONE]\n\n"
-                    );
+                    let sse = format!("data: {chunk1}\n\ndata: {chunk2}\n\ndata: [DONE]\n\n");
                     (
                         [(
                             axum::http::header::CONTENT_TYPE,
@@ -5166,7 +5152,11 @@ api_key_env = "DEMO_API_KEY"
             "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
             Some("claude-opus-5"),
         );
-        assert_env_str(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL", Some("claude-haiku-4-5"));
+        assert_env_str(
+            env,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            Some("claude-haiku-4-5"),
+        );
         assert_env_str(
             env,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",

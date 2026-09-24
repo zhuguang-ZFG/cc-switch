@@ -12,9 +12,7 @@ pub fn get_pi_live_provider_ids() -> Result<Vec<String>, String> {
     let providers = pi_config::get_providers().map_err(|e| e.to_string())?;
     Ok(providers
         .keys()
-        .filter(|name| {
-            *name != pi_config::PI_PROXY_PROVIDER && !name.starts_with("cc-switch-")
-        })
+        .filter(|name| *name != pi_config::PI_PROXY_PROVIDER && !name.starts_with("cc-switch-"))
         .cloned()
         .collect())
 }
@@ -40,9 +38,7 @@ pub fn get_pi_default_model() -> Result<Option<String>, String> {
 
 /// Import providers from Pi live models.json into the database.
 #[tauri::command]
-pub fn import_pi_providers_from_live(
-    state: State<'_, Arc<AppState>>,
-) -> Result<usize, String> {
+pub fn import_pi_providers_from_live(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
     import_pi_from_live(state.inner().as_ref()).map_err(|e: AppError| e.to_string())
 }
 

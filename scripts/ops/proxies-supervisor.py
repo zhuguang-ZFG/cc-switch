@@ -201,12 +201,14 @@ PROXIES["anyrouter"] = {
 TELEGRAM_TOKEN = str(SECRETS.get("telegram_token", ""))
 TELEGRAM_CHAT_ID = str(SECRETS.get("telegram_chat_id", ""))
 ALERT_COOLDOWN_S = 1800
+ALERT_RETRY_S = 60  # Failed deliveries retry without a per-loop alert storm.
 _alert_times: dict[str, float] = {}
+_alert_attempt_times: dict[str, float] = {}
 
 
-def send_telegram(text: str) -> None:
+def send_telegram(text: str) -> bool:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+        return False
     try:
         payload = json.dumps({"chat_id": TELEGRAM_CHAT_ID, "text": text}).encode()
         req = urllib.request.Request(
@@ -215,18 +217,23 @@ def send_telegram(text: str) -> None:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10):
-            pass
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            payload = json.load(resp)
+            return resp.status == 200 and isinstance(payload, dict) and payload.get("ok") is True
     except Exception as e:  # noqa: BLE001 — 告警失败不允许影响看护循环
         log(f"Telegram 告警发送失败: {e}")
+        return False
 
 
 def alert(name: str, text: str) -> None:
     now = time.time()
-    if now - _alert_times.get(name, 0.0) < ALERT_COOLDOWN_S:
+    if name in _alert_times and now - _alert_times[name] < ALERT_COOLDOWN_S:
         return
-    _alert_times[name] = now
-    send_telegram(text)
+    if name in _alert_attempt_times and now - _alert_attempt_times[name] < ALERT_RETRY_S:
+        return
+    _alert_attempt_times[name] = now
+    if send_telegram(text):
+        _alert_times[name] = now
 
 _restart_times: dict[str, list[float]] = {}
 

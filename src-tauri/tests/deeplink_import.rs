@@ -117,10 +117,7 @@ fn deeplink_import_pi_provider_persists_to_db() {
         .settings_config
         .get("apiKey")
         .and_then(|v| v.as_str());
-    let api = provider
-        .settings_config
-        .get("api")
-        .and_then(|v| v.as_str());
+    let api = provider.settings_config.get("api").and_then(|v| v.as_str());
     assert_eq!(base_url, request.endpoint.as_deref());
     assert_eq!(api_key, request.api_key.as_deref());
     assert_eq!(api, Some("openai-completions"));

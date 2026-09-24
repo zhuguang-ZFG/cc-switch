@@ -1954,8 +1954,7 @@ requires_openai_auth = true
                 .expect("apply takeover");
 
             let mut edited = provider.clone();
-            edited.settings_config["base_url"] =
-                Value::String("https://updated.example/v1".into());
+            edited.settings_config["base_url"] = Value::String("https://updated.example/v1".into());
             edited.settings_config["api_key"] = Value::String("updated-secret".into());
             ProviderService::update(state, AppType::Reasonix, None, edited)
                 .expect("update during takeover");
@@ -2037,8 +2036,7 @@ requires_openai_auth = true
                 .expect("apply takeover");
 
             let mut edited = provider.clone();
-            edited.settings_config["base_url"] =
-                Value::String("https://updated.example/v1".into());
+            edited.settings_config["base_url"] = Value::String("https://updated.example/v1".into());
             ProviderService::update(state, AppType::Reasonix, None, edited)
                 .expect("update during takeover");
 
@@ -2598,8 +2596,7 @@ impl ProviderService {
         };
 
         let is_current = force_as_default
-            || crate::settings::get_effective_current_provider(&state.db, &AppType::Pi)?
-                .as_deref()
+            || crate::settings::get_effective_current_provider(&state.db, &AppType::Pi)?.as_deref()
                 == Some(provider.id.as_str());
 
         let updated = if is_current {
@@ -2628,11 +2625,9 @@ impl ProviderService {
         let Some(backup) = backup else {
             return Ok(());
         };
-        let updated = crate::pi_config::remove_provider_from_snapshot_text(
-            &backup.original_config,
-            id,
-        )
-        .map_err(|e| AppError::Message(format!("从 Pi 备份移除供应商失败: {e}")))?;
+        let updated =
+            crate::pi_config::remove_provider_from_snapshot_text(&backup.original_config, id)
+                .map_err(|e| AppError::Message(format!("从 Pi 备份移除供应商失败: {e}")))?;
         futures::executor::block_on(state.db.save_live_backup(AppType::Pi.as_str(), &updated))
             .map_err(|e| AppError::Message(format!("写入 Pi 备份失败: {e}")))
     }
@@ -2764,10 +2759,11 @@ impl ProviderService {
 
             // Kimi Code maintains Claude/Codex-aligned current SSOT for proxy routing.
             // First provider becomes current; subsequent adds leave current unchanged.
-            let seed_additive_current = matches!(
-                app_type,
-                AppType::KimiCode | AppType::Reasonix | AppType::Pi
-            ) && state.db.get_current_provider(app_type.as_str())?.is_none();
+            let seed_additive_current =
+                matches!(
+                    app_type,
+                    AppType::KimiCode | AppType::Reasonix | AppType::Pi
+                ) && state.db.get_current_provider(app_type.as_str())?.is_none();
 
             if !add_to_live {
                 if seed_additive_current {
@@ -3087,11 +3083,10 @@ impl ProviderService {
             if matches!(app_type, AppType::Pi) && Self::pi_proxy_owns_live(state) {
                 if flagged_managed == Some(true) {
                     live_config_managed = true;
-                } else if let Some(backup) = futures::executor::block_on(
-                    state.db.get_live_backup(AppType::Pi.as_str()),
-                )
-                .ok()
-                .flatten()
+                } else if let Some(backup) =
+                    futures::executor::block_on(state.db.get_live_backup(AppType::Pi.as_str()))
+                        .ok()
+                        .flatten()
                 {
                     if crate::pi_config::provider_exists_in_snapshot_text(
                         &backup.original_config,
@@ -3999,7 +3994,10 @@ impl ProviderService {
     /// Additive-mode Kimi skips the exclusive-app backfill path, so this is
     /// invoked explicitly on switch. Non-fatal: failures only warn.
     fn sync_kimi_common_config_snippet_from_live(state: &AppState, result: &mut SwitchResult) {
-        match state.db.is_config_snippet_cleared(AppType::KimiCode.as_str()) {
+        match state
+            .db
+            .is_config_snippet_cleared(AppType::KimiCode.as_str())
+        {
             Ok(true) => return,
             Ok(false) => {}
             Err(err) => {
@@ -4739,16 +4737,18 @@ impl ProviderService {
                 }
                 if let Some(models) = models {
                     if models.iter().any(|model| {
-                        let id = model.as_str().map(str::trim).filter(|s| !s.is_empty()).or_else(
-                            || {
+                        let id = model
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| {
                                 model
                                     .get("id")
                                     .or_else(|| model.get("model"))
                                     .and_then(Value::as_str)
                                     .map(str::trim)
                                     .filter(|s| !s.is_empty())
-                            },
-                        );
+                            });
                         id.is_none()
                     }) {
                         return Err(AppError::localized(
@@ -4790,15 +4790,17 @@ impl ProviderService {
                 }
                 if let Some(models) = models {
                     if models.iter().any(|model| {
-                        let id = model.as_str().map(str::trim).filter(|s| !s.is_empty()).or_else(
-                            || {
+                        let id = model
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| {
                                 model
                                     .get("id")
                                     .and_then(Value::as_str)
                                     .map(str::trim)
                                     .filter(|s| !s.is_empty())
-                            },
-                        );
+                            });
                         id.is_none()
                     }) {
                         return Err(AppError::localized(
@@ -5252,10 +5254,9 @@ impl ProviderService {
 
         // 同步到 Reasonix（加法模式：必须走 add/update 才能写入 live / .env）
         if let Some(mut reasonix_provider) = provider.to_reasonix_provider() {
-            if let Some(existing) =
-                state
-                    .db
-                    .get_provider_by_id(&reasonix_provider.id, "reasonix")?
+            if let Some(existing) = state
+                .db
+                .get_provider_by_id(&reasonix_provider.id, "reasonix")?
             {
                 let mut merged = existing.settings_config.clone();
                 Self::merge_json(&mut merged, &reasonix_provider.settings_config);

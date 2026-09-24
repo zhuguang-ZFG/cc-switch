@@ -242,7 +242,11 @@ async fn kimi_poll_device_flow(
             .filter(|(k, _)| {
                 !matches!(
                     k.as_str(),
-                    "access_token" | "refresh_token" | "expires_at" | "expires_in" | "scope"
+                    "access_token"
+                        | "refresh_token"
+                        | "expires_at"
+                        | "expires_in"
+                        | "scope"
                         | "token_type"
                 )
             })

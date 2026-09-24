@@ -154,10 +154,7 @@ fn parse_usage(usage: &serde_json::Value) -> Option<(UsageTokens, Option<f64>)> 
     }
     let input = usage.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
     let output = usage.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
-    let cache_read = usage
-        .get("cacheRead")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let cache_read = usage.get("cacheRead").and_then(|v| v.as_u64()).unwrap_or(0);
     let cache_write = usage
         .get("cacheWrite")
         .and_then(|v| v.as_u64())
@@ -493,10 +490,7 @@ mod tests {
             )),
             "019f84e4-e5a8-7d5f"
         );
-        assert_eq!(
-            session_uuid_from_path(Path::new("/x/plain.jsonl")),
-            "plain"
-        );
+        assert_eq!(session_uuid_from_path(Path::new("/x/plain.jsonl")), "plain");
     }
 
     #[test]

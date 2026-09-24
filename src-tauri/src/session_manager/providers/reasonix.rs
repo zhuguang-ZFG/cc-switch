@@ -111,10 +111,7 @@ fn first_user_preview(path: &Path) -> Option<String> {
         if role != "user" {
             continue;
         }
-        let content = value
-            .get("content")
-            .map(extract_text)
-            .unwrap_or_default();
+        let content = value.get("content").map(extract_text).unwrap_or_default();
         let trimmed = content.trim();
         if trimmed.is_empty() {
             continue;
@@ -286,10 +283,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         if role.is_empty() {
             continue;
         }
-        let content = value
-            .get("content")
-            .map(extract_text)
-            .unwrap_or_default();
+        let content = value.get("content").map(extract_text).unwrap_or_default();
         // Keep tool/assistant rows even when content is empty if tool_calls exist.
         let has_tool_calls = value
             .get("tool_calls")
@@ -352,10 +346,7 @@ pub fn delete_session(root: &Path, path: &Path, session_id: &str) -> Result<bool
         removed = true;
     }
     // Official branch meta is `chat.jsonl.meta` (path + ".meta"), not `{stem}.meta.json`.
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(stem);
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or(stem);
     let sidecar_names = [
         format!("{stem}.events.jsonl"),
         format!("{stem}.meta.json"),

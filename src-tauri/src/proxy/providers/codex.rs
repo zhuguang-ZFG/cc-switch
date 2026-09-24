@@ -736,10 +736,7 @@ fn resolve_reasonix_upstream_model(
     }
 
     if let Some((_, suffix)) = request_model.rsplit_once('/') {
-        if catalog
-            .iter()
-            .any(|id| id.eq_ignore_ascii_case(suffix))
-        {
+        if catalog.iter().any(|id| id.eq_ignore_ascii_case(suffix)) {
             return Some(suffix.to_string());
         }
     }
@@ -809,10 +806,7 @@ fn pi_model_catalog(provider: &Provider) -> Vec<String> {
     models
 }
 
-fn resolve_pi_upstream_model(
-    provider: &Provider,
-    request_model: Option<&str>,
-) -> Option<String> {
+fn resolve_pi_upstream_model(provider: &Provider, request_model: Option<&str>) -> Option<String> {
     let catalog = pi_model_catalog(provider);
     let default = provider
         .settings_config
@@ -844,10 +838,7 @@ fn resolve_pi_upstream_model(
     }
 
     if let Some((_, suffix)) = request_model.rsplit_once('/') {
-        if catalog
-            .iter()
-            .any(|id| id.eq_ignore_ascii_case(suffix))
-        {
+        if catalog.iter().any(|id| id.eq_ignore_ascii_case(suffix)) {
             return Some(suffix.to_string());
         }
     }
@@ -1851,11 +1842,19 @@ wire_api = "anthropic"
             "models": ["model-a", "model-b"],
             "default": "model-b"
         }));
-        for placeholder in ["cc-switch-proxy", "cc-switch-proxy-default", "cc-switch-proxy/default"] {
+        for placeholder in [
+            "cc-switch-proxy",
+            "cc-switch-proxy-default",
+            "cc-switch-proxy/default",
+        ] {
             let mut body = json!({ "model": placeholder, "messages": [] });
             let upstream =
                 apply_reasonix_upstream_model(&provider, &mut body).expect("placeholder must map");
-            assert_eq!(upstream.as_deref(), Some("model-b"), "placeholder {placeholder}");
+            assert_eq!(
+                upstream.as_deref(),
+                Some("model-b"),
+                "placeholder {placeholder}"
+            );
             assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("model-b"));
         }
         assert!(reasonix_provider_is_anthropic(&create_provider(json!({
@@ -1894,7 +1893,11 @@ wire_api = "anthropic"
             let mut body = json!({ "model": placeholder, "messages": [] });
             let upstream =
                 apply_pi_upstream_model(&provider, &mut body).expect("placeholder must map");
-            assert_eq!(upstream.as_deref(), Some("kimi-k3"), "placeholder {placeholder}");
+            assert_eq!(
+                upstream.as_deref(),
+                Some("kimi-k3"),
+                "placeholder {placeholder}"
+            );
             assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("kimi-k3"));
         }
     }

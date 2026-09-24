@@ -78,7 +78,9 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
               type="button"
               onClick={toggleShowKey}
               className="text-muted-foreground hover:text-foreground transition-colors"
-              aria-label={showKey ? t("apiKeyInput.hide") : t("apiKeyInput.show")}
+              aria-label={
+                showKey ? t("apiKeyInput.hide") : t("apiKeyInput.show")
+              }
             >
               {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>

@@ -473,7 +473,10 @@ fn ensure_table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut T
     Ok(doc[key].as_table_mut().expect("just inserted table"))
 }
 
-fn ensure_nested_table_mut<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Table, AppError> {
+fn ensure_nested_table_mut<'a>(
+    parent: &'a mut Table,
+    key: &str,
+) -> Result<&'a mut Table, AppError> {
     if parent.contains_key(key) && !parent[key].is_table() {
         // W2: an inline table (`oauth = { key = "..." }`) is a valid shape the
         // CLI itself writes. Convert it to a regular table in place so nested
@@ -1515,7 +1518,11 @@ async fn ensure_fresh_oauth_token_with_expected(
             for (k, v) in payload.as_object().into_iter().flatten() {
                 if !matches!(
                     k.as_str(),
-                    "access_token" | "refresh_token" | "expires_at" | "expires_in" | "scope"
+                    "access_token"
+                        | "refresh_token"
+                        | "expires_at"
+                        | "expires_in"
+                        | "scope"
                         | "token_type"
                 ) {
                     extra.insert(k.clone(), v.clone());
@@ -2283,8 +2290,8 @@ model = "real-model"
                 scope: "".to_string(),
                 token_type: "Bearer".to_string(),
                 expires_in: 3600,
-                    extra: Default::default(),
-                };
+                extra: Default::default(),
+            };
             save_oauth_token(&token).unwrap();
             let value: Value =
                 serde_json::from_slice(&fs::read(get_kimi_credentials_path()).unwrap()).unwrap();

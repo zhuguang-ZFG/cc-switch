@@ -189,8 +189,9 @@ pub(crate) fn provider_exists_in_live_config(
         }
         AppType::Reasonix => crate::reasonix_config::get_providers()
             .map(|providers| providers.contains_key(provider_id)),
-        AppType::Pi => crate::pi_config::get_providers()
-            .map(|providers| providers.contains_key(provider_id)),
+        AppType::Pi => {
+            crate::pi_config::get_providers().map(|providers| providers.contains_key(provider_id))
+        }
         _ => Ok(false),
     }
 }
@@ -721,7 +722,9 @@ pub(crate) fn extract_kimi_common_config_from_toml(text: &str) -> Result<String,
         return Ok(String::new());
     }
     let doc = trimmed.parse::<DocumentMut>().map_err(|e| {
-        AppError::Message(format!("Failed to parse Kimi Code config for common extract: {e}"))
+        AppError::Message(format!(
+            "Failed to parse Kimi Code config for common extract: {e}"
+        ))
     })?;
 
     let mut out = DocumentMut::new();
@@ -1381,10 +1384,7 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
         }
         AppType::Reasonix => {
             crate::reasonix_config::set_provider(&provider.id, provider.settings_config.clone())?;
-            log::debug!(
-                "Reasonix provider '{}' written to live config",
-                provider.id
-            );
+            log::debug!("Reasonix provider '{}' written to live config", provider.id);
         }
         AppType::Pi => {
             crate::pi_config::set_provider(&provider.id, provider.settings_config.clone())?;
@@ -1460,9 +1460,8 @@ fn sync_all_providers_to_takeover_backup(
     providers: &indexmap::IndexMap<String, Provider>,
 ) -> Result<usize, AppError> {
     let app_str = app_type.as_str();
-    let Some(backup) =
-        futures::executor::block_on(state.db.get_live_backup(app_str))
-            .map_err(|e| AppError::Message(format!("读取 {app_str} 接管备份失败: {e}")))?
+    let Some(backup) = futures::executor::block_on(state.db.get_live_backup(app_str))
+        .map_err(|e| AppError::Message(format!("读取 {app_str} 接管备份失败: {e}")))?
     else {
         log::warn!(
             "{app_type:?} takeover owns live but no restore backup is present; skip additive backup sync"
@@ -1529,7 +1528,6 @@ fn sync_all_providers_to_takeover_backup(
                         == Some(true)
                     || current.settings_config.get("oauth").is_some());
             if should_sync_additive_provider(app_type, current) || is_kimi_managed_current {
-
                 let switched = match app_type {
                     AppType::KimiCode => crate::kimi_config::apply_switch_defaults_to_text(
                         &text,
@@ -1573,12 +1571,8 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
     // Detect live proxy projection only — stale backup must not divert sync
     // into backup-only writes while live is already restored.
     let takeover_owns_live = match app_type {
-        AppType::KimiCode => {
-            crate::kimi_config::is_proxy_takeover_active().unwrap_or(false)
-        }
-        AppType::Reasonix => {
-            crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false)
-        }
+        AppType::KimiCode => crate::kimi_config::is_proxy_takeover_active().unwrap_or(false),
+        AppType::Reasonix => crate::reasonix_config::is_proxy_takeover_active().unwrap_or(false),
         AppType::Pi => crate::pi_config::is_proxy_takeover_active().unwrap_or(false),
         _ => false,
     };
@@ -2403,9 +2397,7 @@ pub fn remove_kimicode_provider_from_live(provider_id: &str) -> Result<(), AppEr
 /// Remove a Reasonix provider from the live configuration
 pub fn remove_reasonix_provider_from_live(provider_id: &str) -> Result<(), AppError> {
     if !crate::reasonix_config::get_reasonix_dir().exists() {
-        log::debug!(
-            "Reasonix config directory doesn't exist, skipping removal of '{provider_id}'"
-        );
+        log::debug!("Reasonix config directory doesn't exist, skipping removal of '{provider_id}'");
         return Ok(());
     }
 
@@ -2417,9 +2409,7 @@ pub fn remove_reasonix_provider_from_live(provider_id: &str) -> Result<(), AppEr
 /// Remove a Pi provider from live models.json / auth.json.
 pub fn remove_pi_provider_from_live(provider_id: &str) -> Result<(), AppError> {
     if !crate::pi_config::get_pi_dir().exists() {
-        log::debug!(
-            "Pi config directory doesn't exist, skipping removal of '{provider_id}'"
-        );
+        log::debug!("Pi config directory doesn't exist, skipping removal of '{provider_id}'");
         return Ok(());
     }
 
@@ -2667,8 +2657,7 @@ effort = "max"
 type = "openai"
 "#;
         let old = "[thinking]\neffort = \"max\"\n";
-        let updated =
-            replace_kimi_common_config_in_text(original, Some(old), None).expect("clear");
+        let updated = replace_kimi_common_config_in_text(original, Some(old), None).expect("clear");
         assert!(
             !updated.contains("[thinking]"),
             "empty new snippet must strip thinking: {updated}"
@@ -2686,8 +2675,8 @@ effort = "low"
 pre_tool = "echo hi"
 "#;
         let new_snippet = "[thinking]\neffort = \"max\"\n";
-        let strip = build_kimi_reconcile_strip_snippet(live_common, new_snippet, false)
-            .expect("strip");
+        let strip =
+            build_kimi_reconcile_strip_snippet(live_common, new_snippet, false).expect("strip");
         assert!(
             strip.contains("[thinking]"),
             "DB-snippet thinking must be stripped for full replace: {strip}"
@@ -2701,9 +2690,8 @@ pre_tool = "echo hi"
         let full = format!(
             "default_model = \"demo\"\n\n{live_common}\n[providers.demo]\ntype = \"openai\"\n"
         );
-        let updated =
-            replace_kimi_common_config_in_text(&full, Some(&strip), Some(new_snippet))
-                .expect("reconcile");
+        let updated = replace_kimi_common_config_in_text(&full, Some(&strip), Some(new_snippet))
+            .expect("reconcile");
         assert!(updated.contains("effort = \"max\""));
         assert!(
             updated.contains("[hooks]"),

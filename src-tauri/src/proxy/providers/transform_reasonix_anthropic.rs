@@ -34,7 +34,9 @@ fn push_tool_result_block(messages: &mut Vec<Value>, block: Value) {
             if let Some(content) = last.get_mut("content").and_then(Value::as_array_mut) {
                 let insert_at = content
                     .iter()
-                    .position(|item| item.get("type").and_then(Value::as_str) != Some("tool_result"))
+                    .position(|item| {
+                        item.get("type").and_then(Value::as_str) != Some("tool_result")
+                    })
                     .unwrap_or(content.len());
                 content.insert(insert_at, block);
                 return;
@@ -48,13 +50,11 @@ fn push_tool_result_block(messages: &mut Vec<Value>, block: Value) {
 }
 
 fn image_block_from_openai_image_url(part: &Value) -> Option<Value> {
-    let url = part
-        .get("image_url")
-        .and_then(|v| v.as_str().map(str::to_string).or_else(|| {
-            v.get("url")
-                .and_then(|u| u.as_str())
-                .map(str::to_string)
-        }))?;
+    let url = part.get("image_url").and_then(|v| {
+        v.as_str()
+            .map(str::to_string)
+            .or_else(|| v.get("url").and_then(|u| u.as_str()).map(str::to_string))
+    })?;
 
     if let Some(rest) = url.strip_prefix("data:") {
         let (meta, data) = rest.split_once(',')?;
@@ -370,8 +370,10 @@ pub fn openai_chat_request_to_anthropic(
         .and_then(|tools| tools.as_array())
         .into_iter()
         .flatten()
-        .filter(|tool| tool.get("type").and_then(|t| t.as_str()) != Some("function")
-            || tool.get("function").is_some())
+        .filter(|tool| {
+            tool.get("type").and_then(|t| t.as_str()) != Some("function")
+                || tool.get("function").is_some()
+        })
         .filter_map(chat_tool_to_anthropic_tool)
         .collect();
     let has_tools = !anth_tools.is_empty();
@@ -411,7 +413,11 @@ pub fn anthropic_message_response_to_openai_chat(body: Value) -> Result<Value, P
 
     if let Some(blocks) = body.get("content").and_then(|value| value.as_array()) {
         for block in blocks {
-            match block.get("type").and_then(|value| value.as_str()).unwrap_or("") {
+            match block
+                .get("type")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+            {
                 "text" => {
                     if let Some(text) = block.get("text").and_then(|value| value.as_str()) {
                         text_parts.push(text.to_string());
@@ -569,12 +575,12 @@ mod tests {
 
         let anthropic = openai_chat_request_to_anthropic(input, 8192).unwrap();
         assert_eq!(anthropic["messages"][1]["role"], "assistant");
-        assert_eq!(
-            anthropic["messages"][1]["content"][1]["type"],
-            "tool_use"
-        );
+        assert_eq!(anthropic["messages"][1]["content"][1]["type"], "tool_use");
         assert_eq!(anthropic["messages"][1]["content"][1]["id"], "call_123");
-        assert_eq!(anthropic["messages"][2]["content"][0]["type"], "tool_result");
+        assert_eq!(
+            anthropic["messages"][2]["content"][0]["type"],
+            "tool_result"
+        );
         assert_eq!(
             anthropic["messages"][2]["content"][0]["tool_use_id"],
             "call_123"
@@ -606,7 +612,10 @@ mod tests {
         let chat = anthropic_message_response_to_openai_chat(anthropic).unwrap();
         assert_eq!(chat["choices"][0]["finish_reason"], "tool_calls");
         assert_eq!(chat["choices"][0]["message"]["content"], "Let me check");
-        assert_eq!(chat["choices"][0]["message"]["tool_calls"][0]["id"], "call_123");
+        assert_eq!(
+            chat["choices"][0]["message"]["tool_calls"][0]["id"],
+            "call_123"
+        );
         assert_eq!(
             chat["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
             "get_weather"

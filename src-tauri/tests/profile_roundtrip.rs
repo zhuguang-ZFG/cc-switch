@@ -449,6 +449,89 @@ fn profile_apply_reports_dangling_references_and_continues() {
 }
 
 #[test]
+fn uncaptured_profile_preserves_takeover_live_config_and_backup() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
+    let live_path = home.join(".claude/settings.json");
+    let live = "{\n  \"env\": {\"ANTHROPIC_AUTH_TOKEN\": \"PROXY_MANAGED\", \"ANTHROPIC_BASE_URL\": \"http://127.0.0.1:15721\"}\n}\n";
+    fs::create_dir_all(live_path.parent().unwrap()).expect("create live dir");
+    fs::write(&live_path, live).expect("write takeover projection");
+
+    let original = r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-original"}}"#;
+    futures::executor::block_on(state.db.save_live_backup("claude", original))
+        .expect("save takeover backup");
+    let mut config = futures::executor::block_on(state.db.get_proxy_config_for_app("claude"))
+        .expect("get proxy config");
+    config.enabled = true;
+    futures::executor::block_on(state.db.update_proxy_config_for_app(config))
+        .expect("enable takeover");
+    futures::executor::block_on(state.db.set_live_takeover_active(true))
+        .expect("set takeover marker");
+
+    let profile = cc_switch_lib::Profile {
+        id: "uncaptured".to_string(),
+        name: "Uncaptured".to_string(),
+        payload: serde_json::to_string(&ProfilePayload::default()).unwrap(),
+        sort_order: None,
+        created_at: Some(1_000),
+        updated_at: Some(1_000),
+    };
+    state.db.save_profile(&profile).expect("save profile");
+
+    let (warnings, should_stop) =
+        ProfileService::apply(&state, &profile.id, ProfileScope::Claude).expect("apply profile");
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        !should_stop,
+        "uncaptured apply must not stop the running proxy"
+    );
+    assert_eq!(fs::read(&live_path).unwrap(), live.as_bytes());
+    let backup = futures::executor::block_on(state.db.get_live_backup("claude"))
+        .expect("get backup")
+        .expect("backup must survive uncaptured apply");
+    assert_eq!(backup.original_config, original);
+    assert!(
+        futures::executor::block_on(state.db.get_proxy_config_for_app("claude"))
+            .unwrap()
+            .enabled
+    );
+    assert!(state.db.is_live_takeover_active_sync());
+    assert_eq!(
+        state
+            .db
+            .get_current_profile_id("claude")
+            .unwrap()
+            .as_deref(),
+        Some(profile.id.as_str())
+    );
+}
+
+#[test]
+fn uncaptured_profile_does_not_request_stopping_an_idle_proxy() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let state = create_test_state().expect("create test state");
+    let profile = cc_switch_lib::Profile {
+        id: "uncaptured".to_string(),
+        name: "Uncaptured".to_string(),
+        payload: serde_json::to_string(&ProfilePayload::default()).unwrap(),
+        sort_order: None,
+        created_at: Some(1_000),
+        updated_at: Some(1_000),
+    };
+    state.db.save_profile(&profile).expect("save profile");
+    let (_, should_stop) =
+        ProfileService::apply(&state, &profile.id, ProfileScope::Claude).expect("apply profile");
+    assert!(
+        !should_stop,
+        "server lifecycle is unchanged even without takeover"
+    );
+    assert!(!ensure_test_home().join(".claude/settings.json").exists());
+}
+
+#[test]
 fn clear_current_profile_only_clears_scoped_marker() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
