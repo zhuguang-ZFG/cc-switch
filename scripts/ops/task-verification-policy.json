@@ -4,6 +4,13 @@
     {
       "root": "@repository",
       "repairOnFailure": true,
+      "protectedPaths": [
+        "scripts/ops/bugfix-cases.mjs",
+        "scripts/ops/compare_omp_bugfix.mjs",
+        "scripts/ops/task-verification-policy.json",
+        "scripts/ops/task-verification-hutuji.json",
+        "scripts/ops/review/"
+      ],
       "checks": [
         {
           "id": "omp-extensions",
@@ -11,6 +18,9 @@
             "scripts/ops/omp-task-verification.js",
             "scripts/ops/task-verification-policy.json",
             "scripts/ops/test_omp_task_verification.js",
+            "scripts/ops/bugfix-cases.mjs",
+            "scripts/ops/compare_omp_bugfix.mjs",
+            "scripts/ops/test_omp_bugfix_cases.js",
             "scripts/ops/omp-problem-solving.js",
             "scripts/ops/omp-sota-escalation.js",
             "scripts/ops/omp-model-routing-observability.js",
@@ -26,6 +36,7 @@
             "--test",
             "--test-reporter=tap",
             "scripts/ops/test_omp_task_verification.js",
+            "scripts/ops/test_omp_bugfix_cases.js",
             "scripts/ops/test_omp_problem_solving.js",
             "scripts/ops/test_omp_sota_escalation.js",
             "scripts/ops/test_omp_model_routing_observability.js",
@@ -65,7 +76,8 @@
           "id": "omp-solving-upgrade",
           "paths": [
             "scripts/ops/deploy-omp-solving-upgrade.py",
-            "scripts/ops/test_deploy_omp_solving_upgrade.py"
+            "scripts/ops/test_deploy_omp_solving_upgrade.py",
+            "scripts/ops/task-verification-hutuji.json"
           ],
           "command": "@python",
           "args": [
@@ -86,7 +98,45 @@
           "command": "@node",
           "args": ["scripts/ops/bench_omp_bugfix.mjs"],
           "evidence": "exit-code",
-          "timeoutMs": 45000
+          "timeoutMs": 60000
+        },
+        {
+          "id": "renderer-types",
+          "paths": [
+            "src/",
+            "tests/",
+            "tsconfig.json",
+            "tsconfig.node.json",
+            "package.json",
+            "pnpm-lock.yaml",
+            "vite.config.ts",
+            "vitest.config.ts"
+          ],
+          "command": "@node",
+          "args": ["node_modules/typescript/bin/tsc", "--noEmit"],
+          "evidence": "exit-code",
+          "timeoutMs": 60000
+        },
+        {
+          "id": "renderer-tests",
+          "paths": [
+            "src/",
+            "tests/",
+            "vitest.config.ts",
+            "vite.config.ts",
+            "tsconfig.json",
+            "tsconfig.node.json",
+            "package.json",
+            "pnpm-lock.yaml"
+          ],
+          "command": "@node",
+          "args": [
+            "node_modules/vitest/vitest.mjs",
+            "run",
+            "--reporter=default"
+          ],
+          "evidence": "vitest",
+          "timeoutMs": 90000
         }
       ]
     }

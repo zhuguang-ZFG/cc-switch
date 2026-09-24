@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { acquireCanaryLease } from "./omp-model-routing-observability.js";
 
-export const EXTENSION_REVISION = "2026.09.25-task-verification-r2";
+export const EXTENSION_REVISION = "2026.09.25-task-verification-r3";
 export const POLICY_NAME = "task-verification-policy.json";
 const exec = promisify(execFile);
 const digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -45,6 +45,34 @@ export function readVerificationPolicy(agentDir, cwd) {
   if (projects.length !== 1) throw new Error("project-not-configured");
   const project = projects[0];
   if (
+    project.workspacePaths !== undefined &&
+    (!Array.isArray(project.workspacePaths) ||
+      !project.workspacePaths.length ||
+      project.workspacePaths.some(
+        (p) =>
+          typeof p !== "string" ||
+          !p ||
+          isAbsolute(p) ||
+          p.includes("\\") ||
+          p.split("/").includes("..") ||
+          /[:*?\[\]]/.test(p),
+      ))
+  )
+    throw new Error("invalid-workspace-paths");
+  if (
+    project.protectedPaths !== undefined &&
+    (!Array.isArray(project.protectedPaths) ||
+      project.protectedPaths.some(
+        (p) =>
+          typeof p !== "string" ||
+          !p ||
+          isAbsolute(p) ||
+          p.includes("\\") ||
+          p.split("/").includes(".."),
+      ))
+  )
+    throw new Error("invalid-protected-paths");
+  if (
     project.repairOnFailure !== undefined &&
     typeof project.repairOnFailure !== "boolean"
   )
@@ -73,7 +101,7 @@ export function readVerificationPolicy(agentDir, cwd) {
       !Number.isInteger(check.timeoutMs) ||
       check.timeoutMs < 100 ||
       check.timeoutMs > 120000 ||
-      !["node-test", "unittest", "exit-code"].includes(check.evidence)
+      !["node-test", "unittest", "vitest", "exit-code"].includes(check.evidence)
     )
       throw new Error("invalid-check");
     ids.add(check.id);
@@ -93,7 +121,7 @@ async function git(cwd, args) {
   ).stdout;
 }
 
-export async function snapshotWorkspace(cwd, baseHead) {
+export async function snapshotWorkspace(cwd, baseHead, workspacePaths = []) {
   const root = canonical(
     (await git(cwd, ["rev-parse", "--show-toplevel"])).trim(),
   );
@@ -107,8 +135,16 @@ export async function snapshotWorkspace(cwd, baseHead) {
       "-z",
       baseHead ?? head,
       "--",
+      ...workspacePaths,
     ]),
-    git(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    git(root, [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      ...workspacePaths,
+    ]),
   ]);
   const files = [
     ...new Set((diff + untracked).split("\0").filter(Boolean)),
@@ -128,7 +164,7 @@ export async function snapshotWorkspace(cwd, baseHead) {
       else throw error;
     }
   }
-  return { root, head, hashes };
+  return { root, head, hashes, scope: workspacePaths };
 }
 
 export function verificationPlan(project, baseline, current) {
@@ -170,6 +206,100 @@ export function verificationPlan(project, baseline, current) {
   };
 }
 
+// Conservative integrity review, not a semantic proof of test quality. Includes
+// committed edits and untracked tests; existing user dirt is the baseline.
+export async function snapshotVerificationInputs(project) {
+  const root = project.root;
+  const files = (
+    await git(root, [
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      ...(project.workspacePaths
+        ? [
+            ...project.workspacePaths,
+            ".gitignore",
+            "package.json",
+            "pnpm-lock.yaml",
+          ]
+        : []),
+    ])
+  )
+    .split("\0")
+    .filter(Boolean);
+  const explicit = (project.checks ?? [])
+    .flatMap((c) => [c.command, ...c.args])
+    .filter((p) => !p.startsWith("-") && inside(root, resolve(root, p)))
+    .map((p) => normalize(relative(root, resolve(root, p))));
+  const selected = [
+    ...new Set([
+      ...files.filter(
+        (file) =>
+          /(^|\/)(tests?|__tests__|__snapshots__)\/|(^|\/)(test_[^/]+|[^/]+[._](test|spec)\.[^/]+)$|(^|\/)(package\.json|.*lock.*|tsconfig[^/]*|vitest[^/]*|vite\.config\.[^/]+|pytest\.ini|pyproject\.toml|conftest\.py|\.gitignore|\.npmrc)$/.test(
+            file,
+          ) ||
+          (project.protectedPaths ?? []).some((p) =>
+            p.endsWith("/") ? file.startsWith(p) : file === p,
+          ),
+      ),
+      ...explicit.filter((p) => {
+        try {
+          return statSync(resolve(root, p)).isFile();
+        } catch (error) {
+          if (error.code === "ENOENT") return files.includes(p);
+          throw error;
+        }
+      }),
+    ]),
+  ].sort();
+  if (selected.length > 5000) throw new Error("verification-input-limit");
+  const hashes = {};
+  let bytes = 0;
+  for (const file of selected) {
+    const path = resolve(root, file);
+    try {
+      if (!inside(root, canonical(path)))
+        throw new Error("external-verification-input");
+      const stat = statSync(path);
+      if (
+        !stat.isFile() ||
+        stat.size > 8 * 1024 * 1024 ||
+        (bytes += stat.size) > 32 * 1024 * 1024
+      )
+        throw new Error("verification-input-limit");
+      hashes[normalize(file)] = digest(readFileSync(path));
+    } catch (error) {
+      if (error.code === "ENOENT") hashes[normalize(file)] = "deleted";
+      else throw error;
+    }
+  }
+  return hashes;
+}
+
+export function verificationInputChanges(before, after) {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter((p) => before[p] !== after[p])
+    .sort()
+    .map((path) => ({
+      path,
+      reason:
+        after[path] === undefined || after[path] === "deleted"
+          ? "verification-input-deleted"
+          : before[path] === undefined
+            ? "verification-input-added"
+            : "verification-input-modified",
+    }));
+}
+
+function integrityError(reason, changes = []) {
+  const error = new Error(reason);
+  error.integrityReport = { status: "unverified", reason, changes, checks: [] };
+  return error;
+}
+
 export function testEvidence(check, result) {
   if (result.timedOut) return { status: "failed", reason: "timeout" };
   if (result.aborted) return { status: "unverified", reason: "cancelled" };
@@ -179,7 +309,14 @@ export function testEvidence(check, result) {
       reason: result.startFailed ? "command-start-failed" : "nonzero-exit",
     };
   if (check.evidence === "exit-code") return { status: "passed" };
-  const output = result.output ?? "";
+  const output = (result.output ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+  if (check.evidence === "vitest") {
+    const summary = output.match(/^\s*Tests\s+(.+)$/m)?.[1] ?? "";
+    const passed = Number(summary.match(/(\d+) passed/)?.[1] ?? 0);
+    return passed > 0 && !/\d+ failed/.test(summary)
+      ? { status: "passed", tests: passed }
+      : { status: "unverified", reason: "no-passing-test-evidence" };
+  }
   if (check.evidence === "node-test") {
     const passed = Number(output.match(/^# pass (\d+)\s*$/m)?.[1] ?? 0);
     const failed = Number(output.match(/^# fail (\d+)\s*$/m)?.[1] ?? 0);
@@ -317,8 +454,13 @@ export function runVerificationCommand(check, cwd, signal) {
     const started = Date.now();
     let child;
     try {
+      const env = { ...process.env };
+      // A parent node:test worker marks children with its private IPC protocol.
+      // Verification must start an independent runner with real exit semantics.
+      delete env.NODE_TEST_CONTEXT;
       child = spawn(check.command, check.args, {
         cwd,
+        env,
         windowsHide: true,
         shell: false,
         detached: process.platform !== "win32",
@@ -328,6 +470,7 @@ export function runVerificationCommand(check, cwd, signal) {
       return resolveResult({ code: null, startFailed: true });
     }
     let output = "";
+    let outputTruncated = false;
     let timedOut = false;
     let aborted = false;
     let finished = false;
@@ -374,6 +517,7 @@ export function runVerificationCommand(check, cwd, signal) {
       resolveResult({
         code,
         output,
+        outputTruncated,
         timedOut,
         aborted,
         startFailed,
@@ -381,6 +525,7 @@ export function runVerificationCommand(check, cwd, signal) {
       });
     };
     const capture = (chunk) => {
+      outputTruncated ||= output.length + String(chunk).length > 64 * 1024;
       output = (output + String(chunk)).slice(-64 * 1024);
     };
     child.stdout?.on("data", capture);
@@ -401,6 +546,7 @@ export async function executeVerification(
     run = runVerificationCommand,
     snapshot = snapshotWorkspace,
     baseHead,
+    guard,
   } = {},
 ) {
   const release = acquireCanaryLease(
@@ -416,6 +562,7 @@ export async function executeVerification(
   const started = Date.now();
   try {
     for (const check of plan.checks) {
+      await guard?.();
       if (signal?.aborted || Date.now() - started >= 120000) {
         results.push({
           id: check.id,
@@ -442,7 +589,12 @@ export async function executeVerification(
           : {}),
       });
     }
-    const after = await snapshot(project.root, baseHead);
+    const after = await snapshot(
+      project.root,
+      baseHead,
+      project.workspacePaths,
+    );
+    await guard?.();
     const afterPlan = verificationPlan(project, undefined, after);
     if (afterPlan.fingerprint !== plan.fingerprint)
       return {
@@ -458,7 +610,15 @@ export async function executeVerification(
           ? "passed"
           : "not-required";
     return {
-      status,
+      status:
+        project.workspacePaths && status !== "failed" ? "unverified" : status,
+      ...(project.workspacePaths
+        ? {
+            reason: "partial-project-coverage",
+            scope: project.workspacePaths,
+            scopedStatus: status,
+          }
+        : {}),
       checks: results,
       uncovered: plan.uncovered,
       documentation: plan.documentation,
@@ -478,11 +638,35 @@ export default function taskVerificationExtension(pi) {
   let state;
   let running;
   let freshInput = true;
+  async function guard(ctx, turn) {
+    if (
+      !turn?.project ||
+      !turn?.inputs ||
+      canonical(ctx.cwd) !== turn.project.root
+    )
+      throw integrityError("verification-baseline-unavailable");
+    if (
+      digest(readFileSync(join(agentDir, POLICY_NAME))) !==
+      turn.project.policyHash
+    )
+      throw integrityError("verification-policy-changed-review-required");
+    const changes = verificationInputChanges(
+      turn.inputs,
+      await snapshotVerificationInputs(turn.project),
+    );
+    if (changes.length)
+      throw integrityError(
+        "verification-inputs-changed-review-required",
+        changes,
+      );
+  }
   async function planFor(ctx, currentState) {
-    const project = readVerificationPolicy(agentDir, ctx.cwd);
+    await guard(ctx, currentState);
+    const project = currentState.project;
     const current = await snapshotWorkspace(
       ctx.cwd,
       currentState?.baseline?.head,
+      project.workspacePaths,
     );
     return {
       project,
@@ -516,14 +700,16 @@ export default function taskVerificationExtension(pi) {
           agentDir,
           signal,
           baseHead: turn.baseline.head,
+          guard: () => guard(ctx, turn),
         });
         return turn.last;
-      } catch {
-        return {
+      } catch (error) {
+        turn.last = error.integrityReport ?? {
           status: "unverified",
           reason: "policy-snapshot-or-runner-unavailable",
           checks: [],
         };
+        return turn.last;
       }
     })();
     try {
@@ -541,8 +727,13 @@ export default function taskVerificationExtension(pi) {
       state = turn;
       freshInput = false;
       try {
-        readVerificationPolicy(agentDir, ctx.cwd);
-        turn.baseline = await snapshotWorkspace(ctx.cwd);
+        turn.project = readVerificationPolicy(agentDir, ctx.cwd);
+        turn.inputs = await snapshotVerificationInputs(turn.project);
+        turn.baseline = await snapshotWorkspace(
+          ctx.cwd,
+          undefined,
+          turn.project.workspacePaths,
+        );
       } catch (error) {
         // Unknown projects are opt-in. Broken configured verification must be visible.
         if (error.message !== "project-not-configured") {
@@ -563,7 +754,7 @@ export default function taskVerificationExtension(pi) {
         customType: "task-verification-policy",
         display: false,
         content:
-          "For code changes, use task_verify before claiming completion. It runs only operator-configured checks; report passed, failed and unverified separately. A checkpoint's test notes are not test evidence. Fix failures and rerun; do not treat a missing check as success. When GitNexus MCP is available, list indexed repositories, then use context/impact for the current repository. GitNexus 1.6.5 on Windows disables full-text search: use rg for keyword search, not empty query results as proof of absence. Check index freshness and corroborate graph results with source; do not automatically reindex unrelated projects.",
+          "For code changes, use task_verify before claiming completion. It runs only operator-configured checks; report passed, failed and unverified separately. Tests, runner inputs and policy are pinned at turn start. Editing/deleting/adding these requires review and stays unverified, including legitimate regression additions; explain the changes and request review before a new user turn establishes a baseline. Do not weaken assertions, skip tests or change policy to get a pass. A checkpoint's test notes are not test evidence. Fix failures and rerun; do not treat a missing check as success. When GitNexus MCP is available, list indexed repositories, then use context/impact for the current repository. GitNexus 1.6.5 on Windows disables full-text search: use rg for keyword search, not empty query results as proof of absence. Check index freshness and corroborate graph results with source; do not automatically reindex unrelated projects.",
       },
     };
   });
@@ -595,8 +786,11 @@ export default function taskVerificationExtension(pi) {
                 status: "unverified",
                 reason: "files-changed-since-verification",
               };
-          } catch {
-            report = { status: "unverified", reason: "snapshot-unavailable" };
+          } catch (error) {
+            report = error.integrityReport ?? {
+              status: "unverified",
+              reason: "snapshot-unavailable",
+            };
           }
         }
       } else if (params.action === "plan") {
@@ -611,9 +805,10 @@ export default function taskVerificationExtension(pi) {
               args: c.args,
             })),
             uncovered: plan.uncovered,
+            scope: state?.project?.workspacePaths ?? ["."],
           };
-        } catch {
-          report = {
+        } catch (error) {
+          report = error.integrityReport ?? {
             status: "unverified",
             reason: "project-or-policy-unavailable",
           };
@@ -646,11 +841,12 @@ export default function taskVerificationExtension(pi) {
       try {
         const continuation = repairContinuation(
           report,
-          readVerificationPolicy(agentDir, ctx.cwd),
+          turn.project,
           event,
           turn.repairUsed,
         );
         if (continuation) {
+          await guard(ctx, turn);
           turn.repairUsed = true;
           return continuation;
         }

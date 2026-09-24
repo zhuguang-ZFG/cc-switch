@@ -20,9 +20,241 @@ import extension, {
   verificationPlan,
   failureDiagnostic,
   repairContinuation,
+  snapshotVerificationInputs,
+  verificationInputChanges,
 } from "./omp-task-verification.js";
 import { acquireCanaryLease } from "./omp-model-routing-observability.js";
 import { createHash } from "node:crypto";
+
+test(
+  "integrity snapshots catch assertion edits, skips, deletions, additions and committed changes",
+  fixture(async (root) => {
+    init(root);
+    const file = join(root, "regression.test.cjs");
+    writeFileSync(file, "test('works',()=>assert.equal(1,1));");
+    const project = { root, checks: [] };
+    const baseline = await snapshotVerificationInputs(project);
+    assert.deepEqual(
+      verificationInputChanges(
+        baseline,
+        await snapshotVerificationInputs(project),
+      ),
+      [],
+    );
+    for (const text of [
+      "test.skip('works',()=>assert.equal(1,1));",
+      "test('works',()=>{});",
+    ]) {
+      writeFileSync(file, text);
+      assert.equal(
+        verificationInputChanges(
+          baseline,
+          await snapshotVerificationInputs(project),
+        )[0].reason,
+        "verification-input-modified",
+      );
+    }
+    execFileSync("git", ["add", "regression.test.cjs"], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@localhost",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=none",
+        "commit",
+        "-m",
+        "test edit",
+      ],
+      { cwd: root, stdio: "ignore" },
+    );
+    assert.equal(
+      verificationInputChanges(
+        baseline,
+        await snapshotVerificationInputs(project),
+      ).length,
+      1,
+    );
+    rmSync(file);
+    assert.equal(
+      verificationInputChanges(
+        baseline,
+        await snapshotVerificationInputs(project),
+      )[0].reason,
+      "verification-input-deleted",
+    );
+    writeFileSync(join(root, "new.test.cjs"), "test.only('new',()=>{});");
+    assert.equal(
+      verificationInputChanges(
+        baseline,
+        await snapshotVerificationInputs(project),
+      ).length,
+      2,
+    );
+  }),
+);
+
+test(
+  "pinned policy rejects replacement commands before execution and invalidates cached success",
+  fixture(async (root) => {
+    init(root);
+    const agent = join(root, ".agent");
+    policy(root, agent);
+    const handlers = new Map();
+    let tool;
+    extension({
+      pi: { getAgentDir: () => agent },
+      on: (n, f) => handlers.set(n, f),
+      registerTool: (t) => (tool = t),
+      sendMessage: () => {},
+    });
+    const ctx = { cwd: root };
+    await handlers.get("before_agent_start")({}, ctx);
+    writeFileSync(join(root, "subject.js"), "changed");
+    assert.equal(
+      (await tool.execute("a", { action: "run" }, null, null, ctx)).details
+        .status,
+      "passed",
+    );
+    policy(root, agent, [
+      check({
+        args: ["-e", "require('node:fs').writeFileSync('executed.txt','bad')"],
+      }),
+    ]);
+    for (const action of ["status", "run", "plan"]) {
+      const r = await tool.execute("b", { action }, null, null, ctx);
+      assert.equal(
+        r.details.reason,
+        "verification-policy-changed-review-required",
+      );
+    }
+    assert.throws(() => readFileSync(join(root, "executed.txt")), {
+      code: "ENOENT",
+    });
+  }),
+);
+
+test(
+  "test edits refuse automatic repair and do not disappear on extension continuation",
+  fixture(async (root) => {
+    init(root);
+    const agent = join(root, ".agent");
+    policy(root, agent);
+    writeFileSync(join(root, "regression.test.cjs"), "original assertions");
+    const handlers = new Map();
+    let tool;
+    const messages = [];
+    extension({
+      pi: { getAgentDir: () => agent },
+      on: (n, f) => handlers.set(n, f),
+      registerTool: (t) => (tool = t),
+      sendMessage: (m) => messages.push(m),
+    });
+    const ctx = { cwd: root };
+    await handlers.get("before_agent_start")({}, ctx);
+    writeFileSync(join(root, "regression.test.cjs"), "test.skip");
+    handlers.get("input")({ source: "extension" });
+    await handlers.get("before_agent_start")({}, ctx);
+    assert.equal(await handlers.get("session_stop")({}, ctx), undefined);
+    assert.equal(
+      JSON.parse(messages[0].content).reason,
+      "verification-inputs-changed-review-required",
+    );
+    assert.equal(
+      (await tool.execute("a", { action: "run" }, null, null, ctx)).details
+        .status,
+      "unverified",
+    );
+  }),
+);
+
+test(
+  "scoped checks explicitly leave the rest of a project unverified",
+  fixture(async (root) => {
+    init(root);
+    mkdirSync(join(root, "included"));
+    writeFileSync(join(root, "included", "code.js"), "a");
+    const project = {
+      root,
+      workspacePaths: ["included/"],
+      checks: [check({ paths: ["included/"] })],
+      policyHash: "fixture",
+    };
+    const baseline = await snapshotWorkspace(
+      root,
+      undefined,
+      project.workspacePaths,
+    );
+    writeFileSync(join(root, "included", "code.js"), "b");
+    writeFileSync(join(root, "outside.js"), "outside scope");
+    const current = await snapshotWorkspace(
+      root,
+      baseline.head,
+      project.workspacePaths,
+    );
+    const plan = verificationPlan(project, baseline, current);
+    assert.deepEqual(plan.files, ["included/code.js"]);
+    const report = await executeVerification(plan, project, {
+      agentDir: root,
+      baseHead: baseline.head,
+    });
+    assert.equal(report.status, "unverified");
+    assert.equal(report.scopedStatus, "passed");
+    assert.deepEqual(report.scope, ["included/"]);
+  }),
+);
+
+test(
+  "ignored explicit runner edits and inputs changed during verification invalidate evidence",
+  fixture(async (root) => {
+    init(root);
+    mkdirSync(join(root, ".agent"));
+    const runner = join(root, ".agent", "runner.cjs");
+    writeFileSync(runner, "process.exit(0)");
+    const project = { root, checks: [check({ args: [".agent/runner.cjs"] })] };
+    const before = await snapshotVerificationInputs(project);
+    writeFileSync(runner, "process.exit(1)");
+    assert.equal(
+      verificationInputChanges(
+        before,
+        await snapshotVerificationInputs(project),
+      )[0].path,
+      ".agent/runner.cjs",
+    );
+    const agent = join(root, ".agent");
+    policy(root, agent, [
+      check({
+        args: [
+          "-e",
+          "require('node:fs').writeFileSync('.agent/task-verification-policy.json','{}')",
+        ],
+      }),
+    ]);
+    const handlers = new Map();
+    let tool;
+    extension({
+      pi: { getAgentDir: () => agent },
+      on: (n, f) => handlers.set(n, f),
+      registerTool: (t) => (tool = t),
+      sendMessage: () => {},
+    });
+    const ctx = { cwd: root };
+    await handlers.get("before_agent_start")({}, ctx);
+    writeFileSync(join(root, "subject.js"), "changed");
+    const report = await tool.execute("a", { action: "run" }, null, null, ctx);
+    assert.equal(
+      report.details.reason,
+      "verification-policy-changed-review-required",
+    );
+  }),
+);
 
 function fixture(fn) {
   return async () => {
@@ -115,6 +347,23 @@ test("planner includes reverted baseline changes, excludes unchanged user work a
 });
 
 test("test evidence rejects zero tests, all-skipped tests, failures, timeout and cancellation", () => {
+  const vitest = check({ evidence: "vitest" });
+  assert.equal(
+    testEvidence(vitest, { code: 0, output: " Tests 502 passed (502)\n" })
+      .tests,
+    502,
+  );
+  assert.equal(
+    testEvidence(vitest, { code: 0, output: " Tests 4 skipped (4)\n" }).status,
+    "unverified",
+  );
+  assert.equal(
+    testEvidence(vitest, {
+      code: 0,
+      output: " Tests 1 failed | 3 passed (4)\n",
+    }).status,
+    "unverified",
+  );
   const node = check({ evidence: "node-test" });
   assert.equal(
     testEvidence(node, { code: 0, output: "# pass 0\n# fail 0\n" }).status,

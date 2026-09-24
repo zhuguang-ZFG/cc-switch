@@ -1,5 +1,8 @@
 # OMP evidence-driven bug-fix loop
 
+Historical r2 rollout. The subsequent [integrity and evaluation upgrade](omp-verification-integrity-2026-09-25.md)
+documents current project coverage, r3 verification behavior and rollback.
+
 This upgrades the existing problem-solving and task-verification extensions.
 It improves the feedback available to the model and tests the repair workflow;
 it is not a claim that prompts make every model equally capable.
@@ -35,11 +38,11 @@ global OMP package and CCS are preserved. Start a new OMP session to activate.
 `node scripts/ops/bench_omp_bugfix.mjs` uses isolated repositories, a local SSE
 fixture and the real OMP binary:
 
-| Scenario | Observed result |
-| --- | --- |
-| Bad pagination patch followed by a valid repair | Verification triggered one continuation; regression and independent holdout passed; four model requests |
-| Model continues to claim completion without fixing | One continuation, then stop; three requests; tests remain failing |
-| Configured command reports HTTP 403 | No repair continuation; two requests; failure remains visible |
+| Scenario                                           | Observed result                                                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Bad pagination patch followed by a valid repair    | Verification triggered one continuation; regression and independent holdout passed; four model requests |
+| Model continues to claim completion without fixing | One continuation, then stop; three requests; tests remain failing                                       |
+| Configured command reports HTTP 403                | No repair continuation; two requests; failure remains visible                                           |
 
 The deterministic fixture proves control flow, not model intelligence.
 

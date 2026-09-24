@@ -1,0 +1,37 @@
+{
+  "root": "@hutuji",
+  "repairOnFailure": true,
+  "workspacePaths": ["draw-portal/weapp/", "draw-portal/tests/weapp/"],
+  "protectedPaths": ["draw-portal/tests/weapp/"],
+  "checks": [
+    {
+      "id": "weapp-offline-tests",
+      "paths": ["draw-portal/weapp/", "draw-portal/tests/weapp/"],
+      "command": "@node",
+      "args": [
+        "--test",
+        "--test-reporter=tap",
+        "draw-portal/tests/weapp/api_response.test.js",
+        "draw-portal/tests/weapp/chat.test.js",
+        "draw-portal/tests/weapp/control_latency.test.js",
+        "draw-portal/tests/weapp/control_speed.test.js",
+        "draw-portal/tests/weapp/drawpad.test.js",
+        "draw-portal/tests/weapp/font_picker.test.js",
+        "draw-portal/tests/weapp/history.test.js",
+        "draw-portal/tests/weapp/index.test.js",
+        "draw-portal/tests/weapp/market.test.js",
+        "draw-portal/tests/weapp/page_lifecycle.test.js",
+        "draw-portal/tests/weapp/paper.test.js",
+        "draw-portal/tests/weapp/preview_cache.test.js",
+        "draw-portal/tests/weapp/profile.test.js",
+        "draw-portal/tests/weapp/session.test.js",
+        "draw-portal/tests/weapp/share.test.js",
+        "draw-portal/tests/weapp/subscribe.test.js",
+        "draw-portal/tests/weapp/voice_recording.test.js",
+        "draw-portal/tests/weapp/wifi.test.js"
+      ],
+      "evidence": "node-test",
+      "timeoutMs": 30000
+    }
+  ]
+}

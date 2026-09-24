@@ -43,6 +43,37 @@ class UpgradeTests(unittest.TestCase):
         for name, relative in deploy.FILES.items():
             self.assertEqual((self.agent / relative).read_bytes(), self.before[name])
 
+    def test_upgrades_current_manifest_and_preserves_extra_projects(self):
+        first = deploy.deploy(self.previous, self.agent)
+        second = deploy.deploy(first, self.agent)
+        deploy.rollback(second, self.agent)
+        deploy.rollback(first, self.agent)
+        for name, relative in deploy.FILES.items():
+            self.assertEqual((self.agent / relative).read_bytes(), self.before[name])
+
+    def test_additional_project_is_explicit_and_requires_test_entries(self):
+        with tempfile.TemporaryDirectory(prefix="omp-project-") as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            template = json.loads((deploy.REPO / "scripts/ops/task-verification-hutuji.json").read_text())
+            with self.assertRaises(FileNotFoundError):
+                deploy.deploy(self.previous, self.agent, hutuji_root=root)
+            self.assertFalse((self.agent / "extension-backups").exists())
+            for check in template["checks"]:
+                for arg in check["args"]:
+                    if not arg.startswith("-"):
+                        path = root / arg
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text("fixture")
+            first = deploy.deploy(self.previous, self.agent, hutuji_root=root)
+            policy = json.loads((self.agent / "task-verification-policy.json").read_text())
+            self.assertEqual(policy["projects"][1]["root"], str(root.resolve()))
+            self.assertEqual(policy["projects"][0]["root"], str(self.agent))
+            second = deploy.deploy(first, self.agent)
+            self.assertEqual(json.loads((self.agent / "task-verification-policy.json").read_text())["projects"][1], policy["projects"][1])
+            deploy.rollback(second, self.agent)
+            deploy.rollback(first, self.agent)
+
     def test_partial_write_restores_pair_and_policy(self):
         real = deploy.replace_verified
         calls = 0

@@ -31,12 +31,14 @@ def rollback(manifest_path: Path, agent: Path = AGENT) -> None:
         replace_verified(manifest_path.parent / item["name"], agent / FILES[item["name"]], item["before"])
 
 
-def deploy(previous_manifest: Path, agent: Path = AGENT, source: Path = REPO / "scripts/ops") -> Path:
+def deploy(previous_manifest: Path, agent: Path = AGENT, source: Path = REPO / "scripts/ops", hutuji_root: Path | None = None) -> Path:
     previous = json.loads(previous_manifest.read_text(encoding="utf-8"))
     if Path(previous["agent"]).resolve() != agent.resolve():
         raise RuntimeError("Baseline agent mismatch")
     expected = {item["name"]: item["after"] for item in previous["files"]}
-    expected["omp-problem-solving.js"] = previous["existing_extensions"]["extensions\\omp-problem-solving.js" if "extensions\\omp-problem-solving.js" in previous["existing_extensions"] else "extensions/omp-problem-solving.js"]
+    if "omp-problem-solving.js" not in expected:
+        extensions = {k.replace("\\", "/"): v for k, v in previous.get("existing_extensions", {}).items()}
+        expected["omp-problem-solving.js"] = extensions["extensions/omp-problem-solving.js"]
     for name, relative in FILES.items():
         if digest(agent / relative) != expected[name]:
             raise RuntimeError("Unreviewed baseline drift")
@@ -55,6 +57,26 @@ def deploy(previous_manifest: Path, agent: Path = AGENT, source: Path = REPO / "
         project["root"] = old_project["root"]
         for check in project["checks"]:
             check["command"] = commands[check["command"]]
+    # Preserve existing explicitly configured external projects on future upgrades.
+    policy["projects"].extend(p for p in old_policy["projects"][1:])
+    if hutuji_root is not None:
+        root = hutuji_root.resolve(strict=True)
+        if not (root / ".git").exists():
+            raise RuntimeError("Additional project is not a Git checkout")
+        project = json.loads((source / "task-verification-hutuji.json").read_text(encoding="utf-8"))
+        project["root"] = str(root)
+        for check in project["checks"]:
+            check["command"] = commands[check["command"]]
+            for name in check["args"]:
+                if not name.startswith("-"):
+                    path = (root / name).resolve(strict=True)
+                    if not path.is_relative_to(root) or not path.is_file():
+                        raise RuntimeError("Additional project test entry unavailable")
+        policy["projects"] = [p for p in policy["projects"] if Path(p["root"]).resolve() != root]
+        policy["projects"].append(project)
+    for executable in commands.values():
+        if not Path(executable).is_absolute() or not Path(executable).is_file():
+            raise RuntimeError("Verification executable unavailable")
     protected = {str(p.relative_to(agent)): digest(p) for p in (agent / "extensions").rglob("*.js") if str(p.relative_to(agent)).replace("\\", "/") not in FILES.values()}
     protected.update({name: digest(agent / name) for name in ("config.yml", "models.yml", "mcp.json", "sota-review-policy.json")})
     backup = agent / "extension-backups" / f"solving-upgrade-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}"
@@ -97,11 +119,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--previous-manifest", type=Path)
     parser.add_argument("--rollback", type=Path)
+    parser.add_argument("--hutuji-root", type=Path)
     args = parser.parse_args()
     if args.rollback:
         rollback(args.rollback)
         print("Rollback verified; start a new OMP session.")
     elif args.previous_manifest:
-        print(json.dumps({"manifest": str(deploy(args.previous_manifest)), "restart_performed": False}))
+        print(json.dumps({"manifest": str(deploy(args.previous_manifest, hutuji_root=args.hutuji_root)), "restart_performed": False}))
     else:
         parser.error("Provide --previous-manifest or --rollback")

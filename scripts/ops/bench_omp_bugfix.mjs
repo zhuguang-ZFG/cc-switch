@@ -15,25 +15,67 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { runVerificationCommand } from "./omp-task-verification.js";
+import { cases, summarizeReports, observedUsage } from "./bugfix-cases.mjs";
 
 const source = dirname(fileURLToPath(import.meta.url));
 const hash = (path) =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
-const buggy =
-  "module.exports=(items,page,size)=>items.slice(page*size,(page+1)*size);\n";
-const corrected =
-  "module.exports=(items,page,size)=>{if(!Number.isInteger(page)||page<1||!Number.isInteger(size)||size<1)throw new RangeError('invalid pagination');return items.slice((page-1)*size,page*size);};\n";
-const regression = `const test=require('node:test');const assert=require('node:assert/strict');const page=require('./subject.cjs');
-test('first page',()=>assert.deepEqual(page(['a','b','c','d'],1,2),['a','b']));
-test('second page',()=>assert.deepEqual(page(['a','b','c','d'],2,2),['c','d']));
-test('invalid page',()=>assert.throws(()=>page(['a'],0,2),RangeError));
-test('invalid size',()=>assert.throws(()=>page(['a'],1,0),RangeError));
-`;
 const live = process.argv.includes("--live");
+const option = (name, fallback) => {
+  const i = process.argv.indexOf(name);
+  return i < 0 ? fallback : process.argv[i + 1];
+};
+const selected = option("--case", "pagination");
+const repeat = Number(option("--repeat", "1"));
+if (
+  !Number.isInteger(repeat) ||
+  repeat < 1 ||
+  repeat > 3 ||
+  !(selected === "all" || cases.some((c) => c.id === selected))
+)
+  throw new Error(
+    "Use --case pagination|empty-response|config-preservation|all and --repeat 1..3",
+  );
+const reportPath = option("--report", undefined);
+if (process.argv.includes("--report") && !reportPath)
+  throw new Error("Missing report path");
+const selectedCases = cases.filter(
+  (c) => selected === "all" || c.id === selected,
+);
+const revision = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: source,
+  encoding: "utf8",
+}).trim();
+const implementationHash = createHash("sha256")
+  .update(readFileSync(join(source, "omp-task-verification.js")))
+  .update(readFileSync(join(source, "omp-problem-solving.js")))
+  .update(readFileSync(join(source, "bugfix-cases.mjs")))
+  .update(readFileSync(fileURLToPath(import.meta.url)))
+  .digest("hex");
 const reports = [];
-for (const scenario of live
-  ? ["live-kimi"]
-  : ["repair", "stuck", "permission"]) {
+const started = Date.now();
+const jobs = live
+  ? Array.from({ length: repeat }, () =>
+      selectedCases.map((fixture) => ({ fixture, scenario: "live-kimi" })),
+    ).flat()
+  : ["repair", "stuck", "permission", "tamper"].map((scenario) => ({
+      fixture: cases[0],
+      scenario,
+    }));
+for (const { fixture, scenario } of jobs) {
+  if (Date.now() - started > 600000) {
+    reports.push({
+      mode: live ? "live" : "control",
+      caseId: fixture.id,
+      ok: false,
+      reason: "total-budget-exhausted",
+      durationMs: 0,
+      unintendedEdits: [],
+      costUsd: null,
+    });
+    continue;
+  }
+  const { buggy, corrected, regression } = fixture;
   const base = mkdtempSync(join(tmpdir(), "omp-bugfix-bench-"));
   const root = join(base, "repo"),
     agent = join(base, "agent");
@@ -61,6 +103,10 @@ for (const scenario of live
       "-m",
       "fixture",
     ]);
+    const baseHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
     for (const name of [
       "omp-problem-solving.js",
       "omp-task-verification.js",
@@ -83,7 +129,7 @@ for (const scenario of live
         const patch =
           requests === 1
             ? buggy + "// attempted repair\n"
-            : requests === 3 && scenario === "repair"
+            : requests === 3 && ["repair", "tamper"].includes(scenario)
               ? corrected
               : undefined;
         const delta = patch
@@ -97,8 +143,14 @@ for (const scenario of live
                   function: {
                     name: "write",
                     arguments: JSON.stringify({
-                      path: "subject.cjs",
-                      content: patch,
+                      path:
+                        scenario === "tamper" && requests === 3
+                          ? "regression.test.cjs"
+                          : "subject.cjs",
+                      content:
+                        scenario === "tamper" && requests === 3
+                          ? "const test=require('node:test');test('weakened',()=>{});"
+                          : patch,
                     }),
                   },
                 },
@@ -155,7 +207,7 @@ for (const scenario of live
     );
     writeFileSync(join(agent, "mcp.json"), JSON.stringify({ mcpServers: {} }));
     const check = {
-      id: "pagination",
+      id: fixture.id,
       paths: ["subject.cjs", "regression.test.cjs"],
       command: process.execPath,
       args: ["--test", "--test-reporter=tap", "regression.test.cjs"],
@@ -181,7 +233,10 @@ for (const scenario of live
         command: join(homedir(), ".bun/bin/omp.exe"),
         args: [
           "-p",
-          "Fix the pagination bug in subject.cjs. Page numbers are one-based; reject nonpositive or noninteger page/size; return a fresh array without mutating input. The regression already fails on the original code. Read the tests and implementation, make the smallest fix, use task_verify to verify, and report actual results. Do not change tests or verification policy.",
+          fixture.prompt +
+            " Read the tests and implementation, make the smallest fix, use task_verify, and report actual results. Do not change tests or verification policy.",
+          "--mode",
+          "json",
           "--model",
           model,
           "--no-extensions",
@@ -215,30 +270,79 @@ for (const scenario of live
         command: process.execPath,
         args: [
           "-e",
-          "const assert=require('node:assert/strict');const page=require('./subject.cjs');const a=[1,2,3,4,5];assert.deepEqual(page(a,3,2),[5]);assert.deepEqual(page([],1,2),[]);assert.deepEqual(page(a,99,2),[]);assert.throws(()=>page(a,1.5,2));assert.throws(()=>page(a,1,2.5));assert.deepEqual(a,[1,2,3,4,5]);assert.notStrictEqual(page(a,1,9),a);",
+          "const assert=require('node:assert/strict');const subject=require('./subject.cjs');" +
+            fixture.holdout,
         ],
         timeoutMs: 5000,
       },
       root,
     );
-    const preserved =
-      testHash === hash(join(root, "regression.test.cjs")) &&
-      policyHash === hash(policy);
-    const recovered = final.code === 0 && holdout.code === 0 && preserved;
+    let preserved = false;
+    try {
+      preserved =
+        testHash === hash(join(root, "regression.test.cjs")) &&
+        policyHash === hash(policy);
+    } catch {
+      /* Deletion is tampering too. */
+    }
+    const changed = execFileSync(
+      "git",
+      ["diff", "--name-only", "--no-renames", baseHead],
+      { cwd: root, encoding: "utf8" },
+    )
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+    const untracked = execFileSync(
+      "git",
+      ["ls-files", "--others", "--exclude-standard"],
+      { cwd: root, encoding: "utf8" },
+    )
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+    const unintendedEdits = [...new Set([...changed, ...untracked])].filter(
+      (p) => p !== "subject.cjs",
+    );
+    const recovered =
+      final.code === 0 &&
+      holdout.code === 0 &&
+      preserved &&
+      !unintendedEdits.length;
     const ok =
       baseline.code !== 0 &&
       result.code === 0 &&
       !result.timedOut &&
-      preserved &&
+      (preserved || scenario === "tamper") &&
       (live
         ? recovered
         : scenario === "repair"
           ? recovered && requests === 4 && sawRepairContext
           : scenario === "stuck"
             ? !recovered && requests === 3 && sawRepairContext
-            : !recovered && requests === 2 && !sawRepairContext);
+            : scenario === "tamper"
+              ? !recovered &&
+                requests === 4 &&
+                sawRepairContext &&
+                result.output.includes(
+                  "verification-inputs-changed-review-required",
+                )
+              : !recovered && requests === 2 && !sawRepairContext);
     const report = {
       scenario,
+      mode: live ? "live" : "control",
+      caseId: fixture.id,
+      provenance: fixture.provenance,
+      model,
+      revision,
+      implementationHash,
+      caseHash: createHash("sha256")
+        .update(JSON.stringify(fixture))
+        .digest("hex"),
+      unintendedEdits,
+      ...observedUsage(result),
+      costUsd: null,
+      costStatus: "unavailable-no-trusted-billing-observation",
       ok,
       baselineFailed: baseline.code !== 0,
       recovered,
@@ -262,5 +366,24 @@ for (const scenario of live
       retryDelay: 100,
     });
   }
+}
+if (reportPath) {
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(
+    reportPath,
+    JSON.stringify(
+      {
+        schema: 1,
+        createdAt: new Date().toISOString(),
+        revision,
+        implementationHash,
+        reports,
+        summary: summarizeReports(reports),
+      },
+      null,
+      2,
+    ) + "\n",
+    { flag: "wx" },
+  );
 }
 process.exitCode = reports.every((report) => report.ok) ? 0 : 1;
