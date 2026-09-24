@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "projects": [
+    {
+      "root": "@repository",
+      "checks": [
+        {
+          "id": "omp-extensions",
+          "paths": [
+            "scripts/ops/omp-task-verification.js",
+            "scripts/ops/task-verification-policy.json",
+            "scripts/ops/test_omp_task_verification.js",
+            "scripts/ops/omp-problem-solving.js",
+            "scripts/ops/omp-sota-escalation.js",
+            "scripts/ops/omp-model-routing-observability.js",
+            "scripts/ops/omp-unexpected-stop-guard.js",
+            "scripts/ops/review/",
+            "scripts/ops/test_omp_problem_solving.js",
+            "scripts/ops/test_omp_sota_escalation.js",
+            "scripts/ops/test_omp_model_routing_observability.js",
+            "scripts/ops/test_omp_unexpected_stop_guard.js"
+          ],
+          "command": "@node",
+          "args": [
+            "--test",
+            "--test-reporter=tap",
+            "scripts/ops/test_omp_task_verification.js",
+            "scripts/ops/test_omp_problem_solving.js",
+            "scripts/ops/test_omp_sota_escalation.js",
+            "scripts/ops/test_omp_model_routing_observability.js",
+            "scripts/ops/test_omp_unexpected_stop_guard.js"
+          ],
+          "evidence": "node-test",
+          "timeoutMs": 60000
+        },
+        {
+          "id": "omp-verification-deployment",
+          "paths": [
+            "scripts/ops/deploy-omp-verification.py",
+            "scripts/ops/test_deploy_omp_verification.py"
+          ],
+          "command": "@python",
+          "args": [
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "scripts/ops",
+            "-p",
+            "test_deploy_omp_verification.py"
+          ],
+          "evidence": "unittest",
+          "timeoutMs": 60000
+        },
+        {
+          "id": "omp-native-verification",
+          "paths": ["scripts/ops/probe_omp_verification.py"],
+          "command": "@python",
+          "args": ["scripts/ops/probe_omp_verification.py"],
+          "evidence": "exit-code",
+          "timeoutMs": 90000
+        }
+      ]
+    }
+  ]
+}
