@@ -6,7 +6,7 @@ watchdog 崩溃记录、new-api 进程存活、看门狗计划任务上次结果
 （0x800710E0 挂起类）、start.ps1 BOM/-Wait 完整性、watchdog.ps1 ASCII 契约、
 NewAPI 渠道健康、关键日志大小、磁盘余量。
 退出码：0 = 全绿；1 = 有失败项（供计划任务/告警判断）。
-用法：python scripts/ops/system-health-check.py [--json]
+用法：python scripts/ops/system-health-check.py [--json] [--no-log]
 """
 import json
 import os
@@ -25,6 +25,11 @@ NEWAPI_LOCAL = HOME / ".new-api-local"
 RESULT: list[dict] = []
 DX_SMOKE_TASK = "CCSwitch-NewAPI-DX-Ops"
 DX_SMOKE_STALE_SEC = 5 * 60 * 60
+EXPECTED_SUPERVISOR_SERVICES = frozenset({
+    "agentrouter", "anyrouter", "omp-ttft", "justwoker-relay",
+    "cc-switch-proxy", "codex-relay-15999", "codex-relay-16000",
+    "mistral-relay-16001",
+})
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -54,16 +59,38 @@ def fresh_json(path: Path, stale_sec: int) -> tuple[bool, dict]:
     """返回 (是否新鲜, 解析后的内容)。"""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return False, {}
         ts = data.get("ts") or data.get("timestamp", "")
+        if isinstance(ts, bool):
+            return False, data
         if isinstance(ts, str):
             from datetime import datetime
             t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             age = (datetime.now(t.tzinfo) - t).total_seconds()
         else:
             age = time.time() - float(ts)
-        return age <= stale_sec, data
+        return -60 <= age <= stale_sec, data
     except Exception:
         return False, {}
+
+
+def supervisor_violations(data: dict) -> list[str]:
+    """Fail closed for incomplete or malformed supervisor snapshots."""
+    services = data.get("services")
+    if not isinstance(services, dict):
+        return ["missing or invalid services"]
+    violations = [f"missing service: {name}" for name in
+                  sorted(EXPECTED_SUPERVISOR_SERVICES - services.keys())]
+    for name, status in services.items():
+        if not isinstance(status, dict):
+            violations.append(f"{name}: invalid status")
+            continue
+        if status.get("healthy") is not True:
+            violations.append(f"{name}: healthy is not true")
+        if status.get("restartBlocked") is not False:
+            violations.append(f"{name}: restartBlocked is not false")
+    return violations
 
 
 def scheduled_task_status(
@@ -186,6 +213,7 @@ def query_relay_owner_violations() -> list[str]:
 
 
 def main() -> int:
+    RESULT.clear()
     # ── NewAPI 与网关 ─────────────────────────────────────────────
     st = http_status("http://127.0.0.1:3002/api/status")
     check("newapi 3002", st == 200, f"HTTP {st}")
@@ -196,6 +224,7 @@ def main() -> int:
     proxies = {
         "agentrouter 8788": (8788, "100.83.32.95"),
         "anyrouter 8789": (8789, "127.0.0.1"),
+        "justwoker 8790": (8790, "127.0.0.1"),
         "codex-relay 15999": (15999, "127.0.0.1"),
         "codex-relay 16000": (16000, "127.0.0.1"),
         "mistral-relay 16001": (16001, "127.0.0.1"),
@@ -219,8 +248,7 @@ def main() -> int:
     check("guardian 进程存活", bool(g_proc) and g_proc.lower().startswith("pythonw"), f"name={g_proc or 'none'}")
 
     s_fresh, s_data = fresh_json(GUARDIAN / "supervisor-status.json", 180)
-    services = s_data.get("services", {})
-    bad = [k for k, v in services.items() if not v.get("healthy")]
+    bad = supervisor_violations(s_data)
     check("supervisor 状态", s_fresh and not bad, f"all_ok={s_fresh and not bad} bad={bad or '无'}")
 
     crash = GUARDIAN / "watchdog-crash.log"
@@ -302,17 +330,22 @@ def main() -> int:
     failed = [r for r in RESULT if not r["ok"]]
     # 结果追加到健康日志（脚本内写文件，避免计划任务重定向引号问题）
     try:
-        with open(GUARDIAN / "health-check.log", "a", encoding="utf-8") as f:
-            f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-            for r in RESULT:
-                f.write(f"[{'OK ' if r['ok'] else 'FAIL'}] {r['name']}" + (f" — {r['detail']}\n" if r['detail'] else "\n"))
-            f.write(f"summary: {len(RESULT) - len(failed)}/{len(RESULT)} OK\n")
+        if "--no-log" not in sys.argv:
+            append_health_log(failed)
     except OSError:
         pass
     if "--json" in sys.argv:
         print(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "total": len(RESULT), "failed": len(failed), "results": RESULT}, ensure_ascii=False))
     print(f"\nsummary: {len(RESULT) - len(failed)}/{len(RESULT)} OK" + (" — ALL GREEN" if not failed else f" — {len(failed)} FAILED"))
     return 1 if failed else 0
+
+
+def append_health_log(failed: list[dict]) -> None:
+    with open(GUARDIAN / "health-check.log", "a", encoding="utf-8") as f:
+        f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        for r in RESULT:
+            f.write(f"[{'OK ' if r['ok'] else 'FAIL'}] {r['name']}" + (f" — {r['detail']}\n" if r['detail'] else "\n"))
+        f.write(f"summary: {len(RESULT) - len(failed)}/{len(RESULT)} OK\n")
 
 
 if __name__ == "__main__":

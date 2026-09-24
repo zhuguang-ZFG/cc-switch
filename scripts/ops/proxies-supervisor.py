@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 import urllib.request
 import ctypes
@@ -325,14 +326,46 @@ def write_status(services: dict[str, dict], restarts: dict[str, int], last_backu
 
 
 
+def restore_restart_state() -> tuple[str, str, dict[str, int]]:
+    """Keep restart budgets and completed daily maintenance across restarts."""
+    today = time.strftime("%Y-%m-%d")
+    try:
+        data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+        age = time.time() - datetime.fromisoformat(data["ts"]).timestamp()
+        if not 0 <= age < 86400:
+            raise ValueError("snapshot outside recovery window")
+        services = data["services"]
+        counts = data["restarts_today"]
+        if not isinstance(services, dict) or not isinstance(counts, dict):
+            raise ValueError("invalid restart snapshot")
+        if age < 3600:
+            recovered = {}
+            for name in PROXIES:
+                count = services.get(name, {}).get("restartsLastHour", 0)
+                if type(count) is not int or count < 0:
+                    raise ValueError("invalid hourly restart count")
+                # Exact restart times are unavailable in schema v2. Retain the
+                # budget conservatively for an hour after this snapshot.
+                recovered[name] = [time.time() - age] * min(count, MAX_RESTARTS_PER_HOUR)
+            _restart_times.update(recovered)
+        same_day = data["ts"][:10] == today
+        daily = {name: count for name, count in counts.items()
+                 if name in PROXIES and type(count) is int and count >= 0} if same_day else {}
+        backup = today if data.get("last_backup") == today else ""
+        return backup, today, daily
+    except FileNotFoundError:
+        return "", today, {}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        log("supervisor restart snapshot unavailable or invalid; using fresh counters")
+        return "", today, {}
+
+
 def supervise() -> None:
     log(f"supervisor 启动，探测 {PROBE_HOST}，绑定 {BIND_HOST}")
     for name, info in PROXIES.items():
         if info.get("env") and any(v == "" for v in info["env"].values()):
             log(f"警告: {name} 的密钥在 secrets.json 中缺失，启动可能鉴权失败")
-    last_backup_date = ""
-    restarts_day = ""
-    restarts_today: dict[str, int] = {}
+    last_backup_date, restarts_day, restarts_today = restore_restart_state()
     while True:
         today = time.strftime("%Y-%m-%d")
         if today != restarts_day:

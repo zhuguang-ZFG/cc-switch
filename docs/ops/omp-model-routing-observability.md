@@ -82,11 +82,21 @@ The extension dynamically discovers the effective `default`, `task`, and
 `smol` selectors plus every authenticated `omp-sota-*` model. A selector is
 tested when first seen, after a seven-day successful TTL, or after a 30-minute
 failed TTL. Automatic sweeps are serialized by a process promise and an
-exclusive, ten-minute stale lease under:
+exclusive lease under:
 
 ```text
 ~/.omp/agent/model-tool-canary/
 ```
+
+The lease renews its mtime every minute. Reclamation requires both ten minutes
+of staleness and a proven dead owner PID; legacy `pid timestamp` leases are
+supported. Permission errors and malformed owners fail closed. A unique token
+prevents a previous owner from releasing a successor's lease, and ownership is
+checked before each probe and state write. A `.reclaim` guard serializes stale
+reclamation. If a process dies during reclamation, confirm the recorded PID is
+dead and no canary sweep is active before manually removing that guard. A
+malformed lock similarly requires operator inspection; do not delete live locks.
+Existing OMP sessions keep their loaded extension until reloaded or restarted.
 
 Each test launches a two-minute, no-session child with extensions and skills
 disabled except for the explicit probe extension. Only the native `read` tool

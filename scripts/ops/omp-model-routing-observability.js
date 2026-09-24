@@ -3,6 +3,7 @@ import {
   appendFileSync,
   closeSync,
   existsSync,
+  futimesSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -13,7 +14,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-export const EXTENSION_REVISION = "2026.08.19-routing-r5";
+export const EXTENSION_REVISION = "2026.09.24-routing-r6";
 export const ROUTING_LOG_FILENAME = "omp-model-routing.jsonl";
 export const ROUTING_LOG_MAX_BYTES = 2 * 1024 * 1024;
 export const ROUTING_LOG_MAX_RECORDS = 200;
@@ -402,17 +403,30 @@ export function acquireCanaryLease(path, now = Date.now()) {
     let fd;
     try {
       fd = openSync(path, "wx");
-      writeFileSync(fd, `${process.pid} ${now}\n`, "utf8");
-      closeSync(fd);
-      fd = undefined;
+      const owner = `${process.pid} ${now} ${randomBytes(16).toString("hex")}\n`;
+      writeFileSync(fd, owner, "utf8");
+      const ownsLease = () => {
+        try { return readFileSync(path, "utf8") === owner; }
+        catch { return false; }
+      };
+      // Refresh the inode we own, never a replacement path. This also keeps
+      // older extensions (which only inspect mtime) from taking a long sweep.
+      const heartbeat = setInterval(() => {
+        try { futimesSync(fd, new Date(), new Date()); } catch {}
+      }, 60_000);
+      heartbeat.unref?.();
       let released = false;
-      return () => {
+      const release = () => {
         if (released) return;
         released = true;
+        clearInterval(heartbeat);
+        try { closeSync(fd); } catch {}
         try {
-          unlinkSync(path);
+          if (ownsLease()) unlinkSync(path);
         } catch {}
       };
+      release.ownsLease = ownsLease;
+      return release;
     } catch (error) {
       if (fd !== undefined) {
         try {
@@ -428,14 +442,35 @@ export function acquireCanaryLease(path, now = Date.now()) {
   };
   let release = tryAcquire();
   if (release) return release;
+  // Serialize dead-owner reclamation. An abandoned reclaim guard fails closed;
+  // operators may remove it after confirming no sweep/reclaimer is active.
+  const guardPath = `${path}.reclaim`;
+  let guard;
   try {
+    guard = openSync(guardPath, "wx");
+    writeFileSync(guard, `${process.pid} ${now}\n`, "utf8");
     if (now - statSync(path).mtimeMs < CANARY_LEASE_STALE_MS) return undefined;
+    const owner = readFileSync(path, "utf8").trim().match(/^(\d+) (\d+)(?: [a-f0-9]{32})?$/);
+    const pid = Number(owner?.[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+    try {
+      process.kill(pid, 0);
+      return undefined;
+    } catch (error) {
+      // EPERM and unknown failures do not prove that the owner is dead.
+      if (error?.code !== "ESRCH") return undefined;
+    }
     unlinkSync(path);
+    release = tryAcquire();
+    return release;
   } catch {
     return undefined;
+  } finally {
+    if (guard !== undefined) {
+      try { closeSync(guard); } catch {}
+      try { unlinkSync(guardPath); } catch {}
+    }
   }
-  release = tryAcquire();
-  return release;
 }
 
 export function buildCanaryArgs(selector, noncePath, probePath, configPath) {
@@ -803,6 +838,7 @@ export default function modelRoutingObservability(pi) {
       try {
         const state = readCanaryState(paths.state);
         for (const selector of selectors) {
+          if (!release.ownsLease()) throw new Error("canary-lease-ownership-lost");
           if (options.manual !== true && !isCanaryDue(state.selectors[selector])) continue;
           record({
             route: "canary",
@@ -815,6 +851,7 @@ export default function modelRoutingObservability(pi) {
             probePath,
             cwd: ctx.cwd,
           });
+          if (!release.ownsLease()) throw new Error("canary-lease-ownership-lost");
           state.selectors[selector] = summary;
           writeCanaryState(paths.state, state);
           record({

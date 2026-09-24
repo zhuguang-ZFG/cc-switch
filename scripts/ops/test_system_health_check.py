@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import importlib.util
+import ast
+import json
 import sys
+import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,6 +18,54 @@ assert SPEC and SPEC.loader
 health = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = health
 SPEC.loader.exec_module(health)
+
+
+class SnapshotTests(unittest.TestCase):
+    def test_timestamp_requires_recent_finite_time(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "state.json"
+            for timestamp, expected in [
+                (time.time(), True), (datetime.now().isoformat(), True),
+                (time.time() - 181, False), (time.time() + 3600, False),
+                (float("inf"), False), (float("nan"), False),
+                (True, False), ("invalid", False),
+            ]:
+                with self.subTest(timestamp=timestamp):
+                    path.write_text(json.dumps({"ts": timestamp}), encoding="utf-8")
+                    self.assertEqual(health.fresh_json(path, 180)[0], expected)
+            for invalid in [[], None, "state"]:
+                path.write_text(json.dumps(invalid), encoding="utf-8")
+                self.assertEqual(health.fresh_json(path, 180), (False, {}))
+
+    def test_supervisor_requires_complete_strict_healthy_roster(self) -> None:
+        services = {name: {"healthy": True, "restartBlocked": False}
+                    for name in health.EXPECTED_SUPERVISOR_SERVICES}
+        self.assertEqual(health.supervisor_violations({"services": services}), [])
+        for invalid in [{}, {"services": {}}, {"services": []}]:
+            self.assertTrue(health.supervisor_violations(invalid))
+        for invalid in [None, {}, {"healthy": "false", "restartBlocked": False},
+                        {"healthy": 1, "restartBlocked": False},
+                        {"healthy": True, "restartBlocked": True}]:
+            with self.subTest(status=invalid):
+                self.assertTrue(health.supervisor_violations({
+                    "services": {**services, "agentrouter": invalid}}))
+        del services["justwoker-relay"]
+        self.assertIn("missing service: justwoker-relay",
+                      health.supervisor_violations({"services": services}))
+
+    def test_expected_roster_matches_supervisor_source_without_import_side_effects(self) -> None:
+        tree = ast.parse(MODULE_PATH.with_name("proxies-supervisor.py").read_text(encoding="utf-8"))
+        names = set()
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "PROXIES":
+                    names.update(ast.literal_eval(key) for key in node.value.keys)
+                elif (isinstance(target, ast.Subscript)
+                      and isinstance(target.value, ast.Name) and target.value.id == "PROXIES"):
+                    names.add(ast.literal_eval(target.slice))
+        self.assertEqual(health.EXPECTED_SUPERVISOR_SERVICES, names)
 
 
 class RelayOwnerTests(unittest.TestCase):

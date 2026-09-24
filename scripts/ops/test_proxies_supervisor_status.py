@@ -20,6 +20,37 @@ class SupervisorStatusTests(unittest.TestCase):
         self.addCleanup(self.tempdir.cleanup)
         supervisor.GUARDIAN_DIR = Path(self.tempdir.name)
         supervisor.STATUS_FILE = supervisor.GUARDIAN_DIR / "supervisor-status.json"
+        supervisor._restart_times.clear()
+
+    def test_restart_preserves_budget_counts_and_completed_backup(self) -> None:
+        today = supervisor.time.strftime("%Y-%m-%d")
+        supervisor.write_status({
+            "cc-switch-proxy": supervisor.service_status(
+                healthy=True, restart_blocked=False, last_error=None,
+                restarts_last_hour=5)}, {"cc-switch-proxy": 7}, today)
+        self.assertEqual(supervisor.restore_restart_state(),
+                         (today, today, {"cc-switch-proxy": 7}))
+        self.assertFalse(supervisor.restart_allowed("cc-switch-proxy"))
+
+    def test_stale_or_future_snapshot_does_not_restore_counters(self) -> None:
+        for ts in ["2000-01-01T00:00:00+00:00", "2999-01-01T00:00:00+00:00"]:
+            supervisor.STATUS_FILE.write_text(json.dumps({"ts": ts}), encoding="utf-8")
+            with patch.object(supervisor, "log"):
+                backup, _, counters = supervisor.restore_restart_state()
+            self.assertEqual((backup, counters), ("", {}))
+            self.assertEqual(supervisor._restart_times, {})
+
+    def test_midnight_resets_daily_counts_but_retains_hourly_budget(self) -> None:
+        stamp = "2026-09-24T23:59:50+08:00"
+        supervisor.STATUS_FILE.write_text(json.dumps({
+            "ts": stamp, "last_backup": "2026-09-24",
+            "restarts_today": {"agentrouter": 5},
+            "services": {"agentrouter": {"restartsLastHour": 5}},
+        }), encoding="utf-8")
+        with (patch.object(supervisor.time, "strftime", return_value="2026-09-25"),
+              patch.object(supervisor.time, "time", return_value=supervisor.datetime.fromisoformat(stamp).timestamp() + 20)):
+            self.assertEqual(supervisor.restore_restart_state(), ("", "2026-09-25", {}))
+            self.assertFalse(supervisor.restart_allowed("agentrouter"))
 
     def test_status_records_structured_service_health(self) -> None:
         services = {

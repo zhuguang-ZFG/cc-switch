@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, utimesSync, unlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -162,6 +163,83 @@ test("canary state is bounded and lease acquisition is exclusive", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("stale live legacy owner is not displaced", () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-lease-live-"));
+  const path = join(root, "canary.lock");
+  try {
+    writeFileSync(path, `${process.pid} 1000\n`);
+    utimesSync(path, 1, 1);
+    const contender = acquireCanaryLease(path);
+    contender?.();
+    assert.equal(contender, undefined);
+    assert.equal(readFileSync(path, "utf8"), `${process.pid} 1000\n`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("dead legacy owner is reclaimed but replacement survives old release", () => {
+  const child = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
+  assert.equal(child.status, 0);
+  const root = mkdtempSync(join(tmpdir(), "omp-lease-dead-"));
+  const path = join(root, "canary.lock");
+  let release;
+  try {
+    writeFileSync(path, `${child.stdout} 1000\n`);
+    utimesSync(path, 1, 1);
+    release = acquireCanaryLease(path);
+    assert.equal(typeof release, "function");
+    assert.equal(release.ownsLease(), true);
+    unlinkSync(path);
+    writeFileSync(path, "replacement-owner\n");
+    assert.equal(release.ownsLease(), false);
+    release();
+    release();
+    assert.equal(readFileSync(path, "utf8"), "replacement-owner\n");
+  } finally {
+    release?.();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("lease heartbeat renews mtime without touching a successor", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const root = mkdtempSync(join(tmpdir(), "omp-lease-heartbeat-"));
+  const path = join(root, "canary.lock");
+  const release = acquireCanaryLease(path);
+  try {
+    utimesSync(path, 1, 1);
+    t.mock.timers.tick(60_000);
+    assert.ok(Date.now() - statSync(path).mtimeMs < 10_000);
+    unlinkSync(path);
+    writeFileSync(path, "successor");
+    utimesSync(path, 1, 1);
+    t.mock.timers.tick(60_000);
+    assert.ok(statSync(path).mtimeMs < 2000);
+  } finally {
+    release();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("malformed, inaccessible, or concurrently reclaimed lease fails closed", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "omp-lease-invalid-"));
+  const path = join(root, "canary.lock");
+  try {
+    for (const owner of ["", "bad", "0 1000", "999999999999999999999 1000"]) {
+      writeFileSync(path, owner);
+      utimesSync(path, 1, 1);
+      assert.equal(acquireCanaryLease(path), undefined);
+      assert.equal(readFileSync(path, "utf8"), owner);
+    }
+    writeFileSync(path, "12345 1000\n");
+    utimesSync(path, 1, 1);
+    t.mock.method(process, "kill", () => { throw Object.assign(new Error("denied"), { code: "EPERM" }); });
+    assert.equal(acquireCanaryLease(path), undefined);
+    writeFileSync(`${path}.reclaim`, "another reclaimer");
+    assert.equal(acquireCanaryLease(path), undefined);
+    assert.equal(readFileSync(`${path}.reclaim`, "utf8"), "another reclaimer");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("real-tool canary requires child, probe, tool-result, and final nonce proof", async () => {
