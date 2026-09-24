@@ -588,19 +588,21 @@ class OmpRouteGateTests(unittest.TestCase):
         self.assertIn("  fallbackRevertPolicy: cooldown-expiry", text)
 
     def test_default_role_has_no_model_fallback_chain(self):
-        """default 可使用聚合渠道重试，但不得切换到另一个模型。
+        """default 默认禁止切模型，仅允许用户批准的精确例外。
 
         例外（2026-08-21 用户批准）：agentrouter 内容过滤误伤期间，
         `agentrouter/gpt-5.6-sol` 允许且仅允许挂审批过的兜底链
         k3 -> muse-free（见 docs/ops/agentrouter-content-filter-false-positive-2026-08-21.md）。
+        2026-09-25 用户批准稳定性修复：kimi-for-coding 保留既有 DeepSeek
+        备选，移除同渠道的 k3 跳转；不允许扩展至其他 default 主模型。
         """
         text = CONFIG_FILE.read_text(encoding="utf-8")
         roles = _model_role_entries(text)
         chains = _fallback_chain_entries(text)
         self.assertIn("default", roles, "modelRoles.default must be configured")
         primary = _base_selector(roles["default"])
-        approved = {"agentrouter/gpt-5.6-sol"}
-        # 仅当 default 主模型本身就是已审批的 sol 时才豁免；否则残留链
+        approved = {"agentrouter/gpt-5.6-sol", "zg-newapi/kimi-for-coding"}
+        # 仅当 default 主模型本身就在精确审批列表中才豁免；否则残留链
         # 不能因审批名单而静默放行（default 切走后旧链必须被门禁拦下）。
         if primary in approved:
             configured = sorted(({"default", primary} & set(chains)) - approved)
@@ -618,6 +620,9 @@ class OmpRouteGateTests(unittest.TestCase):
                 ["zg-newapi/k3", "zg-newapi/muse-spark-1.2-contributor-free"],
                 "agentrouter sol 兜底链仅限审批过的 k3 -> muse-free",
             )
+        if primary == "zg-newapi/kimi-for-coding":
+            self.assertEqual(chains.get(primary), ["zg-newapi/deepseek-v4-flash"],
+                             "Kimi default fallback must use its approved independent channel")
 
 
     def test_reasoning_role_chains_exclude_deepseek(self):
@@ -663,20 +668,22 @@ class OmpRouteGateTests(unittest.TestCase):
             f"transitive model-keyed chains) must not contain DeepSeek: {offenders}",
         )
 
-    def test_advisor_role_is_pinned_to_free_glm(self):
+    def test_advisor_role_stays_on_approved_low_cost_routes(self):
         """用户约束（2026-08-20, 09-09 修订）：advisor 只能走免费/低成本路由。
 
         advisor 是高频后台角色（活跃会话 ~20s/轮）。曾被建议切到 TTFT 付费
         路径，上线后每 3 分钟烧 ¥0.2+ justwoker 额度被用户叫停。
         09-09 sota 账号被封（403 User has been banned, 非额度耗尽）, 用户
         指定 advisor 挂 zg-newapi/glm-5.3（agentrouter ch45/120 免费池）。
+        2026-09-25 稳定性优化保留当前 Omen Alpha（Go 套餐）角色配置，
+        将其加入精确允许列表；不放宽到任意模型或付费 Opus 路由。
         约束精神不变：不得切付费路由（anthropic opus / justwoker 等）。
         """
         roles = _model_role_entries(CONFIG_FILE.read_text(encoding="utf-8"))
-        self.assertEqual(
+        self.assertIn(
             _base_selector(roles.get("advisor", "")),
-            "zg-newapi/glm-5.3",
-            "advisor 只能走 glm-5.3 免费池（用户约束 09-09 修订），不得改指付费路由",
+            {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha"},
+            "advisor 必须保留已批准的 GLM / Omen Alpha 低成本路由",
         )
 
     def test_critical_chains_exclude_known_bad_agentrouter_claude(self):

@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-export const EXTENSION_REVISION = "2026.09.24-routing-r6";
+export const EXTENSION_REVISION = "2026.09.25-routing-r7";
 export const ROUTING_LOG_FILENAME = "omp-model-routing.jsonl";
 export const ROUTING_LOG_MAX_BYTES = 2 * 1024 * 1024;
 export const ROUTING_LOG_MAX_RECORDS = 200;
@@ -507,6 +507,29 @@ function parseCanaryProbe(path) {
   }
 }
 
+export function classifyCanaryFailure(result, probe, outputProof, invalidProbe = false) {
+  if (result?.killed === true) return "timeout";
+  const diagnostic = `${result?.stderr ?? ""}\n${result?.stdout ?? ""}`.slice(-16_384);
+  // Only persist bounded categories, never provider errors, headers, or output.
+  if (result?.code !== 0) {
+    if (["ENOENT", "EACCES", "EPERM"].includes(result?.code)) return "child-start-failed";
+    if (/\b401\b|\b403\b|unauthori[sz]ed|invalid.*(?:api.?key|credential)|authentication|permission denied/i.test(diagnostic)) return "auth";
+    if (/\b429\b|rate.?limit|too many requests/i.test(diagnostic)) return "rate-limited";
+    if (/no available channel|model.*(?:not found|unavailable|not supported)|unknown model/i.test(diagnostic)) return "model-unavailable";
+    if (/database.*(?:locked|error)|SQLITE_BUSY/i.test(diagnostic)) return "gateway-database";
+    if (/timed?[ -]?out|timeout|deadline exceeded/i.test(diagnostic)) return "timeout";
+    if (/ECONN|ENOTFOUND|EAI_AGAIN|DNS|TLS|connection (?:reset|refused)|fetch failed/i.test(diagnostic)) return "transport";
+    return "child-failed";
+  }
+  if (invalidProbe) return "probe-result-invalid";
+  if (!probe) return String(result?.stdout ?? "").trim() ? "probe-result-missing" : "empty-output";
+  if (probe.readCalled !== true) return "tool-not-called";
+  if (probe.argsValid !== true) return "tool-args-invalid";
+  if (probe.toolResultContainsNonce !== true) return "tool-result-invalid";
+  if (probe.finalContainsNonce !== true || !outputProof) return "final-output-invalid";
+  return undefined;
+}
+
 export async function runModelToolCanary(pi, selector, options) {
   const startedAt = Date.now();
   const safe = safeSelector(selector);
@@ -543,16 +566,9 @@ export async function runModelToolCanary(pi, selector, options) {
       probe?.finalContainsNonce === true;
     const outputProof = String(result.stdout ?? "").trim().includes(nonce);
     const success = result.code === 0 && result.killed !== true && toolProof && outputProof;
-    let failureClass;
-    if (!success) {
-      if (result.killed === true) failureClass = "timeout";
-      else if (!probe) failureClass = "probe-result-missing";
-      else if (!probe.readCalled) failureClass = "tool-not-called";
-      else if (!probe.argsValid) failureClass = "tool-args-invalid";
-      else if (!probe.toolResultContainsNonce) failureClass = "tool-result-invalid";
-      else if (!probe.finalContainsNonce || !outputProof) failureClass = "final-output-invalid";
-      else failureClass = "child-failed";
-    }
+    const failureClass = success ? undefined : classifyCanaryFailure(
+      result, probe, outputProof, !probe && existsSync(resultPath),
+    );
     const channelId = safeAtom(probe?.channelId);
     const requestIdHash = safeAtom(probe?.requestIdHash);
     return {
@@ -564,12 +580,13 @@ export async function runModelToolCanary(pi, selector, options) {
       channelId,
       gatewayAttribution: channelId ? "channel-id" : requestIdHash ? "request-id" : "missing",
     };
-  } catch {
+  } catch (error) {
     return {
       checkedAt: startedAt,
       durationMs: Math.max(0, Date.now() - startedAt),
       result: "failed",
-      failureClass: "local-exec-failed",
+      failureClass: ["ENOENT", "EACCES", "EPERM"].includes(error?.code)
+        ? "child-start-failed" : "local-exec-failed",
       gatewayAttribution: "missing",
     };
   } finally {

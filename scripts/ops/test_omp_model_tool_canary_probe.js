@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import modelToolCanaryProbe, {
   buildProbeResult,
+  canaryPathFromArgs,
   isCanaryReadPath,
   safeChannelId,
 } from "./omp-model-tool-canary-probe.js";
@@ -14,6 +15,44 @@ test("probe accepts only canary paths and numeric gateway channel headers", () =
   assert.equal(isCanaryReadPath("C:\\tmp\\secrets.txt"), false);
   assert.equal(safeChannelId({ "x-oneapi-channel-id": "92" }), "92");
   assert.equal(safeChannelId({ "x-oneapi-channel-id": "92 secret" }), undefined);
+});
+
+test("probe records a missing tool call and rejects a different nonce path", () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-canary-no-tool-"));
+  const previousArgs = process.argv;
+  try {
+    const noncePath = join(root, "omp-model-tool-canary-0123456789abcdef.txt");
+    writeFileSync(noncePath, "OMP_CANARY_PATH_TEST\n");
+    const prompt = `Use the read tool to read exactly this file: ${noncePath}\nReply with only the file's exact contents.`;
+    assert.equal(canaryPathFromArgs(["-p", prompt]), noncePath);
+    assert.equal(canaryPathFromArgs([prompt + " extra"]), undefined);
+    assert.equal(canaryPathFromArgs([prompt.replace(/omp-model-tool-canary-[a-f0-9]+\.txt/, "secrets.txt")]), undefined);
+    process.argv = ["omp", "-p", prompt];
+    const handlers = new Map();
+    modelToolCanaryProbe({ on: (name, handler) => handlers.set(name, handler) });
+    handlers.get("session_stop")({ last_assistant_message: { content: [] } });
+    let result = JSON.parse(readFileSync(`${noncePath}.result.json`, "utf8"));
+    assert.equal(result.readCalled, false);
+    assert.equal(result.finalContainsNonce, false);
+    modelToolCanaryProbe({ on: (name, handler) => handlers.set(name, handler) });
+    handlers.get("tool_call")({ toolName: "read", toolCallId: "wrong", input: {
+      path: join(root, "omp-model-tool-canary-fedcba9876543210.txt"),
+    } });
+    handlers.get("session_stop")({ last_assistant_message: { content: [] } });
+    result = JSON.parse(readFileSync(`${noncePath}.result.json`, "utf8"));
+    assert.equal(result.readCalled, true);
+    assert.equal(result.argsValid, false);
+    modelToolCanaryProbe({ on: (name, handler) => handlers.set(name, handler) });
+    handlers.get("tool_call")({ toolName: "read", toolCallId: "right", input: {
+      path: process.platform === "win32" ? noncePath.replaceAll("\\", "/") : noncePath,
+    } });
+    handlers.get("session_stop")({ last_assistant_message: { content: [] } });
+    result = JSON.parse(readFileSync(`${noncePath}.result.json`, "utf8"));
+    assert.equal(result.argsValid, true);
+  } finally {
+    process.argv = previousArgs;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("probe result contains hashes and booleans but no raw request or path", () => {

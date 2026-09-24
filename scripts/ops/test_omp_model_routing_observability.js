@@ -9,6 +9,7 @@ import {
   acquireCanaryLease,
   buildCanaryArgs,
   canonicalRoleSnapshot,
+  classifyCanaryFailure,
   createAgentWatchdog,
   discoverCanarySelectors,
   extractTaskDispatchEvents,
@@ -240,6 +241,32 @@ test("malformed, inaccessible, or concurrently reclaimed lease fails closed", (t
     assert.equal(acquireCanaryLease(path), undefined);
     assert.equal(readFileSync(`${path}.reclaim`, "utf8"), "another reclaimer");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("canary failures distinguish launch, provider, transport, and proof without leaking errors", () => {
+  const cases = [
+    [{ code: 1, killed: true }, "timeout"],
+    [{ code: "ENOENT" }, "child-start-failed"],
+    [{ code: 1, stderr: "401 invalid API key SECRET" }, "auth"],
+    [{ code: 1, stderr: "429 Too many requests SECRET" }, "rate-limited"],
+    [{ code: 1, stderr: "no available channel SECRET" }, "model-unavailable"],
+    [{ code: 1, stderr: "Database error SECRET" }, "gateway-database"],
+    [{ code: 1, stderr: "ETIMEDOUT SECRET" }, "timeout"],
+    [{ code: 1, stderr: "ECONNRESET SECRET" }, "transport"],
+    [{ code: 1, stderr: "unrecognized failure SECRET" }, "child-failed"],
+    [{ code: 0, stdout: "" }, "empty-output"],
+    [{ code: 0, stdout: "completed without tool proof" }, "probe-result-missing"],
+  ];
+  for (const [result, expected] of cases) {
+    assert.equal(classifyCanaryFailure(result), expected);
+  }
+  assert.equal(classifyCanaryFailure({ code: 0 }, undefined, false, true), "probe-result-invalid");
+  assert.equal(classifyCanaryFailure({ code: 0 }, { readCalled: false }), "tool-not-called");
+  assert.equal(classifyCanaryFailure({ code: 0 }, { readCalled: true, argsValid: false }), "tool-args-invalid");
+  const proof = { readCalled: true, argsValid: true, toolResultContainsNonce: true, finalContainsNonce: true };
+  assert.equal(classifyCanaryFailure({ code: 0 }, proof, false), "final-output-invalid");
+  assert.equal(classifyCanaryFailure({ code: 0 }, proof, true), undefined);
+  assert.equal(classifyCanaryFailure({ code: 1 }, proof, true), "child-failed");
 });
 
 test("real-tool canary requires child, probe, tool-result, and final nonce proof", async () => {

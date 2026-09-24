@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { basename, dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
-export const PROBE_REVISION = "2026.08.19-tool-canary-probe-r1";
+export const PROBE_REVISION = "2026.09.25-tool-canary-probe-r2";
 const CANARY_NAME = /^omp-model-tool-canary-[a-f0-9]{16}\.txt$/;
 const CHANNEL_HEADERS = ["x-oneapi-channel-id", "x-newapi-channel-id", "x-channel-id", "channel-id"];
 
@@ -35,6 +35,20 @@ export function isCanaryReadPath(path) {
   return typeof path === "string" && CANARY_NAME.test(basename(path));
 }
 
+export function canaryPathFromArgs(args) {
+  for (const argument of args) {
+    if (typeof argument !== "string") continue;
+    const match = argument.match(/^Use the read tool to read exactly this file: ([^\r\n]+)\nReply with only the file's exact contents\.$/);
+    if (match && isCanaryReadPath(match[1])) return match[1];
+  }
+  return undefined;
+}
+
+function canonicalPath(path) {
+  const absolute = resolve(path);
+  return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+}
+
 export function buildProbeResult(state, lastAssistantMessage) {
   return {
     revision: PROBE_REVISION,
@@ -62,7 +76,7 @@ export function writeProbeResult(path, result) {
 
 export default function modelToolCanaryProbe(pi) {
   const state = {
-    path: undefined,
+    path: canaryPathFromArgs(process.argv),
     nonce: undefined,
     toolCallId: undefined,
     readCalled: false,
@@ -81,7 +95,7 @@ export default function modelToolCanaryProbe(pi) {
     if (event.toolName !== "read" || state.readCalled) return;
     state.readCalled = true;
     const path = typeof event.input?.path === "string" ? event.input.path : event.input?.file_path;
-    state.argsValid = isCanaryReadPath(path);
+    state.argsValid = isCanaryReadPath(path) && (!state.path || canonicalPath(state.path) === canonicalPath(path));
     if (!state.argsValid) return;
     state.path = path;
     state.toolCallId = event.toolCallId;

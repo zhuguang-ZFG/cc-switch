@@ -98,6 +98,15 @@ dead and no canary sweep is active before manually removing that guard. A
 malformed lock similarly requires operator inspection; do not delete live locks.
 Existing OMP sessions keep their loaded extension until reloaded or restarted.
 
+Revision `2026.09.25-routing-r7` pairs with probe r2. Failed child executions
+retain only categories for launch, authentication, rate limit, unavailable model,
+gateway database, transport, and timeout errors. Zero-exit runs still require
+structured tool and final-output proof; a missing/malformed artifact is never
+success. The probe obtains the expected nonce path from the exact generated CLI
+prompt so it can record `tool-not-called` even when no read happens. Windows
+slash/case normalization accepts equivalent paths while rejecting another nonce.
+No raw child output, credentials, headers, or error text are persisted.
+
 Each test launches a two-minute, no-session child with extensions and skills
 disabled except for the explicit probe extension. Only the native `read` tool
 is enabled. The model must read an unpredictable nonce file and return the
