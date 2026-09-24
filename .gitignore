@@ -46,3 +46,7 @@ tmp/
 _dump/
 *.bak*
 .playwright-mcp/
+
+# Local third-party codex keepalive toolkit (contains DPAPI key blob + probe logs, ~40MB)
+codex_keepalive_v44/
+codex_keepalive_v44.zip

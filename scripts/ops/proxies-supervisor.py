@@ -81,7 +81,16 @@ PROXIES = {
         "port": 8788,
         "dir": "C:/Users/zhugu/.kimi-code/proxies/agentrouter-proxy",
         "cmd": [PYTHON, "agentrouter-proxy.py", "--host", BIND_HOST, "--port", "8788", "--log", "proxy.log"],
-        "env": {"AGENTROUTER_PROXY_KEY": SECRETS.get("agentrouter_proxy_key", "")},
+        # 2026-09-04: 上游 ps.air-outer.com / agentrouter.org 对家宽 IP 触发阿里云
+        # WAF 全量 JS 挑战 → 经 Clash mixed-port 7897 走 Agentrouter-EG 专属组
+        # （见 Clash Verge per-profile merge mc4PF6D8TBKv.yaml + runtime 注入）。
+        # NO_PROXY 保住本地回环与 Tailscale 入口，防自环。
+        "env": {
+            "AGENTROUTER_PROXY_KEY": SECRETS.get("agentrouter_proxy_key", ""),
+            "HTTP_PROXY": "http://127.0.0.1:7897",
+            "HTTPS_PROXY": "http://127.0.0.1:7897",
+            "NO_PROXY": "localhost,127.0.0.1,::1,100.64.0.0/10",
+        },
         "proc": "python.exe",
         "match": "agentrouter-proxy.py",
     },
@@ -102,6 +111,20 @@ PROXIES = {
         },
         "proc": "node.exe",
         "match": "omp-ttft-gateway.cjs",
+    },
+    # justwoker-relay（8790）：NewAPI ch94/95 上游专用出口中转（2026-09-07 加入）。
+    # 上游 api.justwoker.icu CF 封家宽直连（error 1010）但放行 Clash 悍刀行出口；
+    # NewAPI 无 per-channel 代理，全局代理会拖垮 kimi 等直连渠道，故本地中转。
+    # 上游 09-07 换组：Claude 系下架，改 gpt-5.6-luna/sol/terra + Anthropic 面
+    # （/v1/messages，chat/completions 面 CF 拦截）。中转注入 Chrome UA 过 CF。
+    "justwoker-relay": {
+        "port": 8790,
+        "probe_host": "127.0.0.1",
+        "dir": "C:/Users/zhugu/.kimi-code/proxies/justwoker-relay",
+        "cmd": ["node", "justwoker-relay.cjs"],
+        "env": {},
+        "proc": "node.exe",
+        "match": "justwoker-relay\\.cjs",
     },
     # cc-switch 本地代理（15721，OMP 主链路）：仅进程级自愈——崩溃时
     # 重启 exe，不触碰本体代码/配置/DB。cc-switch 启动时自动恢复代理接管
@@ -236,7 +259,12 @@ def kill_stale(proc_name: str, script_match: str) -> None:
         f"Where-Object {{ $_.CommandLine -match '{script_match}' }} | "
         f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
     )
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=15)
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps],
+        capture_output=True,
+        timeout=15,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
 
 
 def restart_allowed(name: str) -> bool:
