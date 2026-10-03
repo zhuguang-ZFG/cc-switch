@@ -77,8 +77,10 @@ env，dry-run 默认，幂等 resume：渠道已存在且配置一致则复用�
 2. 凭据经聊天明文传递（同 stepfun 前例，用户裁决不轮换）。
 3. 上游聚合站本身可能再聚合免费/逆向源（模型列表含大量 `:free` 与
    `unorouter`/`crax`/`hyb` 前缀），质量与稳定性未背书——备份定位正合适。
-4. glm-5.3 定价全站缺口是 open item（非本次引入）：若要精确计费需补
-   ModelRatio/CompletionRatio 条目。
+4. ~~glm-5.3 定价全站缺口~~ → **已补（2026-10-04）**：官方 z.ai $1.40/$4.40 per 1M
+   → ModelRatio 0.7 / CompletionRatio 3.14 / CacheRatio 0.25（备份
+   `new-api-before-glm53-pricing-20261004-004230.db`）；intern-s2 与
+   deepseek-v4-flash-vision 仍未设（各自官方价待查）。
 5. `space-bunny-free ≈ gpt-6-astra`（用户听闻，未实测）；budsin 上游
    亦有 `gpt-6-astra` exact id，可作日后 astra 池备份候选。
 
