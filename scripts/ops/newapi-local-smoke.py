@@ -233,7 +233,9 @@ PRIMARY_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
 # 塌缩到单渠道即 FAIL（当前 justwoker ch94/95 + ch86 兜底，容量 3）。
 MIN_ENABLED_CRITICAL_MODELS: dict[str, int] = {
     "claude-opus-5": 2,
-    "claude-opus-4-8": 2,
+    # 2026-10-03 用户裁决：opus-4-8 池暂时去除（在营 0 渠道：agentrouter
+    # 账户级 402 / anyrouter 关窗 / 网关池空）。恢复=回本行 +"claude-opus-4-8": 2,
+    # 并复活池渠道（agentrouter-claude-keypool runbook）。
 }
 
 NEWAPI_DB = DEPLOY_DIR / "new-api.db"
