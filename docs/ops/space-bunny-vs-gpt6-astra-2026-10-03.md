@@ -59,7 +59,7 @@ astra：明确得分仅 #3 #5；2 答错 2 截断；可用性另扣路由抖动
 ## 后续（同日 23:xx）
 
 - 用户裁决：**space-bunny-free 升任 OMP advisor 主角色**（`~/.omp/agent` commit
-  `5fd2547`）：`modelRoles.advisor: zg-newapi/space-bunny-free`，fallback 链
+  `5fd2547`，**pre-slim hash**，解析见 `commit-map-pre-slim-20261004.txt`）：`modelRoles.advisor: zg-newapi/space-bunny-free`，fallback 链
   `[glm-5.3:max, k3:max, gpt-5.6-luna:max, Atria-Dawn-Preview]`。
 - 顾问胜任力补测（通过）：包络 200k tok + 8192 → 200/11s；100k tok 三针
   检索 3/3 逐字正确/9s。E2E `BUNNY_ADVISOR_OK`。

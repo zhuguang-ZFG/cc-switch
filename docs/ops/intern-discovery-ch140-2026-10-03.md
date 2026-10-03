@@ -96,7 +96,8 @@ abilities 自动派生 3 行（追加模型经 PUT 后同样自动派生）：`(
   一致）；131071 → 200；20k prompt + 131071 → 429、+ 32768 → 200；76.8k + 8192 → 200。
   models.yml 对 glm-5.3 申报 `contextWindow: 1000000 / maxTokens: 131072` → advisor 大
   prompt + 顶格申报必越界。**错误消息伪装成额度耗尽，实为包络预检**。
-- 修复（`~/.omp/agent` commit `1593471`）：zg-newapi glm-5.3 条目
+- 修复（`~/.omp/agent` commit `1593471`，**pre-slim hash**，解析见 agent repo 根
+  `commit-map-pre-slim-20261004.txt`）：zg-newapi glm-5.3 条目
   `contextWindow 1000000→131072`、`maxTokens 131072→32768`。E2E：`omp -p --model
   zg-newapi/glm-5.3:max` → `GLM_ADVISOR_OK`（19.8s，归因 ch146）。
 - 生效范围：**models.yml 仅对新会话热加载**；已开着的终端持旧包络，会话重启前
