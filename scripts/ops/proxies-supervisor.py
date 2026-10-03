@@ -198,6 +198,31 @@ PROXIES["anyrouter"] = {
     "match": "anyrouter-proxy[\\\\/]proxy\\.cjs",
 }
 
+# nimbridge 中继 TLS 桥（2026-10-04）：上游 LE YE2 IP 证书 fork 根包不认，
+# 桥在回环终结 HTTP、向上游 HTTPS(skip-verify) 转发；桥本体不持 key
+# （NewAPI ch149 透传 Authorization）。详见 docs/ops/nimbridge-bridge-2026-10-04.md
+PROXIES["nimbridge"] = {
+    "port": 8791,
+    "probe_host": "127.0.0.1",
+    "dir": "C:/Users/zhugu/.kimi-code/proxies/nimbridge-bridge",
+    "cmd": [PYTHON, "nimbridge-bridge.py", "--host", "127.0.0.1", "--port", "8791", "--log", "proxy.log"],
+    "env": {},
+    "proc": "python.exe",
+    "match": "nimbridge-bridge.py",
+}
+
+# tokenrhythm（基元律动）WoTrus CA 桥（2026-10-04）：WoTrus 根被 Mozilla
+# 系 distrust（fork 内嵌根包同），同一桥脚本第二目录隔离（kill_stale 锚定）。
+PROXIES["tokenrhythm"] = {
+    "port": 8792,
+    "probe_host": "127.0.0.1",
+    "dir": "C:/Users/zhugu/.kimi-code/proxies/tokenrhythm-bridge",
+    "cmd": [PYTHON, "tokenrhythm-bridge.py", "--host", "127.0.0.1", "--port", "8792", "--log", "proxy.log"],
+    "env": {"BRIDGE_UPSTREAM": "https://tokenrhythm.studio"},
+    "proc": "python.exe",
+    "match": "tokenrhythm-bridge.py",
+}
+
 # Telegram 告警：端口不可达且自愈失败/超预算时通知，30 分钟冷却防风暴。
 TELEGRAM_TOKEN = str(SECRETS.get("telegram_token", ""))
 TELEGRAM_CHAT_ID = str(SECRETS.get("telegram_chat_id", ""))

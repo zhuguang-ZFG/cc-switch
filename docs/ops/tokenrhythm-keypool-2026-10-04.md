@@ -54,6 +54,21 @@ distrust）接入，p-10/w1 备份位，7 模型缺口集。4 项抽测全过、
 - longcat-2.0 现三腿：ch68/69 agnes（38/39，429 前科）+ 21 渠道备份
   ——haiku 路径 agnes 429 的缓解就此获得冗余。
 
+## 评审补遗（2026-10-04 02:1x）
+
+- **16 把"empty"key 直连复核**（绕桥、retryAfter 节奏、25s 超时）：仍全空——
+  桥吃掉/瞬时限流两种假设均被否，确认上游侧死亡。21 好 key 名单维持。
+- **备份档序**：评审指出 budsin/nimbridge/tokenrhythm 同档 -10 会三等分备份
+  流量、稀释指定备份位 → 已压实为 **budsin(ch148) -10 → nimbridge(ch149)
+  -20 → tokenrhythm(ch150-170) -30**（渠道级 + fix，abilities 镜像读回一致；
+  备份 `new-api-before-tier-order-20261004-021112.db`）。
+- **ch15 glm-5.2 遗留**：ch15 复活连带启用 glm-5.2（sole carrier）——07-29
+  runbook 曾按 5M TPM 共享陷阱摘除该模型（大 prompt 429 放大）。本次**保留
+  启用**（小请求可用；摘除会让 glm-5.2 全池零在营），口径：大上下文 GLM
+  请求勿走 glm-5.2，用 glm-5.3。
+- supervisor 仓库镜像 `scripts/ops/proxies-supervisor.py` 已同步双桥条目
+  （与 live 文件 diff 验证 IDENTICAL；10/10 服务 healthy）。
+
 ## 回滚
 
 删 ch150–170（或禁双表）+ `POST /api/channel/fix`；还原
