@@ -13,8 +13,9 @@
 - 上游目录（10）：`Agents-A1, Atria-Dawn-Preview, deepseek-v4-flash-0731,
   deepseek-v4-flash-vision, deepseek-v4-pro-0813, glm-5.3, intern-s2, kimi-k2.6,
   minimax-m3, qwen3.8-27b`。
-- **`qwen3-8-27b` 拼写不一致（既有问题，未动）**：池渠道载 `qwen3-8-27b`，上游目录
-  实为 `qwen3.8-27b`——该 ability 实为死映射，后续应统一口径（不在本轮范围）。
+- ~~**`qwen3-8-27b` 拼写不一致（既有问题，未动）**~~ → **同日已修**（qwen3-8-27b
+  runbook 增补轮）：ch140-143 四渠道 `model_mapping` `qwen3-8-27b→qwen3.8-27b`
+  已落，abilities 4 行 p40 enabled；23:5x 审计复核一致（映射在、渠道在营）。
 - 转发档（deepseek/glm/kimi 等）**不接入**，避免与既有渠道路由碰撞。
 - 池功能预检：网关 intern-s2 → ch141、glm-5.3 → ch141（真 usage）。
 
