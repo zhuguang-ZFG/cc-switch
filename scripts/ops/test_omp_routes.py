@@ -680,10 +680,13 @@ class OmpRouteGateTests(unittest.TestCase):
         约束精神不变：不得切付费路由（anthropic opus / justwoker 等）。
         """
         roles = _model_role_entries(CONFIG_FILE.read_text(encoding="utf-8"))
+        # 2026-10-03 用户批准：space-bunny-free 升任 advisor（免费档，符合
+        # "不得切付费路由"的约束精神；A/B 实测见
+        # docs/ops/space-bunny-vs-gpt6-astra-2026-10-03.md）。
         self.assertIn(
             _base_selector(roles.get("advisor", "")),
-            {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha"},
-            "advisor 必须保留已批准的 GLM / Omen Alpha 低成本路由",
+            {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha", "zg-newapi/space-bunny-free"},
+            "advisor 必须保留已批准的 GLM / Omen Alpha / Space Bunny 低成本路由",
         )
 
     def test_critical_chains_exclude_known_bad_agentrouter_claude(self):
@@ -875,11 +878,12 @@ class OmpRouteGateTests(unittest.TestCase):
 
     def test_omp_can_resolve_registered_models(self):
         self.assertEqual(self.omp_models_rc, 0, self.omp_models_stderr)
+        # 2026-10-03：anyrouter 提供者 models: []（opus-4-8 池暂时下线，用户裁决），
+        # omp models 不再列出；窗口恢复并回捞条目后把 "anyrouter" 加回元组。
         for provider in (
             "zg-newapi",
             "zg-newapi-anthropic",
             "agentrouter",
-            "anyrouter",
         ):
             self.assertIn(f"{provider} (", self.omp_models_output)
 
@@ -1235,12 +1239,10 @@ class OmpRouteGateTests(unittest.TestCase):
             CONFIG_FILE.read_text(encoding="utf-8"), models_text
         )
         self.assertEqual(violations, [])
-        marked = [
-            model["id"]
-            for model in _parse_model_registrations(models_text).get("zg-newapi", [])
-            if str(model["id"]).startswith("omp-sota-")
-        ]
-        self.assertIn("omp-sota-claude-opus-5", marked)
+        # 2026-10-03：omp-sota-claude-opus-5 条目已随 09-08 账号封禁（403）退役，
+        # 早前会话从 models.yml 删除（标记 DEAD）。本测试的实质约束 =
+        # 上方 validate_sota_upgrade_only（现存 omp-sota-* 别名仍须 upgrade-only）；
+        # 不再断言该特定别名在册。
 
 
 if __name__ == "__main__":
