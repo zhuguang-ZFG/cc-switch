@@ -72,5 +72,8 @@ env，dry-run 默认）。
 
 ## 回滚
 
+- 定价：还原 `new-api-before-u2flash-pricing-20261004-003735.db`，或 admin API 把
+  `u2-flash` 三行（ModelRatio/CompletionRatio/CacheRatio）改回 0/删除。
+
 `POST /api/channel/138/status {"status":2}` 停用；或删渠道 + `POST /api/channel/fix`
 + models.yml 移除条目（omp-agent 仓还原对应 commit）。
