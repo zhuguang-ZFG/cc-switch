@@ -56,7 +56,54 @@
 
 ## 遗留
 
-- **ch96 opencode-zen-free 仍用旧 key**（/zen 非 /zen/go，status=2）。若旧 key 被上游吊销，
-  zen-free 恢复时需先换 key——届时向用户索取 zen 侧 key。
+- **ch96 opencode-zen-free 仍用旧 key**（/zen 非 /zen/go，status=2）。~~若旧 key 被上游吊销，
+  zen-free 恢复时需先换 key~~ → **2026-10-03 证伪并升级结论**：
+  - key 状态：chat 探针返回策略性 `403 FreeTierError`（非 401 鉴权失败）——key 被服务端
+    接受、拒绝发生在授权策略层；`/v1/models` 200 仅证明目录端点可达，不单独证明鉴权。
+  - 硬证据：上游 403 文案 `OpenCode's free tier can only be used from within OpenCode`。
+  - 当日已测 4 组复刻配方全灭（结论限于已测配方，未穷尽所有头）：
+    ① UA `opencode/<ver>` ×3 变体；② pi#2824 全套 CLI 头（`opencode/latest/1.3.15/cli`
+    +x-opencode-*×4；注意该 issue 针对 429 FreeUsageLimitError，与本次 403 不同错误类）；
+    ③（2026-09-09 更新的）Skynoxk zen-proxy 配方（`opencode-1.18.15`+directory 头）
+    ×3 种 auth 模式（账户 key/匿名/Bearer public，各 403）；④ 精确现版
+    `opencode-1.18.34`（npm latest）仍 403。疑需会话/设备绑定或服务端授权。
+  - 社区旁证（非官方政策）：anomalyco#42500 系用户提交的 feature request，
+    closed as not planned，摘录中无维护者政策声明——仅作参考。
+  - **结论：ch96 保持禁用为正确终态；非 NewAPI/OMP 配置问题。** 目录变动（上游共 11 个
+    free id，ch96 仅配置 6 个）：hy3-free 与 nemotron-3-ultra-free 已下架；新上架
+    ling-3.1-flash-free/fledge-alpha-free/mimo-v2.6-flash-free/
+    muse-spark-1.3-contributor-free/jev-1.13-free（同锁定，未接入）。
+  - `muse-spark-1.2-contributor-free` 经 furry-vg ch105 在役（commit 链）——系
+    **同名替代来源**（mapping 指向另一上游），不计入 /zen 免费档利用。
 - ~~muse-1.3 放行后验证~~（已闭环：responses-only，models.yml 声明 openai-responses，
   网关 /v1/responses 200 归因 ch131，reasoning_tokens=181）。
+
+## 追加：gpt-5.6-luna 恢复（2026-10-02 第二趟）
+
+- 现象：OMP 选 `gpt-5.6-luna` 报 503 `No available channel … under group default`。
+  根因：旧 ch106 `opencode-go-luna` 已不存在（105→107 断号），其余挂该模型的
+  ch82/94/95/107 全部 status=2 且 abilities enabled=0；models.yml 条目成孤儿。
+- 直连实证（ch130 新 key）：`/v1/models` 仍列 `gpt-5.6-luna`；chat 面 400
+  `ModelProtocolUnsupported` → **同为 responses-only**（同 gpt-6-luna 型）；
+  `/v1/responses` 直连 200 completed。
+- 处置：`scripts/ops/add_opencode_go_gpt56luna_channel.py --apply`（key/header_override/
+  base_url 克隆 ch130，donor 不动）→ **ch137** `opencode-go-gpt-5.6-luna`（p0/w2，
+  ModelRatio=0，abilities `(default,1,0,2)`）；DB 快照
+  `new-api-before-opencode-go-gpt56luna-20261002-233533.db`（integrity=ok）。
+- 实弹：网关 `127.0.0.1:3002/v1/responses` 200 completed，usage 11/5，logs 归因 ch137。
+- models.yml：`gpt-5.6-luna` 加 `api: openai-responses`，名称更新为 ch137
+  （omp-agent 仓 commit 5fa6068，同commit捎带此前未提交的本 runbook 三新模型条目）。
+- ch106 时间线：轮换前快照（10-02 22:48）中 ch106 已不存在 → 删除发生在 08-23
+  （omp-config 文档在册）至 10-02 之间，非本次轮换所为；具体删除点无快照可考。
+- 共享 session 风险：ch130/131/132/133/137 五渠道共用同一静态 `x-opencode-session`
+  （照抄 ch130 override）；上游若改为 session 绑定 key/plan 将五腿同损，目前 5/5
+  实弹 200 无冲突迹象。
+- 端到端复核（评审收口）：`omp -p --model zg-newapi/gpt-5.6-luna` → `LUNA_OK`（14.5s，
+  logs 16989 prompt tokens 归因 ch137，quota=0 与 ModelRatio=0 一致）。contextWindow
+  维持既有 400000 不动：同文件 gpt-5.6-sol 条目用 400000 为家族惯例，release notes
+  载 5.6 家族 372K 自动注入——08-14 文档表的 272000 标称已陈旧；真实上限未实测
+  （未做超限输入探针），用户未要求变更，保持原值。
+- 角色任命（用户指令）：OMP `modelRoles.advisor` 由 omen-alpha 改为
+  `zg-newapi/gpt-5.6-luna:high`（omp-agent 仓 dbe0ba4，仅该 hunk 入 commit，
+  config.yml 其余既有漂移未动）；无头探针 `omp -p --no-tools` 会话
+  `__advisor.jsonl` 实证 assistant 记录 `model=gpt-5.6-luna`。
