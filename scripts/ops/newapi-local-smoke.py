@@ -45,7 +45,9 @@ PROXY_PORTS: dict[str, tuple[str, int]] = {
     "mistral-relay": ("127.0.0.1", 16001),
 }
 SMOKE_PROBES: tuple[tuple[str, str], ...] = (
-    ("sensenova-6.7-flash-lite", "chat-completions"),
+    # sensenova-6.7-flash-lite 2026-10-04 移出：商汤上游下架该模型（ch15 admin
+    # 自测 404 model is not found），已从 ch15 models 摘除——无载体可探测。
+    # 上游恢复时回捞本行 + ch15 models + models.yml 条目。
     # muse-spark-1.2-contributor 于 2026-08-24 移出：上游已收回+地区封锁
     # （403 not available in your country），ch48 属 KNOWN_BROKEN。
 )
