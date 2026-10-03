@@ -38,3 +38,11 @@ oneapi GIN 日志 + DB type=2 行 + 直接探针，DB 错误表完全不可用�
   `UPDATE abilities SET enabled=1 WHERE channel_id=88 AND model='qwen3-8-27b';`（或恢复后 API PUT）
 - 单点风险：qwen3-8-27b 现仅 ch112 yjs 一只；yjs 挂则 smol/commit 全走 fallback
   deepseek-v4-flash（可接受，但失去 27B 档位的低成本小任务承载）。
+
+## 2026-10-03 增补：tiny 角色 + Groq 快腿 + intern 池四腿
+
+- `tiny` role 切 `zg-newapi/qwen3-8-27b`（备份 `~/.omp/agent/config.yml.bak-20261003-tiny-qwen`；重启 OMP 生效）。
+- **ch124 Groq prio 40→50 升主腿**（389ms 快腿先行），ch88 runinfra 49 降为备。分布实测 4/4 落 ch124（252–936ms，`logs.channel_id` 归因）。快照 `new-api-before-groq-prio-20261003-161532.db`。
+- thinking 形状实测：`reasoning_effort=high` → Groq 200；@512 预算 `content='pong'` finish=stop（reasoning_tokens=17，落 `reasoning` 字段；早前 `content=''` 系 16-token 探针预算耗尽，非 Groq 缺陷）。`chat_template_kwargs` → **400 且 NewAPI 不 failover**（relay 终态，日志只见 ch124）——与 09-04 结论一致；translator（thinkingLevel:max）若走该形状由 OMP 层 fallback（omen-alpha）接住。
+- **intern-discovery 池（ch140–143，4 个独立账户）加入兜底**：`model_mapping` `qwen3-8-27b→qwen3.8-27b`（上游带点命名），4×PUT + abilities 4 行（prio40 w1），ch140 映射 channel test success=True（676ms）。快照 `new-api-before-intern-qwen-20261003-161843.db`。
+- 终态：`qwen3-8-27b` 六条 enabled 腿 = **Groq(50) > runinfra(49) > intern×4(40)**。
