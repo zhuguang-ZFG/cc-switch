@@ -86,6 +86,20 @@ channel/fix）；ch148 全局压至 **-10** 成为全池最底层备份。
 | k3 | ch33 | 官方主 |
 | 门禁 | smoke 仅存量 opus-posture FAIL；route gate 40/40（早前） | — |
 
+### auto_ban 未兑现 + ch89 手工禁用（00:34，评审指正后补证）
+
+- 早前记录"auto_ban=1 自动接住"是**未验证假设**。补证：00:16–00:20 多次
+  生产/admin 500（do_request_failed）后 20+ 分钟 ch89 仍 status=1、零日志行——
+  **auto_ban 对 500 类上游死亡的触发覆盖未兑现**（至少不及时）。含义：
+  Guardian/本仓依赖 auto_ban 做 fail-closed 的假设对 5xx 类失效不成立，
+  此类死亡须手工禁用或 Guardian 侧强制（备份
+  `new-api-before-ch89-disable-20261004-003429.db`，smoke 复绿=仅存量 FAIL，
+  auto_ban 渠道禁用被 accepted 逻辑接纳）。
+- **已手工双表禁用 ch89**（可逆，seeseed 补全端恢复后回捞）。连带：
+  qwen3.7-max/normal/plus（ch89 独腿 ×3，OMP 可选）转硬 503——死选择子，
+  是否按 qwen3.8-max 同款挂 ch148 待用户裁决（budsin 有 qwen3.7-max/plus
+  exact id）。
+
 ## 回滚
 
 - 定价：还原 `new-api-before-pricing-20261004-000625.db` 或 admin API 改回。
