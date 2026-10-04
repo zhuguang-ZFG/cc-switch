@@ -31,3 +31,14 @@
 ## 凭据事件（本会话累计，全部入轮换清单）
 
 `~/.claude` anyrouter token（多次部分/近全量）、codex token（proxy_live_backup 打印事故）、OMP models.yml 各 provider key（grep 上下文行）。轮换一律走 UI 编辑保存，ProviderService 自动投影。
+
+## 排障实录（2026-10-04 13:47 用户首试 Fable 失败）
+
+现象：`/model` 选 Fable 5.1 后请求失败。流水两行归因：
+
+- **400**（session d68db095，362ms）：上游报错"1m 上下文已经全量可用，请启用 1m 上下文后重试"= 该会话未发送 `context-1m-2025-08-07` beta。proxy 透传原样保留客户端 beta（`forwarder.rs:2002-2013`），所以根因=**陈旧 Claude Code 会话**（启动时 live env 尚无 `ANTHROPIC_BETAS`），非配置错误。
+- **503**（session de0e8105，3008ms）：**过了 1m 校验**才撞 anyrouter 容量风暴（Service Unavailable）——证明现行配置对新会话正确；failover 队列不伺候此模型 id，风暴期失败直接浮出水面。
+
+被否决的修复：picker 值加 `[1M]` 后缀（已写入后又回滚，备份 `cc-switch.db.20261004-1355-before-fable-1m.bak`）。理由：客户端 `[1M]` 处理仅对 env 槽位有 200×53 实证，picker 路径未证实；且透传路径剥离后缀的分支（`forwarder.rs:1346,1675-1681`）不注入 beta（`anthropic_bridge_one_m` 仅 Codex/Reasonix 分支置位），picker 值不被识别时反而必 400。`ANTHROPIC_CUSTOM_HEADERS` 方案同样被否：相对已验证的 `ANTHROPIC_BETAS` 零增量（都需重启会话），且 beta 头覆盖行为未证实。
+
+结论：配置零变更（db=live 一致）。用户动作=**完全退出所有 Claude Code 会话再重启**，重选 Fable 5.1；残留风险=anyrouter 风暴期 503（容量问题，非配置）。
