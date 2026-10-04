@@ -46,4 +46,15 @@
 
 **最终归因（13:58 闭环）**：用户重启的是 **CC Switch**（新 PID 13:57:54，takeover 重申 1s 后重写 live=路由名槽位指纹），"还是直连"= CC Switch UI 里 provider 上游地址 anyrouter.top——设计本意（provider 行存真实上游，代理 15721 在前），且 **CC Switch 源码无任何 modelPicker 渲染代码**（全仓 grep 仅命中本文档），UI 永远不会显示 picker。picker 生效面=Claude Code `/model`。live 扛过 CC Switch 重启（picker 双项+ANTHROPIC_BETAS 均在）。**Fable 有两条已通电路径**：①原生 Fable 档——live `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5[1M]`，Claude Code 发 `claude-fable-5[1m]`（issue #3980 形态），proxy `model_mapper` 映射到 provider 行 FABLE_MODEL=`claude-fable-5-1-reversed`（`model_mapper.rs:285-299` 测试实证）；②picker 选项——Claude Code 直发 `claude-fable-5-1-reversed`，`matches_configured_upstream`（model_mapper.rs:99-102）保留直通。用户唯一动作=重启 **Claude Code**（非 CC Switch）→ `/model` 选 Fable。
 
-**端到端闭环（14:06）**：用户重启 Claude Code 后选 Fable，session 59a94836 打出 200×3 真实补全（in=32819/out=562，44s，与探针 36.5s 同量级）。角色归属终态（6h 流水）：Sonnet=全 NewAPI 池（200×70，路由层决定，非 provider env）；Opus=anyrouter+NewAPI 双分（429×13 被 failover 兑住）；Fable=anyrouter 直连；Haiku=零流量。Sonnet/Haiku 掰直连=路由池层决策（非 env），用户已知情未裁决。
+**端到端闭环（14:06）**：用户重启 Claude Code 后选 Fable，session 59a94836 打出 200×3 真实补全（in=32819/out=562，44s，与探针 36.5s 同量级）。角色归属当时态（后经 §角色重映射 更正为"单 current"解释）：Sonnet 全 newapi（200×70，10:49-11:46 current=newapi 时段）；Opus anyrouter 直连+上午 newapi 时段分流；Fable=anyrouter 直连；Haiku=零流量。
+
+## 角色重映射（2026-10-04 14:20，用户裁决"全押 NewAPI"）
+
+架构前提（源码+流水双重实证）：代理**单 current 架构**，无按模型分流——`auto_failover_enabled=0` 时 `select_providers` 只用 current（`provider_router.rs:80-95`）；上午 10:40-11:46 opus/sonnet 全走 newapi 是**当时 current=newapi-local**，零交错。
+
+变更（备份 `cc-switch.db.20261004-1420-before-newapi-roles.bak`）：
+
+1. newapi-local 行槽位：SONNET `k3[1M]`→`space-bunny-free`，OPUS `claude-opus-5`→`k3[1M]`（_NAME 同步）；HAIKU=`qwen3-8-27b` 与 FABLE=`claude-opus-5` 未动（无 modelPicker 字段，投影后 live picker 消失）
+2. 托盘切 current → NewAPI Local（ProviderService 投影+热切换，4s）
+
+冒烟（经 15721，四角色）：Sonnet→space-bunny-free 200(1.4s) ✓；Opus→k3 200(2.8s) ✓；Haiku→qwen/qwen3.8-27b 200(0.4s) ✓；Fable→NewAPI claude-opus-5 池 **503 No available accounts**（池零在营渠道=10-03 agentrouter 预算窟窿+风暴叠加，非配置错）。**注意 Default 档**（ANTHROPIC_MODEL=claude-opus-5）同池同 503，`/model` 需显式选角色。anyrouter 行 fable 全家+picker 原样保留，托盘 4s 可切回直连。
