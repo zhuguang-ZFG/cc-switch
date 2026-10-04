@@ -45,3 +45,5 @@
 被否决的修复（同前，维持）：picker 值 `[1M]` 后缀（透传剥离分支不注入 beta，picker 路径未证实）；`ANTHROPIC_CUSTOM_HEADERS`（相对 `ANTHROPIC_BETAS` 零增量，覆盖行为未证实）。
 
 **最终归因（13:58 闭环）**：用户重启的是 **CC Switch**（新 PID 13:57:54，takeover 重申 1s 后重写 live=路由名槽位指纹），"还是直连"= CC Switch UI 里 provider 上游地址 anyrouter.top——设计本意（provider 行存真实上游，代理 15721 在前），且 **CC Switch 源码无任何 modelPicker 渲染代码**（全仓 grep 仅命中本文档），UI 永远不会显示 picker。picker 生效面=Claude Code `/model`。live 扛过 CC Switch 重启（picker 双项+ANTHROPIC_BETAS 均在）。**Fable 有两条已通电路径**：①原生 Fable 档——live `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5[1M]`，Claude Code 发 `claude-fable-5[1m]`（issue #3980 形态），proxy `model_mapper` 映射到 provider 行 FABLE_MODEL=`claude-fable-5-1-reversed`（`model_mapper.rs:285-299` 测试实证）；②picker 选项——Claude Code 直发 `claude-fable-5-1-reversed`，`matches_configured_upstream`（model_mapper.rs:99-102）保留直通。用户唯一动作=重启 **Claude Code**（非 CC Switch）→ `/model` 选 Fable。
+
+**端到端闭环（14:06）**：用户重启 Claude Code 后选 Fable，session 59a94836 打出 200×3 真实补全（in=32819/out=562，44s，与探针 36.5s 同量级）。角色归属终态（6h 流水）：Sonnet=全 NewAPI 池（200×70，路由层决定，非 provider env）；Opus=anyrouter+NewAPI 双分（429×13 被 failover 兑住）；Fable=anyrouter 直连；Haiku=零流量。Sonnet/Haiku 掰直连=路由池层决策（非 env），用户已知情未裁决。
