@@ -209,6 +209,21 @@ CHANNEL_TEST_PATH_OVERRIDES = {
         "/api/channel/test/128?model=gpt-6-astra"
         "&endpoint_type=openai-response&stream=true"
     ),
+    # 2026-10-06：opencode-go responses-only 模型（上游 chat 面报
+    # ModelProtocolUnsupported，通用 chat 测试必假失败——ch131 被误降权、
+    # ch132 被误禁用）。镜像 OMP 的 responses 面做探针（同 48/91/92/128 口径）。
+    131: (
+        "/api/channel/test/131?model=muse-spark-1.3-contributor"
+        "&endpoint_type=openai-response&stream=true"
+    ),
+    132: (
+        "/api/channel/test/132?model=gpt-6-luna"
+        "&endpoint_type=openai-response&stream=true"
+    ),
+    137: (
+        "/api/channel/test/137?model=gpt-5.6-luna"
+        "&endpoint_type=openai-response&stream=true"
+    ),
 }
 JOIN_STABILITY_WINDOW_MIN = 10  # 加入后稳定性监控窗口（分钟）
 JOIN_STABILITY_CHECK_INTERVAL = 3  # 稳定性检查间隔（检查周期数，即 3*15s=45s）

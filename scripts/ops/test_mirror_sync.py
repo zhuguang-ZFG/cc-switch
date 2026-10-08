@@ -46,5 +46,28 @@ class MirrorSyncTests(unittest.TestCase):
                 )
 
 
+# agentrouter 桥（NewAPI ch180 唯一上游）2026-10-08 起入仓托管：事故复盘必须能拿到
+# 实际运行的版本，且它已承载 payload sanitizer / key×网关重试分层 / 耗尽 503 三处行为。
+BRIDGE_REPO = REPO_DIR / "agentrouter-proxy.py"
+BRIDGE_LIVE = Path.home() / ".kimi-code" / "proxies" / "agentrouter-proxy" / "agentrouter-proxy.py"
+
+
+@unittest.skipUnless(BRIDGE_LIVE.is_file(), "生产桥不存在（非生产机）")
+class AgentrouterBridgeMirrorTests(unittest.TestCase):
+    def test_bridge_mirror_is_byte_identical(self) -> None:
+        self.assertTrue(BRIDGE_REPO.is_file(), f"仓库镜像缺失: {BRIDGE_REPO}（先镜像再提交）")
+        self.assertEqual(
+            BRIDGE_REPO.read_bytes(),
+            BRIDGE_LIVE.read_bytes(),
+            "agentrouter-proxy.py 镜像漂移：改仓库侧后跑 "
+            "`python scripts/ops/deploy_agentrouter_proxy.py --apply` 部署到生产",
+        )
+
+    def test_pooled_keys_are_never_mirrored(self) -> None:
+        """keys.json 含上游密钥，只作比对哈希，绝不入仓。"""
+        self.assertFalse((REPO_DIR / "keys.json").exists(),
+                         "密钥文件不得镜像进仓库（deploy 脚本只记录其哈希）")
+
+
 if __name__ == "__main__":
     unittest.main()

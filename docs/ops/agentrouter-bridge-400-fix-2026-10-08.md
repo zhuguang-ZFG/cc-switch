@@ -101,16 +101,33 @@ NewAPI 侧（`REQUIRED_OPTIONS` 钉死，见 `newapi-local-smoke.py`）：
   `keys` 数组），备份 `keys.json.bak-20261008-200141-drop-key0`；mtime 热加载生效
   无需重启，`/health` 报 keys=3，NewAPI 端到端 `deepseek-v4-flash` 并发 4/4 200。
   key3（严格后端 keyside 400）暂留池——冷却换 key 逻辑已能确定性绕开，摘除与否待观察。
-  **20:11 复发（归因未定，勿当结论）**：key0 摘除后仍观察到 `400 keyside`（20:11:01 / 20:11:11）。
-  按 key 逐把探针（3 把 × 双网关，触发器 payload＝assistant 空 `reasoning_content`，20:2x 实测）
-  **6/6 全 200**，即"某把 key 确定性 400"不再复现（key0 摘除后池已轮换）；桥对 keyside 分支只记
-  状态码与网关、不记 400 body，故当前**无法把复发归因到具体 key 或具体字段**。若要定位，需给
-  keyside 分支补一行 body 截断日志（待授权）。503 改动已保证复发不再外溢为客户端 400。
+  **20:11 复发 → 2026-10-08 20:37 归因落定（keyside body 日志第一现场）**：key0 摘除后
+  仍观察到 `400 keyside`（20:11:01 / 20:11:11）。桥于 20:3x 补上 keyside 分支的 body
+  截断日志（≤200 字符）+ 每把 key 的 8 位 SHA1 指纹（`keyfp`）后，**当场抓获**：
+  `↻ 400 keyside | ps.air-outer.com/v1 | keyfp=5620f43f | body={"error":{"message":"The
+  `content[].thinking` in the thinking mode must be passed back to the API ..."}}`。
+  指纹归因：池内 3 把 key 的 keyside 400 出现次数 = `{5620f43f:3, 93743b7f:2, c41b5727:1}`
+  （keys[0/1/2] 全部中招）——**不是"某把坏 key"，是字段层问题**：多轮会话里 assistant
+  `reasoning_content` 走 NewAPI 重序列化/桥 sanitizer 补齐后，ps.air-outer.com 严格后端
+  要求 thinking 载荷以 `content[].thinking` 结构回传；agentrouter.org 宽松放行，故同
+  payload 换网关即成功（20:37 实例：`keyside → 500 transient → agentrouter.org stream ok 13s`）。
+  逐 key × 双网关 6/6 200 的旧探针结论作废原因：该触发器 payload 未复现 158-msg 长会话的
+  thinking 载荷；日志归因（3 key 均失败）覆盖它。修复方向（供后续）：sanitizer 对
+  `reasoning_content` 的补齐逻辑仅补字面占位，未规整 `content[].thinking` 结构；或对该
+  严格射线挂 `content[].thinking` 适配层。
 - ~~ch180 `param_override: delete reasoning_effort` 是否撤销~~
   **2026-10-08 用户裁决：保持现状（不撤）**。量化依据（同 prompt、`max_tokens=600`、每档 2 次）：
   桥直连 `max` 思维链 541/236 字符 vs `minimal` 51/75；经 NewAPI（override 删字段）两档均 50~70 字符
   ——上游认档位，是 override 把它抹平。故主链实质锁在上游默认档（官方口径 `high`），且关思考的旁路
   也不通（`thinking:{type:disabled}`/`enable_thinking:false` 实测均无效）。详见
   `newapi-deepseek-v4-flash-pool-2026-10-08.md` 思考强度一节。
-- 桥 sanitizer/重试改动是否镜像一份到 `scripts/ops/`（现仅生产文件；耗尽状态码已有
-  仓库侧不变式测试 `test_agentrouter_exhaustion_status.py`）。
+- ~~桥 sanitizer/重试改动是否镜像一份到 `scripts/ops/`（现仅生产文件；耗尽状态码已有
+  仓库侧不变式测试 `test_agentrouter_exhaustion_status.py`）。~~
+  **2026-10-08 20:3x 执行（用户授权）**：桥已入仓托管——`scripts/ops/agentrouter-proxy.py`
+  为可审阅真源（含 keyside body 截断日志 + key 指纹），部署经
+  `scripts/ops/deploy_agentrouter_proxy.py`（`--check` 漂移门禁 / `--apply` 备份+原子替换+
+  guardian 重启+健康+生产探针 / `--restart` / `--rollback`，manifest 落
+  `~/.kimi-code/proxies/agentrouter-proxy/backups/`），`test_mirror_sync.py` 增
+  bridge 逐字节一致门禁 + keys.json 永不入仓断言（5/5 OK）。当前 deployed
+  `d589b043`（backup `.bak-20261008-203605`，pre-image `b5c81de7`），
+  `--check` 输出 `in sync`。
