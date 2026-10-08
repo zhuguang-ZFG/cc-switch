@@ -53,6 +53,18 @@
   `~/.omp/agent/backups/models.yml.bak-20261008-flash-efforts-max`）。依据与生效面见下节。
 - 新增注释说明聚合池构成与申报依据
 
+### 2026-10-08 晚：全库 compactionModel 换轨（A1 处置，用户授权）
+
+原全局 `compactionModel: zg-newapi/omen-alpha` **断链**——唯一承载 ch125
+（opencode-go 免费档）实测 429 `GoUsageLimitError`（窗口限额）被 auto_ban 禁用
+（ch130 space-bunny 同态）。130 处活引用 + 1 处注释模板整体替换为
+`zg-newapi/deepseek-v4-flash`（本聚合池）。
+
+- 备份：`~/.omp/agent/models.yml.bak-20261008-compaction-omen2ds`
+- 验证：YAML 解析 OK、`test_omp_routes` 40/40 OK、compaction 目标网关实弹 200/3.5s
+  （含 reasoning 面，content 正常）
+- omen-alpha 条目本身保留在 models.yml（死条目批量摘除属 B 类，另行处置）
+
 ## 思考强度（effort）口径
 
 官方（`api-docs.deepseek.com/zh-cn/guides/thinking_mode`、`news/news260424`）：V4-Flash
