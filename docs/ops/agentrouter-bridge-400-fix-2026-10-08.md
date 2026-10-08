@@ -54,5 +54,11 @@ OMP → 本地 NewAPI（`127.0.0.1:3002`）→ ch180 agentrouter（`ps.air-outer
 
 ## 待示下
 
-- keys.json key0（额度尽）/key3（严格后端）是否摘除；现靠冷却逻辑自动绕开。
+- ~~keys.json key0（额度尽）/key3（严格后端）是否摘除~~
+  **2026-10-08 20:01 处置**：逐 key × 双上游探针实锤 key0 = air-outer 403
+  `user quota is not enough`（key1/2/3 同探 200；agentrouter.org 当日对四把全 503，
+  站面另议）。已将 key0 移入 keys.json `keys_disabled`（带 reason/时间戳，桥只读
+  `keys` 数组），备份 `keys.json.bak-20261008-200141-drop-key0`；mtime 热加载生效
+  无需重启，`/health` 报 keys=3，NewAPI 端到端 `deepseek-v4-flash` 并发 4/4 200。
+  key3（严格后端 keyside 400）暂留池——冷却换 key 逻辑已能确定性绕开，摘除与否待观察。
 - 桥 sanitizer/重试改动是否镜像一份到 `scripts/ops/`（现仅生产文件）。
