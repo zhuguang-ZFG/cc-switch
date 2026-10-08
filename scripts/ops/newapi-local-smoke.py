@@ -1170,13 +1170,31 @@ def main() -> int:
             option_status == 200 and not affinity_violations,
             f"HTTP {option_status} violations={affinity_violations or 'none'}",
         )
-        status, ch = http_json(
-            f"{NEWAPI_BASE}/api/channel/?p=0&page_size=200",
-            headers=headers,
-        )
-        items = (ch.get("data") or {}).get("items")
-        if items is None:
-            items = ch.get("data")
+        # fork 渠道列表 API 每页硬顶 100（page_size>100 被钳制）且 p=0 是特例
+        # （只回首页，与 p=1 同集合）：真翻页从 p=1 起。2026-10-08 起渠道数超 100
+        # （104），单页抓取会静默丢渠道、enabled/unexpected_disabled 归因失真。
+        # 按页拉全（total 对账），丢页即 FAIL。
+        items: list = []
+        status = 0
+        ch = {}
+        for page in range(1, 21):
+            status, ch = http_json(
+                f"{NEWAPI_BASE}/api/channel/?p={page}&page_size=100",
+                headers=headers,
+            )
+            data = ch.get("data") if isinstance(ch, dict) else None
+            page_items = data.get("items") if isinstance(data, dict) else data
+            if status != 200 or not isinstance(page_items, list):
+                break
+            items.extend(page_items)
+            total = data.get("total") if isinstance(data, dict) else None
+            if not page_items or (isinstance(total, int) and len(items) >= total):
+                break
+        if isinstance(ch.get("data"), dict):
+            total_field = ch["data"].get("total")
+            if isinstance(total_field, int) and len(items) != total_field:
+                # 翻页不完整：置 status 让下方统一校验路径报 FAIL（不静默绿）。
+                status = 999
         # 渠道接口异常（500 + 空 body 等）不得误报健康：先校验状态码和 items 结构
         if status != 200 or not isinstance(items, list):
             check("channels", False, f"bad response: HTTP {status}, items={str(items)[:80]!r}")
