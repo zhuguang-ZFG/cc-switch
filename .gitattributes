@@ -25,6 +25,11 @@
 # Shell scripts
 *.sh text eol=lf
 
+# Python (mirror gates in test_mirror_sync.py compare repo bytes to LF-only
+# live copies under ~/.omp and ~/.kimi-code; autocrlf=true would otherwise
+# materialize CRLF on checkout and false-fail byte identity)
+*.py text eol=lf
+
 # Denote all files that are truly binary and should not be modified.
 *.png binary
 *.jpg binary
