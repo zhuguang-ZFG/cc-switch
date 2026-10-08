@@ -40,11 +40,15 @@ OMP → 本地 NewAPI（`127.0.0.1:3002`）→ ch180 agentrouter（`ps.air-outer
 
 - `qwen3.8-flash-next`：models.yml L543 已入库（10-07 批次）；10-08 OMP 实弹
   `omp -p --model zg-newapi/qwen3.8-flash-next` **200 闭环**。
-- `mistral-large-4-0`：用户点名入库 → models.yml 已加条目，但**站侧确定性 503**
-  `No available channel for model ... (distributor)`（错误体来自 muyuan 自身路由层；
-  同渠道对照组 mistral-code-latest 200，本地 channels/abilities enabled=1 健康；
-  10-06 曾实弹 200、10-07 403 tier_not_allowed、10-08 503——站侧动态门，本地无可修缺陷）。
-  条目注释标注"站侧503待恢复勿入主链"，站恢复即插即用。
+- `mistral-large-4-0`：用户点名入库 → models.yml 曾加条目，**OMP 实弹确定性 503**
+  报错（用户回报）。NewAPI 日志归因（`channel error (channel #173, status code: 503)`
+  ×多轮）：本地路由正确选中 ch173、abilities enabled=1、本站 token 组为 default，
+  错误体 `No available channel ... under group auto (distributor)` 来自 **muyuan
+  自身 NewAPI 分销层**（"group auto" 是站侧分组）透传——站侧模型门死，本地无可修
+  缺陷。models.yml 无"禁用条目"机制，保留必报错 → **当日摘回**，models.yml 注释留
+  完整条目模板与复活条件（channel test 200 后加回）。同渠道对照组
+  （qwen3.8-flash-next/mistral-code-latest）不受影响；ch173 未被 503 连坐禁用
+  （status=1，abilities 全 enabled，auto_ban 未触发）。
 
 ## 回归
 
