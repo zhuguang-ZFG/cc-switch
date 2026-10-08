@@ -56,6 +56,42 @@ OMP → 本地 NewAPI（`127.0.0.1:3002`）→ ch180 agentrouter（`ps.air-outer
 - `python3 scripts/ops/newapi-local-smoke.py`：3 FAIL 与存量基线一致
   （channel model isolation / fallback channel posture / primary opus pool posture），无新增。
 
+## 重试耗尽状态码：4xx/502 → 503（2026-10-08 20:1x）
+
+**症状**（用户当场报障）：OMP 弹 `400 openai_error (bad_response_status_code)`，
+抓包 `~/.omp/logs/http-400-requests/1791461385299-3q6plsb657reb.json`
+（20:09:45，`deepseek-v4-flash`，12 tools，158 msgs，`reasoning_effort=high`，
+非本次 `max` 改动引入）。桥侧同一请求 rid=`acf4aa62` 的轨迹：
+
+```
+20:09:18 ▶ msgs=158         20:09:28 ↻ 400 keyside | ps.air-outer.com | key cooled
+20:09:32 ↻ 500 transient    20:09:38 ↻ 400 keyside | agentrouter.org | key cooled
+20:09:38 ↻ 全网关 transient  20:09:45 ↻ 400 keyside | ps.air-outer.com | key cooled
+```
+
+**根因**：`_forward()` 重试预算耗尽后 `raise HTTPException(status_code=last_status)`——
+把**最后一个上游状态**（keyside 400）或初始默认 `502 "no keys"` 原样抛给客户端。
+NewAPI 侧（`REQUIRED_OPTIONS` 钉死，见 `newapi-local-smoke.py`）：
+
+- `AutomaticRetryStatusCodes = 408,500-503` → **4xx 不触发 failover**，ch118/ch15 备链
+  形同不存在（这正是 20:09:45 用户看到裸 400 的原因）；
+- `AutomaticDisableStatusCodes = 401,402,403,502` → 默认 `502 "no keys"` 落在**自动禁用集**内，
+  key 池全冷却时会把主渠 ch180 连坐禁用。
+
+**修复**（仅桥侧，`agentrouter-proxy.py`；备份 `.bak-20261008-exhaustion503`，md5 `148ee097…`）：
+两处耗尽出口统一改为 `503`（含 `/v1/models` 侧原 502），detail 标 `upstream_exhausted`。
+503 进重试集触发备链 failover，且不在自动禁用集。
+
+**验证**：
+- 隔离复现（桩上游恒返 keyside 400，脚本 `scripts/ops/test_agentrouter_exhaustion_status.py`）：
+  改前 keyside 耗尽=`400`、空池=`502` → 改后两者均 `503`（`python3 -m unittest scripts.ops.test_agentrouter_exhaustion_status` → 2/2 OK）。
+- 生产重启：`taskkill /PID 26464` → guardian 35s 内起新进程 `/health` 200 `keys=3`。
+- 生产形态探针（经 NewAPI 3002，tools+stream，effort=high）→ **200 / 3.4s / 带 reasoning**。
+- 改后桥日志仍见 keyside/500 抖动（13 次），但不再出现「耗尽即 4xx」：20:17:04 一次
+  `500 transient → 400 keyside → 全网关 transient` 后同请求 **stream ok（20.0s）**。
+- 回滚：`cp agentrouter-proxy.py.bak-20261008-exhaustion503 agentrouter-proxy.py` +
+  `taskkill` 该进程，guardian ≤15s 自动拉起（`HEALTH_CHECK_INTERVAL=15`）。
+
 ## 待示下
 
 - ~~keys.json key0（额度尽）/key3（严格后端）是否摘除~~
@@ -65,4 +101,16 @@ OMP → 本地 NewAPI（`127.0.0.1:3002`）→ ch180 agentrouter（`ps.air-outer
   `keys` 数组），备份 `keys.json.bak-20261008-200141-drop-key0`；mtime 热加载生效
   无需重启，`/health` 报 keys=3，NewAPI 端到端 `deepseek-v4-flash` 并发 4/4 200。
   key3（严格后端 keyside 400）暂留池——冷却换 key 逻辑已能确定性绕开，摘除与否待观察。
-- 桥 sanitizer/重试改动是否镜像一份到 `scripts/ops/`（现仅生产文件）。
+  **20:11 复发（归因未定，勿当结论）**：key0 摘除后仍观察到 `400 keyside`（20:11:01 / 20:11:11）。
+  按 key 逐把探针（3 把 × 双网关，触发器 payload＝assistant 空 `reasoning_content`，20:2x 实测）
+  **6/6 全 200**，即"某把 key 确定性 400"不再复现（key0 摘除后池已轮换）；桥对 keyside 分支只记
+  状态码与网关、不记 400 body，故当前**无法把复发归因到具体 key 或具体字段**。若要定位，需给
+  keyside 分支补一行 body 截断日志（待授权）。503 改动已保证复发不再外溢为客户端 400。
+- ~~ch180 `param_override: delete reasoning_effort` 是否撤销~~
+  **2026-10-08 用户裁决：保持现状（不撤）**。量化依据（同 prompt、`max_tokens=600`、每档 2 次）：
+  桥直连 `max` 思维链 541/236 字符 vs `minimal` 51/75；经 NewAPI（override 删字段）两档均 50~70 字符
+  ——上游认档位，是 override 把它抹平。故主链实质锁在上游默认档（官方口径 `high`），且关思考的旁路
+  也不通（`thinking:{type:disabled}`/`enable_thinking:false` 实测均无效）。详见
+  `newapi-deepseek-v4-flash-pool-2026-10-08.md` 思考强度一节。
+- 桥 sanitizer/重试改动是否镜像一份到 `scripts/ops/`（现仅生产文件；耗尽状态码已有
+  仓库侧不变式测试 `test_agentrouter_exhaustion_status.py`）。

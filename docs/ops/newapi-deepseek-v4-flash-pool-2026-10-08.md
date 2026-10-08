@@ -49,7 +49,46 @@
 - name：`DeepSeek V4 Flash (NewAPI 聚合池: ch180 主 / ch118 备 / ch15 末)`
 - contextWindow：`1000000 → 262144`（对齐主渠 ch180 实测能力，避免 1M 申报导致 262K~1M 输入失败）
 - maxTokens：`131072` 保留（ch180 实测接受）
+- efforts：`[low, medium, high, xhigh] → [low, medium, high, xhigh, max]`（2026-10-08，备份
+  `~/.omp/agent/backups/models.yml.bak-20261008-flash-efforts-max`）。依据与生效面见下节。
 - 新增注释说明聚合池构成与申报依据
+
+## 思考强度（effort）口径
+
+官方（`api-docs.deepseek.com/zh-cn/guides/thinking_mode`、`news/news260424`）：V4-Flash
+思考强度参数为 `reasoning_effort`，可用 `low/high/max`，`minimal/low→low`、`medium/high/xhigh→high`、
+`ultra→max`；默认 `high`，官方建议 agent 场景用 `max`。
+
+三跳现状（2026-10-08 实测）：
+
+| 跳 | `reasoning_effort` 处置 | 实测 |
+|---|---|---|
+| ch180 主（agentrouter，经 8788 桥） | NewAPI 渠道 `param_override` = `{"operations":[{"path":"reasoning_effort","mode":"delete"}]}` | 桥直连 `high/xhigh/max/ultra` 全 200；删字段后同样 200 |
+| ch118 备（seeseed） | 透传 | 直通 `low/medium/high/xhigh/max` 全 200 |
+| ch15 末（sensenova） | `param_override` 条件钳制 `max → xhigh`（见 `scripts/ops/clamp_ch15_reasoning_effort.py`） | 该上游白名单仅 `low/medium/high/xhigh/none` |
+
+**已知取舍**：主链 ch180 会在出网前删掉 `reasoning_effort`（沿用内容过滤规避决策，见
+`agentrouter-content-filter-false-positive-2026-08-21.md`），故主链上选档位不改变上游请求体——
+档位差异实际只在 ch118/ch15 备链、或 ch180 override 撤销后才生效。回放 400 抓包体（696KB、
+12 tools、stream）经 NewAPI 与桥直连均 200，400 已非现网复现项。
+
+**override 生效性量化实证**（2026-10-08 20:2x，同一 prompt `Reply with exactly:`，`max_tokens=600`，
+每档 2 次）：
+
+| 下发路径 | `reasoning_effort=minimal` | `reasoning_effort=max` |
+|---|---|---|
+| 桥直连 8788（字段到达上游） | 思维链 51 / 75 字符，19 / 25 token | 思维链 **541 / 236 字符，139 / 56 token** |
+| 经 NewAPI 3002（ch180 override 删字段） | 70 / 53 字符 | **53 / 63 字符**（与 minimal 无差别） |
+
+结论修正：**上游是认档位的**（直连 max 约为 minimal 的 6~10 倍思维量），此前的"上游对档位不敏感"
+判断是简单题上小样本噪声（以及 3000-token 饱和题把各档位都顶满预算）造成的误读。因此：
+不撤 override ⇒ 主链实质固定在**上游默认档**（官方口径 `high`），既升不到 `max` 也降不到 `low`；
+关闭思考的旁路同样不通——`thinking:{"type":"disabled"}`、`enable_thinking:false` 在该上游均无效
+（实测仍返回 `reasoning_content`）。用户 2026-10-08 裁决：**保持现状（不撤 override）**。
+
+验证：`omp models` 生效白名单含 `max`；`omp -p --model zg-newapi/deepseek-v4-flash:max`
+→ 回复目标串、日志全部落 ch180 `type=2`（成功）；`python3 -m unittest scripts.ops.test_omp_routes`
+→ 40/40 OK。
 
 ## 注意事项
 
