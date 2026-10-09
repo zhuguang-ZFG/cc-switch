@@ -33,10 +33,11 @@ API_KEY = 'sk-XgEtMUd1JkqJOXcqxxCUR52zOi7MSeC76Lf5NvDQl2tirV0y'
 LOG_FILE = Path.home() / '.omp' / 'logs' / 'ch173-monitor.log'
 
 EMBEDDING_MODELS = [
-    'mistral-embed-2312',  # Primary (fastest)
-    'codestral-embed-2505',
-    'mistral-embed',
-    'codestral-embed',
+    'mistral-embed-2312',  # Primary (fastest, ch173)
+    'codestral-embed-2505',  # ch173
+    'mistral-embed',  # ch173
+    'codestral-embed',  # ch173
+    'jina-embeddings-v3',  # Backup (ch187)
 ]
 
 # Alert thresholds
