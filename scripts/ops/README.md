@@ -571,3 +571,10 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   4/4 全 200；**5h 额度窗（00:11/05:11/10:11/15:11 刷新），key 10-10 15:11
   到期即摘除**；runbook 见
   `docs/ops/agentrouter-ch127-revival-jhsy-midjok-2026-10-09.md` 增补节
+- Free 组批量补行（2026-10-10，用户授权）：全库聚合审计发现 60 模型
+  default 有路由而 Free 零行（glm-5.3/claude 全家/grok 全家/step-5-preview
+  等，OMP 走 Free ⇒ 批量"无渠道"假象）；镜像 default 行批量 INSERT 99 行
+  （渠道限 status=1），回读遗漏=0，抽测 glm-5.3→ch142/step-5→ch184/
+  u2-flash→ch138 全 200；快照 `new-api-before-free-backfill-<ts>.db`；
+  **单腿高危遗留**：ch192 到期（10-20）前需为 deepseek-v4-pro/glm-5.2/
+  kimi-k2.6/k2.7-code 找备份源；审计脚本为临时件未落仓，SQL 口径见 runbook

@@ -92,6 +92,23 @@ hubway runbook（10-07）曾判定 ch127 `agentrouter-codex-gpt` 上游死亡并
   404=无目录端点，exact-id；**5 小时额度窗（00:11/05:11/10:11/15:11 刷新），
   key 2026-10-10 15:11 到期即摘除**；快照 `new-api-before-free-abilities-<ts>.db`
 
+## 全库 Free 组覆盖审计与批量补行（2026-10-10，用户授权）
+
+- 聚合审计三类发现：①声明未挂路由仅 ch196 `deepseek-v4-flash-0731`（刻意停用）
+  ②**60 模型 default 有路由而 Free 零行**（含 glm-5.3/intern-s2/qwen3-8-27b/
+  claude 全家/grok 全家/step-5-preview/u2-flash 等，OMP token 走 Free ⇒ 整批
+  "不可用"假象）③44 个单腿模型
+- `newapi-before-free-backfill-<ts>.db` 备份后批量镜像：**99 行 / 60 模型**
+  （复制 default 行的 enabled/priority/weight/tag，渠道限 status=1），回读
+  遗漏=0
+- 抽测 3/3 全 200 且归因正确：glm-5.3→ch142 1.6s、step-5-preview→ch184 2.4s、
+  u2-flash→ch138 1.7s
+- **遗留清单（单腿高危）**：deepseek-v4-pro/glm-5.2/kimi-k2.6/k2.7-code 全压
+  ch192 longai（**10-20 key 到期**，需提前找备份源）；claude-fable-5.1 仅 ch3、
+  grok-4.x 仅 ch109、mercury-2 仅 ch61、sensenova 系仅 ch15——列入后续渠道
+  发现/羊毛增厚；结构性单源（ch178 zen 桥、ch181 jev、ch187 jina、ch202 ctyun）
+  无法聚合、接受现状
+
 ## SenseAudio 福利羊毛（api.senseaudio.cn）— 用户决定跳过
 
 - 端点存活（401 规范鉴权应答）；用户转发的 key 为兽音译者混淆文本，
