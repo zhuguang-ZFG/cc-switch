@@ -520,3 +520,19 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   k3-256k/kimi-for-coding(-highspeed) 复活条件已满足（网关目录重现），
   形状自 git 522a6d5/24853ce 回捞，待渠道落地后插回并 E2E；
   文档 `docs/ops/ss2a-kimi-channel-2026-10-09.md`。
+- jojatoken 四 key 池（2026-10-09，ch188-191）：jojatoken.com 8 模型（GPT
+  sol/terra/luna/astra 家族）exact-id 全量透传，p-20/w1×4 单 key 渠道聚合
+  （agentrouter 四 key 池先例，规避 fork 多 key 坑）；gpt-6-luna/gpt-6-sol
+  零活跃渠道补空；**上游有反探测风控**（短输入 400 distillation/heartbeat、
+  连发 429）→ relay 探针自然长度 prompt + 4s 节流 + 有界重试（含
+  TimeoutError/OSError 裸抛捕获）；gpt-6-sol/6.1-sol/6-astra 无 ModelRatio
+  走默认倍率（既有 open item 只读）；`add_jojatoken_channel.py`
+  （`--keys-file`、`--resume`），快照 ×4，runbook 见
+  `docs/ops/jojatoken-longai-channels-2026-10-09.md`
+- longai 单 key 聚合（2026-10-09，ch192）：llm.longai.vip 7 模型
+  p19/w1（居所有现有主力之下），glm-5.3-flash/deepseek-v4-pro/kimi-k2.6/
+  kimi-k2.7-code/qwen3.8-max 零活跃渠道补空；qwen3.8-flash 排除（上游自身
+  distributor 冷却 503 + 本地无 ModelRatio）；glm-5.3 首响 ~60s 慢，
+  test_model 走 glm-5.3-flash；**key 2026-10-20 到期**，续期后 `--resume`；
+  同晚 ch173 muyuan-gongyi 上游 401 Invalid token 经用户授权禁用，
+  glm-5.2 由 ch192 接管；`add_longai_channel.py`，runbook 同上
