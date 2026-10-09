@@ -58,6 +58,21 @@ hubway runbook（10-07）曾判定 ch127 `agentrouter-codex-gpt` 上游死亡并
   流量）；是否补 Free 待用户决策，本轮未动
 - ch193 当晚已见真实服务记录（gpt-5.6-sol relay 归因 ch193）
 
+## Claude 池 ch86/134/135/136 key 对齐（用户授权，同晚）
+
+- 指纹对账：ch86/ch134/ch136 三把 key 本就在验证过的五 key 池内；**ch135
+  持有的是被删/失效 key（fp 5e089d4f，不在池）** → 换成有效池闲置腿
+  sk-nAax0…（fp 22ccd1e1）；第五把 sk-vBV8P…（4ecda142）继续只挂 ch127
+- 四渠道统一补 `header_override` claude-cli 头集（ps.air-outer.com 与
+  agentrouter.org 同指纹门、同后端）
+- 逐渠道直连双 host 探针（自然长度 prompt）：**8/8 全 402 `Budget pool
+  quota has been exhausted`** ⇒ key 有效、鉴权通过，Claude 预算池自 10-02
+  账户级耗尽后仍未回血
+- 姿态：**维持 status=2 fail-closed 停泊**（启用会被 402 关键词扫描/
+  auto_ban 立刻打回，徒增噪音）；上游补预算后一步启用（status=1 +
+  abilities 随行），header/key 均已就绪
+- 备份：`new-api-before-agent-claude-pool-<ts>.db`
+
 ## SenseAudio 福利羊毛（api.senseaudio.cn）— 用户决定跳过
 
 - 端点存活（401 规范鉴权应答）；用户转发的 key 为兽音译者混淆文本，
