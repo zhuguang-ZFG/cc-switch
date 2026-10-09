@@ -140,20 +140,18 @@ fn import_pi_from_live(state: &crate::store::AppState) -> Result<usize, AppError
         if let Ok(Some(default_provider)) = pi_config::get_default_provider() {
             if default_provider != pi_config::PI_PROXY_PROVIDER
                 && !default_provider.starts_with("cc-switch-")
-            {
-                if state
+                && state
                     .db
                     .get_provider_by_id(&default_provider, "pi")
                     .ok()
                     .flatten()
                     .is_some()
-                {
-                    let _ = state.db.set_current_provider("pi", &default_provider);
-                    let _ = crate::settings::set_current_provider(
-                        &crate::app_config::AppType::Pi,
-                        Some(&default_provider),
-                    );
-                }
+            {
+                let _ = state.db.set_current_provider("pi", &default_provider);
+                let _ = crate::settings::set_current_provider(
+                    &crate::app_config::AppType::Pi,
+                    Some(&default_provider),
+                );
             }
         }
     }
