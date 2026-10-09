@@ -70,6 +70,15 @@ BACKUP_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     97: {"max_priority": 50, "max_weight": 5},   # tabitoken-1
     98: {"max_priority": 50, "max_weight": 5},   # tabitoken-2
     123: {"max_priority": 0, "max_weight": 1},   # zzzcoding（zz_gate.py 门控；p0 兜底层，2026-08-30 自 p60 降级：空窗 p60 实测泄漏 500）
+    # 2026-10-09 新增渠道契约（备份/免费层，priority 不得超过上限）
+    173: {"max_priority": 20, "max_weight": 1},  # muyuan-gongyi（mistral/glm/qwen 系）
+    174: {"max_priority": -10, "max_weight": 1}, # grok-heavy-indevs（gpt-5.6-luna 主档）
+    175: {"max_priority": -20, "max_weight": 1}, # hubway（gpt-6-sol 等 p-20 备份）
+    178: {"max_priority": 0, "max_weight": 5},   # zen-free-bridge（免费层）
+    181: {"max_priority": 0, "max_weight": 5},   # jev-systemone-bridge
+    182: {"max_priority": 20, "max_weight": 5},  # asvla-gpt-6-astra
+    184: {"max_priority": 0, "max_weight": 2},   # opencode-go-step-5-preview（限时免费）
+    185: {"max_priority": 30, "max_weight": 1},  # 0v0（glm-4.5-air/glm-4.6v）
 }
 
 # Model isolation is channel-specific. AgentRouter (ch45) is GLM-only as of
