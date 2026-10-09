@@ -116,7 +116,7 @@ impl ModelMapping {
     }
 
     fn matches_configured_upstream(&self, original_model: &str) -> bool {
-        for ref m in [
+        for m in [
             &self.haiku_model,
             &self.sonnet_model,
             &self.opus_model,

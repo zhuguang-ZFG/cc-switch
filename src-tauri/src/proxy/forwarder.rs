@@ -1666,7 +1666,7 @@ impl RequestForwarder {
                 mapped_body,
                 DEFAULT_REASONIX_ANTHROPIC_MAX_TOKENS,
             )?;
-            if !anthropic_body.get("max_tokens").is_some() {
+            if anthropic_body.get("max_tokens").is_none() {
                 anthropic_body["max_tokens"] = Value::from(DEFAULT_REASONIX_ANTHROPIC_MAX_TOKENS);
             }
             // Same [1m] contract as Codex→Anthropic: strip for the wire model id and

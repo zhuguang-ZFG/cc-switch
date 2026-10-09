@@ -617,11 +617,9 @@ pub fn create_openai_chat_sse_stream_from_anthropic<E: std::error::Error + Send 
             }
         }
 
-        if !stream_failed && !state.completed {
-            if state.stop_reason.is_some() || state.started {
-                for event in state.finalize() {
-                    yield Ok(event);
-                }
+        if !stream_failed && !state.completed && (state.stop_reason.is_some() || state.started) {
+            for event in state.finalize() {
+                yield Ok(event);
             }
         }
     }

@@ -10,16 +10,14 @@ use tauri::State;
 /// 聚合统计查询跑在 blocking 线程池：这些命令由仪表盘高频轮询，
 /// 同步命令会在主线程上执行多路 UNION 聚合并与代理日志写入争抢
 /// 全局连接互斥，造成 UI 卡顿。
-fn spawn_usage_query<T, F>(f: F) -> impl std::future::Future<Output = Result<T, AppError>>
+async fn spawn_usage_query<T, F>(f: F) -> Result<T, AppError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, AppError> + Send + 'static,
 {
-    async move {
-        tauri::async_runtime::spawn_blocking(f)
-            .await
-            .map_err(|e| AppError::Message(format!("Usage stats task failed: {e}")))?
-    }
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Message(format!("Usage stats task failed: {e}")))?
 }
 
 /// 获取使用量汇总
