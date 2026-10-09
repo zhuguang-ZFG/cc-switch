@@ -50,7 +50,7 @@ Important invariants:
 - `src-tauri/src/*_config.rs` — app-specific live config readers/writers.
 - `tests/` — frontend Vitest tests and MSW/Tauri mocks.
 - `src-tauri/tests/` — Rust integration tests using isolated temp HOME and real service APIs.
-- `docs/ops/` — local NewAPI/DX ops policy and historical runbooks; verify current docs before treating scripts as live.
+- `docs/ops/archive/` — local NewAPI/DX ops policy and historical runbooks (archived); verify current docs before treating scripts as live.
 - `scripts/` — maintenance/smoke scripts; `scripts/ops/` contains NewAPI/VPS operational mirrors, several historical.
 - `.trellis/` — Trellis task/spec/workflow context. Read relevant specs before code changes.
 
@@ -135,7 +135,7 @@ Project-level rules:
 - `src-tauri/src/services/provider/mod.rs`, `services/proxy.rs` — highest-impact provider/proxy business logic.
 - `src-tauri/src/proxy/server.rs`, `handlers.rs`, `forwarder.rs`, `provider_router.rs` — proxy request pipeline.
 - `src-tauri/src/database/mod.rs`, `database/schema.rs` — SQLite init, migrations, schema version.
-- `docs/ops/do-not-modify-cc-switch.md` — binding local ops constraint.
+- `docs/ops/archive/do-not-modify-cc-switch.md` — binding local ops constraint.
 - `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md` — contribution, security, support expectations.
 
 ## Runtime/Tooling Preferences
