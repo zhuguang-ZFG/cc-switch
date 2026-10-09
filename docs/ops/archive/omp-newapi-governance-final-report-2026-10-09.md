@@ -148,10 +148,27 @@ summary: ALL OK
 | agentrouter/glm-5.3 | 1000000 | 131072 |
 | anyrouter-sol/gpt-5.6-sol | 200000 | 400000 |
 
+### 新模型收录
+
+发现 29 个渠道供应模型未收录于 OMP，筛选后添加 7 个有价值的新模型：
+
+| 模型 | 渠道 | 说明 |
+|------|------|------|
+| glm-4.5-air | 0v0 ch185 | GLM 4.5 Air |
+| glm-4.6v | 0v0 ch185 | GLM 4.6V Vision |
+| jev-latest | jev-systemone ch181 | JEV 最新模型 |
+| gpt-5.5 | hubway ch175 | GPT 5.5 |
+| deepseek-v4.1-flash | sensenova ch15 | DeepSeek V4.1 Flash |
+| ling-3.0-flash-fin-free | zen-free-bridge ch178 | Ling 3.0 Flash Fin |
+| step-5-preview | opencode-go ch184 | Step 5 Preview |
+
+**跳过：** embedding 模型、audio 模型、旧版本别名、已知问题模型
+
 ---
 
 **治理完成时间：** 2026-10-09 13:34  
 **思维链修复时间：** 2026-10-09 14:15  
 **上下文修正时间：** 2026-10-09 14:25  
+**新模型收录时间：** 2026-10-09 14:35  
 **执行人：** AI Agent  
 **验证状态：** ✅ ALL OK
