@@ -82,7 +82,7 @@ CHANNEL_MODEL_EXCLUSIONS: dict[int, set[str]] = {
 # Live aggregate fallback contracts. These channels must stay enabled but below
 # the primary pool; model eligibility remains governed separately above.
 FALLBACK_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
-    45: {"priority": 40, "max_weight": 5},
+    # ch45 removed: deleted from live DB (was agentrouter fallback, gone as of 2026-10-09)
     72: {"priority": 40, "max_weight": 5},
 }
 
@@ -212,7 +212,7 @@ AI168661_CHANNEL_CONTRACTS: dict[int, dict[str, object]] = {
 # claude-opus-5 recovery probe still returns upstream 429; Guardian keeps
 # retrying with bounded backoff and re-enable remains automatic on recovery.
 DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
-    45: "agentrouter upstream flapping; disabled 2026-08-10 22:05 by local automation",
+    # ch45 removed: deleted from live DB (was agentrouter fallback, gone as of 2026-10-09)
     72: "anyrouter Claude upstream 429; disabled 2026-08-09 00:10 by Guardian",
     123: "zzzcoding claude pool window; auto-gated by zz_gate.py (status=2 while pool empty, auto re-enable on window)",
 }
@@ -1057,9 +1057,10 @@ def admin_auth() -> tuple[str, str]:
             check("admin token auth", False,
                   f"Guardian token check returned HTTP {status}; password login skipped")
             raise _AdminAuthUnavailable from None
-        check("admin token auth", False,
-              "Guardian token rejected with HTTP 401; password login skipped")
-        raise _AdminAuthUnavailable from None
+        # Guardian token stale (401): drop it and fall through to password login.
+        # Password login caches the session token, so this only costs one
+        # /api/user/login per cache expiry — not per smoke run.
+        _drop_token_cache()
 
     if cached_permission_failure:
         check("admin token auth", False,

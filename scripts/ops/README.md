@@ -254,6 +254,14 @@ watchdog.ps1 同时监视 supervisor 的 `supervisor-status.json` 心跳（stale
 - LongCat 官方源接入：runbook `docs/ops/longcat-official-2026-10-03.md`（ch145 `longcat-official`，LongCat-2.5-Preview 上游标称 1M ctx/262K out；与 ch133 free 变体不同 id 并存；定价未设 open item；一次全绿，E2E LC_OK）
 - LongCat 2.5 Preview 双源聚合：runbook `docs/ops/longcat-preview-unify-2026-10-03.md`（**用户指正：ch133 free 与 ch145 官方是同一模型**；`unify_longcat_preview_sources.py` sqlite 直写（fork 拒 PUT 渠道更新）双渠道互加对方 id + model_mapping，ch145 提 prio 10 为主 / ch133 留 0 为备；abilities 4 行 + 双映射 admin test + 两 id 网关实弹均落 ch145）
 - intern-discovery 池扩充：runbook `docs/ops/intern-discovery-pool-expansion-2026-10-03.md`（+ch146 k5/ch147 k6 单 key 渠道对齐池 prio40/w1；**pool 级归因不能证明新 key** → sha256 幂等 + 逐 key 直连 + 逐渠道 admin test 硬门；既有问题：池载 `qwen3-8-27b` 上游实为 `qwen3.8-27b` 死映射待统一；glm-5.3 官方货源增厚至 6 key 池）
+- opencode-go 套餐变更（Go/Go Plus 双档 + per-model 月度 $ 限额）与 `space-bunny-free`→`space-bunny` 改名：runbook `docs/ops/opencode-go-space-bunny-rename-2026-10-06.md`（ch130 改名 + `ModelRatio[space-bunny]=0`（漏配会按 37.5 计费）+ 临时兼容别名 `models=space-bunny,space-bunny-free` + `model_mapping`（桥接启动期缓存旧名的会话，下架流程见 runbook）；Guardian 对 responses-only 模型（ch131/132/137）补 `endpoint_type=openai-response&stream=true` 测试覆盖 → ch132 自愈回池、ch131 权重复原；`fix_opencode_go_space_bunny_20261006.py`，快照 `new-api-before-opencode-go-spacebunny-20261006-185217.db`；误计费 2,475,076 quota（≈$4.95）待用户确认退还）
+- 42x.shop DeepSeek 渠道（禁用态 fail-closed）：runbook `docs/ops/42x-deepseek-channel-2026-10-06.md`（ch172 `42x-deepseek-v4-flash-0731` p20/w1 手工禁用；上游 `deepseek-v4-flash-0731`/`-free` 实测 502、`deepseek-flash-free` 本 token 403 → 只注册实测存在的 id；启用=上游复测 200 + 定价后 `POST /api/channel/172/status {"status":1}`；`add_42x_deepseek_channel.py`（dry-run 默认，key 走 `FORTYTWOX_KEY` env），快照 `new-api-before-42x-deepseek-20261006-190648.db`）
+- 君の公益 muyuan.do 聚合接入：runbook `docs/ops/muyuan-gongyi-channel-2026-10-06.md`（ch173 `muyuan-gongyi` p20/w1，**27 模型** exact-id 全量透传（GLM-5.3-200k/GLM-5.2-200k/glm-4.5-flash/grok-4.7/qwen3.8-27b/Mistral 全家含 mistral-large-4-0/-4）；glm-5.2 与 ch15 共享池（ch15 p50 主，ch173 备）；其余 26 模型为唯一在营渠道；mistral-large-4-0 首探上游未定价（400），22:13 上游定价后 `--extend` 补入；定价只读对账未改写（25 模型走网关默认倍率，glm-5.2=2/3、glm-4.5-flash=0 已在库）；`add_muyuan_gongyi_channel.py`（dry-run 默认，key 走 `MUYUAN_KEY` env，幂等 resume，纯增量 `--extend`），快照 `new-api-before-muyuan-gongyi-20261006-220441.db` / `-221422.db`；与 ch83 `muyuan-sol`/ch119 `muyuan-glm-5.2`（均 status=2）同域不同渠道勿混淆）
+- grok-heavy.878.indevs.in 接入（ch174）：runbook `docs/ops/grok-heavy-indevs-channel-2026-10-06.md`（ch174 `grok-heavy-indevs` p-10/w1，3 模型 gpt-6-luna/gpt-5.6-luna/gpt-5.6-terra（resp_* 套壳）；ch132/ch137 opencode-go 套餐耗尽经用户授权 status=2 后为 luna 系唯一在营；OMP models.yml 加 gpt-5.6-terra、回加 gpt-5.6-luna（api=openai-responses）；`add_grok_heavy_channel.py`（`GROK_HEAVY_KEY` env），快照 `new-api-before-grok-heavy-indevs-20261006-230018.db`）
+- hubway.cc 接入（ch175 `hubway`）：runbook `docs/ops/hubway-channel-2026-10-07.md`（p-20/w1，7 模型 codex-auto-review/gpt-5.5/gpt-5.6-sol/gpt-5.6-terra/gpt-6-astra/gpt-6-sol/gpt-6.1-sol；gpt-5.6 上游别名死排除；CF 仅 ban python-urllib UA 无需 header_override；canary 两轮 0 issue 含 nested tool；**发现 ch127 agentrouter-codex-gpt 启用态上游死**（sol 503 无可用渠道 / astra 402 budget pool），sol/astra 现由 p-20 层接管；`add_hubway_channel.py`（`HUBWAY_KEY` env），快照 `new-api-before-hubway-20261007-004717.db`）
+- apisub.vsakura.top 接入（ch176 `vsakura-gpt`）：runbook `docs/ops/vsakura-gpt-channel-2026-10-07.md`（深夜福利 3 key：K1 Claude 账号池尽、K2 GLM 分组协议封锁均未接入；K3 组 4 模型 sol/terra/astra/6-sol p-20/w1；注入 ~3.5k token/次、nested tool_choice 缺口、偶发 429/gateway_concurrency_limit 留痕；`add_vsakura_gpt_channel.py`（`VSAKURA_KEY` env），快照 `new-api-before-vsakura-gpt-20261007-005920.db`）
+- asvla.bbqwq.com 接入（ch177 `asvla-claude`）：runbook `docs/ops/asvla-claude-channel-2026-10-07.md`（sub2api“claude满血全系列”，**type=14**，p-20/w1，10 个 Claude 模型；opus-4-6/4-7/sonnet-4-6/5 零渠道唯一来源；canary 0 issue 含 nested tool；接入当日 key 余额耗尽（402 `余额不足`，fail-closed，Guardian 扫描将隔离、充值后恢复）；OMP models.yml 新增 6 条目（zg-newapi-anthropic）；`add_asvla_channel.py`（`ASVLA_KEY` env），快照 `new-api-before-asvla-claude-20261007-011306.db`）
+- zombie 停泊 ch127/ch9（用户授权，2026-10-07）：runbook `docs/ops/zombie-park-ch127-ch9-2026-10-07.md`（ch127 agentrouter 预算池 402/503、ch9 linxi 账号池 503/404 → **status=2 + auto_ban=1** 房式停泊、abilities 随禁、smoke 零新增（`unexpected_disabled=none`）；**实证 fork admin `/status` 拒 status=3**；sol/astra 回归 attr=176/175；ch18 同源死亡待裁决；ch148 活体未动但其 claude 预算池当晚耗尽致 opus-5 全链告急（budsin 充值/重置、linxi 回血、asvla 充值为外部恢复项）；脚本 `park_zombie_channels_20261007.py`，快照 `new-api-before-park-ch127-ch9-20261007-021031.db`）
 
 ## sol 链劣化与亲和迁移（2026-08-16/17）
 
@@ -447,3 +455,68 @@ non-overlapping ten-minute readiness refresh; each run tests only the isolated
 marked channel, enables it only after a management probe, and disables it on a
 strict semantic/log failure. The scripts write
 only bounded readiness metadata and never print keys or raw provider bodies.
+
+- zen-free-bridge（2026-10-07）：`scripts/ops/zen_free_bridge.mjs` 本地 OpenAI 兼容桥，驱动真实 opencode CLI
+  消费 OpenCode Zen 免费档（raw API 一律 403 FreeTierError，CLI 会话通过门禁；账号级每日额度 429=配额非故障）；
+  `scripts/ops/add_zen_free_bridge_channel.py --apply` 按标准合约入网 NewAPI ch178（12 模型 ModelRatio=0，
+  探针 subset 3 模型全 quota-pass），runbook 见 `docs/ops/zen-free-bridge-2026-10-07.md`；
+  配额恢复后逐模型实弹补验（`--probe-all`），Jev 属 SystemOne 决策接口不适用。
+- jev-systemone（2026-10-08）：200 枚官方 key 已入 NewAPI ch181 多 key 轮询池（逐字读回，200/200 官方探针成功）。
+  `scripts/ops/jev_systemone_bridge.mjs`（8413）转发 NewAPI 所选 Bearer 至 api.typesafe.ai；
+  显式 `jev.systemone` 封装保留自选 state/questions，无标记输入保持固定模板。
+  `scripts/ops/add_jev_systemone_channel.py --keys-file <私密文件> --apply` 备份后更新池；
+  `jev_mcp_tool.mjs` 经 NewAPI 调用（不入聊天角色），真实 OMP/MCP/SSE 验证通过；
+  新增 6 项回归通过但 task_verify 仍需评审新测试，见 `docs/ops/jev-systemone-2026-10-08.md`。
+- ss2a（2026-10-08）：glm-5.3 max 官号 relay 入网并**升为主档** — NewAPI ch183
+  `ss2a`（type=1，`https://ss2a.top` 裸 base，单模型 exact-id `glm-5.3`，
+  **p50/w5/auto_ban=1**）。探测：models 200 仅 1 id；直连/SSE 内容+usage 正常，
+  `reasoning_effort=max` 接受；UA 矩阵全 200（无需 header_override）；
+  `glm-5.3-max`/`:max` 404（不建别名）；无 billing 端点。canary
+  `empty-semantic-output` 为 max_tokens=32 预算工件（推理模型吃掉预算），
+  max_tokens=800 重放语义+tool 全过，缓存探测无 suspicious-first-hit。
+  升档后网关实弹 3/3 attr=183（`PRIME_OK`）；intern p40 档
+  ch140/141/142/143/146 保留为自动故障转移档；禁用式故障演练未做（显式
+  未验证）。DB 快照 `new-api-before-ss2a-20261008-232954.db`、
+  `new-api-before-ss2a-promote-20261008-233550.db`（integrity=ok）；
+  文档 `docs/ops/ss2a-channel-2026-10-08.md`。
+- opencode-go-step-5-preview（2026-10-08）：OpenCode 官方限时免费活动
+  （1 周，不消耗 Go 套餐额度）——Step-5-Preview 入网 NewAPI ch184
+  `opencode-go-step-5-preview`（type=1，base `https://opencode.ai/zen/go`，
+  key/header 克隆自 ch130 不落盘，p0/w2，auto=1）。暴露双 id：
+  `step-5-preview-free`（exact 上游 id）+ `step-5-preview`（alias→
+  -free）。实测 200：chat/SSE/vision(1x1 png 判色)/reasoning_effort=max/
+  tool_calls/max_tokens=131072；v1 探测 38 模型目录含 `step-5-preview-free`。
+  网关双 id 实弹归因 ch184；真实 OMP `--print` 全程 STEP_OK；OMP models.yml
+  zg-newapi 增 `step-5-preview-free`（1M context 官方口径未 1M 实测填充、
+  input text+image，活动结束约 2026-10-15 需摘除或改指 arcdent）；
+  文档 `docs/ops/opencode-go-step-5-preview-2026-10-08.md`。
+- k3-outage（2026-10-09）：用户报"glm-5.3 总是报错"实为 **k3 无可用渠道**
+  （OMP plan/designer/task=k3:max；ch33 10-07 起手改禁用、ch115/148 配额死）。
+  NewAPI 即时 503 `No available channel for model k3` ×12（00:07:44-00:08:15），
+  glm-5.3 ch183 同窗 13+ 次全成功。管理探针证 kimi 官方周额度已恢复 →
+  备份后 `POST /api/channel/33/status {"status":1}` 启用（勿用 PUT 改状态），
+  网关 k3 200 + OMP `k3:max` E2E `OMP_K3_OK`；快照
+  `new-api-before-k3-ch33-enable-20261009-001559.db`（integrity=ok）；
+  文档 `docs/ops/k3-outage-misattributed-glm53-2026-10-09.md`。
+- jev-enhance（2026-10-09）：Jev 双开增强——(1) 全局技能
+  `global:jev-second-opinion`（风险交付/方案摇摆时调 jev_judge 拿独立概率，
+  并列上报、分歧标注、失败不阻塞）；(2) `scripts/ops/jev_ops_triage.py`
+  周报判定（channels status≠1 + Guardian disabled/degraded 池 → jev 判
+  persistence/severity，report-only fail-open；**本 fork 不把请求错误写入
+  logs 表**，勿用 logs 扫错误）。实测 76 信号 76 行 ch181 精确 1:1 归因；
+  **契约坑：信封须带 `"type":"jev.systemone"`** 否则桥走固定模板；
+  约束不变：建议信号不 gate 自动决策；见
+  `docs/ops/jev-systemone-2026-10-08.md` 增强节。
+- ss2a-kimi（2026-10-09，⏳待上游恢复 apply）：ss2a.top 新 key 组探测
+  ——仅放行 Anthropic `/v1/messages`（4 kimi id 全 200 实弹；OpenAI 路径
+  502 forbidden → **type=14**；glm/claude id 404=独立分组）。5 模型面：
+  4 真实 id exact-id + `zg-k3→k3` 别名腿（镜像 ch33，消除 Cursor BYOK
+  zg-k3 单源）。**稳定性：burst 型官号池**，首分钟 6×200 后 503/502
+  连续 8/8（~35min 冷却）；
+  同 host glm 组 ch183 同期零异常。定位 ch33（p50）之下的**彩票备份腿**
+  p20/w1/auto_ban=1，直指 k3-outage 遗留的单腿风险。
+  `add_ss2a_kimi_channel.py`（`SS2A_KIMI_KEY` env；管理探针直连门挡
+  冷却期 apply；python3 运行，py launcher 忌 shebang）。OMP 侧
+  k3-256k/kimi-for-coding(-highspeed) 复活条件已满足（网关目录重现），
+  形状自 git 522a6d5/24853ce 回捞，待渠道落地后插回并 E2E；
+  文档 `docs/ops/ss2a-kimi-channel-2026-10-09.md`。

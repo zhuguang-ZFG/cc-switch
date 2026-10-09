@@ -683,9 +683,10 @@ class OmpRouteGateTests(unittest.TestCase):
         # 2026-10-03 用户批准：space-bunny-free 升任 advisor（免费档，符合
         # "不得切付费路由"的约束精神；A/B 实测见
         # docs/ops/space-bunny-vs-gpt6-astra-2026-10-03.md）。
+        # 2026-10-06 上游改名 space-bunny-free -> space-bunny，同一批准路由延续。
         self.assertIn(
             _base_selector(roles.get("advisor", "")),
-            {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha", "zg-newapi/space-bunny-free"},
+            {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha", "zg-newapi/space-bunny"},
             "advisor 必须保留已批准的 GLM / Omen Alpha / Space Bunny 低成本路由",
         )
 
