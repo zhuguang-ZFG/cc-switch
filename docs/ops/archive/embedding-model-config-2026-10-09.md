@@ -94,3 +94,54 @@ OMP 语义搜索用于：
 ## 更新历史
 
 - 2026-10-09: 初始配置，启用语义搜索，配置 4 个嵌入模型
+
+## 备用渠道调查结果 (2026-10-09)
+
+### 调查范围
+- 测试了 35 个启用渠道
+- 测试了 8 个常见嵌入模型名称（OpenAI、BGE、E5、Nomic 等）
+- 检查了 Mistral、OpenAI、Azure 等提供商渠道
+
+### 结果
+**唯一可用渠道**: ch173 (muyuan-gongyi)
+- 提供 4 个嵌入模型
+- 平均延迟: 1037ms
+- 状态: ALL STABLE
+
+**无备用渠道**: 当前 NewAPI 配置中无其他渠道提供嵌入模型。
+
+### 故障转移方案
+
+由于 OMP 仅支持单一 `embeddingModel` 配置，无法自动故障转移。
+
+**手动故障转移步骤**:
+1. 如果 mistral-embed 不可用，编辑 `~/.omp/agent/config.yml`
+2. 将 `embeddingModel` 改为其他可用模型：
+   ```yaml
+   embeddingModel: zg-newapi/codestral-embed  # 1536d
+   # 或
+   embeddingModel: zg-newapi/mistral-embed-2312  # 1024d, 最快
+   # 或
+   embeddingModel: zg-newapi/codestral-embed-2505  # 1536d
+   ```
+3. 重启 OMP 或重新加载配置
+
+**推荐优先级**（基于延迟测试）:
+1. mistral-embed-2312 (795ms) - 最快
+2. codestral-embed-2505 (901ms)
+3. mistral-embed (974ms) - 当前默认
+4. codestral-embed (1069ms)
+
+### 长期建议
+
+1. **寻找备用渠道**: 联系 NewAPI 管理员添加其他嵌入模型渠道
+2. **缓存策略**: 实现嵌入结果缓存，减少对单一渠道的依赖
+3. **监控告警**: 将 `monitor-embedding-stability.py` 集成到 Guardian 监控
+4. **OMP 功能请求**: 向 OMP 开发团队请求支持嵌入模型故障转移列表
+
+### 当前风险评估
+
+- **风险等级**: 中
+- **影响**: 如果 ch173 不可用，语义搜索功能完全失效
+- **恢复时间**: 手动修改配置 ~2 分钟
+- **缓解措施**: 定期监控，快速手动切换
