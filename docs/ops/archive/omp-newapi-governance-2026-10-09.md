@@ -34,6 +34,21 @@ modelRoles:
 + task: zg-newapi/glm-5.3:max
   advisor: zg-newapi/glm-5.3
   default: zg-newapi/qwen3.8-flash-next:high
+
+retry:
+  fallbackChains:
+-   slow:
+-     - zg-newapi/k3
++   slow:
++     - zg-newapi/glm-5.3:max
+    ...
+-   advisor:
+-     - zg-newapi/k3:max
+-     - zg-newapi/gpt-6-luna:max
++   advisor:
++     - zg-newapi/glm-5.3:max
++     - zg-newapi/qwen3.7-max
+      - zg-newapi/Atria-Dawn-Preview
 ```
 
 ### ~/.omp/agent/models.yml
