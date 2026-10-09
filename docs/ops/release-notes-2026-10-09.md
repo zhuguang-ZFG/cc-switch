@@ -20,7 +20,7 @@
 | opencode-go step-5 | `add_opencode_go_step5preview_channel.py` | step-5-preview-free | 限时免费 | enabled (ch184) |
 | jev-systemone | `add_jev_systemone_channel.py` | system-one 系 | 新增 | enabled (ch181) |
 
-**渠道状态汇总：** 7 enabled / 4 disabled / 2 仅脚本入库
+**渠道状态汇总：** 8 enabled / 4 disabled / 2 仅脚本入库（共 14 个渠道条目）
 
 ## Smoke 关键修复
 
