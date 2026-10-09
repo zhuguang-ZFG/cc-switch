@@ -357,10 +357,10 @@ impl AnthropicToOpenAiChatState {
         }
         self.completed = true;
         let finish_reason = Self::map_stop_reason(self.stop_reason.as_deref());
-        let mut events = Vec::new();
-        events.push(self.emit_chunk(json!({}), finish_reason, true));
-        events.push(Bytes::from("data: [DONE]\n\n"));
-        events
+        vec![
+            self.emit_chunk(json!({}), finish_reason, true),
+            Bytes::from("data: [DONE]\n\n"),
+        ]
     }
 
     fn failed_event(&mut self, message: String) -> Vec<Bytes> {
@@ -618,11 +618,7 @@ pub fn create_openai_chat_sse_stream_from_anthropic<E: std::error::Error + Send 
         }
 
         if !stream_failed && !state.completed {
-            if state.stop_reason.is_some() {
-                for event in state.finalize() {
-                    yield Ok(event);
-                }
-            } else if state.started {
+            if state.stop_reason.is_some() || state.started {
                 for event in state.finalize() {
                     yield Ok(event);
                 }

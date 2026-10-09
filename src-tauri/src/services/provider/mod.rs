@@ -4781,7 +4781,7 @@ impl ProviderService {
                     ));
                 }
                 let models = settings.get("models").and_then(Value::as_array);
-                if !models.is_some_and(|m| !m.is_empty()) {
+                if models.is_none_or(|m| m.is_empty()) {
                     return Err(AppError::localized(
                         "provider.pi.models.missing",
                         "Pi 至少需要一个模型",

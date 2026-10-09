@@ -116,20 +116,21 @@ impl ModelMapping {
     }
 
     fn matches_configured_upstream(&self, original_model: &str) -> bool {
-        for configured in [
+        for ref m in [
             &self.haiku_model,
             &self.sonnet_model,
             &self.opus_model,
             &self.fable_model,
             &self.subagent_model,
             &self.default_model,
-        ] {
-            if let Some(ref m) = configured {
-                if strip_one_m_suffix_for_upstream(original_model)
-                    .eq_ignore_ascii_case(strip_one_m_suffix_for_upstream(m))
-                {
-                    return true;
-                }
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if strip_one_m_suffix_for_upstream(original_model)
+                .eq_ignore_ascii_case(strip_one_m_suffix_for_upstream(m))
+            {
+                return true;
             }
         }
         false

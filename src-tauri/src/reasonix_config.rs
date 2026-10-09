@@ -232,7 +232,7 @@ pub fn generate_api_key_env(name: &str) -> String {
         return "CUSTOM_API_KEY".to_string();
     }
 
-    let mut env_name = if trimmed.chars().all(|c| c.is_ascii()) {
+    let mut env_name = if trimmed.is_ascii() {
         let normalized: String = trimmed
             .chars()
             .map(|c| {
