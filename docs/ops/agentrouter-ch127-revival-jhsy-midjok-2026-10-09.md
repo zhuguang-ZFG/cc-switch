@@ -73,6 +73,25 @@ hubway runbook（10-07）曾判定 ch127 `agentrouter-codex-gpt` 上游死亡并
   abilities 随行），header/key 均已就绪
 - 备份：`new-api-before-agent-claude-pool-<ts>.db`
 
+## Free 组路由补齐 + ctyun 羊毛接入（2026-10-10）
+
+- **gpt-5.6-luna 20 行 Free abilities 补齐**（用户授权）：luna 此前 default
+  组 6 条启用渠道（ch199 dddai p20/w5、ch174 p-10、ch188-191 p-20）但 Free
+  组零行 ⇒ OMP token（Free 组）报 no available channel。补行后网关实弹 200
+  （62s，dddai 慢腿归因 ch199）
+- **midjok ch193/194 ×7 模型 Free 行补齐**；实弹 gpt-5.6-terra 走 Free 组
+  403 `Insufficient account balance`——ch193/194 此前有真实 200 消费记录，
+  判定为 midjok key 组账户余额耗尽（促销比率消耗完），非路由缺陷；观察项
+- **ch135 复核**：状态齐备（BLOB channel_info、header_override、有效 key、
+  402=鉴权通过），单 key 渠道按渠道优先级/权重选择而非 key 轮询；维持
+  status=2 + abilities disabled 停泊，预算回血即一步启用
+- **ch202 ctyun-oc-pool（电信 eaiChat 羊毛，key 双重 base64=278 字符 JWT）**：
+  base `https://eaichat.ctyun.cn/ai/platform/v2/cp`（NewAPI 拼 /v1 实测正确），
+  2 模型 `kimi-k3-oc`/`glm-5.3-oc` 接入前**零活跃渠道**（唯一来源）；
+  p30/w5 双组，auto_ban=0；直连+网关 4/4 全 200（归因 ch202）；`/v1/models`
+  404=无目录端点，exact-id；**5 小时额度窗（00:11/05:11/10:11/15:11 刷新），
+  key 2026-10-10 15:11 到期即摘除**；快照 `new-api-before-free-abilities-<ts>.db`
+
 ## SenseAudio 福利羊毛（api.senseaudio.cn）— 用户决定跳过
 
 - 端点存活（401 规范鉴权应答）；用户转发的 key 为兽音译者混淆文本，

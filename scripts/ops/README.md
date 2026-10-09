@@ -561,3 +561,13 @@ only bounded readiness metadata and never print keys or raw provider bodies.
 - SenseAudio 福利羊毛（2026-10-09）：api.senseaudio.cn 端点存活（401 规范
   应答），key 为兽音译者混淆文本、**用户明示不解密**；30 万积分当日到期，
   明文 key 到手再议，否则归档
+- Free 组补行 + ctyun 羊毛（2026-10-10）：gpt-5.6-luna 6 渠道×Free 行补齐
+  （此前 default 有 6 条启用而 Free 零行 ⇒ OMP 报无渠道；实弹 200 归因
+  ch199 dddai 62s 慢腿）；midjok ch193/194 ×7 模型补 Free 行，实弹 terra
+  403 `Insufficient account balance`=**key 组余额耗尽非路由缺陷**（此前有
+  200 消费记录）；ch135 复核维持停泊（单 key 渠道无轮询语义，预算回血一步
+  启用）；**ch202 ctyun-oc-pool**：电信 eaiChat 羊毛（key 双重 base64=278
+  字符 JWT），`kimi-k3-oc`/`glm-5.3-oc` 零渠道补空，p30/w5 双组 auto_ban=0，
+  4/4 全 200；**5h 额度窗（00:11/05:11/10:11/15:11 刷新），key 10-10 15:11
+  到期即摘除**；runbook 见
+  `docs/ops/agentrouter-ch127-revival-jhsy-midjok-2026-10-09.md` 增补节
