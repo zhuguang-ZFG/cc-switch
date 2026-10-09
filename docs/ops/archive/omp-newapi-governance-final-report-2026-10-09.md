@@ -122,8 +122,25 @@ summary: ALL OK
 2. **42 个 disabled 渠道定期审查** — 部分渠道可能已永久失效，可考虑从 DB 删除
 3. **Guardian 与 smoke posture contracts 同步** — 当前两者独立运作，可考虑让 Guardian 读取 posture contracts
 
+## 后续修复（同日）
+
+### 思维链强度配置补全
+
+发现 35 个 reasoning 模型缺少 `thinking` 配置块，3 个模型缺少 `max` 强度。
+
+**修复内容：**
+- 添加 `thinking` 块到 35 个模型
+- 补充 `max` 强度到 3 个模型（mimo-v2.6-flash-free, ling-3.1-flash-free, agentrouter/glm-5.3）
+- default 角色升级为 `:max` 强度
+
+**修复后统计：**
+- 66 个模型中 47 个有 thinking 块
+- 46 个支持 max 强度
+- 所有 reasoning 模型均有 thinking 配置 ✓
+
 ---
 
 **治理完成时间：** 2026-10-09 13:34  
+**思维链修复时间：** 2026-10-09 14:15  
 **执行人：** AI Agent  
 **验证状态：** ✅ ALL OK
