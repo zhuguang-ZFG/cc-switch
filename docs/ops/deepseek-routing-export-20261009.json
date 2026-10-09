@@ -1,0 +1,405 @@
+{
+  "generated": "2026-10-09T18:59:54.558982",
+  "description": "NewAPI DeepSeek routing configuration export",
+  "newapi_instance": "127.0.0.1:3002",
+  "models": {
+    "deepseek-flash": {
+      "routes": [
+        {
+          "channel_id": 15,
+          "channel_name": "sensenova-token",
+          "base_url": "https://token.sensenova.cn",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 25,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 0,
+          "all_models": "sensenova-6.8-flash-lite,sensenova-u1.5-lite,deepseek-flash,deepseek-v4.1-flash",
+          "traffic_24h": {
+            "requests": 3,
+            "success": 3,
+            "failed": 0,
+            "prompt_tokens": 93,
+            "completion_tokens": 60
+          }
+        }
+      ]
+    },
+    "deepseek-v4-flash": {
+      "routes": [
+        {
+          "channel_id": 180,
+          "channel_name": "agentrouter-deepseek-v4-flash",
+          "base_url": "http://100.83.32.95:8788",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 51,
+          "weight": 5,
+          "group": "default",
+          "auto_ban": 0,
+          "all_models": "deepseek-v4-flash",
+          "traffic_24h": {
+            "requests": 752,
+            "success": 752,
+            "failed": 0,
+            "prompt_tokens": 48612738,
+            "completion_tokens": 527201
+          }
+        },
+        {
+          "channel_id": 118,
+          "channel_name": "seeseed-deepseek-v4-flash",
+          "base_url": "https://api-yi-hydrogel.seeseed1ck.icu",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 30,
+          "weight": 5,
+          "group": "default",
+          "auto_ban": 0,
+          "all_models": "deepseek-v4-flash",
+          "traffic_24h": {
+            "requests": 322,
+            "success": 322,
+            "failed": 0,
+            "prompt_tokens": 24758468,
+            "completion_tokens": 202486
+          }
+        },
+        {
+          "channel_id": 148,
+          "channel_name": "budsin-apichat",
+          "base_url": "https://apichat.budsin.dev",
+          "channel_status": 2,
+          "enabled": 0,
+          "priority": -10,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "deepseek-v4-flash,glm-5.3,claude-opus-5,k3,step-3.7-flash,qwen3.8-max",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        {
+          "channel_id": 167,
+          "channel_name": "tokenrhythm-k18",
+          "base_url": "http://127.0.0.1:8792",
+          "channel_status": 2,
+          "enabled": 0,
+          "priority": -30,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "k3,qwen3.7-max,qwen3.8-max,glm-5.3,glm-5.3-flash,deepseek-v4-flash,longcat-2.0",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        {
+          "channel_id": 168,
+          "channel_name": "tokenrhythm-k19",
+          "base_url": "http://127.0.0.1:8792",
+          "channel_status": 2,
+          "enabled": 0,
+          "priority": -30,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "k3,qwen3.7-max,qwen3.8-max,glm-5.3,glm-5.3-flash,deepseek-v4-flash,longcat-2.0",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        {
+          "channel_id": 169,
+          "channel_name": "tokenrhythm-k20",
+          "base_url": "http://127.0.0.1:8792",
+          "channel_status": 2,
+          "enabled": 0,
+          "priority": -30,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "k3,qwen3.7-max,qwen3.8-max,glm-5.3,glm-5.3-flash,deepseek-v4-flash,longcat-2.0",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        {
+          "channel_id": 170,
+          "channel_name": "tokenrhythm-k21",
+          "base_url": "http://127.0.0.1:8792",
+          "channel_status": 2,
+          "enabled": 0,
+          "priority": -30,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "k3,qwen3.7-max,qwen3.8-max,glm-5.3,glm-5.3-flash,deepseek-v4-flash,longcat-2.0",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        }
+      ]
+    },
+    "deepseek-v4-flash-0731": {
+      "routes": [
+        {
+          "channel_id": 196,
+          "channel_name": "clinebot-deepseek-v4-flash-0731",
+          "base_url": "https://api.cline.bot/api",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 30,
+          "weight": 5,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "deepseek-v4-flash-0731",
+          "traffic_24h": {
+            "requests": 2,
+            "success": 2,
+            "failed": 0,
+            "prompt_tokens": 102,
+            "completion_tokens": 18
+          }
+        }
+      ]
+    },
+    "deepseek-v4-flash-vision": {
+      "routes": [
+        {
+          "channel_id": 140,
+          "channel_name": "intern-discovery",
+          "base_url": "https://discovery-api.intern-ai.org.cn",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 40,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "glm-5.3,intern-s2,deepseek-v4-flash-vision,qwen3-8-27b",
+          "traffic_24h": {
+            "requests": 2,
+            "success": 2,
+            "failed": 0,
+            "prompt_tokens": 170,
+            "completion_tokens": 41
+          }
+        },
+        {
+          "channel_id": 141,
+          "channel_name": "intern-discovery-k2",
+          "base_url": "https://discovery-api.intern-ai.org.cn",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 40,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "glm-5.3,intern-s2,deepseek-v4-flash-vision,qwen3-8-27b",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        {
+          "channel_id": 142,
+          "channel_name": "intern-discovery-k3",
+          "base_url": "https://discovery-api.intern-ai.org.cn",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 40,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "glm-5.3,intern-s2,deepseek-v4-flash-vision,qwen3-8-27b",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        {
+          "channel_id": 143,
+          "channel_name": "intern-discovery-k4",
+          "base_url": "https://discovery-api.intern-ai.org.cn",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 40,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "glm-5.3,intern-s2,deepseek-v4-flash-vision,qwen3-8-27b",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        {
+          "channel_id": 146,
+          "channel_name": "intern-discovery-k5",
+          "base_url": "https://discovery-api.intern-ai.org.cn",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 40,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "glm-5.3,intern-s2,deepseek-v4-flash-vision",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        {
+          "channel_id": 147,
+          "channel_name": "intern-discovery-k6",
+          "base_url": "https://discovery-api.intern-ai.org.cn",
+          "channel_status": 2,
+          "enabled": 0,
+          "priority": 40,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 0,
+          "all_models": "glm-5.3,intern-s2,deepseek-v4-flash-vision",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        }
+      ]
+    },
+    "deepseek-v4-pro": {
+      "routes": [
+        {
+          "channel_id": 192,
+          "channel_name": "longai",
+          "base_url": "https://llm.longai.vip",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 19,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "glm-5.2,glm-5.3,glm-5.3-flash,deepseek-v4-pro,kimi-k2.6,kimi-k2.7-code,qwen3.8-max",
+          "traffic_24h": {
+            "requests": 2,
+            "success": 2,
+            "failed": 0,
+            "prompt_tokens": 319,
+            "completion_tokens": 10
+          }
+        }
+      ]
+    },
+    "deepseek-v4.1-flash": {
+      "routes": [
+        {
+          "channel_id": 195,
+          "channel_name": "clinebot-deepseek-v4.1-flash",
+          "base_url": "https://api.cline.bot/api",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 30,
+          "weight": 5,
+          "group": "default",
+          "auto_ban": 1,
+          "all_models": "deepseek-v4.1-flash",
+          "traffic_24h": {
+            "requests": 5,
+            "success": 5,
+            "failed": 0,
+            "prompt_tokens": 153,
+            "completion_tokens": 128
+          }
+        },
+        {
+          "channel_id": 15,
+          "channel_name": "sensenova-token",
+          "base_url": "https://token.sensenova.cn",
+          "channel_status": 1,
+          "enabled": 1,
+          "priority": 25,
+          "weight": 1,
+          "group": "default",
+          "auto_ban": 0,
+          "all_models": "sensenova-6.8-flash-lite,sensenova-u1.5-lite,deepseek-flash,deepseek-v4.1-flash",
+          "traffic_24h": {
+            "requests": 0,
+            "success": 0,
+            "failed": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        }
+      ]
+    }
+  },
+  "summary": {
+    "deepseek-flash": {
+      "active_routes": 1,
+      "total_routes": 1,
+      "requests_24h": 3
+    },
+    "deepseek-v4-flash": {
+      "active_routes": 2,
+      "total_routes": 7,
+      "requests_24h": 1074
+    },
+    "deepseek-v4-flash-0731": {
+      "active_routes": 1,
+      "total_routes": 1,
+      "requests_24h": 2
+    },
+    "deepseek-v4-flash-vision": {
+      "active_routes": 5,
+      "total_routes": 6,
+      "requests_24h": 2
+    },
+    "deepseek-v4-pro": {
+      "active_routes": 1,
+      "total_routes": 1,
+      "requests_24h": 2
+    },
+    "deepseek-v4.1-flash": {
+      "active_routes": 2,
+      "total_routes": 2,
+      "requests_24h": 5
+    }
+  }
+}

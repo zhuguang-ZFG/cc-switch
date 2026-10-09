@@ -536,3 +536,28 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   test_model 走 glm-5.3-flash；**key 2026-10-20 到期**，续期后 `--resume`；
   同晚 ch173 muyuan-gongyi 上游 401 Invalid token 经用户授权禁用，
   glm-5.2 由 ch192 接管；`add_longai_channel.py`，runbook 同上
+- agentrouter ch127 五 key 复活（2026-10-09 晚）：10-07 死亡判定被用户推翻，
+  实证 5 key 全活。双重根因：①上游新增**客户端指纹门**（裸请求 401
+  `unauthorized client`，header_override claude-cli 头集后 401→402/200，
+  直连 401 先跑 UA 矩阵再判 key 失效）；②channel_info **sqlite 直写 TEXT
+  毒化 distributor**（`Scan error on column index 28 … unexpected end of
+  JSON input`，殃及 deepseek-v4-flash 全路由跨渠道 503；在营行必须
+  `typeof=blob`，修复配方=`CAST(? AS BLOB)` 紧凑 JSON 直写 + 60s 缓存同步，
+  `fix_ch127_channel_info.py`，t1qq BLOB 配方同源）；p52 提权遍历 10/10 200、
+  multi_key_index 0–4 全命中、status_list 空；回归 p40（ch180 p51 主之下）
+  default+Free；预算池：deepseek-v4-flash 活、astra 不足回退 ch182 有效、
+  sol 403 待补货；runbook `docs/ops/agentrouter-ch127-revival-jhsy-midjok-2026-10-09.md`
+- jhsy-glm ch201（2026-10-09 晚）：ai.jhsy0721.xyz `/v1/models` 仅
+  glm-5.3-flash，直连 200/2.5s，单 key p30/w5 default+Free；同轮 ch118 seeseed
+  glm 腿 3/4 超时（回退 ch192 30–50s）→ 降 p25 备胎，链=ch201 p30→ch118
+  p25→ch192 p19；网关归因 `use_channel:["201"]` 200/2.0s；快照
+  `new-api-before-jhsy-ch201-20261009-203241.db`；key base64 传入不落仓
+- midjok ch193/194（2026-10-09 晚，脚本 `add_midjok_channel.py` 补录）：
+  midjok.lol 双 key 单 key 渠道池 p10/w1 auto_ban=0，7 模型直连 200 才收录
+  （gpt-5.5/5.6-sol/5.6-terra/6-sol/6.1-sol/6-astra/codex-auto-review），
+  404/429/502 变体排除；**open item：abilities 仅 default 组、无 Free 行**
+  （Free 组 token 暂不可路由，补否待裁决）；当晚 gpt-5.6-sol 已见 ch193 真实
+  服务归因
+- SenseAudio 福利羊毛（2026-10-09）：api.senseaudio.cn 端点存活（401 规范
+  应答），key 为兽音译者混淆文本、**用户明示不解密**；30 万积分当日到期，
+  明文 key 到手再议，否则归档
