@@ -50,11 +50,65 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
 - 修复：ch126 `status_code_mapping` 补 `"403":"503"`（ch128 SharedChat 先例），让 403 参与一次跨渠道重试，兄弟腿 ch127(p40)/ch182(p20)/ch193/194(p10) 兜底。
 - 验证：映射生效后 codex 实弹 3/3 成功（11:03:05/18/27，均归因 ch126，上游此刻自愈；403 真实形态的 failover 以映射语义+兄弟腿在池为准）。
 - 边界：ch126 `auto_ban=0`，403 不会自动打黑；若上游演化为持续 403（key 级），错误扫描关键词归因后再人工处置。
+- **注（11:1x 用户裁决后追记）**：本节"兄弟腿兜底"思路已被 §7 硬隔离取代——403→503 映射保留，但 any 流量的 failover 域只有 ch126 自身。
 
 ## 6. 回滚
 
 ```text
 ~/.new-api-local/backups/new-api-before-any-agent-restore-20261010-104604.db   # 渠道/abilities 整库
 ~/.codex/config.toml.bak-20261010-104851-any-restore                           # Codex 接线
-新 token 摘除：PUT /api/token/ status=2（codex-any-agent, id=10）
+新 token 摘除：PUT /api/token/ status=2（codex-any-agent id=10 / codex-agent id=11）
 ```
+
+## 7. 追加：any/agent 流量硬隔离（11:1x，用户裁决）
+
+**用户裁定：any 流量只准走 any 渠道、agent 流量只准走 agent 渠道**——§5 的
+跨池兜底设计（any→ch127/182/193/194 兄弟腿）就此作废；BBcloud 403 的正确
+处置是隔离而非借道。
+
+实现（NewAPI 分组隔离，`default`/`Free` 池原样保留给 OMP 等既有消费者）：
+
+| 组 | 成员渠道 | 模型面 |
+|---|---|---|
+| `any` | ch126（GPT 活腿）、ch72（Claude，enabled=0 停泊随行） | gpt-6-astra；claude 全家（待上游 429 窗结束一步启用） |
+| `agent` | ch127（GPT）、ch86/134/135/136（Claude） | gpt-6-astra/gpt-5.6-sol/deepseek-v4-flash；claude 全家 |
+
+- abilities 按 default 行镜像插入 29 行；`channels.group` 同步追加
+  `default,any` / `default,agent`（防渠道编辑触发的 abilities 重同步抹行）。
+- token 绑定：`codex-any-agent`(id=10) group `default→any`；新建
+  `codex-agent`(id=11) group `agent`（key 存
+  `~/.new-api-local/codex-agent-token.txt` 0600，不入仓；sk- 形态同
+  §1 存储事实）。
+- **分组权限门（本轮新契约）**：token 组请求 403 `无权访问 %s 分组` 的根因
+  是 **`UserUsableGroups` 选项**（service.GroupInUserUsableGroups），
+  `GroupRatio` 单独注册不充分——两个选项都经 `PUT /api/option/` 登记了
+  any/agent。DB 直写 options 表不会热生效，必须走 option API（广播刷新内存）。
+- `~/.codex/config.toml`：`[model_providers.any]` 更名 "Any GPT"（保持默认
+  provider），新增 `[model_providers.agent]` "Agent GPT"（同 3002 base，
+  agent token）；备份 `config.toml.bak-20261010-111011-any-agent-separate`。
+  切换用法：`codex exec -c model_provider="agent" …`。
+
+验证（11:1x，全部隔离正确）：
+
+| 探针 | 结果 | 归因 |
+|---|---|---|
+| codex 实弹 默认(any) | 成功 ×2 | `use_channel:['126']`，零跨池 ✓ |
+| codex 实弹 `-c model_provider=agent` | 503 `Budget pool quota has been exhausted` | agentrouter 预算池签名（ch127 专属错误上冒，未借道）✓；池回血前 agent-GPT 暂不可用 |
+| any token × gpt-5.6-sol | 503 `No available channel … under group any (distributor)` | 隔离反证 ✓ |
+| agent token × gpt-5.6-sol | 上游签名 `当前分组 default 下…无可用渠道` | 打到 agentrouter（其自有分组文案，§8.4 教训同族）✓ |
+| agent token × claude-opus-5 | 402 预算池耗尽 | agent Claude 池未回血（§4 观察项延续），归因正确 ✓ |
+| any token × claude-opus-5 | 503 under group any | ch72 enabled=0 随行隔离 ✓ |
+| `newapi-local-smoke.py` | **ALL OK** | 零新增违规 |
+
+边界与遗留：
+
+- **agent 侧上游此刻普遍缺货**（GPT 402、sol 503、Claude 402）——隔离让
+  "agent 不可用"如实呈现，不再被 any/羊毛腿假成功掩盖；上游回血后无需本地
+  变更（0/8/16 窗先例）。
+- chat 面合成探针打 any×astra 得 404 = anyrouter codex 门假阴性（§3 既有
+  教训），隔离结论以 codex 实弹 + distributor 错误报文为准。
+- ch86/134/135/136 无 402→503 映射，agent-Claude 面 402 直接透传（池内
+  四腿同池轮询，语义正确，未动）。
+- 回滚：删 any/agent 两组 abilities 行 + `channels.group` 还原 + token 10
+  group 改回 default + option 两项还原；备份
+  `new-api-before-any-agent-separate-20261010-110936.db`。
