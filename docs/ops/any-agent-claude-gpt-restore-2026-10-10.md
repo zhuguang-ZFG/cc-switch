@@ -154,3 +154,35 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
     必须填**入口令牌**（桥的 `--api-key`/env），填上游池 key 会在桥入口 401；
   - cc-switch provider 编辑若 UI 保存不生效，改 DB 数据行 + 切路由/重启可生效，
     必须先备份原 `settings_config`。
+
+## 9. 追加：OMP deepseek-v4-flash 杂错根治——ch127 移出 default/Free 链（12:0x）
+
+- 用户报"OMP DeepSeek 几乎不可用，各种错误码"；OMP 走 `zg-newapi` provider
+  **直连 3002**（models.yml baseUrl），token 组 default。
+- OMP 日志错误普查（当日 warn/error，按 provider 归因到网关报文）：
+  | 错误形态 | 渠道归因 | 定性 |
+  |---|---|---|
+  | 401 `unauthorized client detected … discord.gg/…` | ch127 | agentrouter deepseek 上游客户端指纹门（透传） |
+  | 400 ``content[].thinking … must be passed back`` ×2 | ch127 | 上游 anthropic 风格校验；OMP 实际已回传 `reasoning_content`（openai 形态），是其上游转换层假拒绝 |
+  | 400 `Invalid schema for function 'wait'` | ch127 | 上游严格 schema 校验透传 |
+  | 401/400 包装形态 `openai_error bad_response_status_code` | ch127 | 同族签名（网关二次包装） |
+  | 502 `bad response status code` | ch118 seeseed | 00:50 时链头还是 118（旧链，50550d66 已降级） |
+- **归因方法**：OMP 的 `~/.omp/logs/http-400-requests/*.json` 存了 400 原始
+  请求（含 headers 里的 token——**只读结构、绝不打印**）；用 body 按 request_id
+  grep 网关日志即得渠道级归因。完整原样重放经 ch180 **通过**（228KB、61 条
+  消息含 reasoning_content/tool_calls，16.5s 正常计费）→ 请求形态无罪，
+  病灶是 ch127 上游。
+- 根因：凌晨错误发生在 50550d66（链头 118→180）之前；修链后当日无新 deepseek
+  provider error。但 **ch127 仍在 default/Free 链内当 p40 备胎**——ch180 一旦
+  抖动重试落到 ch127，就会出现这批 400/401"乱码级"不可重试错误（400 不触发
+  换渠道重试），外加 11:52 实测预算池 503 风暴。codex-window 语义上 ch127 的
+  deepseek 腿本就该只服务 agent 组。
+- 修复（最小变更，备份 `new-api-before-deepseek-chain-clean-20261010-120810.db`）：
+  `abilities` 直写 **ch127×deepseek-v4-flash 的 default+Free 行 enabled=0**
+  （agent 行保留给 codex agent 组）。链收敛为 default: 180(p51)→118(p25)；
+  Free: 118 独腿。~60s 缓存同步生效。
+- 验证：变更后 3/3 探针 200（~2.6s），归因 `use_channel:['180']` 零 ch127
+  尝试；full-replay 计费行 `ch=180 quota=25737` ✓；`newapi-local-smoke.py`
+  **ALL OK**（含 critical ability posture）。
+- 回滚：`UPDATE abilities SET enabled=1 WHERE channel_id=127 AND
+  model='deepseek-v4-flash' AND group IN ('default','Free')` 或整库还原备份。
