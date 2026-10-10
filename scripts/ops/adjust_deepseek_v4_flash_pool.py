@@ -1,40 +1,47 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Adjust deepseek-v4-flash pool in NewAPI:
-- ch180 agentrouter -> main (pri 51)
-- ch118 seeseed     -> revive (st=1, auto_ban=0, pri 30) as backup
-- ch15  sensenova    -> demote (pri 50 -> 40) as 1M-capable backup
+- ch118 seeseed     -> main (pri 51)
+- ch180 agentrouter -> demote (pri 30) as backup
 
-Evidence (2026-10-08, live probes via each channel's own key):
-- ch180 direct POST /v1/chat/completions max_tokens=131072 -> 200
-- ch118 direct POST /v1/chat/completions deepseek-v4-flash -> 200 (was auto-banned on prior ReadTimeout)
-- ch15  returns 429 "inference exceeds tpm/rpm limit" and NewAPI passes it through (no failover)
+Uses the SQLite direct-write precedent (docs/ops/archive/
+newapi-deepseek-v4-flash-pool-2026-10-08.md): this fork's channel PUT round-trips
+`key: ""` from GET and wipes the real key, so priority changes go through
+UPDATE channels/abilities only, DB backed up first. channel_cache syncs within
+~60s, no restart needed.
 
-Uses NewAPI admin API (PUT /api/channel/) so the channel cache stays consistent.
+abilities is scoped by model, never by channel_id alone: ch118 carries 6 model
+rows and a channel-wide sweep would promote its dead legs to head (the 2026-10-09
+连坐 bug, see docs/ops/omp-driftfix-dsv4f-head-2026-10-10.md).
+
+--dry-run prints the plan without writing.
+
+Precondition: probe_deepseek_v4_flash_head.py must endorse ch118 before running
+this. Re-measured 2026-10-11 00:32 it was 0/6 with the same
+`upstream error: do request failed`, so the plan below is on hold; promoting a
+channel with auto_ban=0 puts a permanent failing hop in front of every request.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import re
-import shutil
+import sqlite3
 import sys
 import time
-import urllib.error
-import urllib.request
+from contextlib import closing
 from pathlib import Path
+from typing import NoReturn
 
 HOME = Path.home()
 DB_PATH = HOME / ".new-api-local" / "new-api.db"
 BACKUP_DIR = HOME / ".new-api-local" / "backups"
-SECRETS_PATH = HOME / ".omp" / "guardian" / "secrets.json"
-BASE = "http://127.0.0.1:3002"
 
+# channel_id -> target priority
 CHANGES = {
-    15: {"priority": 40},   # sensenova: demote to backup
-    118: {"status": 1, "auto_ban": 0, "priority": 30},  # seeseed: revive
-    180: {"priority": 51},  # agentrouter: main
+    118: 51,  # seeseed: main
+    180: 30,  # agentrouter: backup
 }
+POOL_MODEL = "deepseek-v4-flash"
 BACKUP_PREFIX = "new-api-before-deepseek-pool-adjust"
 
 
@@ -48,56 +55,38 @@ def log(msg: str) -> None:
     print(_redact(msg), flush=True)
 
 
-from typing import NoReturn
-
-
 def fatal(msg: str) -> NoReturn:
     log(f"ERROR: {msg}")
     sys.exit(1)
 
 
-def load_admin_token() -> str:
-    try:
-        data = json.loads(SECRETS_PATH.read_text(encoding="utf-8"))
-    except Exception as exc:
-        fatal(f"cannot read {SECRETS_PATH}: {exc}")
-    token = data.get("newapi_token") or data.get("newapi_user")
-    if not token:
-        fatal("newapi_token/newapi_user missing in secrets.json")
-    return token
-
-
-def api_call(token: str, method: str, path: str, payload: dict | None = None, timeout: int = 30) -> dict:
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(f"{BASE}{path}", data=data, method=method)
-    req.add_header("Authorization", f"Bearer {token}")
-    if data is not None:
-        req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def backup_db() -> Path:
+def backup_db(src: sqlite3.Connection) -> Path:
+    """Online backup: a bare file copy of this WAL-mode DB can miss in-flight pages."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
     dest = BACKUP_DIR / f"{BACKUP_PREFIX}-{ts}.db"
-    shutil.copy2(DB_PATH, dest)
+    with closing(sqlite3.connect(dest.as_posix())) as dst:
+        src.backup(dst)
     return dest
 
 
-def get_channel(token: str, cid: int) -> dict:
-    body = api_call(token, "GET", f"/api/channel/{cid}")
-    data = body.get("data")
-    if not isinstance(data, dict):
-        fatal(f"channel {cid}: unexpected GET response {body}")
-    return data
+def channel_row(db: sqlite3.Connection, cid: int) -> dict | None:
+    row = db.execute(
+        "SELECT id, name, status, auto_ban, priority, weight FROM channels WHERE id = ?",
+        (cid,),
+    ).fetchone()
+    if not row:
+        return None
+    keys = ("id", "name", "status", "auto_ban", "priority", "weight")
+    return dict(zip(keys, row))
 
 
-def update_channel(token: str, channel: dict) -> None:
-    cid = channel.get("id")
-    resp = api_call(token, "PUT", f"/api/channel/{cid}", {"mode": "single", "channel": channel})
-    if not resp.get("success"):
-        fatal(f"PUT channel {cid} failed: {resp}")
+def ability_priorities(db: sqlite3.Connection, cid: int) -> dict[tuple[str, str], int]:
+    rows = db.execute(
+        'SELECT model, "group", priority FROM abilities WHERE channel_id = ?',
+        (cid,),
+    ).fetchall()
+    return {(model, group): priority for model, group, priority in rows}
 
 
 def main() -> int:
@@ -105,25 +94,62 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="print plan only, do not write")
     args = parser.parse_args()
 
-    token = load_admin_token()
-    backup = backup_db()
-    log(f"backup: {backup.name}")
+    if not DB_PATH.exists():
+        fatal(f"DB not found: {DB_PATH}")
 
-    for cid, want in CHANGES.items():
-        cur = get_channel(token, cid)
-        before = {k: cur.get(k) for k in ("status", "auto_ban", "priority", "weight", "name")}
-        log(f"ch{cid} {before['name']}: before {before}, applying {want}")
+    with closing(sqlite3.connect(DB_PATH.as_posix(), timeout=30)) as db:
+        before = {}
+        for cid, want_pri in CHANGES.items():
+            cur = channel_row(db, cid)
+            if not cur:
+                fatal(f"channel {cid} not found")
+            ab = ability_priorities(db, cid)
+            before[cid] = ab
+            touched = [f"{model}/{group}" for (model, group) in ab if model == POOL_MODEL]
+            untouched = {f"{model}/{group}": pri for (model, group), pri in ab.items() if model != POOL_MODEL}
+            log(f"ch{cid} {cur['name']}: priority {cur['priority']} -> {want_pri} "
+                f"(status={cur['status']} auto_ban={cur['auto_ban']} weight={cur['weight']})")
+            log(f"  {POOL_MODEL} rows in scope: {touched or 'NONE'}")
+            log(f"  rows left untouched: {untouched or 'none'}")
+
         if args.dry_run:
-            continue
-        cur.update(want)
-        # drop read-only fields NewAPI rejects on write
-        for k in ("created_time", "created_at", "updated_time", "updated_at", "channel_info", "test_time", "response_time", "used_quota", "model_mapping_raw"):
-            cur.pop(k, None)
-        update_channel(token, cur)
-        after = get_channel(token, cid)
-        log(f"ch{cid} after: status={after.get('status')} auto_ban={after.get('auto_ban')} priority={after.get('priority')}")
+            log("dry-run only, nothing written.")
+            return 0
 
-    log("DONE. Channel cache syncs within ~1 min; verify with /v1/chat/completions.")
+        backup = backup_db(db)
+        log(f"backup: {backup.name}")
+
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            for cid, want_pri in CHANGES.items():
+                db.execute("UPDATE channels SET priority = ? WHERE id = ?", (want_pri, cid))
+                cur = db.execute(
+                    "UPDATE abilities SET priority = ? WHERE channel_id = ? AND model = ?",
+                    (want_pri, cid, POOL_MODEL),
+                )
+                if cur.rowcount == 0:
+                    raise RuntimeError(f"ch{cid}: no {POOL_MODEL} ability row updated")
+                log(f"ch{cid}: abilities {POOL_MODEL} rows updated={cur.rowcount}")
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            fatal(f"write failed, rolled back (backup {backup.name}): {exc}")
+
+        for cid, want_pri in CHANGES.items():
+            after_ch = channel_row(db, cid)
+            after_ab = ability_priorities(db, cid)
+            log(f"ch{cid} {after_ch['name']}: priority={after_ch['priority']} abilities={after_ab}")
+            if after_ch["priority"] != want_pri:
+                fatal(f"ch{cid} channel priority verification failed; restore from {backup.name}")
+            for key, pri in after_ab.items():
+                model = key[0]
+                if model == POOL_MODEL and pri != want_pri:
+                    fatal(f"ch{cid} {key} priority={pri}, want {want_pri}; restore from {backup.name}")
+                if model != POOL_MODEL and pri != before[cid].get(key):
+                    fatal(f"ch{cid} collateral damage on {key}: {before[cid].get(key)} -> {pri}; "
+                          f"restore from {backup.name}")
+
+    log(f"DONE. channel_cache syncs within ~60s; verify with /v1/chat/completions {POOL_MODEL}.")
     return 0
 
 
