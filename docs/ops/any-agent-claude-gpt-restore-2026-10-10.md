@@ -225,3 +225,18 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
   priority 回 52 + gate 常量回滚。
 - ch95 权重教训入契约：备份层加权重需先确认该 tier 内竞争关系，priority
   重排才是本 fork 的确定性杠杆。
+
+## 11. 追加：jianzhile ch91 GPT 复活上线（13:1x，用户实报上游恢复）
+
+- ch91 `jianzhile-gpt-5.6-sol`（8/18 手动停泊，default 组 p55，4 个 sol 别名
+  全部映射上游 `gpt-5.6-sol`）。用户报上游恢复。
+- 流程：管理测试 `test_model` + 裸名 2/2 通过 → 双写启用
+  （channels.status=1 + abilities 4 行 enabled=1，备份
+  `new-api-before-jianzhile-restore-*.db`）→ ~60s 同步后实弹
+  `gpt-5.6-sol` 2/2（归因 `channel_id:91`，4.8s/1.8s）+ 两个 `zg-` 别名 200。
+- 格局影响：sol default 头名变为 ch91（p55；上方 ch128 仍停泊），agentrouter
+  撤 sol 腿的空窗（§4）由此补上；`auto_ban=1` 保持——上游再抖动会被自动隔离，
+  由 smoke 的 unexpected_disabled 显式暴露。
+- 边界：未加入 any/agent 组（§7 隔离矩阵不变，jianzhile 只服务 default）；
+  Free 组未开（sol Free 仍由 ch127/midjok 在位）。
+- `newapi-local-smoke.py` ALL OK。
