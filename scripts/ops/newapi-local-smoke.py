@@ -233,7 +233,11 @@ DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
 # 502 已愈（当日 437K quota 成功计费），禁用-接受契约过期。
 PRIMARY_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     3: {"priority": 52, "min_weight": 20},
-    9: {"priority": 52, "min_weight": 16},
+    # 2026-10-10: linxi ch9 上游账户池耗尽（403 Insufficient account balance /
+    # All available accounts exhausted），channels+abilities 双降至 49，把 opus
+    # 头名让给 baibei ch3 与 justwoker ch95（402 池四腿另降 48，见当日 runbook
+    # §10）。余额回血后恢复=两处回 52 并还原本常量。
+    9: {"priority": 49, "min_weight": 16},
     18: {"priority": 50, "min_weight": 6},
 }
 

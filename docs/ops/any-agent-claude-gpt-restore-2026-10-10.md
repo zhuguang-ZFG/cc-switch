@@ -186,3 +186,42 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
   **ALL OK**（含 critical ability posture）。
 - 回滚：`UPDATE abilities SET enabled=1 WHERE channel_id=127 AND
   model='deepseek-v4-flash' AND group IN ('default','Free')` 或整库还原备份。
+
+## 10. 追加：advisor 兜底链（claude-opus-4-8）姿态重排 + **abilities.priority 才是路由真值**（13:0x）
+
+- 症状续集：advisor 主模型 glm-5.3 此刻健康（ch141/143 探针 0.7s 通过；凌晨
+  429 风暴与 10:22–10:27 `Connection error` ×6 分别归因 intern 池配额窗与
+  **3003 anthropic 桥宕机**——桥 10:29:59 重启，属服务生命周期断档，无本地遗留）。
+- advisor 兜底 `zg-newapi-anthropic/claude-opus-4-8` 实测三缺陷（管理测试 +
+  实弹探针归因）：
+  1. **ch9（linxi-k40）上游账户池整体耗尽**（`Insufficient account balance`
+     403 / `All available accounts exhausted` 503），但 403 不可重试、直接上冒；
+  2. p50 备份层 4/5 是 agentrouter 402 预算池腿（86/134/135/136），402 不可
+     重试，同样截断 failover 链；唯一健康腿 ch95（justwoker，管理测试 200）
+     权重仅 1/9，几乎抽不中；
+  3. RetryTimes=1（总 2 次尝试），链条没有富余。
+- 修复（备份 `new-api-before-ch9-403map-*` / `new-api-before-agentclaude-402map-*`
+  / `new-api-before-opus48-reorder-*.db`）：
+  - ch9 `status_code_mapping={"403":"503"}`（§5 同法，实测错误形态即刻转换）；
+  - 86/134/135/136 `status_code_mapping={"402":"503"}`（对齐 ch127 先例；agent
+    组语义不变，只是允许换腿）；
+  - **ch9 降级 52→49、86/134/135/136 仅 opus-4-8 的 default/Free 行降 50→48**，
+    opus-4-8 新序：**95(p50) → 9(p49) → 池四腿(p48)**；agent 组行与其他模型不动。
+- **关键契约发现（本轮最大教训）**：relay 选路优先级读的是
+  **`abilities.priority`（组×模型行）**，`channels.priority` 只是显示值——只降
+  channels 时运行形态纹丝不动（探针连错 5 轮），改 abilities 后 ~60s 生效。
+  `status_code_mapping` 属渠道运行时配置、~60s 热更；**`weight` 观察不到同步**
+  （改 20 后仍按旧值轮询，故放弃权重方案改用确定性 priority 重排）。整体
+  `PUT /api/channel/` 在本 fork 连完整对象体都拒（`Invalid parameters`），
+  DB 直写 + 等缓存同步是唯一可靠通道。
+- 验证：修复后 opus-4-8 `/v1/messages` 实弹 **6/6 通过**（4/4 + 2/2 终测）；
+  deepseek-v4-flash 3/3、glm-5.3 2/2 复测 OK；`newapi-local-smoke.py` 先因
+  姿态常量（`PRIMARY_CHANNEL_POSTURES` ch9=52、BACKUP ch95 max_weight=8 vs
+  临时 weight=20）报 2 FAIL——ch95 权重回写 1（priority 重排后权重无意义），
+  ch9=49 作为有意姿态写进 gate 常量并注明回滚条件，随后 **ALL OK**。
+- 遗留（上游侧）：opus-5 主池 ch3（baibei）此刻同样 `All available accounts
+  exhausted` 503、ch18 同门 403——两腿真实余额问题，与 §4 同源；等 linxi/baibei
+  回血或 16:00 agentrouter 池投放后池自然冗余。linxi 回血后 ch9 恢复=两处
+  priority 回 52 + gate 常量回滚。
+- ch95 权重教训入契约：备份层加权重需先确认该 tier 内竞争关系，priority
+  重排才是本 fork 的确定性杠杆。
