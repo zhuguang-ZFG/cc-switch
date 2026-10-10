@@ -132,6 +132,21 @@ _QUOTA_WORDS = ("quota", "exhausted", "insufficient", "budget", "rate limit", "r
 # 2026-10-08 实测：keys.json key3 → 两网关均 400 content[].thinking；key1/2 → 200。
 _KEYSIDE_400_WORDS = ("must be passed back", "content[].thinking", "null is not of type")
 
+# 2026-10-10 401 分层（key 失效事故：死 key 两网关均 401，旧逻辑归 fatal 直接透传给 OMP）：
+# 指纹/风控门的 401 与 key 无关（裸客户端被拒），冷却换 key 会把整池抽干——必须 fatal；
+# 鉴权词命中才是 key 侧死令牌——冷却换 key。顺序：指纹门词先行排除。
+_FATAL_401_WORDS = ("unauthorized client", "client detected", "cloudflare", "just a moment")
+_KEYSIDE_401_WORDS = ("无效的令牌", "invalid token", "invalid api key", "invalid api-key",
+                      "invalid authentication", "expired")
+
+
+def _classify_401(low: str) -> str:
+    if any(w in low for w in _FATAL_401_WORDS):
+        return "fatal"
+    if any(w in low for w in _KEYSIDE_401_WORDS):
+        return "keyside"
+    return "fatal"
+
 
 def _is_retryable(status: int, text: str) -> bool:
     if status in (502, 503, 504, 429):
@@ -139,6 +154,8 @@ def _is_retryable(status: int, text: str) -> bool:
     low = (text or "").lower()
     if status == 400:
         return any(w in low for w in _KEYSIDE_400_WORDS)
+    if status == 401:
+        return _classify_401(low) == "keyside"
     if status in (402, 403):
         # 仅明确的额度/限流错误换 key；认证类 403（invalid key 等）必须快速失败
         return any(w in low for w in _QUOTA_WORDS)
@@ -147,13 +164,15 @@ def _is_retryable(status: int, text: str) -> bool:
 
 def _classify(status: int, text: str) -> str:
     """error kind: keyside | transient | fatal.
-    keyside  = key 本身被判死（额度尽/严格后端 400），换网关无用，应冷却换 key；
+    keyside  = key 本身被判死（额度尽/严格后端 400/死令牌 401），换网关无用，应冷却换 key；
     transient= 网关侧抖动（5xx/429/WAF），应先同 key 试另一网关再冷却。
     2026-10-08：AIR 大面积 500 时旧逻辑把每个 key 连坐冷却、从不试 ORG，
     健康 key 被耗尽导致 400/500 透传——本分层即该根因修复。"""
     low = (text or "").lower()
     if status == 400:
         return "keyside" if any(w in low for w in _KEYSIDE_400_WORDS) else "fatal"
+    if status == 401:
+        return _classify_401(low)
     if status in (402, 403):
         return "keyside" if any(w in low for w in _QUOTA_WORDS) else "fatal"
     if status in (502, 503, 504, 429):
