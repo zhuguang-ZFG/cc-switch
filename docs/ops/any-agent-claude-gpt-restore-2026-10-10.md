@@ -272,3 +272,33 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
 - 已知形态非故障：`gpt-5.6-sol` 走 responses 桥（`billing_usage.source:
   oai_responses`），chat 面 usage 的 reasoning_tokens 恒 0；一次 xhigh
   SSL EOF 为上游瞬断，重试即绿。
+
+## 14. 追加：any 组 GPT 面向 OMP/qodercli 开放（ch91 进 any，14:1x，用户裁决"同意"）
+
+- 前置事实（本轮实测）：any 组 GPT 仅 `gpt-6-astra`（ch126/anyrouter）；
+  anyrouter **chat 端 404**（不卖 astra）、**responses 端 codex 指纹门**
+  （合成请求 400 `invalid codex request`，真实 codex 实弹 OK）——故 OMP
+  （chat 面）与 qodercli（无 responses 协议）走 any 组结构性不可达。
+- 方案（用户同意）：把 ch91（jianzhile，chat+responses 全通）开进 any 组作
+  头名，ch126 降为 any 内兜底；两个客户端各加一个 token10 的 any provider。
+- DB（备份 `new-api-before-ch91-any-20261010-141610.db`）：
+  `channels.group: default → default,any`；abilities 新增 2 行
+  (`gpt-6-astra`,`gpt-6-sol`) × any × p55/w5/enabled=1。
+  **gpt-5.6-sol 刻意不进 any**——§7 隔离反证（any×sol=503）保持有效。
+- 客户端接线（key 只落配置文件，不入日志/仓）：
+  - qodercli `~/.qoder/settings.json`：新增 provider `newapi-local-any`
+    （base 3002、token10、protocol openai、models gpt-6-astra/gpt-6-sol），
+    备份 `settings.json.bak-20261010-141625-ch91-any`；qodercli 需重启会话生效。
+  - OMP `~/.omp/agent/models.yml`：文件尾追加 provider `any-newapi`
+    （base 3002/v1、openai-completions、token10、同上两模型，astra 400K/128K、
+    sol 200K/32K 与 default 条目同姿态），备份
+    `models.yml.bak-20261010-141625-ch91-any`；YAML 重解析通过。
+- 验证（~60s 同步后）：token10 chat × astra 2/2（2.0/1.8s）+ × gpt-6-sol 1/2
+  全 OK；反证 any×gpt-5.6-sol 仍 503；codex any 实弹 ANYOK2；最近 8 笔 gpt-6
+  计费全部 `use_channel:["91"]` 零跨池。`newapi-local-smoke.py` ALL OK。
+- 格局变化：codex Any 路由的 astra 流量头名由 ch126 变为 ch91（同 any 组内
+  记账，语义不变，池冗余 +1：91 → 126 → (127 不在 any) ）；ch91 再抖动被
+  auto_ban 时 any 落回 ch126，chat 面会重现 404（anyrouter 本性），codex 面
+  不受影响——这是可接受的降级形态，不是配置缺陷。
+- 回滚：删 2 行 any abilities + `channels.group` 回 `default` + 两客户端配置
+  块删除（备份件即还原件）。
