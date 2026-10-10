@@ -43,7 +43,15 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
 - **gpt-5.6-sol**：agentrouter 上游已撤该腿（503 无可用渠道，非预算耗尽），路由保留待补货。
 - **cc-switch 覆写风险**：`config.toml` 是 codex provider 投影，下次切 provider 会再抹掉 any 块——恢复=重放本文 §2.5。
 
-## 5. 回滚
+## 5. 追加：BBcloud 转售面 403 假死（11:0x，用户实报）
+
+- 症状：codex 连续 `403 Astra由BBcloud提供 友情提醒：请求未能完成`（3002 `/v1/responses`）。
+- 归因：**ch126 anyrouter 上游**（anyrouter.top 的 astra 由 BBcloud 转售，文案为转售方临时拒答透传），非本地接线错误；403 不在 `AutomaticRetryStatusCodes` 且 ch126 未映射 403 → 不换渠道重试，叠加 `channel_affinity`（TTL 300s）把会话钉死在 ch126，形成"继续/继续/同一 403"。
+- 修复：ch126 `status_code_mapping` 补 `"403":"503"`（ch128 SharedChat 先例），让 403 参与一次跨渠道重试，兄弟腿 ch127(p40)/ch182(p20)/ch193/194(p10) 兜底。
+- 验证：映射生效后 codex 实弹 3/3 成功（11:03:05/18/27，均归因 ch126，上游此刻自愈；403 真实形态的 failover 以映射语义+兄弟腿在池为准）。
+- 边界：ch126 `auto_ban=0`，403 不会自动打黑；若上游演化为持续 403（key 级），错误扫描关键词归因后再人工处置。
+
+## 6. 回滚
 
 ```text
 ~/.new-api-local/backups/new-api-before-any-agent-restore-20261010-104604.db   # 渠道/abilities 整库
