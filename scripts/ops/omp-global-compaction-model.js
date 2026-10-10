@@ -1,9 +1,17 @@
-export const EXTENSION_REVISION = "2026.09.09-r7";
+export const EXTENSION_REVISION = "2026.10.09-r9";
 
 const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
-  // primary: user-directed 2026-09-09 — Omen Alpha as global compaction model
+  // primary: user-directed 2026-10-09 — LongCat 2.5 Preview Free, 1M ctx, 8s TTFT, free
+  "zg-newapi/longcat-2.5-preview-free",
+  // fallback: midjok gpt-5.5, confirmed 200 both keys, 37s TTFT
+  "zg-newapi/gpt-5.5",
+  // fallback: midjok gpt-5.6-terra, confirmed 200
+  "zg-newapi/gpt-5.6-terra",
+  // fallback: midjok gpt-5.6-sol, confirmed 200
+  "zg-newapi/gpt-5.6-sol",
+  // fallback: omen-alpha (previous primary, kept as last-resort default)
   "zg-newapi/omen-alpha",
-  // fallback: agentrouter direct, user-directed 2026-09-09 (NewAPI ch118 seeseed quota-dead, ch15 re-enabled)
+  // fallback: agentrouter direct (bypasses NewAPI)
   "agentrouter/deepseek-v4-flash",
   // reserved: register in models.yml to activate (2026-08-28 re-probe kept it
   // unregistered: ch15 upstream returned 429 workspace-quota-exceeded)
