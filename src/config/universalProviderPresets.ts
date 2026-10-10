@@ -220,6 +220,46 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
     description: "GPT 5.5 via right.codes | 快速蒸馏和批量处理",
     isCustomTemplate: true,
   },
+  {
+    name: "MidJok (midjok.lol)",
+    providerType: "newapi",
+    defaultApps: {
+      claude: true,
+      codex: true,
+      gemini: false,
+      kimicode: true,
+      reasonix: false,
+    },
+    defaultModels: {
+      claude: {
+        model: "gpt-5.5",
+        haikuModel: "gpt-5.4-mini",
+        sonnetModel: "gpt-5.5",
+        opusModel: "gpt-6",
+      },
+      codex: {
+        model: "gpt-6.1-sol",
+        reasoningEffort: "high",
+      },
+      gemini: {
+        model: "gpt-5.5",
+      },
+      kimicode: {
+        providerType: "openai",
+        model: "gpt-5.5",
+      },
+      reasonix: {
+        kind: "openai",
+        model: "gpt-5.5",
+      },
+    },
+    websiteUrl: "https://midjok.lol",
+    icon: "openai",
+    iconColor: "#8B5CF6",
+    description:
+      "MidJok API | GPT-5.x/6.x 全系列 | 0.068x 倍率起 | 含 Codex Auto Review & 图像生成",
+    isCustomTemplate: true,
+  },
 ];
 
 /**
