@@ -112,3 +112,37 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
 - 回滚：删 any/agent 两组 abilities 行 + `channels.group` 还原 + token 10
   group 改回 default + option 两项还原；备份
   `new-api-before-any-agent-separate-20261010-110936.db`。
+
+## 8. 追加：cc-switch codex 路由接管态与 provider 重接线（11:3x–11:5x，用户授权"你搞"）
+
+- 用户报"切到 agent 还是走 any"——三重归因，前两层非故障：
+  1. 上午接线把 `config.toml` 改成 `model_provider="any"` 直连 3002，**绕开了
+     cc-switch 15721 代理接管**；cc-switch 路由切换（日志三次"切到 agentrouter…
+     完成"均成功）对流不进 15721 的流量无感。cc-switch 11:27 重启 attach 后
+     客户端配置写回 `custom→15721 (PROXY_MANAGED)`，接管恢复。
+  2. AgentRouter 路由真实转发目标 8788 桥回 401 `invalid api key`：**8788 入口
+     令牌 = secrets `agentrouter_proxy_key`（64 字符，fp ae204e1c）**，而
+     provider 里存的是 agentrouter 上游池 key sk-vBV8P…（51 字符，fp b433b22b）
+     ——上游 key 当本地门票用，桥入口即拒，从未出网。
+  3. 用户在 UI 编辑 provider 未保存落库（DB 复核 base_url/key 原样）。
+- 处置（用户授权直接改数据行；未动 schema、未动应用进程）：
+  `providers.agentrouter-1790248366298.settings_config` 重接线到 §7 的 agent 组——
+  `base_url http://127.0.0.1:8788 → http://127.0.0.1:3002`（**不带 /v1**：cc-switch
+  forwarder 自动拼 `/v1/responses`），`OPENAI_API_KEY → codex-agent token（sk-，
+  组 agent）`；原值备份 `~/.cc-switch/backups/codex-agentrouter-provider-before-3002-20261010-114959.json`。
+  用户切换路由+重启 cc-switch 生效。
+- 验证（11:52）：codex 实弹 → cc-switch 日志 `请求目标: http://127.0.0.1:3002/v1/responses`
+  ×3，响应体为 agentrouter 预算池 402→503 签名（ch127 专属）——接线成立；
+  agent-GPT 实际可用性等上游 16:00 投放窗。
+- 最终形态：**Any 路由 → 8789 桥（anyrouter 直连，无 3002 记账）；AgentRouter
+  路由 → 3002 agent 组（ch127 + Claude 池，有记账归因）**。Any 侧是否同样
+  接 3002 any 组（换 token10 + base `http://127.0.0.1:3002`）待用户裁决，
+  当前 8789 直连功能正常、隔离方向正确。
+- 契约要点（新增）：
+  - cc-switch **代理接管态**下，直改 `config.toml` 的 `model_provider` 会让
+    UI 路由切换整体失明——两者只能选一条控制路径；
+  - cc-switch provider 的 `base_url` 写值**不带你 /v1**，forwarder 拼接路径；
+  - 8788/8789 桥的入口令牌与上游池 key 是两个域，provider `OPENAI_API_KEY`
+    必须填**入口令牌**（桥的 `--api-key`/env），填上游池 key 会在桥入口 401；
+  - cc-switch provider 编辑若 UI 保存不生效，改 DB 数据行 + 切路由/重启可生效，
+    必须先备份原 `settings_config`。
