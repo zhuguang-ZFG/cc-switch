@@ -240,3 +240,22 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
 - 边界：未加入 any/agent 组（§7 隔离矩阵不变，jianzhile 只服务 default）；
   Free 组未开（sol Free 仍由 ch127/midjok 在位）。
 - `newapi-local-smoke.py` ALL OK。
+
+## 12. 追加：jianzhile 上新 gpt-6-astra / gpt-6-sol，ch91 一并接入（13:2x，用户指示）
+
+- 用户要求把 jianzhile 的其他 GPT 模型一并加入。上游 `/v1/models`（key 仅本地
+  读取、不出仓不出日志）现暴露 3 模型：`gpt-5.6-sol`、`gpt-6-astra`、
+  `gpt-6-sol`——后两个是 8/13 建档时不存在的新投放。
+- 预验证：两把 ch91 key × 2 新模型 × {裸 header, codex header 包} 直连上游
+  7/8 OK（唯一一次 key1+codex-hdr×astra 30s 超时，瞬时抖动；sol 门不拦新模型，
+  ch91 的 header_override 是全模型透传，无额外准入风险）。
+- 接入（备份 `new-api-before-jianzhile-gpt6-20261010-132315.db`）：
+  `channels.models` 追加 `gpt-6-astra,gpt-6-sol` + abilities 双写 2 行
+  default/p55/w5/enabled=1（与 sol 行同姿态）。不建独立渠道、不动 mapping。
+- 验证：admin `GET /api/channel/test/91` 两模型均通过；~60s 缓存同步后
+  token8 实弹 3+3 全 OK（1.4–2.4s），归因 `channel_id:91` ×6——ch91 直接成为
+  两模型 default 头名（原头：astra ch126 p40、sol 侧仅 p-20~p10，55 压顶）。
+- 边界：仍只进 default 组（any/agent 隔离矩阵不变，astra 的 any 腿是 ch126
+  专务）；Free 组未开。gpt-6-sol 原 default 链无 p>10 渠道，此改动等于给
+  gpt-6-sol 立了新头名，若 jianzhile 再抖动 auto_ban 会自动落回 midjok p10。
+- `newapi-local-smoke.py` ALL OK（Sol primary/primary opus pool 等姿态无新增违规）。
