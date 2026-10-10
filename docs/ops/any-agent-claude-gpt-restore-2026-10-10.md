@@ -302,3 +302,23 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
   不受影响——这是可接受的降级形态，不是配置缺陷。
 - 回滚：删 2 行 any abilities + `channels.group` 回 `default` + 两客户端配置
   块删除（备份件即还原件）。
+
+## 15. 勘误（15:0x，用户报告"any 的 gpt 在 qodercli 用不了"）
+
+- 根因：§14 给 qodercli `~/.qoder/settings.json` 写的两个 openai 协议
+  provider（`newapi-local`、`newapi-local-any`）`baseUrl=http://127.0.0.1:3002`
+  少了 `/v1`。qodercli 的 custom-openai transport 直接 `baseUrl +
+  /chat/completions`，请求打到 `3002/chat/completions` → NewAPI SPA
+  catch-all 返回 **HTTP 200 + text/html**，qodercli 侧表现为
+  `ModelTransportError: incomplete_stream (status=200, streamEventCount=0)`，
+  11 次重试全空、~2 分钟后放弃。渠道/组/abilities 全部无责——NewAPI 日志里
+  该时段没有任何 token10 请求，请求根本没进 API 路由。
+- §14 验证盲区：验收用 curl 直连 `/v1/chat/completions`（手写正确路径），
+  没有走 qodercli 真实 transport，掩盖了拼 URL 缺陷。教训：客户端接线验证
+  必须用客户端本身的最小请求。
+- 修复：两个 provider `baseUrl` 改为 `http://127.0.0.1:3002/v1`，备份
+  `settings.json.bak-20261010-150x-fix-any-v1`；`newapi-local-anthropic`
+  路径拼接方式不同且无同型故障证据，未动。qodercli 需重启会话生效。
+- 顺带实测（与本案无关的 ch91 形态分布）：any 组小请求 astra/sol 全绿；
+  一次 stream+tools 大请求 astra 出现瞬时 `servers overloaded` 注入
+  （jianzhile 上游抖动，重试即恢复，6/6 复测全绿）。
