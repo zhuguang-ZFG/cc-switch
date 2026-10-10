@@ -3951,7 +3951,7 @@ class OpusEmptyResponseTests(unittest.TestCase):
 
 
 class UnbilledEmptyRoundsTests(unittest.TestCase):
-    """未计费空回监控：按渠道+模型分组的口径、阈值、分组冷却。"""
+    """空回监控：按渠道+模型分组的未计费空回与零输出已计费两种口径。"""
 
     @staticmethod
     def _make_db(rows):
@@ -3962,19 +3962,29 @@ class UnbilledEmptyRoundsTests(unittest.TestCase):
                 "CREATE TABLE logs ("
                 "id INTEGER PRIMARY KEY, created_at INTEGER, type INTEGER, "
                 "model_name TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, "
-                "quota INTEGER, channel_id INTEGER, channel_name TEXT)"
+                "quota INTEGER, channel_id INTEGER, channel_name TEXT, "
+                'token_name TEXT, "group" TEXT)'
             )
             conn.executemany(
                 "INSERT INTO logs (created_at, type, model_name, prompt_tokens, "
-                "completion_tokens, quota, channel_id, channel_name) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                'completion_tokens, quota, channel_id, channel_name, token_name, '
+                '"group") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 rows,
             )
             conn.commit()
         return db, tmp
 
     @staticmethod
-    def _rows(total, empty, now, channel_id=126, name="any-gpt-6-astra", model="gpt-6-astra"):
+    def _rows(
+        total,
+        empty,
+        now,
+        channel_id=126,
+        name="any-gpt-6-astra",
+        model="gpt-6-astra",
+        token="codex-agent",
+        grp="agent",
+    ):
         rows = []
         for i in range(total):
             if i < empty:
@@ -3982,7 +3992,18 @@ class UnbilledEmptyRoundsTests(unittest.TestCase):
             else:
                 prompt, completion, quota = 1500, 800, 4200
             rows.append(
-                (int(now) - i * 60, 2, model, prompt, completion, quota, channel_id, name)
+                (
+                    int(now) - i * 60,
+                    2,
+                    model,
+                    prompt,
+                    completion,
+                    quota,
+                    channel_id,
+                    name,
+                    token,
+                    grp,
+                )
             )
         return rows
 
@@ -4033,6 +4054,7 @@ class UnbilledEmptyRoundsTests(unittest.TestCase):
         self.assertIn("any-gpt-6-astra", message)
         self.assertIn("gpt-6-astra", message)
         self.assertIn("52.0%", message)
+        self.assertIn("codex-agent", message)
         self.assertEqual(level, "warning")
         tmp.cleanup()
 
@@ -4060,7 +4082,7 @@ class UnbilledEmptyRoundsTests(unittest.TestCase):
         stale = [
             (
                 int(now) - (guardian.UNBILLED_EMPTY_WINDOW_HOURS * 3600 + 600),
-                2, "gpt-6-astra", 0, 0, 0, 126, "any-gpt-6-astra",
+                2, "gpt-6-astra", 0, 0, 0, 126, "any-gpt-6-astra", "codex-agent", "agent",
             )
         ] * 80
         db, tmp = self._make_db(self._rows(40, 0, now) + stale)
@@ -4076,6 +4098,116 @@ class UnbilledEmptyRoundsTests(unittest.TestCase):
             g = self._guardian(missing)
             g._step_unbilled_empty_rounds()
         g.telegram.send_alert.assert_not_called()
+
+    @staticmethod
+    def _billed_empty_rows(
+        n,
+        now,
+        quota_each,
+        channel_id=127,
+        name="agentrouter",
+        model="gpt-6-astra",
+        token="master",
+        grp="default",
+    ):
+        # 2026-10-10 ch127 形状：/v1/chat/completions、首包未到（frt=-1000）、
+        # 输入按 local_count_tokens 全额计费、零输出。
+        return [
+            (
+                int(now) - i * 3,
+                2,
+                model,
+                199000,
+                0,
+                quota_each,
+                channel_id,
+                name,
+                token,
+                grp,
+            )
+            for i in range(n)
+        ]
+
+    def test_zero_output_billed_rounds_alert_on_quota_not_rate(self):
+        now = time.time()
+        rows = self._rows(17, 0, now, channel_id=127, name="agentrouter")
+        rows += self._billed_empty_rows(3, now, 7_500_000)
+        db, tmp = self._make_db(rows)
+        with patch.object(guardian, "NEWAPI_DB", db):
+            offenders = guardian._query_unbilled_empty_rounds(db, now=now)
+            g = self._guardian(db)
+            g._step_unbilled_empty_rounds()
+        self.assertEqual(len(offenders), 1)
+        self.assertEqual(offenders[0]["channel_id"], 127)
+        self.assertEqual(offenders[0]["model"], "gpt-6-astra")
+        # 样本 20 < 30 且未计费空回 0% —— 旧口径恒为不响。
+        self.assertFalse(offenders[0]["unbilled"])
+        self.assertTrue(offenders[0]["billed"])
+        self.assertEqual(offenders[0]["billed_empty"], 3)
+        self.assertEqual(offenders[0]["billed_quota"], 22_500_000)
+        title, message, level = g.telegram.send_alert.call_args.args
+        self.assertEqual(title, "零输出但已计费")
+        self.assertIn("ch127", message)
+        self.assertIn("gpt-6-astra", message)
+        self.assertIn("22500000", message)
+        self.assertIn("master", message)
+        self.assertIn("default", message)
+        self.assertEqual(level, "warning")
+        tmp.cleanup()
+
+    def test_zero_output_billed_needs_both_row_and_quota_floor(self):
+        now = time.time()
+        for n, quota_each in ((2, 20_000_000), (4, 1_000_000)):
+            with self.subTest(n=n, quota_each=quota_each):
+                rows = self._rows(17, 0, now, channel_id=127, name="agentrouter")
+                rows += self._billed_empty_rows(n, now, quota_each)
+                db, tmp = self._make_db(rows)
+                with patch.object(guardian, "NEWAPI_DB", db):
+                    offenders = guardian._query_unbilled_empty_rounds(db, now=now)
+                    g = self._guardian(db)
+                    g._step_unbilled_empty_rounds()
+                self.assertEqual(offenders, [])
+                g.alerts.should_alert.assert_not_called()
+                tmp.cleanup()
+
+    def test_unbilled_and_billed_use_separate_cooldown_keys(self):
+        # 同组两种形态都要暴露：已计费空回不能被未计费空回的冷却盖掉。
+        now = time.time()
+        rows = self._rows(40, 12, now)
+        rows += self._billed_empty_rows(4, now, 6_000_000, channel_id=126, name="any-gpt-6-astra")
+        db, tmp = self._make_db(rows)
+        with patch.object(guardian, "NEWAPI_DB", db):
+            g = self._guardian(db, alerts=guardian.AlertManager(Mock()))
+            g._step_unbilled_empty_rounds()
+            g._step_unbilled_empty_rounds()
+        titles = [call.args[0] for call in g.telegram.send_alert.call_args_list]
+        self.assertEqual(titles.count("未计费空回超标"), 1)
+        self.assertEqual(titles.count("零输出但已计费"), 1)
+        # 调用方必须按形态拆开：A 行来自 codex-agent/agent，B 行来自 master/default，
+        # 合并上报会把排查指向错误的调用方。
+        unbilled_msg = next(
+            c.args[1] for c in g.telegram.send_alert.call_args_list
+            if c.args[0] == "未计费空回超标"
+        )
+        billed_msg = next(
+            c.args[1] for c in g.telegram.send_alert.call_args_list
+            if c.args[0] == "零输出但已计费"
+        )
+        self.assertIn("codex-agent", unbilled_msg)
+        self.assertNotIn("master", unbilled_msg)
+        self.assertIn("master", billed_msg)
+        self.assertNotIn("codex-agent", billed_msg)
+        tmp.cleanup()
+
+    def test_zero_output_billed_alone_does_not_emit_unbilled_alert(self):
+        now = time.time()
+        db, tmp = self._make_db(self._billed_empty_rows(3, now, 8_000_000))
+        with patch.object(guardian, "NEWAPI_DB", db):
+            g = self._guardian(db)
+            g._step_unbilled_empty_rounds()
+        self.assertEqual(g.telegram.send_alert.call_count, 1)
+        self.assertEqual(g.telegram.send_alert.call_args.args[0], "零输出但已计费")
+        tmp.cleanup()
 
 
 class DailyQuotaCapTests(unittest.TestCase):

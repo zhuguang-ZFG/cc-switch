@@ -150,6 +150,22 @@ UNBILLED_EMPTY_WINDOW_HOURS = 6
 UNBILLED_EMPTY_MIN_SAMPLES = 30
 UNBILLED_EMPTY_THRESHOLD = 0.20
 
+# 零输出但已计费（2026-10-10，ch127 gpt-6-astra）：上游返回 200、prompt 全额
+# 计费（≈199–200k）、completion_tokens=0，quota 照扣。11 行里 10 行挤在
+# 20:23:01–20:23:17 的 16 秒内，单行 0–4s 且 frt=-1000（首包从未到达），合计
+# 烧掉 82,175,027 quota。9/11 行 use_channel 只有一跳——重复计费来自调用侧
+# 原地重试同一 200k 会话，不是 NewAPI 的重试；fork 因上游没回 usage 而走
+# admin_info.usage_billing_path=local + local_count_tokens 把输入全额计费。
+# 两条现有口径都看不见它：未计费空回要求 quota=0（这里 quota>0），opus 空响应
+# 率虽然谓词正确（completion_tokens <= 2 AND prompt_tokens >= 1000），却被
+# OPUS_EMPTY_RESPONSE_MODELS 这个硬编码模型名单限死，gpt-6-astra 不在名单内。
+# 所以挂在未计费空回的同一个 (channel, model) 分组上，用「行数 + 烧掉的 quota」
+# 双门槛而非比率：该组空回率只有 7.6%，按比率永远不响。quota 门槛按
+# QuotaPerUnit=500000 折算约 $40；同形形态当天也出现在 ch69/ch86/ch91，但金额
+# 在 5.5 万–71 万 quota 量级，正该被这个门槛挡掉。
+BILLED_EMPTY_MIN_ROWS = 3
+BILLED_EMPTY_MIN_QUOTA = 20_000_000
+
 # 降权/禁用阈值（P1: 渐进式处理）
 WEIGHT_DEGRADE_FACTOR = 0.5  # 降权到原来的 50%
 MIN_WEIGHT = 1  # 最小权重
@@ -1191,10 +1207,24 @@ def _query_opus_empty_response_rate(
     return {"total": total, "empty": empty, "rate": empty / total}
 
 
+def _format_caller(tokens: Optional[str], groups: Optional[str]) -> str:
+    """把某一类空回行内去重出来的 token 名/分组名拼成一行标签（标签非密钥）。
+
+    两类空回各自聚合：整个 (channel, model) 组里 A 与 B 的调用方往往不同
+    （2026-10-10 ch127：A=codex-agent/agent 走 /v1/responses，
+    B=master/default 走 /v1/chat/completions），合并上报会把人引向错误调用方。
+    """
+    tokens = tokens or ""
+    groups = groups or ""
+    if not tokens:
+        return "未知"
+    return f"{tokens}（group {groups}）" if groups else tokens
+
+
 def _query_unbilled_empty_rounds(
     db_path: Path, now: Optional[float] = None
 ) -> Optional[list[dict]]:
-    """只读查询每个渠道+模型最近窗口内的「未计费空回」占比。
+    """只读查询每个渠道+模型最近窗口内的两种「空回」：未计费与零输出已计费。
 
     与 opus 空响应率互补：那条口径要求 prompt_tokens >= 1000，只看得见
     「有输入、无输出」的计费轮；ch126 的空回是 prompt/completion/quota 全 0
@@ -1202,8 +1232,16 @@ def _query_unbilled_empty_rounds(
     在监控里始终是 0.0%。这里按 (channel_id, model_name) 分组，谁空回谁暴露，
     不再依赖预先写死的模型名单。
 
-    返回按占比降序的 [{channel_id, channel_name, model, total, empty, rate}]，
-    只含样本足量且超阈值的组；DB 不可用或查询失败返回 None，避免误告警。
+    两组都聚合（同一趟扫描，不额外开连接）：
+      empty        —— prompt/completion/quota 全 0，用户空回且不扣费；
+      billed_empty —— completion_tokens = 0 但 quota > 0，用户空回且照扣费。
+    后者是 2026-10-10 ch127 的形状，比率门槛看不见（7.6%），按烧掉的 quota 判。
+
+    返回按占比降序的 [{channel_id, channel_name, model, total, empty, rate,
+    unbilled, billed_empty, billed_quota, billed, unbilled_caller, billed_caller}]，
+    只含命中任一门槛的组；DB 不可用或查询失败返回 None，避免误告警。
+    *_caller 是该类空回行内去重的 token 名与分组名（标签，非密钥），用于直接
+    定位调用方。
     """
     if not db_path.exists():
         return None
@@ -1217,12 +1255,33 @@ def _query_unbilled_empty_rounds(
             SUM(
                 CASE WHEN prompt_tokens = 0 AND completion_tokens = 0 AND quota = 0
                 THEN 1 ELSE 0 END
-            ) AS empty
+            ) AS empty,
+            SUM(
+                CASE WHEN completion_tokens = 0 AND quota > 0
+                THEN 1 ELSE 0 END
+            ) AS billed_empty,
+            COALESCE(
+                SUM(CASE WHEN completion_tokens = 0 AND quota > 0 THEN quota ELSE 0 END),
+                0
+            ) AS billed_quota,
+            GROUP_CONCAT(DISTINCT
+                CASE WHEN prompt_tokens = 0 AND completion_tokens = 0 AND quota = 0
+                     THEN token_name END
+            ) AS unbilled_tokens,
+            GROUP_CONCAT(DISTINCT
+                CASE WHEN prompt_tokens = 0 AND completion_tokens = 0 AND quota = 0
+                     THEN "group" END
+            ) AS unbilled_groups,
+            GROUP_CONCAT(DISTINCT
+                CASE WHEN completion_tokens = 0 AND quota > 0 THEN token_name END
+            ) AS billed_tokens,
+            GROUP_CONCAT(DISTINCT
+                CASE WHEN completion_tokens = 0 AND quota > 0 THEN "group" END
+            ) AS billed_groups
         FROM logs
         WHERE type = 2
           AND created_at >= ?
         GROUP BY channel_id, model_name
-        HAVING total >= ?
     """
     try:
         with closing(
@@ -1232,18 +1291,38 @@ def _query_unbilled_empty_rounds(
                 timeout=5,
             )
         ) as conn:
-            rows = conn.execute(sql, (cutoff, UNBILLED_EMPTY_MIN_SAMPLES)).fetchall()
+            rows = conn.execute(sql, (cutoff,)).fetchall()
     except (OSError, sqlite3.Error) as e:
         logger.error(f"未计费空回率查询失败: {e}")
         return None
     offenders = []
-    for channel_id, channel_name, model, total, empty in rows:
+    for (
+        channel_id,
+        channel_name,
+        model,
+        total,
+        empty,
+        billed_empty,
+        billed_quota,
+        unbilled_tokens,
+        unbilled_groups,
+        billed_tokens,
+        billed_groups,
+    ) in rows:
         total = total or 0
         empty = empty or 0
-        if total < UNBILLED_EMPTY_MIN_SAMPLES:
-            continue
-        rate = empty / total
-        if rate <= UNBILLED_EMPTY_THRESHOLD:
+        billed_empty = billed_empty or 0
+        billed_quota = billed_quota or 0
+        # 样本门槛从 HAVING 移到 Python：已计费空回要能在小样本下暴露，
+        # 未计费空回仍按 30 样本 + 20% 比率。
+        unbilled = (
+            total >= UNBILLED_EMPTY_MIN_SAMPLES
+            and (empty / total) > UNBILLED_EMPTY_THRESHOLD
+        )
+        billed = billed_empty >= BILLED_EMPTY_MIN_ROWS and billed_quota >= (
+            BILLED_EMPTY_MIN_QUOTA
+        )
+        if not (unbilled or billed):
             continue
         offenders.append(
             {
@@ -1252,7 +1331,13 @@ def _query_unbilled_empty_rounds(
                 "model": model or "",
                 "total": total,
                 "empty": empty,
-                "rate": rate,
+                "rate": empty / total if total else 0.0,
+                "unbilled": unbilled,
+                "billed_empty": billed_empty,
+                "billed_quota": billed_quota,
+                "billed": billed,
+                "unbilled_caller": _format_caller(unbilled_tokens, unbilled_groups),
+                "billed_caller": _format_caller(billed_tokens, billed_groups),
             }
         )
     offenders.sort(key=lambda item: item["rate"], reverse=True)
@@ -3415,9 +3500,10 @@ class Guardian:
             )
 
     def _step_unbilled_empty_rounds(self) -> None:
-        """未计费空回告警：按渠道+模型暴露「200 但无内容无计费」的空回占比。
+        """空回告警：按渠道+模型暴露「200 但无内容」的两种形态。
 
-        每组独立冷却 key，避免一个渠道的故障段压掉另一个渠道的首次告警。
+        每组两类各一个独立冷却 key，避免一个渠道的故障段压掉另一个渠道的
+        首次告警，也避免「烧钱的空回」被「不烧钱的空回」的同组告警盖掉。
         """
         offenders = self.autofix.check_unbilled_empty_rounds()
         if not isinstance(offenders, list):
@@ -3426,23 +3512,54 @@ class Guardian:
             channel_id = item["channel_id"]
             model = item["model"]
             rate = item["rate"]
-            logger.warning(
-                f"未计费空回：ch{channel_id} {item['channel_name']} {model} "
-                f"{rate:.1%} ({item['empty']}/{item['total']})"
-            )
-            if self.alerts.should_alert(
-                f"unbilled_empty:{channel_id}:{model}", "warning"
-            ):
-                self.telegram.send_alert(
-                    "未计费空回超标",
-                    f"渠道 ch{channel_id}（{item['channel_name']}）模型 {model} "
-                    f"最近 {UNBILLED_EMPTY_WINDOW_HOURS} 小时空回率 {rate:.1%}"
-                    f"（{item['empty']}/{item['total']}），高于阈值 "
-                    f"{UNBILLED_EMPTY_THRESHOLD:.0%}\n"
-                    f"口径：上游以 200 结束但未回内容与计费信息，用户侧表现为空回。\n"
-                    f"NewAPI 无法对静默空回重试，需查上游或降低该腿权重。",
-                    "warning",
+            if item["unbilled"]:
+                logger.warning(
+                    f"未计费空回：ch{channel_id} {item['channel_name']} {model} "
+                    f"{rate:.1%} ({item['empty']}/{item['total']})"
                 )
+                if self.alerts.should_alert(
+                    f"unbilled_empty:{channel_id}:{model}", "warning"
+                ):
+                    self.telegram.send_alert(
+                        "未计费空回超标",
+                        f"渠道 ch{channel_id}（{item['channel_name']}）模型 {model} "
+                        f"最近 {UNBILLED_EMPTY_WINDOW_HOURS} 小时空回率 {rate:.1%}"
+                        f"（{item['empty']}/{item['total']}），高于阈值 "
+                        f"{UNBILLED_EMPTY_THRESHOLD:.0%}\n"
+                        f"口径：上游以 200 结束但未回内容与计费信息，用户侧表现为空回。\n"
+                        f"NewAPI 无法对静默空回重试，需查上游。\n"
+                        f"调用方：{item['unbilled_caller']}\n"
+                        f"注意：channel_affinity_setting 按 prompt_cache_key 把会话"
+                        f"钉在原渠道（default_ttl_seconds），降权不移动这部分流量；"
+                        f"摘腿前确认该 group 还有别的 enabled 腿。",
+                        "warning",
+                    )
+            if item["billed"]:
+                quota_musd = item["billed_quota"] / 500000.0
+                logger.warning(
+                    f"零输出已计费空回：ch{channel_id} {item['channel_name']} "
+                    f"{model} {item['billed_empty']} 行 / "
+                    f"{item['billed_quota']} quota（≈${quota_musd:.2f}）"
+                )
+                if self.alerts.should_alert(
+                    f"billed_empty:{channel_id}:{model}", "warning"
+                ):
+                    self.telegram.send_alert(
+                        "零输出但已计费",
+                        f"渠道 ch{channel_id}（{item['channel_name']}）模型 {model} "
+                        f"最近 {UNBILLED_EMPTY_WINDOW_HOURS} 小时内有 "
+                        f"{item['billed_empty']} 轮 completion_tokens=0 却照扣 quota，"
+                        f"合计 {item['billed_quota']}（≈${quota_musd:.2f}）。\n"
+                        f"口径：上游以 200 结束、输入全额计费、无输出，用户侧同样是空回，"
+                        f"但未计费监控（要求 quota=0）与 opus 口径（硬编码模型名单）都看不见。\n"
+                        f"占比 {item['billed_empty']}/{item['total']}——低比率也照告，"
+                        f"这条按烧掉的 quota 判，与上面「未计费空回」是两个独立告警键。\n"
+                        f"调用方：{item['billed_caller']}\n"
+                        f"这类行是上游干净 EOF、首包未到（frt=-1000）却由 "
+                        f"local_count_tokens 全额计输入所致；调用侧每重试一轮就重计一次 "
+                        f"200k 上下文。先定位调用方与上游，降权对 affinity 钉住的会话无效。",
+                        "warning",
+                    )
 
     def _step_pool_legs(self) -> None:
         """模型池单腿告警：enabled 模型活跃渠道从 >=2 塌到 1 时 edge-trigger。
