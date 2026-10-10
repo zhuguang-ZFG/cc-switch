@@ -138,6 +138,14 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
   路由 → 3002 agent 组（ch127 + Claude 池，有记账归因）**。Any 侧是否同样
   接 3002 any 组（换 token10 + base `http://127.0.0.1:3002`）待用户裁决，
   当前 8789 直连功能正常、隔离方向正确。
+- **11:5x 用户裁决"同意"，Any 路由同法接入 3002 any 组**：
+  `providers.any-codex-1788960193007` base `8789→http://127.0.0.1:3002`、key
+  → token10（`codex-any-agent`，组 any）；备份
+  `codex-any-provider-before-3002-20261010-115429.json`。**forwarder 按请求现读
+  provider 配置，无需重启即生效**。验证：实弹 15721→`请求目标: 3002/v1/responses`
+  → 计费日志 `ch=126 use_channel:['126']` ×2 ✓。至此两条 cc-switch 路由统一
+  经 3002 分组：Any→any 组（仅 ch126/72）、AgentRouter→agent 组（仅
+  ch127/86/134/135/136），双向有 NewAPI 记账与归因。
 - 契约要点（新增）：
   - cc-switch **代理接管态**下，直改 `config.toml` 的 `model_provider` 会让
     UI 路由切换整体失明——两者只能选一条控制路径；
