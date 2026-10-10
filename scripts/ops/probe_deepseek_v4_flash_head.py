@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Decide the deepseek-v4-flash head by measuring both pools, not by trusting the plan.
+"""Measure one model across named pools, through each channel's own machinery.
+
+Two uses:
+- decide the deepseek-v4-flash head before running adjust_deepseek_v4_flash_pool.py
+- check whether an opus pool leg actually still serves (--model claude-opus-5)
 
 docs/ops/omp-driftfix-dsv4f-head-2026-10-10.md demoted ch118 seeseed to p25 because
 its own relay returned deterministic 500 "do request failed". ch118 keeps
 auto_ban=0, so promoting it to head without re-measuring would put a permanent
 failing hop in front of every request.
 
-Uses POST/GET /api/channel/test/{id} (the channel's own key and machinery, routing
+Uses GET/POST /api/channel/test/{id} (the channel's own key and machinery, routing
 untouched). Read-only: nothing here changes priority, status or abilities.
 """
 from __future__ import annotations
@@ -20,8 +24,8 @@ import time
 from pathlib import Path
 
 SMOKE_PATH = Path(__file__).with_name("newapi-local-smoke.py")
-MODEL = "deepseek-v4-flash"
-HEADS = {118: "seeseed (candidate main)", 180: "agentrouter (current main)"}
+DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_HEADS = {118: "seeseed (candidate main)", 180: "agentrouter (current main)"}
 
 
 def _redact(text: str) -> str:
@@ -37,8 +41,8 @@ def load_smoke():
     return module
 
 
-def probe(smoke, headers, cid: int, attempts: int, gap: float) -> list[dict]:
-    url = f"{smoke.NEWAPI_BASE}/api/channel/test/{cid}?model={MODEL}"
+def probe(smoke, headers, cid: int, attempts: int, gap: float, model: str) -> list[dict]:
+    url = f"{smoke.NEWAPI_BASE}/api/channel/test/{cid}?model={model}"
     method = "GET"
     results = []
     for i in range(1, attempts + 1):
@@ -68,25 +72,41 @@ def probe(smoke, headers, cid: int, attempts: int, gap: float) -> list[dict]:
     return results
 
 
+def parse_channels(specs: list[str] | None) -> dict[int, str]:
+    if not specs:
+        return dict(DEFAULT_HEADS)
+    heads: dict[int, str] = {}
+    for spec in specs:
+        cid_text, _, label = spec.partition("=")
+        heads[int(cid_text)] = label or f"ch{cid_text}"
+    return heads
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--attempts", type=int, default=6, help="probes per channel (default 6)")
     parser.add_argument("--gap", type=float, default=5.0, help="seconds between probes")
-    parser.add_argument("--min-ok", type=int, default=6, help="ch118 successes required to endorse head")
+    parser.add_argument("--min-ok", type=int, default=6, help="successes required to endorse the candidate")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"model to test (default {DEFAULT_MODEL})")
+    parser.add_argument("--channels", nargs="*", metavar="ID[=LABEL]",
+                        help="channels to probe (default the deepseek-v4-flash head pair 118/180)")
     args = parser.parse_args()
+
+    heads = parse_channels(args.channels)
+    candidate = next(iter(heads)) if args.channels else 118
 
     smoke = load_smoke()
     token, user_id = smoke.admin_auth()
     headers = {"Authorization": f"Bearer {token}", "New-Api-User": str(user_id)}
 
-    print(f"model={MODEL} attempts={args.attempts} gap={args.gap}s")
+    print(f"model={args.model} attempts={args.attempts} gap={args.gap}s")
     all_results = {}
-    for cid, label in HEADS.items():
+    for cid, label in heads.items():
         print(f"ch{cid} {label}:")
-        all_results[cid] = probe(smoke, headers, cid, args.attempts, args.gap)
+        all_results[cid] = probe(smoke, headers, cid, args.attempts, args.gap, args.model)
 
     print("\n--- summary ---")
-    for cid, label in HEADS.items():
+    for cid, label in heads.items():
         res = all_results[cid]
         ok_n = sum(1 for r in res if r["ok"])
         lat = sorted(r["ms"] for r in res if r["ok"])
@@ -95,8 +115,10 @@ def main() -> int:
         print(f"ch{cid} {label}: {ok_n}/{len(res)} ok, median_wall={med}ms"
               f"{('; ' + ' | '.join(sorted(errs))[:200]) if errs else ''}")
 
-    endorse = sum(1 for r in all_results[118] if r["ok"]) >= args.min_ok
-    print(f"\nverdict: {'PROMOTE ch118 to head (measured ok)' if endorse else 'KEEP ch180 as head'}")
+    ok_n = sum(1 for r in all_results[candidate] if r["ok"])
+    endorse = ok_n >= args.min_ok
+    print(f"\nverdict: ch{candidate} {'ENDORSED' if endorse else 'NOT endorsed'} "
+          f"({ok_n}/{len(all_results[candidate])} ok, need {args.min_ok})")
     return 0 if endorse else 2
 
 
