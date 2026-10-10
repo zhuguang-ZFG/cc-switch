@@ -259,3 +259,16 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
   专务）；Free 组未开。gpt-6-sol 原 default 链无 p>10 渠道，此改动等于给
   gpt-6-sol 立了新头名，若 jianzhile 再抖动 auto_ban 会自动落回 midjok p10。
 - `newapi-local-smoke.py` ALL OK（Sol primary/primary opus pool 等姿态无新增违规）。
+
+## 13. 追加：ch91 新模型的 effort/上下文配置核验（13:3x，用户问"设置对吗"）
+
+- OMP `models.yml` 三条目对照 jianzhile 上游实测：`low/medium/high/xhigh/max`
+  五档 effort 全接受且真实生效（xhigh/max 的 usage 里
+  `reasoning_tokens=28~35`，非静默吞参）；`gpt-6-astra`/`gpt-6-sol` 经 3002
+  全链路透传同样成立（归因 91）。
+- 上下文：astra/sol 条目 400K/128K 与上游 `max_tokens=128000` 接受一致；
+  `gpt-6-sol` 条目维持 200K/32K（midjok 保守值）——条目按 model id 与兜底腿
+  共享，头名抖动落回 midjok 时大上下文会 400，故不上调。
+- 已知形态非故障：`gpt-5.6-sol` 走 responses 桥（`billing_usage.source:
+  oai_responses`），chat 面 usage 的 reasoning_tokens 恒 0；一次 xhigh
+  SSL EOF 为上游瞬断，重试即绿。
