@@ -805,25 +805,71 @@ class NewAPIClient:
         self.token = token
         self.user_id = user_id
 
+    def _db_access_token(self) -> Optional[str]:
+        """Read NewAPI's long-lived per-user access token from the local DB."""
+        try:
+            user_id = int(self.user_id)
+        except (TypeError, ValueError):
+            logger.error(f"New-Api-User id is not numeric: {self.user_id!r}")
+            return None
+        try:
+            with closing(
+                sqlite3.connect(
+                    f"file:{NEWAPI_DB.expanduser().resolve().as_posix()}?mode=ro",
+                    uri=True,
+                    timeout=5,
+                )
+            ) as connection:
+                row = connection.execute(
+                    "SELECT access_token FROM users WHERE id = ?", (user_id,)
+                ).fetchone()
+        except (OSError, sqlite3.Error) as error:
+            logger.error(f"NewAPI token refresh failed: local DB read error: {error}")
+            return None
+        token = str(row[0] or "").strip() if row else ""
+        return token or None
+
+    def _refresh_token_from_db(self) -> bool:
+        """Adopt the current access token after a 401.
+
+        Rotation rewrites users.access_token, so a static copy in secrets.json
+        goes stale and silences every management-API check. Reading it from the
+        local DB heals that without /api/user/login, which would add a server
+        session per refresh and hit AUTH_SESSION_LIMIT.
+        """
+        token = self._db_access_token()
+        if not token or token == self.token:
+            return False
+        self.token = token
+        logger.warning(
+            "NewAPI admin token rotated; adopted the current access token from the local DB"
+        )
+        return True
+
     def _request(self, method: str, path: str, data: Optional[dict] = None, timeout: int = 15) -> Optional[dict]:
         """发送 NewAPI 管理 API 请求"""
-        try:
-            url = f"{self.base_url}{path}"
-            headers = {
-                "Authorization": f"Bearer {self.token}",
-                "New-Api-User": self.user_id,
-                "Content-Type": "application/json",
-            }
-            body = json.dumps(data).encode() if data else None
-            req = urllib.request.Request(url, data=body, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            logger.error(f"NewAPI {method} {path} failed: {e.code} {e.read().decode()[:200]}")
-            return None
-        except Exception as e:
-            logger.error(f"NewAPI {method} {path} failed: {e}")
-            return None
+        for attempt in (0, 1):
+            try:
+                url = f"{self.base_url}{path}"
+                headers = {
+                    "Authorization": f"Bearer {self.token}",
+                    "New-Api-User": self.user_id,
+                    "Content-Type": "application/json",
+                }
+                body = json.dumps(data).encode() if data else None
+                req = urllib.request.Request(url, data=body, headers=headers, method=method)
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode()[:200]
+                if e.code == 401 and attempt == 0 and self._refresh_token_from_db():
+                    continue
+                logger.error(f"NewAPI {method} {path} failed: {e.code} {detail}")
+                return None
+            except Exception as e:
+                logger.error(f"NewAPI {method} {path} failed: {e}")
+                return None
+        return None
 
     def get_status(self) -> bool:
         try:
@@ -3205,6 +3251,7 @@ class Guardian:
         self._cycle_deadline = time.monotonic() + CYCLE_BUDGET_SEC
         # 跨步骤共享值的安全默认：任一步骤被跳过或抛异常时，后续步骤不得 NameError
         channels: List[dict] = []
+        channels_ok = False
         rate = 0.0
         remaining = -1
 
@@ -3241,9 +3288,13 @@ class Guardian:
 
         # 3. P1: 权重自动调整（根据性能历史）
         def _weight_adjust():
-            nonlocal channels
+            nonlocal channels, channels_ok
             # 重新获取渠道列表：步骤 2/2.5 可能已禁用/降权某些渠道，过期列表会错误处理它们
-            channels = self.newapi.get_channels()
+            result = self.newapi.get_channels_result()
+            if not result.ok:
+                raise RuntimeError(f"channel list unavailable: {result.reason}")
+            channels_ok = True
+            channels = result.channels
             self.autofix._auto_adjust_weights(channels)
 
         self._run_step("weight adjust", _weight_adjust)
@@ -3317,10 +3368,17 @@ class Guardian:
         self._run_step("balance check", _balance)
 
         # 9. P2: 导出指标
-        self._run_step(
-            "metrics export",
-            lambda: self.autofix.export_metrics(channels, rate, remaining),
-        )
+        # 快照不可用时跳过而非写零：全零读起来像"0 个健康渠道"的可信事实，
+        # 掩盖真实故障；让 metrics 变陈旧，巡检才会报"快照过期"。
+        if channels_ok:
+            self._run_step(
+                "metrics export",
+                lambda: self.autofix.export_metrics(channels, rate, remaining),
+            )
+        else:
+            logger.warning(
+                "metrics export skipped: no trusted channel snapshot this cycle"
+            )
 
         # 10. 自循环维护（无需人工干预持续运转）
         self._run_step("ability fix", self.autofix.periodic_ability_fix)

@@ -1,5 +1,6 @@
 import os
 import sys
+import io
 import json
 import sqlite3
 import time
@@ -7,6 +8,8 @@ import socket
 import tempfile
 import logging
 import unittest
+import urllib.error
+import urllib.request
 from contextlib import closing
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, Mock, patch
@@ -61,6 +64,84 @@ class FakeNewAPI:
 class FakeTelegram:
     def send_alert(self, *_args):
         return True
+
+
+class NewAPIClientTokenRefreshTests(unittest.TestCase):
+    def _users_db(self, temp_dir, token):
+        database = Path(temp_dir) / "new-api.db"
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, access_token TEXT)"
+            )
+            connection.execute("INSERT INTO users VALUES (1, ?)", (token,))
+            connection.commit()
+        return database
+
+    def _unauthorized(self):
+        return urllib.error.HTTPError(
+            "http://127.0.0.1:3002/api/channel/",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"code":"AUTH_UNAUTHORIZED"}'),
+        )
+
+    def test_db_access_token_reads_current_rotated_value(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = self._users_db(temp_dir, "rotated-token")
+            client = guardian.NewAPIClient("http://127.0.0.1:3002", "stale-token", "1")
+            with patch.object(guardian, "NEWAPI_DB", database):
+                self.assertEqual(client._db_access_token(), "rotated-token")
+
+    def test_request_adopts_rotated_token_and_retries_once(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = self._users_db(temp_dir, "rotated-token")
+            client = guardian.NewAPIClient("http://127.0.0.1:3002", "stale-token", "1")
+            seen = []
+
+            class FakeResponse:
+                def read(self):
+                    return b'{"success": true, "data": {"items": []}}'
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *_args):
+                    return False
+
+            def fake_urlopen(request, timeout=None):
+                seen.append(request.headers.get("Authorization"))
+                if seen[-1].endswith("stale-token"):
+                    raise self._unauthorized()
+                return FakeResponse()
+
+            with patch.object(guardian, "NEWAPI_DB", database):
+                with patch.object(
+                    guardian.urllib.request, "urlopen", side_effect=fake_urlopen
+                ):
+                    result = client._request("GET", "/api/channel/")
+
+            self.assertEqual(result, {"success": True, "data": {"items": []}})
+            self.assertEqual(client.token, "rotated-token")
+            self.assertEqual(len(seen), 2)
+
+    def test_request_stops_after_one_refresh_when_token_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = self._users_db(temp_dir, "same-token")
+            client = guardian.NewAPIClient("http://127.0.0.1:3002", "same-token", "1")
+            attempts = []
+
+            def fake_urlopen(request, timeout=None):
+                attempts.append(request.full_url)
+                raise self._unauthorized()
+
+            with patch.object(guardian, "NEWAPI_DB", database):
+                with patch.object(
+                    guardian.urllib.request, "urlopen", side_effect=fake_urlopen
+                ):
+                    self.assertIsNone(client._request("GET", "/api/channel/"))
+
+            self.assertEqual(len(attempts), 1)
 
 
 class NewAPIClientUpdateTests(unittest.TestCase):
@@ -3548,6 +3629,11 @@ class StepIsolationTests(unittest.TestCase):
         g.health.check_error_rate.return_value = (True, 0.0, 0, 0)
         g.health.check_balance.return_value = (True, 100, 200)
         g.newapi = Mock()
+        # 自动化契约要求 get_channels_result() 返回显式结果对象：裸 Mock 的
+        # .ok 恒真会让"快照不可用"分支在测试里永远走不到。
+        g.newapi.get_channels_result.return_value = guardian.ChannelListResult(
+            True, [], "ok"
+        )
         g.newapi.get_channels.return_value = []
         g.autofix = Mock()
         g.autofix.state = {"restart_counts": {}}
@@ -3572,13 +3658,33 @@ class StepIsolationTests(unittest.TestCase):
         g.autofix.export_metrics.assert_called_once()
         g._maybe_daily_report.assert_called_once()
 
-    def test_failing_weight_step_leaves_metrics_export_with_safe_default(self):
-        """weight adjust 抛异常 → channels 保持 []，metrics 导出不得 NameError"""
+    def test_untrusted_channel_snapshot_skips_metrics_export(self):
+        """渠道快照不可信 → 宁可不写，也不能写出 healthy=0 的假事实"""
         g = self._make_guardian()
-        g.newapi.get_channels.side_effect = [RuntimeError("parse fail"), []]
+        g.newapi.get_channels_result.return_value = guardian.ChannelListResult(
+            False, [], "401 Unauthorized"
+        )
 
-        with patch.object(guardian.logger, "error"):
+        with patch.object(guardian.logger, "error") as err, patch.object(
+            guardian.logger, "warning"
+        ) as warn:
             g._check_cycle()
+
+        err.assert_called()
+        self.assertIn(
+            "channel list unavailable: 401 Unauthorized",
+            " ".join(str(c.args) for c in err.call_args_list),
+        )
+        g.autofix.export_metrics.assert_not_called()
+        # 跳过的只是指标导出，后续维护步骤照常执行
+        g.autofix.periodic_ability_fix.assert_called_once()
+        g.autofix.full_health_scan.assert_called_once()
+
+    def test_trusted_empty_channel_snapshot_still_exports(self):
+        """空列表 ≠ 抓取失败：确认 0 渠道是真实现状时仍然导出"""
+        g = self._make_guardian()
+
+        g._check_cycle()
 
         g.autofix.export_metrics.assert_called_once()
         self.assertEqual(g.autofix.export_metrics.call_args.args[0], [])
