@@ -247,12 +247,26 @@ PRIMARY_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
 # Current capacity is reported in the check detail either way.
 # 2026-08-20：min=1 在塌缩到单渠道（ch86 裸奔）时仍是绿的， opus 双模型提到 2，
 # 塌缩到单渠道即 FAIL（当前 justwoker ch94/95 + ch86 兜底，容量 3）。
+# 2026-10-11 门禁口径改造：配置容量 + 实测容量双轴，两轴分别都不得少于 min。
+# 只有配置行证明不了上游能回答——docs/ops/any-agent-claude-gpt-restore-2026-10-10.md:37
+# 那轮记录 "ALL OK: pool capacity claude-opus-5 enabled=7 ids=[3,9,18,86,134,135,136]"，
+# 7 条配置全绿，实际只有 0 条能回答。配置轴继续红（塌缩即失败），实测轴补抓幻影容量。
 MIN_ENABLED_CRITICAL_MODELS: dict[str, int] = {
     "claude-opus-5": 2,
     # 2026-10-03 用户裁决：opus-4-8 池暂时去除（在营 0 渠道：agentrouter
-    # 账户级 402 / anyrouter 关窗 / 网关池空）。恢复=回本行 +"claude-opus-4-8": 2,
-    # 并复活池渠道（agentrouter-claude-keypool runbook）。
+    # 账户级 402 / anyrouter 关窗 / 网关池空）。
+    # 2026-10-11 按该条记录的恢复方式回捞（"恢复=回本行 +"claude-opus-4-8": 2"）：
+    # 实测 6h 窗口 ch94=143 / ch95=100 条真实 agent 成功行（prompt 6.5k~171k），
+    # 且 OMP slow 角色已由用户裁决改指本模型，故按关键模型钉 min=2。
+    "claude-opus-4-8": 2,
 }
+
+MEASURED_CAPACITY_WINDOW_SECONDS = 6 * 3600
+# 探针不算容量（"小探针假活"，见 docs/ops/tabitoken-split-single-key-2026-08-20.md）：
+# 管理侧 /api/channel/test 与运维短 prompt 探针同样写 type=2，但一条 2~14 token 的
+# "Reply with exactly OK" 只证明上游肯接小请求，不证明它能扛 OMP 的真实上下文。
+# 下界取 1000，与 guardian.py:134 的空轮口径一致。
+MEASURED_CAPACITY_MIN_PROMPT_TOKENS = 1000
 
 NEWAPI_DB = DEPLOY_DIR / "new-api.db"
 
@@ -901,6 +915,69 @@ def zero_output_billing_violations() -> list[str]:
         con.close()
     return violations
 
+# 2026-10-11 未注册名按隐含 37.5 计费：gpt-6-astra 24h 615 条记 2,836,445,168 quota，
+# 同族已注册名 gpt-5.6-sol（0.5）209 条只记 12,202,706。名字漏注册不是配置漂移，是
+# 流量自己长出来的，所以按实测 consume 行报，不按 ModelRatio 键集报。
+UNREGISTERED_RATIO_WINDOW_SECONDS = 24 * 3600
+UNREGISTERED_RATIO_MIN_REQUESTS = 20  # 噪声名不报，≥20 条才算真在被使用
+
+
+def unregistered_ratio_violations() -> list[str]:
+    """Flag high-volume model names billed at the fork's implied ratio.
+
+    A name absent from both ModelRatio and ModelPrice falls back to the implied
+    ratio (37.5, read back from the row itself), which overstates local quota
+    ~75x against the curated 0.5 family. Each row's own model_ratio/model_price is
+    reported instead of inferring from the option key set: a fixed ModelPrice is a
+    deliberate price and must not read as a gap.
+    """
+    violations: list[str] = []
+    try:
+        con = sqlite3.connect(f"file:{NEWAPI_DB.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        return [f"db-open-failed={e}"]
+    try:
+        priced: set[str] = set()
+        for option in ("ModelRatio", "ModelPrice"):
+            row = con.execute("SELECT value FROM options WHERE key=?", (option,)).fetchone()
+            try:
+                values = json.loads(row[0]) if row and row[0] else {}
+            except ValueError:
+                violations.append(f"option-{option}-unparsable")
+                values = {}
+            priced.update(str(k) for k in values)
+        since = int(time.time()) - UNREGISTERED_RATIO_WINDOW_SECONDS
+        busy = con.execute(
+            "SELECT model_name, COUNT(*), SUM(quota) FROM logs"
+            " WHERE type=2 AND created_at>=? AND quota>0 AND channel_id>0"
+            " GROUP BY 1 HAVING COUNT(*)>=?",
+            (since, UNREGISTERED_RATIO_MIN_REQUESTS),
+        ).fetchall()
+        latest = dict(con.execute(
+            "SELECT x.model_name, l.other FROM logs l"
+            " JOIN (SELECT model_name, MAX(id) mid FROM logs"
+            " WHERE type=2 AND created_at>=? GROUP BY 1) x ON x.mid = l.id",
+            (since,),
+        ).fetchall())
+        for model_name, count, quota in busy:
+            name = str(model_name)
+            if name in priced:
+                continue
+            try:
+                info = json.loads(latest.get(name) or "{}")
+            except ValueError:
+                info = {}
+            violations.append(
+                f"{name} x{count} quota={quota} "
+                f"model_ratio={info.get('model_ratio', '?')} "
+                f"model_price={info.get('model_price', '?')}"
+            )
+    except sqlite3.Error as e:
+        violations.append(f"db-read-failed={e}")
+    finally:
+        con.close()
+    return violations
+
 GUARDIAN_STATE_FILE = Path.home() / ".omp" / "guardian" / "state.json"
 
 
@@ -1118,6 +1195,49 @@ def serving_channel_ids(channels: list[dict], model: str) -> list[int]:
     ]
 
 
+def measured_served_by_channel(
+    window_seconds: int,
+) -> tuple[dict[str, dict[int, int]], dict[str, int], str]:
+    """Model -> channel -> successful real requests inside the look-back window.
+
+    NewAPI writes a type=2 consume row only after a response succeeded, so this
+    is the one capacity signal that proves the upstream answered; failed
+    attempts leave no row at all.  Rows with ``completion_tokens=0`` are billed
+    hangs (see ``zero_output_billing_violations``), not answers.
+
+    Returns ``(served, demand, skipped_reason)``.  ``demand`` counts every
+    consume row for the model including probe-sized ones, so the caller can tell
+    "nobody asked" apart from "only pings asked".  A non-empty
+    ``skipped_reason`` means the measured axis was not evaluated at all (DB
+    unreadable), which must never be reported as a capacity FAIL.
+    """
+    served: dict[str, dict[int, int]] = {}
+    demand: dict[str, int] = {}
+    try:
+        con = sqlite3.connect(f"file:{NEWAPI_DB.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        return {}, {}, f"db-open-failed={e}"
+    try:
+        since = int(time.time()) - window_seconds
+        placeholders = ",".join("?" * len(MIN_ENABLED_CRITICAL_MODELS))
+        for model_name, channel_id, answered, asked in con.execute(
+            "SELECT model_name, channel_id, SUM(CASE WHEN completion_tokens>0"
+            f" AND prompt_tokens>={MEASURED_CAPACITY_MIN_PROMPT_TOKENS}"
+            " THEN 1 ELSE 0 END), COUNT(*) FROM logs"
+            " WHERE type=2 AND created_at>=? AND channel_id>0"
+            f" AND model_name IN ({placeholders}) GROUP BY 1,2",
+            (since, *sorted(MIN_ENABLED_CRITICAL_MODELS)),
+        ):
+            name = str(model_name)
+            served.setdefault(name, {})[int(channel_id)] = int(answered or 0)
+            demand[name] = demand.get(name, 0) + int(asked)
+    except sqlite3.Error as e:
+        return {}, {}, f"db-read-failed={e}"
+    finally:
+        con.close()
+    return served, demand, ""
+
+
 def smoke_probe_skip_reason(
     channels: list[dict], model: str, guardian_ids: set[int]
 ) -> str | None:
@@ -1295,14 +1415,35 @@ def main() -> int:
             )
             # 池冗余：关键模型不得失去最后一个启用渠道（0 = "503 No available
             # channel" 前置检测；2026-08-10 凌晨 opus 池曾退化到单渠道 ch75）。
+            # 双轴判定：配置轴防塌缩，实测轴防幻影（type=2 成功行是唯一能证明上游
+            # 真的回答过的信号，失败请求不留行，所以实测只在窗口内有需求时评估）。
+            measured, demand, measured_note = measured_served_by_channel(
+                MEASURED_CAPACITY_WINDOW_SECONDS
+            )
             for model, minimum in MIN_ENABLED_CRITICAL_MODELS.items():
                 serving_ids = serving_channel_ids(items, model)
-                check(
-                    f"pool capacity {model}",
-                    len(serving_ids) >= minimum,
+                served = measured.get(model, {})
+                answered = [cid for cid in serving_ids if served.get(cid)]
+                ok = len(serving_ids) >= minimum
+                detail = (
                     f"enabled_channels={len(serving_ids)} min={minimum}"
-                    f" ids={serving_ids}",
+                    f" ids={serving_ids}"
+                    f" | measured_channels={len(answered)} ids={answered}"
+                    f" measured_successes={sum(served.values())}"
+                    f" demand={demand.get(model, 0)}"
+                    f" window={MEASURED_CAPACITY_WINDOW_SECONDS}s"
                 )
+                if measured_note:
+                    detail += f" | measured-skipped={measured_note}"
+                elif demand.get(model, 0) == 0:
+                    # 窗口内无人请求该模型：实测轴无信号可用，只能按配置容量判定。
+                    detail += " | measured-skipped=no-demand"
+                elif sum(served.values()) == 0:
+                    # 只有探针尺寸的成功行，真实上下文从未验证过——红不起来，但必须显式写出。
+                    detail += " | measured-skipped=probe-only-successes"
+                else:
+                    ok = ok and len(answered) >= minimum
+                check(f"pool capacity {model}", ok, detail)
     except _AdminAuthUnavailable:
         # admin_auth 已记录 FAIL（缓存 token 校验失败降级），跳过依赖 admin
         # API 的检查；多 key / 冒烟检查在下方照常执行，本轮不中断。
@@ -1323,6 +1464,12 @@ def main() -> int:
         "zero-output billed streams",
         not zero_out_violations,
         f"violations={zero_out_violations or 'none'}",
+    )
+    ratio_violations = unregistered_ratio_violations()
+    check(
+        "unregistered model ratios",
+        not ratio_violations,
+        f"violations={ratio_violations or 'none'}",
     )
     ability_violations = ability_posture_violations()
     check(
