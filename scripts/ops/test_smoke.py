@@ -326,9 +326,16 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual((token, user_id), ("guardian-tok", "1"))
         self.assertEqual(len(calls), 2)
 
-    def test_expired_guardian_token_fails_without_password_login(self):
-        """A stale long-lived token must not create recurring sessions."""
+    def test_expired_guardian_token_falls_back_to_single_password_login(self):
+        """A stale long-lived Guardian token costs one login, not one per run.
+
+        d85deaf5 起 Guardian 401 不再 fail-closed：丢弃过期 token 后走一次密码登录
+        并回写缓存。session 成本因此是"每次缓存过期一次"，定时巡检复用缓存，不会
+        反复撞 AUTH_SESSION_LIMIT；丢弃过期 token 保证权限恢复后无人工干预也能自愈。
+        """
         calls = []
+        unlinked = []
+        writes = []
 
         def fake_read(path):
             if path == smoke.TOKEN_CACHE:
@@ -343,18 +350,28 @@ class AdminAuthTests(unittest.TestCase):
                 return 200, LOGIN_OK
             return 401, {}
 
+        self.addCleanup(smoke.failures.clear)
         with (
             patch.object(smoke, "read_json", fake_read),
             patch.object(smoke, "http_json", fake_http),
-            patch.object(type(smoke.TOKEN_CACHE), "write_text"),
+            patch.object(
+                type(smoke.TOKEN_CACHE), "unlink",
+                lambda self_path, **kw: unlinked.append(str(self_path)) or None,
+            ),
+            patch.object(
+                type(smoke.TOKEN_CACHE), "write_text",
+                lambda self_path, text, **kw: writes.append(text) or len(text),
+            ),
         ):
-            with self.assertRaises(smoke._AdminAuthUnavailable):
-                smoke.admin_auth()
+            token, user_id = smoke.admin_auth()
 
-        self.assertEqual(len(calls), 1)
-        self.assertNotIn("/api/user/login", calls[0])
-        self.assertIn("admin token auth", smoke.failures)
-        smoke.failures.clear()
+        self.assertEqual((token, user_id), ("new-tok", "9"))
+        self.assertEqual(len(calls), 2, calls)
+        self.assertIn("/api/channel/", calls[0], "先验证 Guardian token，再决定是否登录")
+        self.assertIn("/api/user/login", calls[1])
+        self.assertTrue(unlinked, "过期 Guardian token 必须丢弃，不得残留毒化")
+        self.assertTrue(writes, "登录成功须回写缓存，让后续巡检复用而不是重复登录")
+        self.assertEqual(smoke.failures, [], "能自愈的降级不应记 FAIL")
 
     def test_401_triggers_relogin(self):
         """确定性鉴权失败 401 → 丢弃过期缓存、重新登录并返回新 token"""
@@ -764,56 +781,48 @@ class AdminAuthTests(unittest.TestCase):
             ["94:justwoker-opus-1=priority=52", "98:tabitoken-2=weight=20"],
         )
 
-    def test_agentrouter_primary_tier_or_excess_weight_is_rejected(self):
+    def test_fallback_primary_tier_or_excess_weight_is_rejected(self):
         channels = [
-            {
-                "id": 45,
-                "name": "agentrouter",
-                "status": 1,
-                "priority": 50,
-                "weight": 10,
-                "models": "gpt-5.6-sol",
-            },
             {
                 "id": 72,
                 "name": "anyrouter",
                 "status": 1,
-                "priority": 40,
-                "weight": 5,
+                "priority": 50,
+                "weight": 10,
+                "models": "claude-opus-5",
             },
+            # ch86 is a backup-posture channel: outside this contract, so its
+            # primary-tier priority must not leak into the fallback verdict.
+            {"id": 86, "name": "agentrouter-claude", "status": 1, "priority": 60, "weight": 40},
         ]
 
         self.assertEqual(
             smoke.fallback_posture_violations(channels),
-            ["45:agentrouter=priority=50,weight=10"],
+            ["72:anyrouter=priority=50,weight=10"],
         )
 
-    def test_agentrouter_disabled_or_missing_is_rejected(self):
+    def test_fallback_disabled_or_missing_is_rejected(self):
         self.assertEqual(
             smoke.fallback_posture_violations(
                 [
-                    {"id": 45, "name": "agentrouter", "status": 2, "priority": 40, "weight": 5},
-                    {"id": 72, "name": "anyrouter", "status": 1, "priority": 40, "weight": 5},
+                    {"id": 72, "name": "anyrouter", "status": 2, "priority": 40, "weight": 5},
                 ]
             ),
-            # ch45 is in DEGRADED_ACCEPTED_DISABLED: its disabled state is an
+            # ch72 is in DEGRADED_ACCEPTED_DISABLED: its disabled state is an
             # accepted upstream-degradation posture, so only priority/weight
             # drift would be flagged; status=2 alone is not a violation.
             [],
         )
-        self.assertEqual(
-            smoke.fallback_posture_violations([]), ["45:missing", "72:missing"]
-        )
+        self.assertEqual(smoke.fallback_posture_violations([]), ["72:missing"])
         self.assertEqual(
             smoke.fallback_posture_violations(
                 [
-                    {"id": 45, "name": "agentrouter", "status": 2, "priority": 50, "weight": 10},
-                    {"id": 72, "name": "anyrouter", "status": 1, "priority": 40, "weight": 5},
+                    {"id": 72, "name": "anyrouter", "status": 2, "priority": 50, "weight": 10},
                 ]
             ),
             # Degraded exemption covers status only; tier drift is still a
             # violation so the channel re-enters at the correct fallback tier.
-            ["45:agentrouter=priority=50,weight=10"],
+            ["72:anyrouter=priority=50,weight=10"],
         )
 
     def test_anyrouter_claude_only_recovery_contract(self):
@@ -827,13 +836,6 @@ class AdminAuthTests(unittest.TestCase):
                 "test_model": smoke.ANYROUTER_TEST_MODEL,
                 "models": ",".join(smoke.ANYROUTER_CLAUDE_MODELS),
                 "model_mapping": json.dumps(smoke.ANYROUTER_CLAUDE_MAPPING),
-            },
-            {
-                "id": 45,
-                "name": "agentrouter",
-                "status": 1,
-                "priority": 40,
-                "weight": 5,
             },
         ]
 
@@ -1150,6 +1152,9 @@ class AdminAuthTests(unittest.TestCase):
             ),
             patch.object(smoke.socket, "create_connection"),
             patch.object(smoke, "log"),
+            # 探针集自带，不依赖生产 SMOKE_PROBES：它 2026-10-04 起为空，
+            # 否则本用例只会退化成"没有断言可失败"，测不到降级后续检查仍执行。
+            patch.object(smoke, "SMOKE_PROBES", (("probe-model", "chat-completions"),)),
         ):
             smoke.failures.clear()
             self.assertEqual(smoke.main(), 1)

@@ -55,8 +55,8 @@ SMOKE_PROBES: tuple[tuple[str, str], ...] = (
 # Channels whose auto-disabled state is currently intentional. Channel 2 has
 # no upstream model; channels 62-65 fail production-shaped pre-consumption.
 # Channel 74 is held out until its shared upstream quota recovers and a real
-# relay + aggregate smoke passes. Channel 45 remains a live fallback.
-KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99}  # 78 deleted from DB 2026-09-13 but kept in quarantine set for Guardian exclusion parity  # 9/18 于 2026-08-24 移出：linxi 同账号余额恢复（管理探测双双 200），重新入池参与 opus-5 负载均衡；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse RegionError 振荡（2026-08-21 复活即超时再禁用），付费 muse 上游已收回，无复活价值；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中；75: tabitoken 多 key 拆分后保留的禁用 tombstone（2026-08-20，单 key 欠费拖垮整渠道，拆为 ch97/98/99）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20 16:25 实测 403 预扣费失败，$0.21/$0.61 < $0.8），充值前保持禁用；98: tabitoken-2 key#2 欠费 $0.22，充值前保持禁用（小探针假活，见 runbook docs/ops/tabitoken-split-single-key-2026-08-20.md）；57/75/97/98 同日移出：网关自带 /test 实测 claude-opus-5 通过，转 p50 备份次档
+# relay + aggregate smoke passes.
+KNOWN_BROKEN_CHANNELS: set[int] = {2, 20, 39, 48, 62, 63, 64, 65, 70, 71, 73, 74, 78, 99, 110, 112}  # 78 deleted from DB 2026-09-13 but kept in quarantine set for Guardian exclusion parity（110/112 同理：yjs 上游账号封禁 2026-09-13 入 Guardian 排除集，渠道现已从 DB 删除，保留占位防 ID 复用并与 Guardian 对齐）  # 9/18 于 2026-08-24 移出：linxi 同账号余额恢复（管理探测双双 200），重新入池参与 opus-5 负载均衡；20: fengwind gpt-5.6-sol 故障路由，08-05 起禁用（sol 全局清除决策），08-10 补双锁；39/78: ai.168661 账号侧死 key 恢复点；48: opencode-go-muse RegionError 振荡（2026-08-21 复活即超时再禁用），付费 muse 上游已收回，无复活价值；57: gorouter 余额不足；70/71: 上游真死（2026-08-08 实测，71 已从 NewAPI 删除、保留占位防 ID 复用），与 Guardian 排除集一致；73/74: relay 渠道上游 405 禁用中；75: tabitoken 多 key 拆分后保留的禁用 tombstone（2026-08-20，单 key 欠费拖垮整渠道，拆为 ch97/98/99）；97/99: tabitoken key#1/key#3 余额耗尽（2026-08-20 16:25 实测 403 预扣费失败，$0.21/$0.61 < $0.8），充值前保持禁用；98: tabitoken-2 key#2 欠费 $0.22，充值前保持禁用（小探针假活，见 runbook docs/ops/tabitoken-split-single-key-2026-08-20.md）；57/75/97/98 同日移出：网关自带 /test 实测 claude-opus-5 通过，转 p50 备份次档
 
 # opus-5 备份档（2026-08-24 起）：主池 3/9/18（p52/p52/p50）之下的一层，
 # 只许低优先级存在——启用状态下 priority 越过 MAX_PRIORITY（进入主池档）即违规。
@@ -1222,10 +1222,11 @@ def admin_auth() -> tuple[str, str]:
     running multi-key and smoke checks. 401 drops the stale cache and refreshes
     via Guardian or, when no Guardian token is configured, a fresh login;
     403 drops the cache too; a configured Guardian token is tried before any
-    password login, while an absent Guardian token fails closed. 429/5xx/network errors keep the
+    password login. 429/5xx/network errors keep the
     cache (re-login on a transient blip would burn the AUTH_SESSION_LIMIT
-    quota). A configured Guardian token that returns 401 fails closed rather
-    than repeatedly creating password sessions.
+    quota). A configured Guardian token that returns 401 is stale: it is
+    dropped and one password login refreshes the cache, so the session cost is
+    one login per cache expiry rather than one per scheduled run.
     """
     cached_permission_failure = False
     try:
@@ -1623,6 +1624,15 @@ def main() -> int:
     )
 
     # 4. real cheap completions
+    if not SMOKE_PROBES:
+        # 2026-10-04 sensenova 上游下架后探针集为空，本门禁一个端到端补全请求都不发。
+        # "没有探针" ≠ "补全链路已验证"：显式声明缺口（与 pool answer rate 的
+        # no-samples 语义一致），恢复探针需要一个可计费模型载体，见 SMOKE_PROBES 注释。
+        check(
+            "gateway completion probes",
+            True,
+            "no-probes-configured — completion path UNVERIFIED",
+        )
     try:
         tok = read_json(DEPLOY_DIR / "client-token.json")
         key = tok.get("api_key") or tok.get("key")
