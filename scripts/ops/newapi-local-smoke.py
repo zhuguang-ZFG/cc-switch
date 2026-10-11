@@ -80,6 +80,10 @@ BACKUP_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     184: {"max_priority": 0, "max_weight": 2},   # opencode-go-step-5-preview（限时免费）
     185: {"max_priority": 30, "max_weight": 1},  # 0v0（glm-4.5-air/glm-4.6v）
     186: {"max_priority": -20, "max_weight": 1}, # tierflow-qwen38-flash（qwen3.8-flash 备份）
+    # 2026-10-11 qgyz13（ch209）：供应商自述"纯 glm-5.3 包装映射、速度随机"，按操作者
+    # 裁定只声明 glm-5.3，且钉死在 p20 兜底档——低于 ch203/ch208 的 p30。它升档即违规：
+    # 未经证实的上游不能挤掉既有 glm-5.3 容量。
+    209: {"max_priority": 20, "max_weight": 1},  # qgyz13（glm-5.3 兜底腿）
 }
 
 # Model isolation is channel-specific. AgentRouter (ch45) is GLM-only as of
