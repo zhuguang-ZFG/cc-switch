@@ -84,6 +84,12 @@ BACKUP_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     # 裁定只声明 glm-5.3，且钉死在 p20 兜底档——低于 ch203/ch208 的 p30。它升档即违规：
     # 未经证实的上游不能挤掉既有 glm-5.3 容量。
     209: {"max_priority": 20, "max_weight": 1},  # qgyz13（glm-5.3 兜底腿）
+    # 2026-10-11 ciallo（ch211）：仅声明 /v1/models 真实返回的 deepseek-v4.1-flash 一个名。
+    # 钉死 p20/w1 有两个理由：一是它必须低于 ch203/ch208（p30）与 ch15（p25）才算兜底；
+    # 二是上游自述"小鸡不是很好、并发限 15"，且它自己的 NewAPI 带 CPU 甩负载
+    # （首次管理探测即 503 system cpu overloaded 97.2%/threshold 90%）——weight 抬高就是在
+    # 拿生产流量去撞别人的共享小机器。
+    211: {"max_priority": 20, "max_weight": 1},  # ciallo（deepseek-v4.1-flash 兜底腿）
 }
 
 # Model isolation is channel-specific. AgentRouter (ch45) is GLM-only as of
