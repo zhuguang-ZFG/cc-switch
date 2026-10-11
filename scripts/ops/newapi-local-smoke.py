@@ -978,6 +978,138 @@ def unregistered_ratio_violations() -> list[str]:
         con.close()
     return violations
 
+# 2026-10-11 intern-discovery 现场：ch140/141/142/143/146 五腿共享
+# discovery-api.intern-ai.org.cn 一个账号，上游按请求体量预扣费。余额见底后 11 token
+# 的探测仍然 200，25k token 的真实请求 429 "quota exceeded" —— 最大成功 prompt 逐日
+# 塌缩（122158 → 77751 → 32946 → 87 → 17）就是这个形状。NewAPI auto_ban 不把 429 当
+# 故障，五腿恒 status=1 并占着 glm-5.3 / intern-s2 / deepseek-v4-flash-vision 的最高
+# 启用层，每个真实请求先白烧两次重试。任何"探测=健康"的门都看不见它，只能用生产报错
+# × 生产真实成功交叉判断。
+QUOTA_DRAIN_WINDOW_SECONDS = 6 * 3600
+QUOTA_DRAIN_MIN_ERRORS = 10  # 抖动不报，窗口内 ≥N 次 quota 429 才算持续耗尽
+QUOTA_DRAIN_REAL_PROMPT_TOKENS = 256  # 成功行最大 prompt 低于此 = 只接得住探测
+QUOTA_DRAIN_LOG_TAIL_BYTES = 8 * 1024 * 1024
+# 额度类报文词表：quota（intern-discovery）、limit（ch203 clinepass "You have reached
+# your weekly Clinepass limit ... resets in 4d 22h"）、exhausted / insufficient。
+# 纯 "too many requests" / rate limit 已由 _QUOTA_DRAIN_TRANSIENT_RE 先跳过。
+QUOTA_DRAIN_CAP_MARKERS = ("quota", "limit", "exhausted", "insufficient", "预扣费")
+_QUOTA_DRAIN_ERR_RE = re.compile(
+    r"^\[(?:ERR|W)\] (\d{4}/\d{2}/\d{2}) - (\d{2}:\d{2}:\d{2})\b.*?"
+    r"channel error \(channel #(\d+), status code: 429\): ([^|\n]{0,200})"
+)
+_QUOTA_DRAIN_TRANSIENT_RE = re.compile(r"rate.?limit|too many requests", re.IGNORECASE)
+
+
+def drained_leg_violations() -> list[str]:
+    """Flag enabled channels that only answer probes while 429ing on real traffic."""
+    cutoff = time.time() - QUOTA_DRAIN_WINDOW_SECONDS
+    log_path = DEPLOY_DIR / "stderr.log"
+    counts: dict[int, int] = {}
+    samples: dict[int, str] = {}
+    try:
+        size = log_path.stat().st_size
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            if size > QUOTA_DRAIN_LOG_TAIL_BYTES:
+                handle.seek(size - QUOTA_DRAIN_LOG_TAIL_BYTES)
+                handle.readline()  # 丢掉截断的首行
+            for line in handle:
+                match = _QUOTA_DRAIN_ERR_RE.match(line)
+                if not match:
+                    continue
+                try:
+                    when = time.mktime(
+                        time.strptime(f"{match.group(1)} {match.group(2)}", "%Y/%m/%d %H:%M:%S")
+                    )
+                except ValueError:
+                    continue
+                if when < cutoff:
+                    continue
+                body = match.group(4).strip()
+                if _QUOTA_DRAIN_TRANSIENT_RE.search(body):
+                    continue  # 瞬态限流不是耗尽，交给池内重试
+                if not any(marker in body.lower() for marker in QUOTA_DRAIN_CAP_MARKERS):
+                    continue
+                channel_id = int(match.group(3))
+                counts[channel_id] = counts.get(channel_id, 0) + 1
+                samples.setdefault(channel_id, body[:60])
+    except OSError as error:
+        return [f"stderr-read-failed={error}"]
+    suspect = {cid for cid, n in counts.items() if n >= QUOTA_DRAIN_MIN_ERRORS}
+    if not suspect:
+        return []
+    violations: list[str] = []
+    try:
+        con = sqlite3.connect(f"file:{NEWAPI_DB.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as error:
+        return [f"db-open-failed={error}"]
+    try:
+        since = int(cutoff)
+        for channel_id in sorted(suspect):
+            row = con.execute(
+                "SELECT status, name FROM channels WHERE id=?", (channel_id,)
+            ).fetchone()
+            if not row or row[0] != 1:
+                continue  # 已禁用/已回收，不是裸奔
+            largest = con.execute(
+                "SELECT MAX(prompt_tokens) FROM logs"
+                " WHERE type=2 AND channel_id=? AND created_at>=?",
+                (channel_id, since),
+            ).fetchone()[0]
+            if largest is not None and largest >= QUOTA_DRAIN_REAL_PROMPT_TOKENS:
+                continue  # 窗口内接过真实流量
+            violations.append(
+                f"ch{channel_id} {row[1]}: {counts[channel_id]}x 429 quota in 6h, "
+                f"max success prompt={largest or 0} (probe-only) :: {samples[channel_id]}"
+            )
+    except sqlite3.Error as error:
+        violations.append(f"db-read-failed={error}")
+    finally:
+        con.close()
+    return violations
+
+
+# 2026-10-11 glm-5.3 现场：logs 只在成功时写 type=2，所以"配置全绿 + 探测假活"能同时
+# 骗过配置容量轴和实测容量轴；perf_metrics 是这份 DB 里唯一带失败尝试量的表（按
+# model+group 每小时一行）。glm-5.3 6h req=215 ok=29（13.5%，且 ok 全是 17 token 的探测
+# 尺寸），同窗口 claude-opus-4-8 98.4% / step-5-preview-free 99.6% / gpt-6-astra 91.7%
+# ——阈值 50% 只报真出事的那个名，不制造噪声红灯。
+ANSWER_RATE_WINDOW_SECONDS = 6 * 3600
+ANSWER_RATE_MIN_ATTEMPTS = 30
+ANSWER_RATE_MIN_PERCENT = 50.0
+
+
+def pool_answer_rate_violations() -> tuple[list[str], str]:
+    """Flag model names that carry real demand but barely get an answer."""
+    try:
+        con = sqlite3.connect(f"file:{NEWAPI_DB.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as error:
+        return [f"db-open-failed={error}"], ""
+    try:
+        rows = con.execute(
+            """SELECT model_name, "group", SUM(request_count), SUM(success_count)
+               FROM perf_metrics WHERE bucket_ts >= ?
+               GROUP BY model_name, "group"
+               HAVING SUM(request_count) >= ?
+               ORDER BY SUM(success_count) * 1.0 / SUM(request_count)""",
+            (int(time.time()) - ANSWER_RATE_WINDOW_SECONDS, ANSWER_RATE_MIN_ATTEMPTS),
+        ).fetchall()
+    except sqlite3.Error as error:
+        return [f"perf-metrics-read-failed={error}"], ""
+    finally:
+        con.close()
+    if not rows:
+        # 无采样 ≠ 健康：fork 没写 perf_metrics 时显式说明，门禁不得静默绿。
+        return [], "no-samples-in-window"
+    violations: list[str] = []
+    for model_name, group, attempts, answered in rows:
+        rate = 100.0 * (answered or 0) / attempts
+        if rate >= ANSWER_RATE_MIN_PERCENT:
+            continue
+        label = model_name if group in ("default", "", None) else f"{model_name}@{group}"
+        violations.append(f"{label} req={attempts} ok={answered or 0} rate={rate:.1f}%")
+    return violations, f"sampled={len(rows)}"
+
+
 GUARDIAN_STATE_FILE = Path.home() / ".omp" / "guardian" / "state.json"
 
 
@@ -1470,6 +1602,18 @@ def main() -> int:
         "unregistered model ratios",
         not ratio_violations,
         f"violations={ratio_violations or 'none'}",
+    )
+    drain_violations = drained_leg_violations()
+    check(
+        "probe-only drained legs",
+        not drain_violations,
+        f"violations={drain_violations or 'none'}",
+    )
+    rate_violations, rate_note = pool_answer_rate_violations()
+    check(
+        "pool answer rate",
+        not rate_violations,
+        f"violations={rate_violations or 'none'} {rate_note}".strip(),
     )
     ability_violations = ability_posture_violations()
     check(

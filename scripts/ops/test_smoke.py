@@ -9,6 +9,8 @@ import importlib.util
 import json
 import re
 import sys
+import tempfile
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -122,6 +124,119 @@ class AdminAuthTests(unittest.TestCase):
 
         with patch.object(smoke.sqlite3, "connect", return_value=FakeConn([])):
             self.assertEqual(smoke.zero_output_billing_violations(), [])
+
+    def test_probe_only_drained_leg_detection(self):
+        """探测假活侦测：生产 quota/limit 429 持续 + 窗口内只接得住探测尺寸 = 红。
+
+        覆盖三条判据：瞬态 rate limit 不算耗尽；接过真实尺寸就不算耗尽；已禁用不报
+        （门禁只抓裸奔渠道）。报文词表要同时吃 intern-discovery 的 "quota exceeded"
+        和 ch203 的 "weekly Clinepass limit ... resets in 4d 22h"。
+        """
+        recent = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime())
+        stale = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(time.time() - 8 * 3600))
+
+        class FakeResult:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def fetchone(self):
+                return self._rows[0] if self._rows else None
+
+            def fetchall(self):
+                return self._rows
+
+        class FakeConn:
+            def __init__(self, status, largest):
+                self.status = status
+                self.largest = largest
+
+            def execute(self, sql, params=None):
+                head = " ".join(sql.split())[:22]
+                if head.startswith("SELECT status, name FR"):
+                    if self.status is None:
+                        return FakeResult([])
+                    return FakeResult([(self.status, "intern-discovery")])
+                if head.startswith("SELECT MAX(prompt_to"):
+                    return FakeResult([(self.largest,)])
+                raise AssertionError(f"unexpected sql: {head}")
+
+            def close(self):
+                pass
+
+        def run(lines, status=1, largest=17):
+            with tempfile.TemporaryDirectory() as workdir:
+                (Path(workdir) / "stderr.log").write_text(
+                    "\n".join(lines) + "\n", encoding="utf-8"
+                )
+                with patch.object(smoke, "DEPLOY_DIR", Path(workdir)), patch.object(
+                    smoke, "NEWAPI_DB", Path(workdir) / "new-api.db"
+                ), patch.object(
+                    smoke.sqlite3, "connect", return_value=FakeConn(status, largest)
+                ):
+                    return smoke.drained_leg_violations()
+
+        def burst(channel_id, body, count=12, stamp=recent):
+            return [
+                f"[ERR] {stamp[:10]} - {stamp[11:]} | trace{idx} | "
+                f"channel error (channel #{channel_id}, status code: 429): {body}"
+                for idx in range(count)
+            ]
+
+        violations = run(
+            burst(140, "quota exceeded")
+            + burst(203, "You have reached your weekly Clinepass limit. The limit resets in 4d 22h")
+            + burst(150, "Upstream rate limit, retry shortly")
+            + burst(160, "quota exceeded", stamp=stale)
+        )
+        self.assertEqual(len(violations), 2, violations)
+        self.assertTrue(any("ch140" in v for v in violations))
+        self.assertTrue(any("ch203" in v for v in violations))
+
+        self.assertEqual(run(burst(140, "quota exceeded"), largest=5000), [])
+        self.assertEqual(run(burst(140, "quota exceeded"), status=2), [])
+        self.assertEqual(run(burst(140, "quota exceeded", count=3)), [])
+
+    def test_pool_answer_rate_detection(self):
+        """回答率门禁：perf_metrics 是唯一带失败尝试量的表，探针全绿也遮不住它。"""
+
+        class FakeResult:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def fetchall(self):
+                return self._rows
+
+        class FakeConn:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def execute(self, sql, params):
+                since, minimum = params
+                self.window = int(time.time()) - since
+                return FakeResult([row for row in self._rows if row[2] >= minimum])
+
+            def close(self):
+                pass
+
+        rows = [
+            ("glm-5.3", "default", 215, 29),
+            ("claude-opus-4-8", "default", 771, 759),
+            ("intern-s2", "default", 40, 3),
+            ("tiny-noise", "default", 12, 0),
+            ("codex-only", "codex", 60, 9),
+        ]
+        conn = FakeConn(rows)
+        with patch.object(smoke.sqlite3, "connect", return_value=conn):
+            violations, note = smoke.pool_answer_rate_violations()
+        self.assertEqual(conn.window, smoke.ANSWER_RATE_WINDOW_SECONDS)
+        self.assertEqual(note, "sampled=4", note)
+        self.assertEqual(
+            [v.split(" ")[0] for v in violations], ["glm-5.3", "intern-s2", "codex-only@codex"]
+        )
+        self.assertIn("rate=13.5%", violations[0])
+
+        with patch.object(smoke.sqlite3, "connect", return_value=FakeConn([])):
+            self.assertEqual(smoke.pool_answer_rate_violations(), ([], "no-samples-in-window"))
 
     def test_disabled_ai168661_contracts_are_double_locked_and_quarantined(self):
         disabled = {
