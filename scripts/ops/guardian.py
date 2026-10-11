@@ -467,6 +467,10 @@ RECOVERY_BACKOFF_MAX_QUOTA = 15  # quota/额度类退避上限：自愈型上游
                                 # 60min 封顶把回池拖后（2026-09-12 ch128/ch33 现场）
 RECOVERY_PROBE_TIMEOUT = 12  # 恢复探测独立短超时（秒）：慢渠道 30s 会把恢复周期拖到预算截断；
                              # 恢复探测只需判断是否恢复，12s 未回即按失败进入指数退避
+RECOVERY_PROBE_BUDGET = 12  # 同一禁用事件最多失败 N 个周期，之后停机等人（2026-10-11 现场：
+                            # state 里 33 条累计 15,641 个失败周期 = 46,923 次探测，其中 45,762 次
+                            # 烧在第 12 次失败之后。退避封顶 60min 意味着死渠道每小时 3 次探测、
+                            # 永不停止，每轮还占用 RECOVERY_BATCH_SIZE 的名额去挤掉可恢复渠道）
 OMP_ROLE_CHECK_INTERVAL = 80  # 每 N 周期主动检测 OMP 角色（80*15s=20min）
 
 # 自循环维护
@@ -1690,6 +1694,29 @@ class AutoFixEngine:
         added = 0
         channels = self.newapi.get_channels()
         self.reconcile_channel_identities(channels)
+        # 停机必须可逆，否则人工修好上游、渠道再次 auto_ban 后，exhausted 记录会跨事件
+        # 永久停探（那才是真正的静默故障）。判据是"又被 ban 了一次"= 新事件：只有
+        # status=3 且已 parked 的记录才重新武装。NewAPI 把死渠道自动 enable 回去不会
+        # 清计数，所以每轮失败照样累计，预算对抖动渠道仍然有效。
+        rearmed = 0
+        for channel in channels:
+            reban_id = channel.get("id")
+            if channel.get("status") != 3 or not isinstance(reban_id, int):
+                continue
+            parked = next(
+                (r for r in disabled if r.get("id") == reban_id and r.get("recovery_exhausted")),
+                None,
+            )
+            if parked is None:
+                continue
+            parked.pop("recovery_exhausted", None)
+            parked["recovery_failures"] = 0
+            parked.pop("last_recovery_attempt", None)
+            parked["time"] = datetime.now().isoformat()
+            rearmed += 1
+        if rearmed:
+            self._save_state()
+            logger.info(f"Rearmed the recovery probe budget on {rearmed} re-banned channel(s)")
         for channel in channels:
             channel_id = channel.get("id")
             auto_ban = str(channel.get("auto_ban", "")).strip().lower()
@@ -2287,6 +2314,9 @@ class AutoFixEngine:
                 break
             if record.get("manual"):
                 continue
+            # 预算耗尽 ≠ 策略排除：告警已发、等人处置，不再无限烧探测配额
+            if record.get("recovery_exhausted"):
+                continue
             # 策略排除集永不自动恢复（与 _sync_newapi_auto_bans 导入侧一致，
             # 2026-08-11 评审 P1-6）
             if record["id"] in AUTO_BAN_RECOVERY_EXCLUSIONS:
@@ -2302,6 +2332,7 @@ class AutoFixEngine:
                     record.pop("daily_cap_until", None)
                     record.pop("recovery_failures", None)
                     record.pop("last_recovery_attempt", None)
+                    record.pop("recovery_exhausted", None)
                 except (ValueError, TypeError):
                     pass
 
@@ -2352,11 +2383,8 @@ class AutoFixEngine:
                 # 探针不兼容不算渠道故障，但必须计入退避：否则 failures 恒 0、
                 # 退避恒 5min，队首 incompatible 记录每轮烧恢复配额，
                 # 饿死其后渠道（2026-08-11 评审 P1-5）
-                record["recovery_failures"] = failures + 1
-                self._save_state()
-                logger.info(
-                    f"Channel {channel_id} ({name}) recovery probes all incompatible; "
-                    "status left unchanged"
+                self._charge_recovery_failure(
+                    record, failures, channel_id, name, test_msg, incompatible=True
                 )
                 continue
             if stable_count >= RECOVERY_TEST_PASS_MIN or (
@@ -2384,11 +2412,51 @@ class AutoFixEngine:
                 else:
                     logger.error(f"Channel {channel_id} ({name}) failed recovery and could not be re-disabled")
 
-            record["recovery_failures"] = failures + 1
-            self._save_state()
+            self._charge_recovery_failure(
+                record, failures, channel_id, name, test_msg
+            )
+
+    def _charge_recovery_failure(
+        self,
+        record: dict,
+        failures: int,
+        channel_id: int,
+        name: str,
+        test_msg: str,
+        incompatible: bool = False,
+    ) -> None:
+        """计一个失败周期；到预算就停机，并发一次可行动的告警而不是静默挂着。
+
+        停机不是策略排除：渠道仍然禁用，但不再每轮占 RECOVERY_BATCH_SIZE 名额，
+        也不再每小时烧 3 次探测。复活要么人工 enable，要么等日额度墓碑到点自清。
+        """
+        charged = failures + 1
+        record["recovery_failures"] = charged
+        if charged >= RECOVERY_PROBE_BUDGET:
+            record["recovery_exhausted"] = True
+        self._save_state()
+        if incompatible:
+            logger.info(
+                f"Channel {channel_id} ({name}) recovery probes all incompatible; "
+                "status left unchanged"
+            )
+        else:
             logger.debug(
                 f"Channel {channel_id} ({name}) recovery failed: {test_msg}; "
-                f"backoff #{failures + 1}"
+                f"backoff #{charged}"
+            )
+        if charged >= RECOVERY_PROBE_BUDGET:
+            logger.error(
+                f"Channel {channel_id} ({name}) exhausted the recovery probe budget "
+                f"({charged} failed cycles, budget {RECOVERY_PROBE_BUDGET}); probing stopped"
+            )
+            self.telegram.send_alert(
+                "恢复探测预算耗尽",
+                f"渠道 <b>{_html_escape(name)}</b> (id: {channel_id}) 累计 "
+                f"{charged} 个恢复周期失败（预算 {RECOVERY_PROBE_BUDGET}），已停止自动探测。\n"
+                f"最近原因: {_html_escape(str(test_msg)[:120])}\n"
+                "复活需人工：修好上游后 enable，等它再次 auto_ban 会重新武装预算；"
+                "或从恢复队列删除该记录。",
             )
 
     def _auto_join_pool(self, channel_id: int, name: str) -> bool:

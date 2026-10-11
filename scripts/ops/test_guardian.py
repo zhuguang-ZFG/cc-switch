@@ -1367,6 +1367,142 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(record["recovery_failures"], 1)
         self.assertIn(record, engine.state["disabled_channels"])
 
+    def test_recovery_probe_budget_parks_a_dead_channel(self):
+        record = {
+            "id": 7,
+            "name": "stone-dead",
+            "time": (datetime.now() - timedelta(days=2)).isoformat(),
+            "recovery_failures": guardian.RECOVERY_PROBE_BUDGET - 1,
+            "last_recovery_attempt": (datetime.now() - timedelta(days=1)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.test_results.extend([(False, "no response")] * 6)
+
+        with patch.object(guardian.time, "sleep"), \
+                patch.object(engine.telegram, "send_alert") as alert:
+            engine.check_and_enable_recovered_channels()
+
+        self.assertEqual(engine.newapi.test_calls, [7, 7, 7])
+        self.assertTrue(record["recovery_exhausted"])
+        self.assertEqual(record["recovery_failures"], guardian.RECOVERY_PROBE_BUDGET)
+        self.assertEqual(alert.call_count, 1)
+
+        engine.newapi.test_calls.clear()
+        engine.check_and_enable_recovered_channels()
+        self.assertEqual(engine.newapi.test_calls, [])
+        self.assertEqual(alert.call_count, 1)
+
+    def test_channel_already_past_budget_parks_and_alerts_on_first_test(self):
+        """The deploy-time state: records with hundreds of failures must still be announced.
+
+        Gating the alert on an exact budget hit would park every pre-existing record in
+        silence, which is the defect this budget exists to remove.
+        """
+        record = {
+            "id": 75,
+            "name": "legacy-over-budget",
+            "time": (datetime.now() - timedelta(days=40)).isoformat(),
+            "recovery_failures": 1703,
+            "last_recovery_attempt": (datetime.now() - timedelta(days=1)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.test_results.extend([(False, "no response")] * 3)
+
+        with patch.object(guardian.time, "sleep"), \
+                patch.object(engine.telegram, "send_alert") as alert:
+            engine.check_and_enable_recovered_channels()
+
+        self.assertEqual(engine.newapi.test_calls, [75, 75, 75])
+        self.assertTrue(record["recovery_exhausted"])
+        self.assertEqual(alert.call_count, 1)
+
+        engine.newapi.test_calls.clear()
+        engine.check_and_enable_recovered_channels()
+        self.assertEqual(engine.newapi.test_calls, [])
+        self.assertEqual(alert.call_count, 1)
+
+    def test_reban_rearms_the_parked_recovery_budget(self):
+        record = {
+            "id": 80,
+            "name": "auto-banned",
+            "manual": False,
+            "time": (datetime.now() - timedelta(days=3)).isoformat(),
+            "recovery_failures": guardian.RECOVERY_PROBE_BUDGET,
+            "recovery_exhausted": True,
+            "last_recovery_attempt": (datetime.now() - timedelta(days=1)).isoformat(),
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[80] = {
+            "id": 80,
+            "name": "auto-banned",
+            "status": 3,
+            "auto_ban": 1,
+            "weight": 0,
+        }
+
+        engine._sync_newapi_auto_bans()
+
+        self.assertNotIn("recovery_exhausted", record)
+        self.assertEqual(record["recovery_failures"], 0)
+        self.assertNotIn("last_recovery_attempt", record)
+
+    def test_upstream_auto_enable_does_not_rearm_the_parked_budget(self):
+        """NewAPI re-enabling a dead channel must not hand it a fresh budget.
+
+        Otherwise a channel that flaps ban/auto-enable forever keeps probing every
+        cycle, which is the exact waste the budget exists to stop.
+        """
+        record = {
+            "id": 80,
+            "name": "auto-banned",
+            "manual": False,
+            "time": (datetime.now() - timedelta(days=3)).isoformat(),
+            "recovery_failures": guardian.RECOVERY_PROBE_BUDGET,
+            "recovery_exhausted": True,
+        }
+        engine = make_engine(
+            {
+                "disabled_channels": [record],
+                "weight_history": {},
+                "degraded_channels": {},
+                "joined_channels": {},
+            }
+        )
+        engine.newapi.channels[80] = {
+            "id": 80,
+            "name": "auto-banned",
+            "status": 1,
+            "auto_ban": 1,
+            "weight": 0,
+        }
+
+        engine._sync_newapi_auto_bans()
+        engine.check_and_enable_recovered_channels()
+
+        self.assertTrue(record["recovery_exhausted"])
+        self.assertEqual(engine.newapi.test_calls, [])
+
     def test_recovery_does_not_rewrite_omp_roles(self):
         """渠道恢复只维护 NewAPI 健康状态，不得改写人工维护的 OMP 路由策略。"""
         record = {
