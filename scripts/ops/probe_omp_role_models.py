@@ -33,14 +33,18 @@ def find_models(prov):
 
 
 def call(base, key, model, effort, api):
-    if api == "anthropic":
-        root = base.rstrip("/")
+    root = base.rstrip("/")
+    # The provider's api field is "anthropic-messages", not "anthropic" — a bare equality
+    # test silently routed every anthropic role down the OpenAI branch.
+    if "anthropic" in (api or ""):
         url = (root + "/messages") if root.endswith("/v1") else (root + "/v1/messages")
-        body = {"model": model, "max_tokens": 32, "messages": [{"role": "user", "content": "Reply only: OK."}]}
+        body = {"model": model, "max_tokens": 64, "messages": [{"role": "user", "content": "Reply only: OK."}]}
         hdr = {"Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"}
     else:
-        url = base.rstrip("/") + "/chat/completions"
-        body = {"model": model, "max_tokens": 32, "messages": [{"role": "user", "content": "Reply only: OK."}]}
+        if not root.endswith("/v1"):
+            root += "/v1"
+        url = root + "/chat/completions"
+        body = {"model": model, "max_tokens": 64, "messages": [{"role": "user", "content": "Reply only: OK."}]}
         if effort:
             body["reasoning"] = {"effort": effort}
         hdr = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
@@ -48,11 +52,25 @@ def call(base, key, model, effort, api):
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
-            j = json.loads(r.read())
-        c = (j.get("choices") or [{}])[0].get("message", {}).get("content") or (j.get("content") or "")
+            raw, status, ctype = r.read(), r.status, r.headers.get("content-type")
+        dt = round(time.time() - t0, 1)
+        try:
+            j = json.loads(raw)
+        except Exception:
+            # 200 + HTML is the SPA catch-all, i.e. a wrong endpoint, not a model failure.
+            return status, dt, f"NOT-JSON ctype={ctype} url={url} head={raw[:60]!r}"
+        if isinstance(j.get("error"), dict):
+            return status, dt, "upstream: " + str(j["error"].get("message"))[:120]
+        ch = (j.get("choices") or [{}])[0]
+        c = (ch.get("message") or {}).get("content") or j.get("content") or ""
         if isinstance(c, list):
             c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
-        return r.status, round(time.time() - t0, 1), (c or "<empty content>")[:34]
+        det = ((j.get("usage") or {}).get("completion_tokens_details") or {})
+        note = f" finish={ch.get('finish_reason')}"
+        if not c and det.get("reasoning_tokens"):
+            # empty content with a reasoning budget spent is truncation, not an outage.
+            note += f" reasoning_tokens={det['reasoning_tokens']}"
+        return status, dt, ((c or "<empty>")[:34] + note)
     except urllib.error.HTTPError as e:
         return e.code, round(time.time() - t0, 1), e.read().decode("utf-8", "replace").replace("\n", " ")[:150]
     except Exception as e:
@@ -73,7 +91,8 @@ def main():
             print(f"{role:<9} {sel:<44} UNKNOWN PROVIDER (not in models.yml)")
             continue
         known = find_models(prov)
-        marked = "ok" if model in known else "NOT-IN-LIST"
+        # Declared-in-provider-list is NOT health; naming it "ok" invited exactly that misread.
+        marked = "declared" if model in known else "NOT-IN-LIST"
         base = prov.get("baseUrl")
         key = prov.get("apiKey") or prov.get("api_key") or ""
         api = prov.get("api") or "openai-completions"
