@@ -1,4 +1,4 @@
-export const EXTENSION_REVISION = "2026.10.09-r9";
+export const EXTENSION_REVISION = "2026.10.12-r11";
 
 const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
   // primary: user-directed 2026-10-09 — LongCat 2.5 Preview Free, 1M ctx, 8s TTFT, free
@@ -9,14 +9,23 @@ const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
   "zg-newapi/gpt-5.6-terra",
   // fallback: midjok gpt-5.6-sol, confirmed 200
   "zg-newapi/gpt-5.6-sol",
-  // fallback: omen-alpha (previous primary, kept as last-resort default)
-  "zg-newapi/omen-alpha",
-  // fallback: agentrouter direct (bypasses NewAPI)
-  "agentrouter/deepseek-v4-flash",
-  // reserved: register in models.yml to activate (2026-08-28 re-probe kept it
-  // unregistered: ch15 upstream returned 429 workspace-quota-exceeded)
+  // fallback: fleet compaction default; registered & routed (2026-10-12
+  // audit: replaced two dead slots — zg-newapi/omen-alpha (never registered
+  // in models.yml) and agentrouter/deepseek-v4-flash (agentrouter provider
+  // only serves claude-opus-5/gpt-5.6-sol/glm-5.3)).
+  "zg-newapi/deepseek-v4-flash",
+  // reserved: registered & routed since the 2026-10-12 audit (the earlier
+  // 2026-08-28 ch15 429 workspace-quota note is superseded).
   "zg-newapi/glm-5.2",
   "zg-newapi/qwen3-8-27b",
+  // deep fallback: user-directed 2026-10-11 — all registered & serving
+  // (24h real usage verified). u2-flash free window ends 2026-10-31; its
+  // upstream window claim is ">109K confirmed, official page says 'long
+  // context' without a number" — treat as 1M-class only after a full-window
+  // probe, until then it still beats nothing when everything above is dead.
+  "zg-newapi/u2-flash",
+  "zg-newapi/qwen3.8-flash-next",
+  "zg-newapi/step-5-preview",
 ]);
 const DEFAULT_RECONCILE_INTERVAL_MS = 1000;
 const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
