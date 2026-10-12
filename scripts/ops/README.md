@@ -578,3 +578,132 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   u2-flash→ch138 全 200；快照 `new-api-before-free-backfill-<ts>.db`；
   **单腿高危遗留**：ch192 到期（10-20）前需为 deepseek-v4-pro/glm-5.2/
   kimi-k2.6/k2.7-code 找备份源；审计脚本为临时件未落仓，SQL 口径见 runbook
+- OMP kimi 家族条目复活（2026-10-11，用户指令「把 newapi 中的 k3 和
+  kimi-for-coding 加入 omp」）：ch33 `kimi-official-k3` 5 模型
+  （k3/k3-256k/kimi-for-coding/kimi-for-coding-highspeed/zg-k3）status=1
+  enabled=1 全部在线，`docs/ops/archive/ss2a-kimi-channel-2026-10-09.md`
+  复活条件达成 ⇒ `~/.omp/agent/models.yml` zg-newapi 块 gpt-5.6-sol 之后
+  插回 4 条（原始形状自 git 522a6d5/24853ce 回捞：k3 1M/128K+efforts
+  minimal..max、k3-256k 262K/32K、kimi-for-coding
+  `contextPromotionTarget: zg-newapi/k3`、highspeed 262K/32K；备份
+  `models.yml.bak-20261011-2130-kimi-restore`）。验证：网关
+  /v1/chat/completions 4 模型全 200 真实补全（0.7–2.6s，含非空 text 块
+  ——归档文档 62-68 行两项待补复核一并关闭：SSE 28 帧+[DONE]+usage、
+  text 块非空）；`omp models` 85 ids 可见 4 条；`omp --model
+  zg-newapi/k3:max --print`→`OMP_K3_OK`(54.4s)、`--model
+  zg-newapi/kimi-for-coding`→`OMP_KFC_OK`(22.0s)；
+  `verify_omp_newapi_alignment.py` 新增 0 孤儿（既有 5 孤儿与本轮无关）。
+  ss2a-kimi 备份腿仍处 staged 未 apply（`add_ss2a_kimi_channel.py
+  --apply`，SS2A_KIMI_KEY env 传入），ch33 单腿风险遗留不变
+- 同日勘误（effort 档位实测）：`kimi-for-coding` 上游**支持六档**
+  （同 prompt / 4000 tok 预算：minimal 1434 → high 3441 → xhigh/max
+  ≈3997 reasoning tok；high 档起即被预算截断，故 xhigh 与 max 在本预算内
+  不可区分，但均显著高于 minimal ⇒ 高档位真实生效）。git 回捞的旧形状
+  **没有** `thinking:` 块——属 OMP 侧欠声明，不是上游缺档；已补
+  `thinking.mode: effort` + `efforts: [minimal, low, medium, high, xhigh,
+  max]`（备份 `models.yml.bak-20261011-kfc-efforts`），`omp models`
+  该模型档位列变六档，`omp --model
+  zg-newapi/kimi-for-coding:max --print`→`OMP_KFC_MAX_OK`(43.2s)。
+  `kimi-for-coding-highspeed` 初测（4000 预算）minimal==max==3999 曾误判
+  "固定档直通"——8192 预算复测 minimal 4358 vs max 7293（26s/41s）证明
+  **effort 同样生效**，4000 下只是双重饱和；已同样补六档（备份
+  `models.yml.bak-20261011-highspeed-efforts`）。同轮 xhigh 5148 vs max
+  8189（再顶格）⇒ kfc 六档全实、max 为最高天花板。判别饱和 vs 无档
+  **必须加大预算复测**，缩小预算只会双重截断。
+  越界值实测：k3 `effort=ultramax` → 200 且 reasoning 仅 12 tok（上游对
+  未知名静默降到最低档、不报错）⇒ 多声明的档位名无风险，但也不会凭空获得能力。
+  **教训：档位可用性以上游实弹为准，git 旧形状与 `omp models` 显示列
+  都不是证据。**
+- **kimi 主腿切换福利官号（2026-10-11 晚，用户指令「先用这个，再用我自己的
+  订阅」）**：社区流传 `sk-kimi-*` 官方套餐 key（"Kimi K3 (1M)"，
+  `api.kimi.com/coding/v1` 直连实测 4 模型目录 + k3 补全 200/2.4s + SSE 15
+  帧）。新渠道 **ch215 `kimi-official-k3-welfare`** type=1、base/mapping
+  镜像 ch33（`zg-k3→k3`）、5 模型、**p60/w10 auto_ban=1**（羊毛 key 随时
+  可被回收，auto_ban 降级即自动回落 ch33 订阅）；脚本
+  `scripts/ops/add_kimi_welfare_leg.py`（直连门→备份→建渠→读回→fix→
+  admin test→归因断言；key 经 env 不落盘）。**过程三坑**（脚本已修，均
+  为 add_ss2a 模板首次真实 apply 才暴露）：①本 fork `GET /api/channel/`
+  返回 `{items,page,...}` 分页包装（默认页 10 行）——fetch 误把 dict 当
+  list 迭代拿空表，POST 已建成 ch215 却"不可见"；②resume 无漂移仍 PUT
+  （fork PUT 前科，改为 key+配置全同则跳过）；③k3 系推理模型 200 tok
+  预算会 200 空 content，gate 提到 800+重试。**验证**：admin test 0.47s
+  200；网关归因 kfc-highspeed 与 k3 **均 ch215**（羊毛腿赢=主用生效）；
+  OMP `zg-newapi/k3:max --print`→`WELFARE_E2E_OK` 29.9s 归因 ch215
+  （18K prompt/7s）；ch33 (1,50,10) 全程未动=自动兜底；alignment 门零新增
+  孤儿；快照 `new-api-before-kimi-welfare-20261011-233445.db`。
+  **连带**：ss2a-kimi staged 备份腿（`add_ss2a_kimi_channel.py`）就此
+  作废不再 apply；羊毛 key 公共流传，勿单独依赖（每模型都有 ch33 兜底，
+  风险已被姿态覆盖）。
+- 压缩候选池扩容 r10（2026-10-11，用户指令）：全局压缩扩展
+  `omp-global-compaction-model.js` DEFAULT 候选尾部追加
+  `zg-newapi/u2-flash` / `zg-newapi/qwen3.8-flash-next` /
+  `zg-newapi/step-5-preview`（三模型 24h 实弹健康：ch138/ch173/ch205+184；
+  longcat 主位不动——10-09 用户定向）。revision r9→r10，deploy 脚本
+  部署（live SHA 2B73BBBD 与源一致，备份+manifest 落盘）。测试基线对照：
+  改前 16 过 5 挂，改后 17 过 5 挂——5 挂为 r9 存量（测试读 live
+  models.yml 注册表所致，与本轮无关，未在范围内修复）。u2-flash 窗口：
+  实测 >109K（24h 日志），官方页只写"long context"无数字，用户称 1M——
+  未做满窗探针前按深兜底使用。
+- **阶跃星辰官方 key 接入 ch216（2026-10-11 深夜，用户发 key，Base58
+  解码）**：`stepfun-official` type=1 base `https://api.stepfun.com`，
+  4 chat 模型（step-5-preview/step-3.5-flash/-2603/step-3.7-flash，镜像
+  本地目录），p0/**w1** 同档末位 auto_ban=1；同档内为加权随机（上游语义
+  w5:w2:w1≈5/8:2/8:1/8，主腿健康时新腿约 1/8 概率承接，本次主腿死亡
+  未能实测比例）。脚本
+  `scripts/ops/add_stepfun_official_leg.py`（复用 welfare 骨架+归因限流
+  重试；修 `or -1` 对 priority=0 的 falsy 误判，welfare 脚本同源同修）。
+  **接入即救场**：admin 直测 ch205 `no left credit for step plan`（套餐
+  额度耗尽）、ch184 `Endpoint is unavailable`（zen 中继失效）——双腿
+  俱死，step-5-preview 实流量经 429 穿透全部落 ch216（网关 200，日志
+  归因实证）。快照 `new-api-before-stepfun-official-20261011-235801.db`。
+- step flash 杂活档接入 OMP + ch216 提级（2026-10-12 凌晨，用户指令
+  「可以接入干点杂活」）：step-3.5-flash/`-2603`/step-3.7-flash 接入
+  `~/.omp/agent/models.yml`（官方规格：三者均 256K ctx；2603 官方
+  `reasoning_effort low/high`；3.7 官方三档 low/medium/high + 多模态
+  图文——按官方声明录入，maxTokens 32768 三模型实弹全接受；备份
+  `models.yml.bak-20261012-step-flash-chores`）。**路由事故修复**：
+  加权随机 p0 档内 ch205(w5，套餐额度死)/ch184(w2，端点死) 仍 enabled，
+  ~5/6 请求撞死腿 429 且不回退 → 我建的 ch216 提 p0→**p10**（脚本常量
+  同步），高位先尝试、死腿自动绕开，双腿留作回血后兜底；快照
+  `new-api-before-ch216-prio10-20261012-001342.db`。**验证**：5 发网关
+  全 200 全归因 ch216；`omp models` 88 ids 三条可见且 efforts 列正确；
+  E2E `zg-newapi/step-3.7-flash:high --print`→`SF37_OK`(32.5s)；
+  alignment 零新增孤儿；三模型 abilities (216,enabled,p10)/(205,p0)。
+- OMP 配置审计 + 缺陷清扫（2026-10-12 凌晨续）：审计结论——99 selector
+  引用零断链、6 扩展 SHA 零漂移、四 provider 端点全可达（401=仅探针无
+  key）；发现 5 孤儿仍可被 OMP 选中即 500（intern-s2/ deepseek-v4-flash
+  -vision/ qwen3.7-max-normal/ grok-chat-fast/ deepseek-v4-flash-0731，
+  后端 abilities 全手动禁用）+ vision 回退链一环踩孤儿 deepseek-v4-flash
+  -vision + 压缩池 2 个死候选（omen-alpha 从未注册、agentrouter/
+  deepseek-v4-flash 该 provider 无此模型——死语义为静默跳过不崩）。揩
+  除：models.yml 摘 5 孤儿（备份 `models.yml.bak-20261012-*-orphan-
+  sweep`；88→83 ids、selectors 99→94）、config.yml vision 链删死环、
+  压缩 r11（`deploy-omp-global-compaction-model.ps1`，live/源 SHA
+  `4dcd8c624c0f` 一致，候选 11→10：删 omen-alpha、agentrouter/dsv4f→
+  zg-newapi/deepseek-v4-flash，glm-5.2 注记过期已更正——现已注册有路
+  由）。扩测同步：r10 曾把首个候选改为 longcat 但测试常量 TARGET 仍钉
+  omen-alpha 致 5 挂未回补；r11 一并修复（TARGET=longcat、mock 换血、
+  删档断言改现实值），`test_omp_global_compaction_model.js` 21/21 全绿
+  （r9 基线 16/5），deploy 测试 1/1。
+- ch91 any 组先收边后完全撤出：runbook `docs/ops/any-agent-claude-gpt-restore-2026-10-10.md` §16-17（10-12）。
+  §16：`channels.group=default,any` 挂组后渠道更新的 abilities 全量重建把 6 模型全铺进
+  any，稀释 §14 隔离；删 4 行 any abilities（gpt-5.6-sol + 3 别名），备份
+  `new-api-before-ch91-any-trim-20261012-162223.db`（backup API 一致快照；**教训：
+  在线 WAL 库勿 cp 三件套后备份删 sidecar**）。§17：用户裁决按渠道名隔离
+  （"anyrouter 是 any 的，jianzhile 是 jianzhile"），ch91 完全撤出 any——删
+  abilities 2 行 + `channels.group` 回 default（备份
+  `new-api-before-ch91-leave-any-20261012-162947.db`）。验证：sol/5.6-sol=503、
+  新会话 126->126（stdout 重试行）、4min 无重建。**排查三事实**：affinity
+  （codex cli trace）优先于 abilities，TTL 300s 内存量会话照走 ch91；ch126 上游
+  当时 500"负载达到上限"（单腿脆弱性=§14 动机）；channel error 无 usage 不落
+  logs 表只落 stderr。any GPT 现状=ch126 单腿 astra，sol 在 any 面悬空。
+  §18（10-12 16:4x）：客户端投影修正——OMP models.yml 删 any-newapi 的 sol 条目
+  +注释改 ch126-only；qodercli settings.json 删 sol；cc-switch DB Any provider
+  base_url 补 /v1 + notes 更新（原投影缺 /v1，写回即 §15 同款事故）。备份
+  ts=20261012-163914。观测：16:30 后 any 零成功，ch126 过载窗口 10min+ 未回血。
+  §19（10-12 17:2x）：ch126 硬饱和 47min+（6 连打 0/6，非瞬时拥堵），不回滚
+  jianzhile——default 组盘点 5 条非 jianzhile 活腿（ch175 hubway、ch188-191
+  jojatoken）以 abilities 行 p30/w1 只挂 `gpt-6-astra×any`（不动 channels.group，
+  防 CacheSync 全铺）。验证 token10×astra 200，use_channel=["126","188"]
+  （500 触发同组 failover）。any 终态=ch126 主+5 兜底，sol/5.6-sol 不进 any，
+  jianzhile 只在 default。备份 `new-api-before-any-fallback-legs-20261012-172243.db`。

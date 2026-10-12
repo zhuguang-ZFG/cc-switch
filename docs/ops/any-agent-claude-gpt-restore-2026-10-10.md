@@ -322,3 +322,114 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
 - 顺带实测（与本案无关的 ch91 形态分布）：any 组小请求 astra/sol 全绿；
   一次 stream+tools 大请求 astra 出现瞬时 `servers overloaded` 注入
   （jianzhile 上游抖动，重试即恢复，6/6 复测全绿）。
+
+## 16. 追加：any 组隔离面收边（10-12 16:2x，用户裁决"同意"删行）
+
+- 触发：用户问"NewAPI 里的 GPT jianzhile 和 any 渠道是不是搞混了"。
+- 取证（快照只读，用完即删，key 未出 DB）：
+  - ch91 abilities 6 模型 × (default, any) 全 enabled=1 p55/w5——其中 any 组的
+    `gpt-5.6-sol`/`zg-gpt-5.6-sol`/`zg-agent-gpt-5.6-sol`/`jianzhile-codex-gpt-5.6-sol`
+    四行超出 §14 设计（当时仅 astra/sol 2 行进 any，gpt-5.6-sol 刻意排除，
+    `any×gpt-5.6-sol=503` 是隔离反证）。
+  - 别名三模型是 ch91 建渠原生清单（`add_jianzhile_gpt56sol_channel.py`），
+    非后来污染；行结构 10-11 15:15 备份已存在（彼时 enabled 全 0，ch91 被 park）。
+  - 机制：`channels.group=default,any` 挂组后，渠道更新路径的 abilities 全量
+    重建会把 models 全清单铺进两个组——new-api 原生无组级模型过滤，稀释迟早
+    发生，不是单步写错。
+  - 24h 归因：无路由串组（default 流量未落 any 渠道；token10 仅 astra×5 笔全
+    走 ch91）；别名暴露无消费方，零实际损害，但隔离承诺名存实亡。
+- 操作（选项 2 最小变更）：
+  - 备份 `new-api-before-ch91-any-trim-20261012-162223.db`（SQLite backup API
+    一致快照，integrity ok，any 6 行已确认在备份）。第一次 cp 三件套方案因
+    删 sidecar 可能截断 WAL，已销毁重备——教训：在线 WAL 库备份必须用
+    backup API 或保留 sidecar。
+  - `DELETE FROM abilities WHERE channel_id=91 AND "group"='any' AND model IN
+    ('gpt-5.6-sol','zg-gpt-5.6-sol','zg-agent-gpt-5.6-sol','jianzhile-codex-gpt-5.6-sol')`
+    → 删 4 行；default 组 6 行未动。
+- 验证：
+  - token10 × `gpt-5.6-sol` → **503**（隔离反证恢复）。
+  - token10 × `gpt-6-sol` → **200**（'ok'，25s）。
+  - token10 × `gpt-6-astra` → 路由 ch91 正确（logs 同时段 7 笔真实流量归因
+    channel_id=91 正常计费）；本次验证请求 71s 首包 >60s 客户端超时，与
+    §15 记录的 jianzhile 瞬时上游抖动同形态，非配置问题。
+  - 删除 ~2.5min 后复查：any 组仍 2 行，CacheSync 未重建（abilities 只随
+    渠道更新路径重建）。
+- 遗留：未来任何对 ch91 的 PUT 更新会按 channels.group+models 重建 any 组
+  4 行；若复现，升级方案 3（ch91 拆 default/any 双渠道副本）。
+
+## 17. 追加：ch91 完全撤出 any 组（10-12 16:3x，用户裁决"anyrouter 是 any 的，jianzhile 是 jianzhile"）
+
+- 背景：§16 只删了 any 组 4 个多余模型，ch91 仍是 any 组 astra/sol 头名（p55 压
+  ch126 p40），日志里 any 组流量全部归因 #91 jianzhile。用户要求按渠道名隔离：
+  any 流量只走 anyrouter（ch126），jianzhile 只服务 default。
+- 操作（备份 `new-api-before-ch91-leave-any-20261012-162947.db`，backup API 快照）：
+  1. `DELETE abilities WHERE channel_id=91 AND "group"='any'`（2 行：astra/sol）
+     ——先删行，立即切断路由（上一轮已证 DELETE 立即生效）；
+  2. `UPDATE channels SET "group"='default' WHERE id=91`——再摘组，防止未来渠道
+     更新的 abilities 重建把行铺回 any。两步同一事务。
+- 验证：
+  - token10 × gpt-6-sol / gpt-5.6-sol → **503**（any 面无腿）。
+  - 带全新 `prompt_cache_key` 的 token10 × gpt-6-astra → 路由 **126->126**
+    （stdout `[INFO] 重试：126->126` 证实）；变更 ~4min 后复查：ch91 any 行 0、
+    default 6 行未动、any 组 GPT 仅 ch126×astra——无重建。
+- 三个排查事实（本次新踩出/复证）：
+  1. **affinity 优先于 abilities，但 TTL 短**：`channel_affinity_setting`
+     （options 表）现为 `default_ttl_seconds=60`、`keep_on_channel_disabled=false`
+     （runbook 旧文的 300s 已过期）。变更后最后一笔 ch91 归因为 16:30:07，
+     之后 any 流量全部落 ch126——钉子 60s 内自然清，非无限续期；
+     abilities 删行不移动存量钉子，但钉子会按时效过期。
+  2. **ch126 上游过载窗口持续**：16:31 起 stderr 连续
+     `channel error (channel #126, status code: 500): 当前模型 gpt-6-astra 负载已
+     经达到上限`，至少持续至 16:34+，NewAPI 同渠重试（126->126）后给客户端
+     500——上游侧限流窗口，非配置缺陷；codex-any-agent 期间持续撞墙。这正是
+     §14 当初把 ch91 加进 any 的背景动机（ch126 单腿脆弱）。
+  3. **失败请求不落 logs 表**：channel error 且无 usage 的请求只在 stderr，不
+     写 `logs` 表——按 logs 排查失败请求会漏，必须联查进程日志。
+- 当前格局：any 组 GPT = ch126 单腿（仅 gpt-6-astra）；gpt-6-sol 在 any 面悬空
+  503。§14 接的 qodercli `newapi-local-any` / OMP `any-newapi` 里的 gpt-6-sol
+  条目已不可用——收不收待用户定。
+
+## 18. 追加：any 客户端投影修正（10-12 16:4x，用户裁决"同意"）
+
+- 触发：用户问"ccs 中的 GPT 模型 any 的设置对吗"。审查结论：live 链路
+  （codex config.toml `[model_providers.any]` = 3002/v1 + responses + token10）对；
+  三处投影/条目漂移不对。
+- 修复（备份 ts=20261012-163914：models.yml / settings.json 用
+  `*-any-sol-trim`，cc-switch.db 用 backup API `*.bak-163914-any-provider-fix`）：
+  1. OMP `~/.omp/agent/models.yml` `any-newapi`：**删 gpt-6-6sol 条目**
+     （§17 后 any×sol=503 悬空），astra 注释改为 "any group; anyrouter ch126
+     only"。YAML 重解析通过；default 块 gpt-6-sol（450 行）未动。
+  2. qodercli `~/.qoder/settings.json` `newapi-local-any`：**models 删
+     gpt-6-sol** 只留 astra。JSON parse 通过；需重启会话生效。
+  3. cc-switch DB `Any` provider（any-codex-1788960193007）：config 内
+     `base_url` 补 `/v1`（原为 `http://127.0.0.1:3002`，投影写回会把 codex
+     any 写坏——§15 qodercli 同款事故预演）；notes 从"8789 指纹桥"更新为
+     3002 直连 + §17 格局。
+- 验证：三处读回均符合预期（astra-only、3002/v1、注释/notes 新文案）。
+- 可用性观测（§17 遗留观测点）：16:30:07 后 any 组**零成功行**，ch126 过载
+  窗口持续 10min+（16:31-16:41+，`负载已经达到上限` 仍在 stderr 刷新）——
+  配置达成但 any 面未恢复可用；codex any 流量持续 500。选项不变：等回血 /
+  回滚 §17（备份 `new-api-before-ch91-leave-any-20261012-162947.db`）/ 另加腿。
+
+## 19. 追加：any 组非 jianzhile 兜底腿接入（10-12 17:2x，用户"继续改进优化"）
+
+- 背景：§17 后 any 组 ch126 单腿，上游"负载已经达到上限"硬饱和 47min+
+  （16:31-17:18，6 连打挤入 0/6）——非瞬时拥堵，持续不可用。回滚 ch91 违背
+  用户"anyrouter 是 any 的，jianzhile 是 jianzhile"原则。
+- 方案：default 组盘点出 5 条非 jianzhile 的存活 astra 后腿——ch175 hubway、
+  ch188-191 jojatoken×4（channels.group 全保持 default 不动，24h 内"模型测试"
+  token 持续成功计费 gpt-5.6-sol，活腿）。以 abilities 行低优先级（p30/w1，
+  低于 ch126 p40）只挂 `gpt-6-astra × any`，不动 channels——避免 CacheSync
+  全量重建把后腿的全部模型铺进 any（§16 机制）。
+- 操作：备份 `new-api-before-any-fallback-legs-20261012-172243.db`；
+  `INSERT OR IGNORE abilities (any, gpt-6-astra, cid, 1, 30, 1)` ×5。
+- 验证：token10 × astra → **200 'ok' 5.2s**，归因 `use_channel: ["126","188"]`
+  ——先 ch126（500），AutomaticRetryStatusCodes(500) 触发同组重试，failover
+  ch188 jojatoken 成功计费。~2min 后复查 6 行无重建。
+- 格局终态：any 组 astra = ch126(p40 主) + hubway/jojatoken×4(p30 兜底)；
+  gpt-6-sol/gpt-5.6-sol 仍不进 any（§16 隔离保持）；ch91 jianzhile 只在
+  default。codex-any-agent 可用性恢复，且用户隔离原则完整兑现。
+- ⚠️ 遗留（反向重建风险）：5 条兜底腿的 any 行是手工孤儿行（channels.group
+  仍 default）。若未来 jojatoken/hubway 渠道被管理面更新或自动 test 触发
+  abilities 重建，重建按 default 展开，可能清掉这 5 行——any 静默回单腿且无
+  告警。届时按本 §19 重放 INSERT 即可；若要结构性固化，再议 any 专用副本渠道。
