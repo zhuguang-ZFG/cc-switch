@@ -32,6 +32,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--yml", default=str(MODELS_YML))
     parser.add_argument("--db", default=str(NEWAPI_DB))
+    parser.add_argument("--no-quarantine", action="store_true",
+                        help="treat quarantined ids as orphans too (strict mode)")
     args = parser.parse_args()
 
     doc = yaml.safe_load(Path(args.yml).read_text(encoding="utf-8"))
@@ -54,8 +56,13 @@ def main() -> int:
         ids = [m["id"] for m in (cfg or {}).get("models") or []
                if isinstance(m, dict) and m.get("id")]
         orphans = [i for i in ids if not live.get(i)]
+        held = [] if args.no_quarantine else [i for i in orphans if i in QUARANTINE]
+        orphans = [i for i in orphans if i not in held]
         problems += len(orphans)
-        print(f"{provider} ({base}): {len(ids)} ids, {len(orphans)} without an enabled route")
+        print(f"{provider} ({base}): {len(ids)} ids, {len(orphans)} without an enabled route"
+              + (f", {len(held)} quarantined" if held else ""))
+        for i in held:
+            print(f"  QUARANTINE {i}: every route dark, expected -- {QUARANTINE[i]}")
         for i in orphans:
             if i in dark:
                 chans = ", ".join(f"{c}({STATUS_NAMES.get(status.get(int(c[2:])), '?')})"
@@ -65,6 +72,25 @@ def main() -> int:
                 print(f"  ORPHAN {i}: NewAPI has no abilities row for this name at all")
     print(f"verdict: {'CLEAN' if not problems else f'{problems} orphan id(s) offered by OMP'}")
     return 0 if not problems else 1
+
+
+# Transient dark legs with known recovery conditions (ops-notes 2026-10-12) -- NOT
+# r11-style never-existed orphans. models.yml entries stay so recovery needs no
+# re-registration; delete each line once its id routes live again.
+QUARANTINE = {
+    "qwen3.7-plus": "ch203 weekly Clinepass quota resets ~2026-10-16",
+    "step-5-preview": "ch184 Go endpoint 429 + ch205 step-plan credit empty",
+    "step-3.5-flash": "ch205 step-plan credit empty; top-up then re-enable",
+    "step-3.5-flash-2603": "ch205 step-plan credit empty; top-up then re-enable",
+    "step-3.7-flash": "ch205 step-plan credit empty; top-up then re-enable",
+    "muse-spark-1.3-contributor-free": "ch178 bridge CLI dead (clean-window 150s timeout x1, 502 x1); row intentionally removed from ch178 -- re-add on CLI recovery",
+    "big-pickle": "ch178 bridge CLI dead (150s timeout x2, clean windows); rows removed -- re-add on CLI recovery",
+    "space-bunny-free": "ch178 bridge CLI dead (150s timeout x2, clean windows); rows removed -- re-add on CLI recovery",
+    "mimo-v2.6-flash-free": "ch178 bridge CLI dead (150s timeout x2); rows removed -- re-add on CLI recovery",
+    "ling-3.1-flash-free": "ch178 bridge CLI dead (502 + 180s timeout); rows removed -- re-add on CLI recovery",
+    "ling-3.0-flash-fin-free": "ch178 bridge CLI dead (180s timeout + retired from zen catalog); rows removed -- re-add on CLI recovery",
+    "glm-5.2": "muyuan ch173 returned 401 Invalid token for this key (2026-10-12); row removed -- re-add on muyuan key-scope recovery",
+}
 
 
 STATUS_NAMES = {0: "disabled", 1: "enabled", 2: "manually-disabled", 3: "no-model"}

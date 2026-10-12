@@ -707,3 +707,54 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   防 CacheSync 全铺）。验证 token10×astra 200，use_channel=["126","188"]
   （500 触发同组 failover）。any 终态=ch126 主+5 兜底，sol/5.6-sol 不进 any，
   jianzhile 只在 default。备份 `new-api-before-any-fallback-legs-20261012-172243.db`。
+  §20-22（10-12 17:3x-17:5x）：UA override 对 CF 1010 无效（TLS 指纹层）；
+  failover 选腿按 **channels.priority**（abilities 只是缓存，双写缺一不可）；
+  403 不在重试码表会断链——照 ch126 先例给兜底腿补 SCM `"403":"503"` +
+  RetryTimes=6，链单次遍历 7 跳机制满分。ch182 asvla 启用（CF 间歇门）；
+  ch217 ip-glm53 接入 default glm 池（仅 glm-5.3，非 any 腿）。any 可用性
+  =CF 边缘放行率的函数，机制已最优，观测 ch126 stderr 停刷+token10 200。
+
+- **OpenCode Go 三模型聚合与全线死腿收口（2026-10-12 晚，用户指令
+  「OPENCODEgo只能用这三个模型 继续；newapi」）**：许可集（plan 级，
+  用户确认）=longcat-2.5-preview-free / step-5-preview-free /
+  deepseek-v4.1-flash。上游**未**技术锁定三模型（glm-5.2/space-bunny/
+  mimo 对照探针全 200），合规靠网关侧收口：Go key 全表指纹扫描仅
+  ch133/184/218 共享，暴露面恰三个许可 id（alias 均映射回许可 id）。
+  新第三腿 ch218（`scripts/ops/add_opencode_go_deepseek_v41_flash_channel.py`，
+  克隆 ch133 key+session 头，p0/w2 auto_ban=1，donor 不改不打印）：
+  disabled 探针 2.1s→enable→fix→abilities (default,1,0,2)→enabled 探针
+  1.3s→relay 200 全绿；**ModelRatio 不动**（共享 id，设 0 会清零
+  ch203/208 付费流量计费口径）。
+- **聚合报错收口（每腿根因实测原文）**：手动停用 ch184（`429 Endpoint
+  is unavailable`，17:42 起持续，管理测试+直连 ×10 一致）、ch203
+  （`weekly Clinepass limit resets in 3d`，10-16 重置）、ch205（`no left
+  credit for step plan`，step-3.5-flash 同错=plan 级全空）。停用后 relay
+  实测：kimi-k3/glm-5.3/deepseek-v4.1-flash 直落活腿 200；
+  step-5-preview/deepseek-v4-pro 0s 确定性 503（替代多跳白烧）。
+  longcat 主腿修复：ch133 p0→p1（`PUT /api/channel/` 拒 Invalid
+  parameters →DB 写 channels.priority+`/api/channel/fix`，abilities 即
+  跟随；与 §20-22"双写缺一不可"结论一致），桥降 p0 真兜底；relay
+  归属由 5/7 桥彩票（150s 504）变 ch133 直落 2.9/4.5s。回滚+恢复操作
+  卡：`~/.new-api-local/ops-notes-20261012-disable-dead-legs.md`。
+- **zen free 实测与死腿摘除**：free tier 唯一 sanctioned transport=
+  opencode CLI 桥（匿名/裸 key/带 key 直连一律 `403 FreeTierError: only
+  from within OpenCode`；zen/go 匿名 chat 先 400 MissingSessionID 再
+  401 `Go requires a credential`——zen/zen/go/openrouter 三链目录均可
+  匿名浏览、调用全要凭证，**无匿名模型**）。**目录≠可用**
+  （nemotron-3-ultra-free 不在 43-id 目录 CLI 仍 200；jev-1.13-free
+  目录内 CLI 反拒）。桥单飞（150s 超时+600s 冷却）禁并发探针、双干净
+  证据才摘：ch178 摘 6 死腿（muse-1.3、big-pickle、space-bunny-free、
+  mimo-v2.6-flash-free、ling-3.1、ling-3.0-flash-fin），活 5 成员
+  （nemotron-ultra/3.5、muse-1.2、step-5-preview-free、longcat 兜底）
+  全部同窗 relay 200 对照。muyuan ch173 同法摘 5（200k×2=muyuan 自身
+  分销无上游 `under group auto (distributor)`、voxtral-mini×2=400
+  Invalid model、glm-5.2=401 per-model 权限），留 21 活（17 chat+4
+  embed 含维度实测）。探针三戒：CF 前直连须带浏览器 UA（opencode.ai/
+  muyuan.do 实测破 1010，区别于 §20 jianzhile TLS 指纹层案例）、多行
+  key 先 split、`sk-` 一律消毒。
+- **门禁增强**：`verify_omp_newapi_alignment.py` 新增 QUARANTINE 名单
+  （临时死腿与 r11 型"从未存在"孤儿区分：条目保留 models.yml、恢复零
+  注册；覆盖"行禁用"与"行摘除"两形态；`--no-quarantine` 保留严格
+  语义）——verdict CLEAN/12Q、strict 列全 12；cmp 21+1 全绿；
+  `omp -p --model zg-newapi/deepseek-v4-flash` 端到端 84s OK。备份链
+  183053/184820/185847/191125/192625/193643。

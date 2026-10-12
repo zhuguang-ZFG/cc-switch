@@ -433,3 +433,62 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
   仍 default）。若未来 jojatoken/hubway 渠道被管理面更新或自动 test 触发
   abilities 重建，重建按 default 展开，可能清掉这 5 行——any 静默回单腿且无
   告警。届时按本 §19 重放 INSERT 即可；若要结构性固化，再议 any 专用副本渠道。
+
+## 20. 追加：兜底腿加固尝试与证伪（10-12 17:3x-17:4x，用户同意 B+C）
+
+- B（header_override Chrome UA ×5 腿，照抄 ch182 asvla 先例，DB 直写防 PUT 擦
+  key）：75s 缓存窗后 6/6 仍 403 `error code: 1010`——**CF 1010 是 TLS/浏览器
+  指纹层拦截，服务端 UA header 救不了**（H2 成立；opencode-go 先例上游未开
+  CF 指纹门，不适用）。且 ch175 hubway 同样被 1010 拦——不只 jojatoken。
+- C（RetryTimes 1→3，走 option API 热生效，PUT 200）：链 126→188→189 遍历
+  正常，但腿全灭，遍历无意义。
+- 关键认知修正：§19 验证的 17:23 单笔 200（ch188）是 **CF 边缘间歇放行**，
+  非可用性证据；jojatoken/hubway 的 CF 门间歇收紧，不可作为 any 的兜底依赖。
+- ch126 过载窗口持续至 17:36+（65min+）。
+- 证伪记录：header_override 过 CF 1010 ❌；RetryTimes 遍历全灭腿池 ❌。
+- 现状：any 面 = ch126 单腿（过载中）+ 5 条 CF 拦截腿（形同虚设）。
+  唯一实测稳定可用的 astra 腿 = ch91 jianzhile（default 组，16:14-16:30
+  连续成功）。备份 `new-api-before-any-leg-hardening-20261012-173401.db`。
+
+## 21. 追加：D 折中回滚落地 + responses 面三路全堵定界（10-12 17:4x，用户"按推荐做"）
+
+- 操作（备份 `new-api-before-ch91-any-reentry-20261012-173856.db`）：ch91 以 abilities 孤儿行
+  回 any（p30/w5，低于 ch126 p40；channels.group 保持 default——避免渠道更新
+  全量重建把 6 模型铺回 any，§16 教训）。腿序：126(p40/w5) → 91(p30/w5) →
+  CF 腿(p30/w1)。
+- 验证异象：token10(responses) failover 到 ch91 报 **503 "No available channel
+  for model gpt-6-astra under group GPT (distributor)"**；而 master(chat) 打
+  ch91 astra **200**（6.5s）。
+- 定界：jianzhile 上游 **chat 面有 gpt-6-astra、responses 面 GPT 组当前无
+  渠道**（16:14-16:30 token10 responses 全成功，属上游后来的组调整；ch91
+  model_mapping 只有 3 个别名，astra 直通，映射无责）。NewAPI 侧不可修。
+- 终局：any 组 responses 面三路全堵——ch126 负载上限（65min+）、ch91
+  responses 面无渠道、CF 腿 1010。codex any 恢复只能等 ch126 负载回落。
+- 观测口径：ch126 stderr "负载已经达到上限" 停止刷新 + token10 responses
+  200 归因 126 即恢复。backup 全链：§17/§19/§20/§21 四个备份均在
+  `~/.new-api-local/`。
+
+## 22. 追加：failover 机制定界 + ch182 启用 + ch217 接入（10-12 17:4x-17:5x）
+
+- 机制定界（三次实验递进）：
+  1. failover 选腿按 **channels.priority**（非 abilities.priority——能力表是
+     缓存，§12"双写"的另一半）：ch182 能力表 p35 无效，channels p35 后链首跳
+     即 182（stderr 证实）。
+  2. **403 断链**：`AutomaticRetryStatusCodes` 只含 408/500-503，兜底腿 CF
+     1010 的 403 直接终止链（ch182 SCM 只有 429 映射）。照 ch126 先例
+     （402/403/429→503）给 182/175/188-191 补 `"403":"503"`。
+  3. **RetryTimes 1→6**（option API）：链单次遍历 126→182→191→190→175→
+     190→189 共 7 跳，机制满分。
+- ch182 asvla-gpt-6-astra：status=2 停泊中但 admin test **活**（4.1s）——
+  启用（status=1）+ channels p35 + any 能力行。后实测它同样有 CF 1010
+  （test 成功是间歇放行）。admin test 只证明"此刻能通"，不证明 CF 门稳定。
+- ch217 ip-glm53 接入：用户提供上游 `http://1.92.88.52:30001/`，模型清单
+  **仅 glm-5.3**（无 astra）——不入 any，按 glm 腿进 default（p30/w5）。
+  实测流式可出字但慢（49s/23 chunks）。key 入渠道库（不落文档）。
+- ch91 新事实：channels.status=**2**（停泊——上游抖动 auto_ban 或手动），
+  且其 responses 面 GPT 组无 astra 渠道（§21）。failover 链自动跳过。
+- 终局定界：any responses 面可用性 = CF 边缘放行率的函数。CF 收紧时刻
+  （17:53 实测）7 跳全 1010 全灭；放行时刻（17:23/17:41 实测）单跳即 200。
+  机制已到最优（优先级排序 + SCM 续链 + 6 次重试遍历全池），余下是上游侧。
+- 观测口径不变：ch126 stderr 停刷"负载已经达到上限"或 EOF + token10
+  responses 200 归因 126/182 即 any 恢复。
