@@ -110,25 +110,88 @@ def configuration_rows(path: Path, ids: tuple[int, ...]) -> list[tuple]:
         return db.execute(f"SELECT {CONFIG_COLUMNS} FROM channels WHERE id IN ({placeholders}) ORDER BY id", ids).fetchall()
 
 
+def json_value(raw) -> dict:
+    """Read a channels-table JSON column that this fork stores as TEXT on some rows, BLOB on others."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    return json.loads(raw or "{}")
+
+
+def status_note(channel: dict) -> str:
+    """How this fork recorded the channel's last status change.
+
+    other_info.status_reason is "manual operation" for every POST /api/channel/{id}/status, and the
+    Guardian disables and recovers through that same endpoint -- so this names the route, not a
+    person. Read it with the process log before concluding anyone clicked anything.
+    """
+    try:
+        other = json_value(channel.get("other_info"))
+    except ValueError:
+        return "status record unparsable"
+    stamp = other.get("status_time")
+    when = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stamp))
+            if isinstance(stamp, (int, float)) and stamp > 0 else str(stamp))
+    return f"{other.get('status_reason', '?')} at {when}"
+
+
 def verify_projection(db_path: Path, agent_id: int) -> dict:
     with read_only(db_path) as db:
         db.row_factory = sqlite3.Row
         agent = dict(db.execute("SELECT * FROM channels WHERE id=?", (agent_id,)).fetchone())
         any_channel = dict(db.execute("SELECT * FROM channels WHERE id=?", (ANY_CHANNEL_ID,)).fetchone())
         expected = agent_payload(["fixture-key-for-configuration-only"])
-        for key in ("name", "type", "status", "base_url", "models", "group", "priority", "weight", "auto_ban", "test_model", "tag"):
+        # `models` and `group` are ADDITIVE in this deployment: ch127 also carries
+        # deepseek-v4-flash, which took real traffic on 10-09/10-10/10-11 (11/13/18 requests), and
+        # its consumers reach it through the `agent` group. Demanding exact equality here asked for
+        # a capacity regression to make a gate green, so the contract checks presence of what the
+        # pool needs, not absence of anything else.
+        for key in ("name", "type", "status", "base_url", "priority", "weight", "auto_ban", "tag"):
             if agent.get(key) != expected[key]:
                 raise RuntimeError(f"AgentRouter readback mismatch: {key}")
+        owned_models = [m.strip() for m in str(agent.get("models") or "").split(",") if m.strip()]
+        missing_models = [model for model in MODELS if model not in owned_models]
+        if missing_models:
+            raise RuntimeError(f"AgentRouter pool lost names {missing_models}; declares {owned_models}")
+        agent_groups = {g.strip() for g in str(agent.get("group") or "").split(",") if g.strip()}
+        if "default" not in agent_groups:
+            raise RuntimeError(f"AgentRouter channel left the default group: {sorted(agent_groups)}")
+        if str(agent.get("model_mapping") or "").strip() not in ("", "{}"):
+            raise RuntimeError("AgentRouter model_mapping must stay empty; a mapping here rewrites "
+                               "names for every consumer of this channel, not just the pool")
+        test_model = str(agent.get("test_model") or "")
+        if test_model not in MODELS:
+            raise RuntimeError(
+                f"AgentRouter test_model is {test_model!r}. This channel declares {owned_models}, so "
+                "a blank or foreign test_model makes every scheduled and Guardian probe ask the "
+                "fork's first name -- which answers even when both GPT names are dead. Repair it "
+                f"with fix_channel_test_model.py --set {agent_id}={MODELS[0]}: test_model is "
+                "channels-only metadata and goes through a direct UPDATE, because this fork's "
+                "channel PUT round-trips key:\"\" and wipes the credential.")
         for row in (any_channel, agent):
-            mapping = json.loads(row["status_code_mapping"] or "{}")
+            mapping = json_value(row["status_code_mapping"])
             if any(str(mapping.get(key)) != value for key, value in RETRY_MAPPING.items()):
                 raise RuntimeError(f"ch{row['id']} channel-local retry mapping is incomplete")
         has_sharedchat = db.execute("SELECT COUNT(*) FROM channels WHERE name=?", (SHAREDCHAT_CHANNEL_NAME,)).fetchone()[0]
         any_priority = PRIORITY if has_sharedchat else 50
-        if any_channel["status"] != 1 or any_channel["priority"] != any_priority or any_channel["weight"] != 5:
-            raise RuntimeError("AnyRouter tier drifted")
-        if json.loads(agent.get("header_override") or "{}").get("User-Agent") != "codex_cli_rs/0.154.0":
-            raise RuntimeError("AgentRouter Codex header missing")
+        if any_channel["priority"] != any_priority or any_channel["weight"] != 5:
+            raise RuntimeError(
+                f"AnyRouter tier drifted: ch{ANY_CHANNEL_ID} is p={any_channel['priority']} "
+                f"w={any_channel['weight']}, contract expects p={any_priority} w=5")
+        if any_channel["status"] != 1:
+            raise RuntimeError(
+                f"AnyRouter leg ch{ANY_CHANNEL_ID} is status={any_channel['status']}; last change "
+                f"{status_note(any_channel)}")
+        # This asserted User-Agent == "codex_cli_rs/0.154.0" until 2026-10-11. Direct calls to
+        # agentrouter with that UA and with the claude-cli UA the channel carries now returned
+        # byte-identical verdicts on both GPT names, so the header was never load-bearing here --
+        # and restoring it would need the PUT that wipes the credential and rebuilds abilities.
+        # A malformed header_override still breaks every request, so that is what is checked.
+        try:
+            headers_seen = json_value(agent.get("header_override"))
+        except ValueError as error:
+            raise RuntimeError(f"AgentRouter header_override is not valid JSON: {error}") from error
+        if not isinstance(headers_seen, dict):
+            raise RuntimeError("AgentRouter header_override must be a JSON object")
         stored_key = agent.get("key") or ""
         key_lines = [line for line in str(stored_key).split("\n") if line.strip()]
         storage = db.execute("SELECT typeof(channel_info) FROM channels WHERE id=?", (agent_id,)).fetchone()
@@ -142,20 +205,37 @@ def verify_projection(db_path: Path, agent_id: int) -> dict:
             raise RuntimeError("single-key channel must store exactly one key line")
         if not all(channel_tools.usable_key(line) for line in key_lines):
             raise RuntimeError("stored AgentRouter credential is missing or masked")
-        abilities = [dict(row) for row in db.execute(
-            "SELECT channel_id,model,enabled,priority,weight FROM abilities WHERE channel_id IN (?,?) ORDER BY channel_id,model",
+        ability_rows = [dict(row) for row in db.execute(
+            'SELECT channel_id,model,"group",enabled,priority,weight FROM abilities '
+            'WHERE channel_id IN (?,?) ORDER BY channel_id,model,"group"',
             (ANY_CHANNEL_ID, agent_id),
         )]
-        expected_abilities = {
-            (ANY_CHANNEL_ID, MODELS[0], 1, any_priority, 5),
-            *{(agent_id, model, 1, PRIORITY, WEIGHT) for model in MODELS},
-        }
-        if {tuple(row.values()) for row in abilities} != expected_abilities:
-            raise RuntimeError("channel ability projection differs from the planned pool")
+        seen = {(row["channel_id"], row["model"], row["group"]): row for row in ability_rows}
+        any_groups = {g.strip() for g in str(any_channel.get("group") or "").split(",") if g.strip()}
+
+        def leg_missing(leg: tuple[int, str, str, int, int]) -> bool:
+            channel_id, model, group, priority, weight = leg
+            row = seen.get((channel_id, model, group))
+            return (row is None or row["enabled"] != 1
+                    or row["priority"] != priority or row["weight"] != weight)
+
+        # A row's existence is not capacity: enabled follows the channel's status and the fork
+        # answers the name or it does not. What this can prove read-only is the projection.
+        required = [(agent_id, model, group, PRIORITY, WEIGHT)
+                    for model in MODELS for group in sorted(agent_groups)]
+        required += [(ANY_CHANNEL_ID, MODELS[0], group, any_priority, 5)
+                     for group in sorted(any_groups)]
+        gaps = [leg for leg in required if leg_missing(leg)]
+        if gaps:
+            raise RuntimeError(f"channel ability projection differs from the planned pool: {gaps}")
+        extras = sorted((row["channel_id"], row["model"], row["group"]) for row in ability_rows
+                        if row["model"] not in MODELS)
         options = dict(db.execute("SELECT key,value FROM options WHERE key IN ('RetryTimes','AutomaticRetryStatusCodes')"))
         if options != {"RetryTimes": "1", "AutomaticRetryStatusCodes": "408,500-503"}:
             raise RuntimeError("global retry policy drifted; refusing nested retries")
-        return {"agent_id": agent_id, "abilities": abilities, "retry_options": options}
+        return {"agent_id": agent_id, "abilities": ability_rows, "retry_options": options,
+                "extra_declared_models": extras, "agent_groups": sorted(agent_groups),
+                "header_user_agent": headers_seen.get("User-Agent")}
 
 
 def main() -> int:

@@ -14,13 +14,12 @@ class SharedChatConfigurationTests(unittest.TestCase):
         fixture.CodexPoolConfigurationTests().create_database(path)
         shared = configure.sharedchat_payload("fixture-sharedchat-key")
         with closing(sqlite3.connect(path)) as db:
-            db.execute('ALTER TABLE abilities ADD COLUMN "group" TEXT DEFAULT "default"')
             columns = ",".join(f'"{key}"' for key in shared)
             placeholders = ",".join("?" for _ in shared)
             db.execute(f"INSERT INTO channels (id,{columns}) VALUES (?,{placeholders})", (128, *shared.values()))
             db.execute("UPDATE channels SET priority=40 WHERE id=126")
             db.execute("UPDATE abilities SET priority=40 WHERE channel_id=126")
-            db.executemany("INSERT INTO abilities VALUES (128,?,1,60,5,'default')", [(model,) for model in sorted(configure.MODELS)])
+            db.executemany("INSERT INTO abilities VALUES (128,?,'default',1,60,5)", [(model,) for model in sorted(configure.MODELS)])
             db.commit()
 
     def test_three_sources_have_only_two_reachable_tiers(self):
@@ -29,7 +28,7 @@ class SharedChatConfigurationTests(unittest.TestCase):
             "UPDATE channels SET priority=50 WHERE id=126",
             "UPDATE abilities SET priority=50 WHERE channel_id=126",
             "UPDATE abilities SET enabled=0 WHERE channel_id=128",
-            "INSERT INTO abilities VALUES (92,'gpt-6-astra',1,60,15,'default')",
+            "INSERT INTO abilities VALUES (92,'gpt-6-astra','default',1,60,15)",
             "UPDATE channels SET models='gpt-5.6-sol' WHERE id=128",
             "UPDATE options SET value='2' WHERE key='RetryTimes'",
         )
