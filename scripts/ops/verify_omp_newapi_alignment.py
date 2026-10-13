@@ -92,6 +92,7 @@ QUARANTINE = {
     "glm-5.2": "muyuan ch173 returned 401 Invalid token for this key (2026-10-12); row removed -- re-add on muyuan key-scope recovery",
     "gemini-3.8-flash-high": "ch222 (chengapi) upstream key expired/401 Unauthorized (2026-10-13); re-enable on fresh key",
     "codex-auto-review": "ch175 hubway manually-disabled 2026-10-13 12:48 (external operator; sole live leg) -- re-enable on hubway restore",
+    "gemini-3.8-flash": "ch220 lucky0625 manually-disabled 2026-10-13 20:17 (external operator; last logs green) -- tiny falls to glm-5.3-flash; re-enable on ch220 restore",
 }
 
 
