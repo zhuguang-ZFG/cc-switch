@@ -11,13 +11,14 @@
 - 503 不在 auto_ban 码表（401,402,403,502）→ 永不自动摘除，每次选中都白烧一跳。
 - **修复**：先 `priority 30→5`；余额转负证实全尺寸皆死后 **status=2 禁用**（19:56，`POST /api/channel/208/status`，abilities 自动 enabled=0）。充值回补后重新启用即可，建议启用时保持低优先级。备份 `newapi-before-pool-error-fix-20261013-191601.db`（integrity ok）。
 
-### 2. OMP 全量发送 `prompt_cache_key`，严格上游 400 拒参
+### 2. OMP 注入 `prompt_cache_key` 与 `reasoning_effort` 档位异构拒参
 
 - 18:13 真实链（RID …z1Gx211X）：glm-5.3-flash 大请求 → ch208 503（预扣费）→ ch183 500（s2api 连接 EOF 偶发）→ **ch173 400 invalid_request → 回吐 OMP**。
 - **直连上游逐参数判别（初稿归因已修正）**：ch173 收 `prompt_cache_key` **不拒**（200）；真正拒的是 **`reasoning_effort=xhigh` 和 `medium`**——返回与 OMP 收到的字节级同形 `{"message":"invalid_request","type":"upstream_error",...}`。ch173 对 glm-5.3-flash 接受枚举={low,high,max}；对 qwen3.8-flash-next 则 xhigh/max 均可（模型×档位异构）。
 - 各腿 effort 档位普查（直连上游，medium/xhigh/max）：**ch173** 400/400/200；**ch209**(glm-5.3) 503 empty response/503/200；**ch183** 全 200；ch118 窗口打满未测。**OMP 自动升档（thinking auto→high/xhigh）正踩雷区**——这就是"聚合时好时坏"的又一层。
 - `prompt_cache_key`：OMP 对 zg-newapi 全量注入（dump `~/.omp/logs/http-400-requests/1791886387728-*.json`），**ch209 实锤拒参**（13 条 400 明示 `Unsupported parameter(s)`），ch88 早同题。
 - **修复（ch88/ch15 先例格式，条件 set）**：ch173=删 pck + {medium,xhigh}→high；ch209=删 pck + {medium,xhigh}→max。**验证**：ch208 禁用后 glm-5.3/xhigh、/medium 经网关 200（唯一活腿=ch209 ⇒ remap 兑现）；ch173 remap 因 p20 第三梯队未被选中暂无网关级直接命中（若未生效最坏=维持现状 400，无副作用）。advisor 真实流量同窗全 200。
+- **置信度**：档位普查为**单次观察**。ch173 的 400 与 OMP 收到的 18:13 错误字节级同形，支持确定性拒档；ch209 的 medium/xhigh→503 `empty response` 亦可能是上游偶发无响应（同日 ch209 服务正常、advisor 流量 200），remap 属**防御性对冲**而非已证枚举规则——条件 set 仅在请求带原档位时改写，最坏情形为 no-op。待后续自然流量命中复核。
 
 ### 3. 已删链/瞬错杂音排除
 
@@ -36,4 +37,5 @@
 
 - 改动全部经 admin 认证或 admin API；DB 直写仅 `channels.priority`/`channels.param_override`（PUT 全对象在本 fork 报 Invalid parameters，且 GET 回显 key 有掩码回写风险，直写更稳）；禁用走 `POST /api/channel/208/status`。
 - 网关内存渠道缓存约 1 分钟同步：直写后 `POST /api/channel/fix` 重建 abilities + 65-70s 后以**行为判别探针**确认生效（不假设）。
+- **门禁覆盖注记**：`verify_omp_newapi_alignment.py` 不映射 kimi-k3/minimax-m3（grep 零命中），其 CLEAN **不构成这两池腿健康的证据**；k3 仅有 OMP 路由测试覆盖兜底链与 `:max` 引用校验。k3/m3 池状态需经管理 API 渠道测试或网关探针单独确认。
 - 归因纪律教训：上游与网关同源代码族 → **同文案不同主体**（"用户额度不足/预扣费失败"两侧都会发）；判别=①查本侧 users/tokens 配额 ②看是否按 `channel error (channel #N)` 记账（记账=上游透传）③同窗计费成功样本。
