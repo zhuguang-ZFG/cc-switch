@@ -35,5 +35,8 @@
 ## 附带发现（同日外部操作潮）
 
 - **ch175 hubway** 12:48、**ch220 lucky0625** **15:37**（`status_time=1791877019` 换算复核，早先误记 20:17 已更正）先后被 `manual operation` 外部禁用（本会话未调用其 status 接口；ch220 禁用前最后消费 13:16 成功、其间无任何失败日志，非 auto_ban）。
-- 影响：`codex-auto-review`、`gemini-3.8-flash`（tiny 主）失去唯一活腿 → 均入 QUARANTINE；tiny 由兜底链落 4 腿 `glm-5.3-flash` 继续服务。**E2E 实证（18:26）**：叠加配置令 default=gemini-3.8-flash + 链 `[glm-5.3-flash]` 跑 `omp -p`，网关归因日志 266488 `glm-5.3-flash` ch183 token=master（25.6K prompt 真 agent 请求）→ 链在真实网关兑现。注意 gemini 直连的 `503 model_not_found` 是 relay 前拒绝，**不产生渠道日志行**——排查时勿以"无日志"当作"未尝试"。
+- 影响：`codex-auto-review`、`gemini-3.8-flash`（tiny 主）失去唯一活腿 → 均入 QUARANTINE；tiny 由兜底链落 `glm-5.3-flash` 继续服务。
+- **链实证（transcript 级，非推断）**：`omp -p --model tiny`（会话 18:12:18）确实解析 modelRoles.tiny 并走网关链：gemini `503 no channel`（errorStatus 记录在案）→ glm-5.3-flash 瞬错 → **deepseek-v4-flash 服务**（transcript 26195/2，网关日志 **266442** ch180 token=master 26451/2，18:13:11）——链第 2 跳兑现。叠加 overlay（default=gemini + 链 `[glm-5.3-flash]`）再测：`model_change role=fallback → glm-5.3-flash`，"OK" 即该模型服务（transcript usage 25598/172 与网关日志 **266488** ch183 token=master 完全吻合）——链第 1 跳兑现。
+- **已删 gemini 模型键链复查：删除已生效**。配置链内无 agnes 于 tiny 链；两条探针 transcript 零 agnes 跳（若旧链存活，503 首跳必为 agnes）。18:11:56 agnes 230/4 行早于任何会话创建、无会话文件变更——系 master/default token 共驻客户端（qodercli 等，见 guardian.py 调用方拆分注释）流量，未归因但不构成链回归证据。
+- 排查细节：gemini 直连的 `503 model_not_found` 是 relay 前拒绝，**不产生渠道日志行**——勿以"无日志"当作"未尝试"。
 - 若禁用非您本意，恢复命令：`POST /api/channel/{175|220}/status {"status":1}`。
