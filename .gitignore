@@ -39,6 +39,8 @@ mainWindow.js
 
 # Local Trellis / pi-agent workspace (journals may contain machine-specific paths and credentials)
 .trellis/
+.scratch/
+.qoder/
 .pi/
 
 # Local ops scratch dumps (NewAPI option/channel exports may contain credentials)

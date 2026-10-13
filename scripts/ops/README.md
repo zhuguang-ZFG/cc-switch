@@ -758,3 +758,12 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   语义）——verdict CLEAN/12Q、strict 列全 12；cmp 21+1 全绿；
   `omp -p --model zg-newapi/deepseek-v4-flash` 端到端 84s OK。备份链
   183053/184820/185847/191125/192625/193643。
+
+- **福利腿与新渠道接入及 OMP 治理（2026-10-13）**：
+  - **jhsy gpt-6-luna (ch219)**：接入 `https://ai.jhsy0721.xyz`，新建 ch219，p30/w5 设为池头，auto_ban=1。
+  - **lucky0625 全量福利腿 (ch220)**：接入 `https://new.lucky0625.qzz.io`，实测 23 个存活模型（含 chat-* 三重奏与 gemini 系列），因 5 RPM 硬限制定位于 p-20/w1 深度兜底。补齐缺失模型 0/0 定价。
+  - **muyuan-gongyi (ch173) 扩容**：接入 `deepseek-v4.1-flash` (p26/w5)、`glm-5.3-flash` (p20/w1) 以及 mistral 系列新模型；修复 PUT 重置 abilities quirk 并验证双 key 轮询。
+  - **cpa2-clinepass (ch221)**：接入 `https://cpa2.803099.xyz` 的 `cline-pass/deepseek-v4.1-flash`，模型映射至主池，p22/w2。
+  - **S2API / ss2a (ch183)**：更新为双 Key 轮询 (`is_multi_key: true, size: 2`)，接入 `deepseek-v4-flash` 与 `glm-5.3-flash`，剔除 502 的 4.1-flash，p25/w5。经网关实测转发归因命中 ch183。
+  - **chengapi-gemini (ch222)**：灰测接入 `gemini-3.8-flash-high`，后续 Key 失效 (401)，已自动禁用并加入隔离名单待恢复。
+  - **OMP 路由治理**：`modelRoles.default` 锁定为 `zg-newapi/qwen3.8-flash-next:max`；彻底清理 `fallbackChains` 中残留的 `gemini-3.8-flash` 与 `step-5-preview-free`；`test_omp_routes.py` 40/40 OK，`verify_omp_newapi_alignment.py` CLEAN。

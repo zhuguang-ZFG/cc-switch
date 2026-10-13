@@ -90,6 +90,7 @@ QUARANTINE = {
     "ling-3.1-flash-free": "ch178 bridge CLI dead (502 + 180s timeout); rows removed -- re-add on CLI recovery",
     "ling-3.0-flash-fin-free": "ch178 bridge CLI dead (180s timeout + retired from zen catalog); rows removed -- re-add on CLI recovery",
     "glm-5.2": "muyuan ch173 returned 401 Invalid token for this key (2026-10-12); row removed -- re-add on muyuan key-scope recovery",
+    "gemini-3.8-flash-high": "ch222 (chengapi) upstream key expired/401 Unauthorized (2026-10-13); re-enable on fresh key",
 }
 
 
