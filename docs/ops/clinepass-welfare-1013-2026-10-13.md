@@ -34,6 +34,6 @@
 
 ## 附带发现（同日外部操作潮）
 
-- **ch175 hubway** 12:48、**ch220 lucky0625** 20:17 先后被 `manual operation` 外部禁用（本会话未调用其 status 接口；ch220 最后 5 条日志全绿非 auto_ban）。
-- 影响：`codex-auto-review`、`gemini-3.8-flash`（tiny 主）失去唯一活腿 → 均入 QUARANTINE；tiny 由兜底链落 4 腿 `glm-5.3-flash` 继续服务（网关实测 gemini 直连为确定性 503，OMP 链承接）。
+- **ch175 hubway** 12:48、**ch220 lucky0625** **15:37**（`status_time=1791877019` 换算复核，早先误记 20:17 已更正）先后被 `manual operation` 外部禁用（本会话未调用其 status 接口；ch220 禁用前最后消费 13:16 成功、其间无任何失败日志，非 auto_ban）。
+- 影响：`codex-auto-review`、`gemini-3.8-flash`（tiny 主）失去唯一活腿 → 均入 QUARANTINE；tiny 由兜底链落 4 腿 `glm-5.3-flash` 继续服务。**E2E 实证（18:26）**：叠加配置令 default=gemini-3.8-flash + 链 `[glm-5.3-flash]` 跑 `omp -p`，网关归因日志 266488 `glm-5.3-flash` ch183 token=master（25.6K prompt 真 agent 请求）→ 链在真实网关兑现。注意 gemini 直连的 `503 model_not_found` 是 relay 前拒绝，**不产生渠道日志行**——排查时勿以"无日志"当作"未尝试"。
 - 若禁用非您本意，恢复命令：`POST /api/channel/{175|220}/status {"status":1}`。
