@@ -40,6 +40,8 @@
   - `deepseek-v4-flash` 池：与 ch118 同级 (p25)，排在 ch180 (p51)、ch127 (p40) 之后。
   - `glm-5.3-flash` 池：排在 ch208 (p30) 之后，高于 ch173 (p20)。
 
+> 后续：`glm-5.3-flash` 经此成为 4 腿池（ch208 p30 / ch118+ch183 p25 / ch173 p20），已注册进 OMP models.yml 并置于 `tiny`/`smol` 兜底链首位（bench TTFT 2.2s，门禁 40/40 + CLEAN）。
+
 ---
 
 ## 4. 全链路实证

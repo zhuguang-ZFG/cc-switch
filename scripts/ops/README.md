@@ -767,3 +767,5 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   - **S2API / ss2a (ch183)**：更新为双 Key 轮询 (`is_multi_key: true, size: 2`)，接入 `deepseek-v4-flash` 与 `glm-5.3-flash`，剔除 502 的 4.1-flash，p25/w5。经网关实测转发归因命中 ch183。
   - **chengapi-gemini (ch222)**：灰测接入 `gemini-3.8-flash-high`，后续 Key 失效 (401)，已自动禁用并加入隔离名单待恢复。
   - **OMP 路由治理**：`modelRoles.default` 锁定为 `zg-newapi/qwen3.8-flash-next:max`；彻底清理 `fallbackChains` 中残留的 `gemini-3.8-flash` 与 `step-5-preview-free`；`test_omp_routes.py` 40/40 OK，`verify_omp_newapi_alignment.py` CLEAN。
+  - **OMP 接入 glm-5.3-flash（13:05）**：models.yml 注册 `glm-5.3-flash`（4 腿池 ch208 p30/ch118+ch183 p25/ch173 p20；131K/32K；effort 档 low→max；备份 `.bak-20261013-125830-before-glm-flash`）。`tiny`/`smol` 兜底链首位插入 glm-5.3-flash（tiny 主 gemini 5RPM 打爆先落 4 腿池而非 2 腿 deepseek）。网关 200/1.49s 归因 ch208 池头；`omp bench` TTFT 2.2s / gen 89.6 tok/s；门禁 40/40 + CLEAN。
+  - **codex-auto-review 隔离（13:0x）**：ch175 hubway 12:48 被外部 manual operation 禁用（本会话未调用其 status 接口），该 id 唯一活腿熄灭 → 入 QUARANTINE，hubway 恢复后重开。
