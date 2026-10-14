@@ -823,3 +823,16 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   kimi，门禁审批形状）。双门禁 40/40 + CLEAN（orphan 18→1，余 Atria 存量）；
   smoke FAIL 集合与基线逐项一致。遗留：qwen3.8-flash-next 无替代（长会话
   主力，建议迁 qwen3-8-27b/gemini-3.8-flash）；models.yml 待 OMP 重启生效。
+
+- **ch208 happycoding 欠费禁用（2026-10-14 23:01，runbook
+  `docs/ops/ch208-wallet-disable-2026-10-14.md`）**：用户报欠费未 ban——
+  上游明报预扣费失败（余额 $0.126→$0.0248/28min），但 3h 仍有 286 笔
+  小额成功故 auto_ban 不触发；10-13「降权后禁用」只落了降权。执行
+  status=2（备份 `new-api-before-ch208-disable-20261014-230149.db`），
+  glm-5.3 网关转 503 fail-closed。ch208 是 glm-5.3/kimi-k3/minimax-m3
+  sole source：config.yml plan/designer/task 与 slow 链重指 `glm-5.2:max`
+  （ch220 活腿，reasoning budget 端到端 200 归因 ch220）；**advisor 保持
+  glm-5.3 暗路由**——白名单 {glm-5.3, omen-alpha, space-bunny} 全灭，
+  改名单待用户批。QUARANTINE 注册表加 glm-5.3、修正 glm-5.2 过时条目。
+  双门禁 40/40 + 1 orphan（存量）。遗留：advisor 裁决、ch220 单腿饱和
+  风险、kimi-k3/minimax-m3 充值前 503。
