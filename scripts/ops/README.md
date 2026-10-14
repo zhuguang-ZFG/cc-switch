@@ -804,3 +804,22 @@ only bounded readiness metadata and never print keys or raw provider bodies.
     卡断言）→ admin test → 缓存窗 → relay，归因断言放宽为 {224,216}（双 p0 腿）；
     key 形态确定性判别：两把新 key 均含非 base58 字符=裸 key，key1
     @stepfun.com 401（step_plan-only），旧 blob 两段均 "no left credit"（无第三腿）。
+
+- **muyuan ch173 目录轮换同步（2026-10-14，runbook
+  `docs/ops/muyuan-model-sync-20261014.md`）**：上游 token 组目录 31→7。
+  ch173 PUT 裁至 **4 id**（deepseek-v4.1-flash/glm-4.5-flash/glm-5.3-flash/grok-4.7；
+  `test_model` 换 glm-4.5-flash；旧 qwen3-8-27b model_mapping 清除；备份
+  `new-api-before-muyuan-sync-20261014-224602.db`；脚本
+  `scripts/ops/sync_muyuan_models_20261014.py`）。剔除 22 id：21 个上游 503
+  `model_not_found`（mistral/ministral/codestral/voxtral 家族、qwen3.8-flash-next、
+  glm-5.2 等）+ **qwen3.8-27b**（目录在册但聊天 504×5/1h，Cloudflare 间歇，
+  注册门拒绝）。jev-latest/preview 400 `invalid_request` → 留官方桥 ch181。
+  OMP `models.yml` 86→**68**（块级删除带字节级回证明；文件现为 LF，备份 LF
+  行数差恰为删除数）；glm-5.2 主来源改标 ch220（ch15 已死）；
+  `config.yml` vision 角色→`glm-4.6v`（vision 实测正确描述图像，ch185）、
+  vision 链→`[qwen3.8-max, step-3.7-flash]`（voxtral 死、agnes 403 移出）、
+  embedding→`jina-embeddings-v3`（200/dim1024/ch187）；补
+  `zg-newapi/kimi-for-coding` 审批 fallback 链（OMP 自行把 default 切成
+  kimi，门禁审批形状）。双门禁 40/40 + CLEAN（orphan 18→1，余 Atria 存量）；
+  smoke FAIL 集合与基线逐项一致。遗留：qwen3.8-flash-next 无替代（长会话
+  主力，建议迁 qwen3-8-27b/gemini-3.8-flash）；models.yml 待 OMP 重启生效。
