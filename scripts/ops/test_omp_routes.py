@@ -684,10 +684,11 @@ class OmpRouteGateTests(unittest.TestCase):
         # "不得切付费路由"的约束精神；A/B 实测见
         # docs/ops/space-bunny-vs-gpt6-astra-2026-10-03.md）。
         # 2026-10-06 上游改名 space-bunny-free -> space-bunny，同一批准路由延续。
-        # 2026-10-14 紧急批准（用户连续贴出 advisor 现场 503：glm-5.3 因 ch208
-        # 欠费全域无活腿、omen-alpha 零 legs、space-bunny 桥死）：advisor 重指
+        # 2026-10-14 用户批准（先紧急处置、后于同日正式确认）：advisor 重指
         # glm-5.3-flash（4 腿健康池 ch118/183/173，near-free 档 0.075/3.333，
         # 高频后台角色定位匹配；glm-5.2 单腿 ch220 5 RPM saturated 不可用）。
+        # 背景：glm-5.3 因 ch208 欠费全域无活腿、omen-alpha 零 legs、
+        # space-bunny 桥死；ch208 充值回开后 glm-5.3 可回任，二者并行不悖。
         self.assertIn(
             _base_selector(roles.get("advisor", "")),
             {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha", "zg-newapi/space-bunny", "zg-newapi/glm-5.3-flash"},
