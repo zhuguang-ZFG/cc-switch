@@ -771,3 +771,36 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   - **codex-auto-review 隔离（13:0x）**：ch175 hubway 12:48 被外部 manual operation 禁用（本会话未调用其 status 接口），该 id 唯一活腿熄灭 → 入 QUARANTINE，hubway 恢复后重开。
   - **ClinePass 福利双 key（ch223，fail-closed）**：runbook `docs/ops/clinepass-welfare-1013-2026-10-13.md`。OpenAI 兼容端点 `api.cline.bot/api/v1/chat/completions`；两 key 活着但 5h 窗口打满（429 INFERENCE_CAP），14 id 映射（含 mimo-v2.6-flash/pro 新池名 0/0 价）双 key 轮询 p10/w1；≈21:55 CST 回血绿测后启用。同批外部 manual 禁用潮（ch175 12:48 / ch220 15:37）→ codex-auto-review + gemini-3.8-flash 入 QUARANTINE；tiny 兜底链 E2E 实证落 glm-5.3-flash（日志 266488 ch183）。
   - **聚合池报错归因修复（19:20-20:0x，runbook `docs/ops/pool-error-triage-2026-10-13.md`）**：8866 条渠道错误普查+上游直连判别定三因——① ch208 上游钱包 $0.003→负（预扣费 503 随规模必挂、不按 auto_ban 摘除；**消息系上游实例配额透传，本网关 users/tokens 实测无限**）→ 降权后禁用，k3/m3 现无腿待充值/ch223；② OMP 注入 `prompt_cache_key` ch209 拒 400（ch173 真凶是 **reasoning_effort=xhigh/medium 拒档**，直连上游字节级复现，各腿枚举异构入 runbook 普查表）→ ch173/ch209 param_override 删 pck+条件 remap 档位，ch209 remap 经禁用判别验证兑现；③ ch118/ch183 双 5h 窗口与 opus 池饱和属容量项列遗留。门禁 40/40+CLEAN。
+
+- **BigModel ch207 免费模型 + 阶跃福利双 key（2026-10-14）**：
+  - **ch207 bigmodel-glm53-gift 免费模型（休眠挂载）**：官方 11-id 目录无免费 id，
+    但礼品 key 直调免费层 200（glm-4-flash-250414 / glm-4.7-flash / glm-z1-flash /
+    glm-4v-flash / glm-4.1v-thinking-flash 实测；glm-4.6v-flash 拥堵=1305，而
+    **1305 实为 HTTP 429**，故无假成功面、无需 status_code_mapping）→ DB 直写 models
+    追加六个免费 id + ModelRatio 置 0（六 id 在 abilities 零承载，无共享 id 计费改写；
+    glm-5.3 0.7 / glm-5.3-flash 0.075 未动，不写 ModelPrice），fix 后 ch207 abilities
+    8 行 enabled=0；网关探针 `glm-4-flash-250414` → 503 model_not_found = 预期
+    fail-closed（启用前的休眠验证）。快照 `newapi-before-zai-free-models-20261014-155246.db`；
+    runbook `docs/ops/bigmodel-ch207-free-models-2026-10-14.md`。
+  - **ch207 已启用（用户同意，2026-10-14 17:30）**：服务端费率断言六免费 id 全 0
+    → 备份 `new-api-before-stepfun-official-20261014-173040.db` → status 2→1 + fix
+    → 8 abilities 行 `(default,1,20,1)`；admin test `glm-4-flash-250414` 200
+    （0.596s）；75s 缓存窗后网关 relay 200（usage 10/3/13）**归因 ch207**；读回
+    status=1/8 模型/p20/w1/key49。双门禁复跑 40/40 + CLEAN（86 ids 0 无路由）。
+    OMP `models.yml` 注册六个免费 id 仍为可选项、未做。
+  - **阶跃福利双 key（公开福利帖）**：key1 @`api.stepfun.ai/step_plan` 活但被薅饱和
+    （429 并发 9/8）→ ch205 teardown 后第 1/2 次创建均被上游门拒（step-3.5-flash 429，
+    门未弱化），第 3 次过门重建为 **ch224** step-plan（p0/w5、6 id、key 文件转 base58
+    blob，旧 blob 留档 `step-plan-key-drained-20261014.txt`）；绿测 step-3.7-flash
+    (4.57s/流 15 chunk) 与 step-5-preview (1.62s/流 21 chunk) 网关 200、6 行日志归因
+    ch224 零空回。key2 @`api.stepfun.com` 首探 200、约 15 分钟后全模型 **402 额度耗尽**
+    → 新脚本 `scripts/ops/rotate_stepfun_official_key.py`（dry-run 已验，含 p10→p0/w1
+    事故挡位回位）未应用，ch216 保持禁用。快照 163045/163348；verify CLEAN（隔离
+    15→11，step 四项解除）、`test_omp_routes` 40/40。
+  - **复核修正（咨询评审）**：`GET /api/option/`（服务端内存）实测六个免费 id
+    ModelRatio 已为 **0**（DB 直写已生效，glm-4.7-flash 不再残留 0.5）——启用 ch207
+    前须先断言服务端比值，见 runbook；`rotate_stepfun_official_key.py` 已改为
+    PUT → **先启用**（status 1）→ fix → abilities（禁用渠道 abilities.enabled=0 会
+    卡断言）→ admin test → 缓存窗 → relay，归因断言放宽为 {224,216}（双 p0 腿）；
+    key 形态确定性判别：两把新 key 均含非 base58 字符=裸 key，key1
+    @stepfun.com 401（step_plan-only），旧 blob 两段均 "no left credit"（无第三腿）。
