@@ -42,10 +42,12 @@
 
 ## 遗留
 
-1. **advisor 暗路由**：三个批准路由全灭。候选：批 `glm-5.3-flash`
-   （4 腿池、NewAPI 价 0.075/3.333 近免费档）进白名单，或批 glm-5.2，
-   或等 ch208 充值。用户决定后改 `test_advisor_role_stays_on_approved_
-   low_cost_routes` 白名单 + config。
+1. ~~advisor 暗路由~~ **已处置（2026-10-14 23:1x）**：用户连续贴出 advisor
+   现场 503（`No available channel for glm-5.3`），视为紧急批准——advisor
+   重指 `zg-newapi/glm-5.3-flash`（4 腿健康池，near-free 档，高频后台
+   角色定位匹配）；`test_omp_routes` advisor 白名单同步加入（注释留
+   否决路径：改回 glm-5.3 等 ch208 充值亦可）。**运行中的 OMP 尚未重启，
+   重启前 advisor 仍是旧值**；也可先用运行时 `/model` 切 advisor 立即止血。
 2. **ch220 单腿风险**：plan/designer/task 现在全系 ch220 一条福利腿
    （间歇 5 RPM 饱和）。ch119/192 的 glm-5.2 腿都 status=2。建议观察，
    饱和频繁时考虑给 glm-5.2 找第二条腿。

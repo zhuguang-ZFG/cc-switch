@@ -836,3 +836,7 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   改名单待用户批。QUARANTINE 注册表加 glm-5.3、修正 glm-5.2 过时条目。
   双门禁 40/40 + 1 orphan（存量）。遗留：advisor 裁决、ch220 单腿饱和
   风险、kimi-k3/minimax-m3 充值前 503。
+- **advisor 紧急重指（2026-10-14 23:1x，同 runbook 补记）**：用户连续贴出
+  advisor 现场 503（glm-5.3 全域无腿），视为紧急批准——advisor →
+  `zg-newapi/glm-5.3-flash`，gate 白名单同步加（注释留否决路径）。
+  注意：运行中的 OMP 未重启，重启前运行时仍是旧值。
