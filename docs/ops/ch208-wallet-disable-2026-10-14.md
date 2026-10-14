@@ -45,8 +45,9 @@
 1. ~~advisor 暗路由~~ **已处置并获批为常态（2026-10-14，用户确认）**：advisor
    重指 `zg-newapi/glm-5.3-flash`（4 腿健康池，near-free 档，高频后台
    角色定位匹配）；`test_omp_routes` advisor 白名单已正式加入。ch208
-   充值回开后 glm-5.3 可回任，二者并行不悖。**运行中的 OMP 尚未重启，
-   重启前 advisor 仍是旧值**；也可先用运行时 `/model` 切 advisor 立即止血。
+   充值回开后 glm-5.3 可回任，二者并行不悖。**已完成：用户 2026-10-14
+   重启 OMP**，重启后 gate 40/40、`omp models` 注册生效、glm-5.3-flash
+   relay 200 归因 ch183；运行时 `/model` 止血步骤不再需要。
 2. **ch220 单腿风险**：plan/designer/task 现在全系 ch220 一条福利腿
    （间歇 5 RPM 饱和）。ch119/192 的 glm-5.2 腿都 status=2。建议观察，
    饱和频繁时考虑给 glm-5.2 找第二条腿。

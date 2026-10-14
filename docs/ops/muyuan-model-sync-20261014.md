@@ -87,9 +87,10 @@ runbook 在册 43 名），本轮未注册新价——上游成本结构不明�
    聊天恒 504 未能接棒。建议长会话用户迁 `qwen3-8-27b`（ch88/124/171，
    OMP 注册在册）或 `gemini-3.8-flash`。若 muyuan 修复 qwen3.8-27b
    （聊天恢复 200），按脚本重加即可。
-2. **models.yml 仅 OMP 启动时读取**：本会话内未重启 OMP（重启会终止
-   本代理会话）。新注册与角色重指待下次 OMP 自然重启生效；网关路由
-   （NewAPI 层）已即时生效不受影响。
+2. ~~models.yml 待 OMP 重启生效~~ **已完成（2026-10-14 用户重启 OMP）**：
+   重启后复核 `test_omp_routes` 40/40 OK；`omp models` 在册 glm-4.6v /
+   jina-embeddings-v3 / glm-5.2，已删 18 死 id 全部不可见；glm-5.3-flash
+   （advisor 新主选）relay 200 归因 ch183。config.yml 全部重指生效。
 3. **agnes-2.5-flash 403**：ch68/69/220 载体之一账号受限；已移出
    vision 链，但 24h 仍有 210 笔计费流——若 403 持续，其渠道可能被
    auto_ban，留意。

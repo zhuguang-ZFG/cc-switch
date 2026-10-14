@@ -838,5 +838,7 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   风险、kimi-k3/minimax-m3 充值前 503。
 - **advisor 重指获批为常态（2026-10-14，同 runbook 补记）**：advisor →
   `zg-newapi/glm-5.3-flash`，gate 白名单已正式加入（用户确认；ch208
-  充值回开后 glm-5.3 可回任，二者并行）。运行中的 OMP 未重启，重启前
-  运行时仍是旧值。
+  充值回开后 glm-5.3 可回任，二者并行）。~~运行中的 OMP 未重启~~
+  **已重启（2026-10-14）**：gate 40/40、`omp models` 生效、glm-5.3-flash
+  relay 200 归因 ch183。遗留收敛为：ch220 单腿饱和观察、kimi-k3/
+  minimax-m3 充值前 503、qwen3.8-27b/qwen3.8-flash-next 观察。
