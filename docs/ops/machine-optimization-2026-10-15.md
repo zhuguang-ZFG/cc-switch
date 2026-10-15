@@ -41,6 +41,13 @@ AutoUpdate 09:40，同晨批量；无 commit、无 runbook、TaskScheduler 事�
 一条命令恢复任一：`Enable-ScheduledTask -TaskName 'NewAPI Guardian Watchdog'`
 （Watchdog 另需 `Start-ScheduledTask` 立即生效）。
 
+**副作用核验（2026-10-15 18:36:56–18:41，watchdog 实跑 4 分钟窗口）**：
+`watchdog.log` 该窗口内仅 `18:36:59 Guardian watchdog started` 一行，无
+stale/restart 动作；`guardian.log` 18:36–18:42 无 restart/disable/enable 行；
+`supervisor-status.json`（18:48 快照）各服务 `restartsLastHour=0`、
+`healthy=true`；Guardian 心跳 `18:47:50 pid=5968` 新鲜。→「净变化=0」有
+证据支撑，非断言。
+
 ## ③ 待裁决
 
 1. **会话数据保留策略**：`~/.omp/agent/sessions` 3.0 GB（>30d 的旧
