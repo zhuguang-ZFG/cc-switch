@@ -60,6 +60,31 @@
 **可选项**：给 jojatoken 账号充值 / 为这 7 个 gpt-* 名字找第二个货源 / 接受大
 上下文的间歇 503（小请求实测可用）。
 
+### 下游影响：compaction/memory 的大请求路径（本轮补测，~100k prompt）
+
+compaction 是真发大请求的调用方（归档文档实弹：140,662-token 一次在 head 上
+67.9s 完成，`docs/ops/archive/omp-global-compaction-model.md:159`）。同尺寸
+（~100k prompt）网关实测：
+
+| 候选 | 结果 |
+|---|---|
+| `deepseek-v4-flash`（候选**首位**） | **200 / 7.2s**，落 **ch180**，prompt=100,031 → **能扛大请求** |
+| `gpt-5.6-terra`（jojatoken，候选 #3） | **200 / 7.5s**，ch191，prompt=100,303 |
+| `gpt-5.6-sol`（jojatoken，候选 #4） | **503 pre-consume**：`remaining $0.003750 < required $0.080008` ← 该类**复现** |
+
+结论：① 候选顺序已把能扛大请求的 dsv4f 放首位（大 session 首选不受影响）；
+② jojatoken 四腿**并非同一账号**（terra 200 vs sol 503 分化）——是 **sol 这条
+腿的钱包干了**，不是"jojatoken 必拒"；③ 只有 head 与 terra 都不可用时，大
+session 才会落进 sol 并吃 503。
+
+另：`global compaction model unavailable`×2 与 quota **无关**——发生在
+17:08/17:09（重启前），原因是当时 reconciler 在 registry 里找不到任何可用候选
+（分辨率失败，非大请求）；17:18 重启后每轮 `target=dsv4f / inspected=83` 正常，
+无复发。
+
+revision：候选改动后 **r12 → `2026.10.15-r13`**（双副本同步；扩展测试
+21/21、`omp-extensions` 100/100）。
+
 ## 附带修（与聚合无直接因果，单独列出）
 
 - **compaction 双副本漂移**（评审发现）：repo 源 `scripts/ops/omp-global-compaction-model.js`

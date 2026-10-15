@@ -1,4 +1,4 @@
-export const EXTENSION_REVISION = "2026.10.12-r12";
+export const EXTENSION_REVISION = "2026.10.15-r13";
 
 const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
   // primary: fleet compaction default, re-promoted 2026-10-12 — live probe on
