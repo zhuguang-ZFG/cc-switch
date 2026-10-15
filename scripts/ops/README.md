@@ -942,3 +942,18 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   逐模型复核**零新增路由**；③ DB 备份轮转回收 **1162 MB**（13 份旧 backups/ +
   7 份主目录 legacy `.bak-*`），保留 12 份（733 MB）。门禁：`test_smoke.py`
   47/47、alignment CLEAN。
+
+- **聚合渠道报错定位与修复（2026-10-15 晚，runbook
+  `docs/ops/aggregation-triage-2026-10-15.md`）**：16 条 enabled 多模型渠道 ×
+  全部模型 = **84 对探活矩阵 → 63 OK / 21 FAIL**。① 裁目录 6 条渠道：ch15
+  `sensenova-u1.5-lite`(404)、ch118 四名（qwen3.8-max / grok-4.5 /
+  qwen3.7-max 500×2 净窗、claude-sonnet-5 402）、ch188-191 `gpt-5.5`（上游
+  "not supported when using Codex"）；整渠死 ch3/ch72/ch204 不裁；
+  ② 4 个新 orphan 入门禁（Q CLEAN 恢复）；③ OMP 死链修复：vision 双跳全死→
+  `[zg-newapi-anthropic/intern-s2-preview, zg-newapi/dots-3-note-prev]`、
+  plan hop2→`glm-5.3`、slow→intern-s2-preview、compaction 候选
+  `gpt-5.5→glm-5.3-flash` 并删 `glm-5.2`/`step-5-preview`；
+  ④ 错误来源定性：`(distributor)` 串 = 本地 fork 自带、`Not enough quota to
+  pre-consume` = 上游透传；⑤ 附带：`muse-spark-1.2-contributor-free` 已自愈
+  （ch178 9.1s 200）。门禁：`test_omp_routes` 40/40、alignment CLEAN、冒烟
+  5 类、`ops-gates` 11/11。
