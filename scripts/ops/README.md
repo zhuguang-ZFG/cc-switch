@@ -924,8 +924,9 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   `docs/ops/machine-optimization-2026-10-15.md`）**：① 清理可再生成物
   **+3.0 GB**（codex daemon 旧版本 2.15 G、npm 缓存、七月 WebView 备份、
   陈旧插件备份、guardian 旧 task-backups、codex 日志表 62.8 M）；
-  ② 恢复四处看护/护栏任务（10-10 被停用）：`NewAPI Guardian Watchdog`
-  （已起）、`NewAPI ch3 100xlabs Reprobe`（实跑 result=0）、
-  `OMP Session Log Cleanup`、`Codex Log Cleanup`；③ 待裁：会话数据保留
-  策略（OMP 3.0 G / codex 1.2 G）、new-api backups 轮转（1.4 G）、
-  `AnyRouter Window Canary` 与 `OMP AutoUpdate` 是否恢复。
+  ② 看护装甲**维持原状**：10-10 同晨批量停用的 `NewAPI Guardian Watchdog` /
+  `ch3 100xlabs Reprobe` / `AnyRouter Window Canary` / `OMP AutoUpdate` 均
+  保持 Disabled（曾短暂启用，经评审核对为有意停用后复原），列裁决项；
+  仅两条有界清理任务（`OMP Session Log Cleanup`、`Codex Log Cleanup`，
+  10-04 后停用、非同一批次）恢复 Ready；③ 待裁：会话数据保留策略
+  （OMP 3.0 G / codex 1.2 G）、new-api backups 轮转（1.4 G）、上述四处任务。

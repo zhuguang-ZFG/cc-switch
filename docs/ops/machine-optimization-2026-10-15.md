@@ -21,17 +21,25 @@
 chrome 进程）**，需浏览器停止后清；`~/.omp/agent/sessions` 与
 `~/.codex/sessions`（见下）。
 
-## ② 看护/护栏任务恢复（四处 Disabled → Ready/已起）
+## ② 看护装甲：维持原状（不擅自启用）——净变化 0
 
-10-10 上午这批任务被停用（无 commit/文档/事件日志可归因；ch3 哨兵当时的
-最后几次运行是 401 失败，现 token 复测 HTTP 200 正常）。恢复：
+10-10 上午这批任务被停用（Watchdog 09:20 / Reprobe 09:59 / Canary 10:08 /
+AutoUpdate 09:40，同晨批量；无 commit、无 runbook、TaskScheduler 事件日志无
+匹配事件可归因）。**处置：三处看护/告警类维持 Disabled，交用户裁决**——
+曾短暂启用 Watchdog 与 ch3 哨兵，经独立评审提醒（同晨同账号批量停用应视为
+有意动作）后**已复原**：任务回 Disabled，启动的 watchdog 进程已终止，无残留。
 
-| 任务 | 作用 | 现状 |
+| 任务 | 现状 | 说明 |
 |---|---|---|
-| `NewAPI Guardian Watchdog`（登录触发） | Guardian/代理 supervisor 心跳看护与重启（README 规范入口） | Ready，**已启动**（log: `18:36:59 Guardian watchdog started`，State=Running） |
-| `NewAPI ch3 100xlabs Reprobe`（15min） | ch3 掉线后按 4/4 探针自动回捞（幂等：status==1 即退） | Ready，**18:36 实跑 result=0** ✓ |
-| `OMP Session Log Cleanup`（周） | 仅删 >2 GB 且 >24h 的 `*.bash.log`/`*.async.log`（30 GB 跑飞事故护栏；不碰 jsonl/sqlite） | Ready |
-| `Codex Log Cleanup`（周） | 仅清 codex 诊断日志（keep 3d） | Ready |
+| `NewAPI Guardian Watchdog` | **Disabled**（维持） | Guardian/supervisor 心跳看护；启用命令见下 |
+| `NewAPI ch3 100xlabs Reprobe` | **Disabled**（维持） | 哨兵 docstring 明说「若 ch3 因**其他原因**被禁用且不希望自动回捞，删除计划任务」——ch3 现为 enabled，自动回捞语义与现状耦合，属策略项 |
+| `AnyRouter Window Canary` | Disabled（维持） | Telegram 开窗告警；ch72 已非角色主路 |
+| `OMP AutoUpdate` | Disabled（维持） | gate=0 发版即升旧策略 |
+| `OMP Session Log Cleanup` | **Ready（已启用）** | 周任务；仅删 >2 GB 且 >24h 的 `*.bash.log`/`*.async.log`（30 GB 跑飞事故护栏；不碰 jsonl/sqlite）。10-04 后停用（非 10-10 批次） |
+| `Codex Log Cleanup` | **Ready（已启用）** | 周任务；仅清 codex 诊断日志（keep 3d，thread_history 不动）。同上 |
+
+一条命令恢复任一：`Enable-ScheduledTask -TaskName 'NewAPI Guardian Watchdog'`
+（Watchdog 另需 `Start-ScheduledTask` 立即生效）。
 
 ## ③ 待裁决
 
@@ -43,9 +51,13 @@ chrome 进程）**，需浏览器停止后清；`~/.omp/agent/sessions` 与
 3. **两处任务策略**：`AnyRouter Window Canary`（5min，Telegram 开窗告警，
    依赖 Clash/telegram_proxy；ch72 已非角色主路，价值下降）、`OMP AutoUpdate`
    （每日，gate=0 发版即升的旧策略）——是否恢复由你定。
-4. 杂项：`lobsterai-updater/installer.exe` 285 MB（10-12 的安装器，
-   是否已装完可删）、`.omp/run/daemons/.../omp.browser.headless.profile`
-   124 MB（头less浏览 profile）。
+4. 杂项：`lobsterai-updater/installer.exe` 285 MB —— **不动**：mtime 10-12
+   （非陈旧残留），且 `AppData/Roaming/LobsterAI/` 存在，属已安装应用待应用的
+   更新缓存，不值得为 285 MB 冒中断更新的风险（评审核对）。`.omp/run/daemons/
+   <id>/omp.browser.headless.profile` 124 MB —— **不动**：`run/daemons/<id>/`
+   有 `scope.json`+`broker.token` 且 clients 17:55 仍在写，是**在线** headless
+   浏览器 scratch，删了会打断运行中的 daemon（评审核对）。
+   `pnpm store prune` 0 回收属正常（store 全被现役项目引用）。
 5. 其他停用任务多为历史遗留/第三方（`agnes-relay`、`LiteLLM Auto Cooldown`、
    `RunPlatformExperienceHelper*`、`SoftLanding*`、`DouyinV2NightRun`、
    `Git for Windows Updater` 等），未动。
