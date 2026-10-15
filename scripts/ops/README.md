@@ -967,3 +967,15 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   扩展测试同步至 r12 口径 **21/21**；③ `omp-extensions` check 增补
   compaction 源+测试（此前无门禁）→ **100/100**；④ muse-spark-1.2 改为
   "未定论"（3 连 200 但上游目录未回列，宽限不取消）。
+
+- **zen-free-bridge 静默截断修复（2026-10-15 晚，runbook
+  `docs/ops/zen-bridge-truncation-fix-2026-10-15.md`）**：桥只发
+  `messages[0]` 且截 32k → 全量序列化 + 去截断 + image fail-loud；重启后
+  决定性验证（38k 标记读回 ✓、多轮历史 `GIRAFFE` ✓）；新测试
+  `test_zen_free_bridge.mjs` 7/7；cat-jam-free 注册（实测 ≥200k ctx，
+  tools/vision/reasoning 均不支持）。
+- **agentrouter 上新接入（2026-10-15 晚，runbook
+  `docs/ops/agentrouter-newmodels-2026-10-15.md`）**：群公告上新
+  `gpt-6.1-sol`/`claude-opus-5-5` → ch180 += gpt-6.1-sol、ch86-136 +=
+  claude-opus-5-5 并回开（上游池恢复）；网关实弹 200（ch180 / ch135）；
+  ch127 key 失效与 8788 keys.json 失效留待。

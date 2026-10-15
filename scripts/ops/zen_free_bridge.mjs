@@ -199,7 +199,48 @@ function completionResponse(modelId, content, stream) {
   });
 }
 
-Bun.serve({
+// Serialize the whole conversation for the single-prompt CLI. The old code took
+// only messages[0] and sliced it to 32k chars, silently dropping history and
+// truncating long prompts -- every OMP session routed here saw only the first
+// 32k chars of its first message (2026-10-15 incident). The prompt goes to the
+// CLI over stdin, so there is no argv length limit to respect.
+export function promptFromMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return { prompt: "" };
+  if (messages.length === 1) return singleMessageText(messages[0]);
+  const lines = [];
+  for (const message of messages) {
+    const built = singleMessageText(message);
+    if (built.error) return built;
+    lines.push(`${String(message?.role || "user")}: ${built.prompt}`);
+  }
+  return { prompt: lines.join("\n\n") };
+}
+
+function singleMessageText(message) {
+  const content = message?.content;
+  if (content == null) return { prompt: "" };
+  if (typeof content === "string") return { prompt: content };
+  if (Array.isArray(content)) {
+    const texts = [];
+    let images = 0;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      if (part.type === "text") texts.push(String(part.text ?? ""));
+      else images += 1;
+    }
+    if (images > 0) {
+      // fail-loud: the bridge can only carry a text prompt over stdin
+      return { error: `image parts not supported by the zen bridge (${images} image part(s))` };
+    }
+    return { prompt: texts.join("\n") };
+  }
+  return { prompt: String(content) };
+}
+
+// Only listen when this file is the entry point; test suites import the module
+// for promptFromMessages and must not bind the port. (import.meta.main is true
+// for the Bun entry, falsy when node --test imports the module.)
+if (import.meta.main) Bun.serve({
   port: PORT,
   hostname: "127.0.0.1",
   async fetch(req) {
@@ -217,8 +258,9 @@ Bun.serve({
     if (now < quotaUntil) {
       return Response.json({ error: { type: "rate_limit_error", message: "OpenCode zen free daily quota exhausted" } }, { status: 429 });
     }
-    const msg = (body.messages || [].slice(-1))[0];
-    const prompt = msg && msg.content != null ? String(msg.content).slice(0, 32_000) : "";
+    const built = promptFromMessages(body.messages);
+    if (built.error) return Response.json({ error: { type: "invalid_request_error", message: built.error } }, { status: 400 });
+    const prompt = built.prompt;
     const stream = body.stream === true;
 
     if (running) {

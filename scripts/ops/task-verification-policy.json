@@ -31,7 +31,9 @@
             "scripts/ops/test_omp_sota_escalation.js",
             "scripts/ops/test_omp_model_routing_observability.js",
             "scripts/ops/test_omp_unexpected_stop_guard.js",
-            "scripts/ops/test_omp_global_compaction_model.js"
+            "scripts/ops/test_omp_global_compaction_model.js",
+            "scripts/ops/zen_free_bridge.mjs",
+            "scripts/ops/test_zen_free_bridge.mjs"
           ],
           "command": "@node",
           "args": [
@@ -43,7 +45,8 @@
             "scripts/ops/test_omp_sota_escalation.js",
             "scripts/ops/test_omp_model_routing_observability.js",
             "scripts/ops/test_omp_unexpected_stop_guard.js",
-            "scripts/ops/test_omp_global_compaction_model.js"
+            "scripts/ops/test_omp_global_compaction_model.js",
+            "scripts/ops/test_zen_free_bridge.mjs"
           ],
           "evidence": "node-test",
           "timeoutMs": 60000
