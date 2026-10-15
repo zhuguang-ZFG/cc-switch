@@ -980,3 +980,6 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   `claude-opus-5-5` 并回开（上游池恢复）；网关实弹 200（ch180 / ch135）；
   更正：ch127 key 有效（dsv4f admin test 200；codex 系 402 预算尽→保持 park）、
   8788 代理健康（先前 401 是撞了它的客户端鉴权门，非 keys.json 失效）。
+  **后续处置（评审要求的明确裁决）**：ch127 trim 到 `deepseek-v4-flash` 单名
+  + 回开 → 给 dsv4f（default 角色）加第四条活腿；冒烟 FAIL 基线 5→4 类
+  （opus-4-8 容量因 ch86-136 回开而过线）。

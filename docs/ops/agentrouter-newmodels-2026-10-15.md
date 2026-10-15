@@ -33,11 +33,13 @@
   base_url= `http://100.83.32.95:8788`（就是该代理），今天连发 200；我先前
   用**渠道 key** 直连 8788 探针得的 401，是撞了代理自己的客户端鉴权门
   （64 字符 key 仅本地鉴权、不透传上游）——不是 keys.json 失效。
-- ~~ch127 key 上游失效（401）~~ **更正：key 有效**。管理探针复测：
-  `deepseek-v4-flash` → **200**；`gpt-6-astra` → 402 `Budget pool quota has
-  been exhausted`（codex 池预算尽）。→ ch127 保持 park，但理由修正为
-  "codex 系模型预算尽；dsv4f 可用但因同渠道挂着死名而保持 park"（若上游给
-  codex 池补货可回开，恢复时按 runbook 复测）。
+- ~~ch127 key 上游失效（401）~~ **更正后已处置（裁决，评审要求的明确决定）**：
+  key 有效、`deepseek-v4-flash` admin test 200、codex 系（gpt-6-astra/
+  gpt-5.6-sol）402 预算池尽 → **trim 到 `deepseek-v4-flash` 单名 + 回开**
+  （status=1；快照 `new-api-before-ch127-trim-20261015-220837.db`；readback +
+  双 ability 行 enabled ✓）。审计注记：这回开**给 dsv4f（default 角色模型）
+  加了第四条活腿**（ch180/ch173/ch218 之外）；codex 系名字上游补货后再回挂
+  （恢复时按 runbook 复测）。
 - ch86-136 仍挂 `claude-opus-5`/`opus-4-8`（上游池已无该名）——若上游彻底下架，
   按聚合裁剪那套摘掉；
 - OMP 重启后生效（config/扩展），渠道改动即时生效。
