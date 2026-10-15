@@ -46,6 +46,26 @@
           "timeoutMs": 60000
         },
         {
+          "id": "ops-gates",
+          "paths": [
+            "scripts/ops/verify_omp_newapi_alignment.py",
+            "scripts/ops/sync_zen_free_bridge_models_20261015.py",
+            "scripts/ops/test_ops_gates.py"
+          ],
+          "command": "@python",
+          "args": [
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "scripts/ops",
+            "-p",
+            "test_ops_gates.py"
+          ],
+          "evidence": "unittest",
+          "timeoutMs": 60000
+        },
+        {
           "id": "omp-verification-deployment",
           "paths": [
             "scripts/ops/deploy-omp-verification.py",

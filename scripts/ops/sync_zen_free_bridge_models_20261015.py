@@ -260,6 +260,26 @@ def merge_ratio(current: str, removed: tuple[str, ...], added: tuple[str, ...]) 
     return json.dumps(ratios, separators=(",", ":"), sort_keys=True)
 
 
+def compute_target(candidates: list[str], current: list[str],
+                   results: dict[str, dict], allow_drop: bool
+                   ) -> tuple[list[str], tuple[str, ...], tuple[str, ...]]:
+    """Target model list under the additive (default) or drop policy.
+
+    Additive keeps every current model even when probing failed: single-shot
+    502s and 503-busy were both proven transient on 2026-10-15 (nemotron-3.5 /
+    longcat 502'd then answered 200 twenty minutes later; 503 is single-flight
+    contention with real gateway traffic). Dropping needs clean-window
+    evidence, so it stays behind --allow-drop.
+    """
+    if allow_drop:
+        target = [m for m in candidates if results[m]["live"]]
+    else:
+        target = [m for m in candidates if m in current or results[m]["live"]]
+    added = tuple(m for m in target if m not in current)
+    removed = tuple(m for m in current if m not in target)
+    return target, added, removed
+
+
 def wait_abilities(db_path: Path, channel_id: int, models: list[str]) -> None:
     deadline = time.time() + ABILITIES_WAIT_SECONDS
     pending = list(models)
@@ -334,16 +354,8 @@ def main() -> int:
         print(f"probe {model}: {state} status={result['status']} {result['seconds']}s {result['detail']}")
     save_probe_cache(results)
 
-    live_list = [m for m in candidates if results[m]["live"]]
-    if args.allow_drop:
-        target_list = live_list
-    else:
-        # additive only (default): a model that is busy/quota/transiently failing
-        # is kept -- dropping needs clean-window evidence, not one probe round.
-        target_list = [m for m in candidates if m in current or results[m]["live"]]
+    target_list, added, removed = compute_target(candidates, current, results, args.allow_drop)
     target = ",".join(target_list)
-    added = tuple(m for m in target_list if m not in current)
-    removed = tuple(m for m in current if m not in target_list)
     unknown = [m for m in candidates if not results[m]["live"] and results[m].get("quota")]
     busy = [m for m in candidates if not results[m]["live"] and results[m].get("status") == 503]
     dead = [m for m in candidates
