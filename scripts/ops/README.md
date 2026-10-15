@@ -892,3 +892,18 @@ only bounded readiness metadata and never print keys or raw provider bodies.
     不重复主选），`test_omp_routes` 40/40；
   - **待裁决**：ModelRatio 缺口 6 名（qwen3.8-flash/glm-4.6v/jina-embeddings-v3
     等，值待用户给）。
+
+- **全渠道体检 + 状态更新（2026-10-15 晚，runbook
+  `docs/ops/channel-health-sweep-2026-10-15.md`）**：102 渠道零成本遥感 +
+  51 渠道真探针（33 enabled 全量 + 18 条有恢复线索的 disabled）。
+  - **ch208 happycoding 回开**（钱包回血，glm-5.3 3/3 探针 200）→ 恢复
+    glm-5.3 / kimi-k3 / minimax-m3，并给 glm-5.3-flash、deepseek-v4.1-flash
+    各加一腿；
+  - **park 三条硬证据死腿**（status=2 + auto_ban=1）：ch127（402 预算池）、
+    ch186（403 订阅额度不足，qwen3.8-flash 唯一腿）、ch224（step-plan 额度尽）；
+  - enabled 死腿未动（ch3 超时/Guardian 降权、ch72 窗口型、ch171/ch182
+    瞬态存疑、ch181/ch204 本地桥）；
+  - **装甲三处被停用待裁决**：`NewAPI ch3 100xlabs Reprobe`、
+    `AnyRouter Window Canary`、`NewAPI Guardian Watchdog` 均 Disabled；
+  - 门禁：alignment CLEAN（0 orphan/24 quarantined）、smoke FAIL 仍 8 类基线、
+    enabled 33→31；备份 `new-api-before-chstatus-20261015-1809*.db`。

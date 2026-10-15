@@ -79,10 +79,11 @@ def main() -> int:
 # re-registration; delete each line once its id routes live again.
 QUARANTINE = {
     "qwen3.7-plus": "ch203 weekly Clinepass quota resets ~2026-10-16",
-    "step-5-preview": "ch184 Go endpoint 429 + ch205 step-plan credit empty",
-    "step-3.5-flash": "ch205 step-plan credit empty; top-up then re-enable",
-    "step-3.5-flash-2603": "ch205 step-plan credit empty; top-up then re-enable",
-    "step-3.7-flash": "ch205 step-plan credit empty; top-up then re-enable",
+    "step-5-preview": "ch184 Go endpoint 429 + ch205/ch224 step-plan credit empty (ch224 parked 2026-10-15)",
+    "step-3.5-flash": "ch205/ch224 step-plan credit empty (ch224 parked 2026-10-15); top-up then re-enable",
+    "step-3.5-flash-2603": "ch205/ch224 step-plan credit empty (ch224 parked 2026-10-15); top-up then re-enable",
+    "step-3.7-flash": "ch205/ch224 step-plan credit empty (ch224 parked 2026-10-15); top-up then re-enable",
+    "qwen3.8-flash": "ch186 tierflow parked 2026-10-15 (403 subscription quota insufficient, bucket=basic); ch122 long-disabled; re-enable on subscription bucket restore",
     "ling-3.1-flash-free": "retired from the live zen catalog (`opencode models` 2026-10-15) -- no re-add path via ch178; drop the models.yml row if a clean picker is wanted",
     "ling-3.0-flash-fin-free": "retired from the live zen catalog (2026-10-15, was 180s timeout + catalog retirement); no re-add path; drop the models.yml row if a clean picker is wanted",
     "glm-5.2": "ch220 lucky0625 account negative balance (-$0.000278), 403 insufficient quota account-wide (2026-10-15); all legs dark; OMP plan/designer/task repointed to k3; re-enable on ch220 recharge",
@@ -98,7 +99,6 @@ QUARANTINE = {
     "grok-composer-2.5-fast": "ch109 imagic disabled + ch220 account negative balance (2026-10-15); all legs dark",
     "muse-spark-1.2-contributor": "ch109 imagic disabled (2026-10-15); sole paid leg dark (free twin muse-spark-1.2-contributor-free is live on ch178, 2026-10-15)",
     "LongCat-2.0": "ch68 upstream dead + ch69 account restricted (2026-10-15 admin tests); all legs dark (LongCat-2.5-Preview ch145 unaffected)",
-    "glm-5.3": "ch208 happycoding wallet depleted (manually disabled 2026-10-14; sole live leg); OMP plan/designer/task moved to k3 and advisor to glm-5.3-flash (2026-10-15 triage) -- no OMP consumer left; re-enable on ch208 recharge",
     "gemini-3.8-flash-high": "ch222 (chengapi) upstream key expired/401 Unauthorized (2026-10-13); re-enable on fresh key",
     "codex-auto-review": "ch175 hubway manually-disabled 2026-10-13 12:48 (external operator; sole live leg) -- re-enable on hubway restore",
     "Atria-Dawn-Preview": "ch139 upstream free credit exhausted: 429 Token quota exhausted (admin test 2026-10-15 HTTP 200 success=false; guardian stopped recovery probing after 12 failed cycles) -- re-enable only if the upstream credit resets",
