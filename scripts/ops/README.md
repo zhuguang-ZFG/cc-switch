@@ -977,5 +977,6 @@ only bounded readiness metadata and never print keys or raw provider bodies.
 - **agentrouter 上新接入（2026-10-15 晚，runbook
   `docs/ops/agentrouter-newmodels-2026-10-15.md`）**：群公告上新
   `gpt-6.1-sol`/`claude-opus-5-5` → ch180 += gpt-6.1-sol、ch86-136 +=
-  claude-opus-5-5 并回开（上游池恢复）；网关实弹 200（ch180 / ch135）；
-  ch127 key 失效与 8788 keys.json 失效留待。
+  `claude-opus-5-5` 并回开（上游池恢复）；网关实弹 200（ch180 / ch135）；
+  更正：ch127 key 有效（dsv4f admin test 200；codex 系 402 预算尽→保持 park）、
+  8788 代理健康（先前 401 是撞了它的客户端鉴权门，非 keys.json 失效）。
