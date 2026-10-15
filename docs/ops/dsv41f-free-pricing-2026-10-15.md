@@ -43,3 +43,16 @@ opencode-go 免费腿 ch218 早在 2026-10-12 已接入
   0，本地 quota 不再虚增。
 - 若未来给该名接回真付费腿（如 sensenova 计划升级），需先把比率从 0
   提回，否则付费流量也记 0。
+
+## 能力实测（2026-10-15，用户要求核上下文/思考档位；均对 ch218 上游直连实测）
+
+- **contextWindow 262144 → 1048576（1M）**：阶梯探测 59.6K/254.5K/272.7K/
+  345.4K/527.3K/600.0K/745.4K/1045.4K in 全部 200（末尾应答 'fox' 正确），
+  1274.8K → 400 明报 `maximum context length is 1048576`。原声明 256K
+  低估 4 倍。
+- **maxTokens 131072 → 200000**（用户指示）：上游接受 max_tokens=200000
+  （finish=stop，参数面 ≥200K；实际生成上限未测，免费腿不值得烧）。
+- **thinking efforts low/medium/high/xhigh/max 五档全 200**，reasoning_tok
+  随档位递增（16→27）——与 muyuan ch173 拒档不同，opencode-go 全档生效，
+  声明原样正确。
+- 生效条件不变：models.yml 改动待下次 OMP 重启。

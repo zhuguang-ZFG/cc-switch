@@ -852,3 +852,7 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   `new-api-before-dsv41f-free-20261015-161205.db`，读回断言，邻居未动）；
   models.yml 改标 opencode-go FREE 主腿。门禁 40/40；smoke
   unregistered-ratio 违规该名消失（余量为存量基线）。回接付费腿前提回比率。
+  能力实测（同日）：contextWindow 262144→**1048576**（阶梯探测 8 档全 200，
+  1.27M→400 明报 1M 硬顶）；maxTokens 131072→**200000**（用户指示，上游
+  实测接受）；thinking 五档 low..max 全生效（reasoning_tok 16→27，异于
+  muyuan 拒档）。models.yml 改动待下次 OMP 重启生效。
