@@ -103,6 +103,13 @@ apply 终态（备份 `new-api-before-zen-free-bridge-recover-20261015-173645.db
 3. **muse-spark-1.2-contributor-free 观察**：17:31 起 CLI 报
    `UnknownError err_26c79a89`（fast fail，非挂死），且已不在 `opencode models`
    目录；16:36 还有真实 ct=3。按 24h 宽限策略保留，明日复检再定摘除。
+   **18:15 复核（第 3 次连续失败）**：17:31 探活 502 → 17:44 直连 CLI
+   `UnknownError` → 18:15 探活仍 fast-fail；同一时刻同桥的
+   muse-spark-1.3-contributor-free 探活 200 → 排除桥故障，判定 1.2 为
+   上游退役。影响可控：config.yml 有 model-keyed 兜底
+   （`muse-spark-1.2-contributor-free` → `deepseek-v4-flash`），用户侧只多
+   一跳。明日宽限到期后按 `--allow-drop` 摘除（或按 1.3 同槽处理）+
+   门禁加 quarantine 条目。
 
 ## slow 角色重指 k3（P0 处置，需 OMP 重启生效）
 
