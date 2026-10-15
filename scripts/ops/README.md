@@ -869,3 +869,22 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   relay 200 归因确认）；tiny → glm-5.3-flash；链清尸（mimo/haiku/agnes 链）；
   QUARANTINE +13 条死因条目，verdict 12→1；双门禁 40/40。遗留：ch220 回血
   观察、agnes 解封观察、OMP 待重启生效。
+
+- **收尾清理：OMP 仓补提交 / Atria 定案 / ch178 桥回加（2026-10-15 晚，
+  runbook `docs/ops/followup-cleanup-2026-10-15.md`）**：
+  - `~/.omp/agent` 补提交 6 天未提交改动（commit `f7a0e75`；含 compaction
+    扩展死候选 `qwen3.8-flash-next` 移除、mcp.json +jev/+rea、`.gitignore
+    +*.backup`）；
+  - Atria ch139 定案 **不回开**（admin test 200/success=false，上游 429
+    `Token quota exhausted`；Guardian 12 轮探测预算用尽）→ 入 QUARANTINE，
+    alignment **CLEAN：0 orphan / 20 quarantined**；
+  - ch178 zen 桥回加新脚本 `sync_zen_free_bridge_models_20261015.py`
+    （catalog=`opencode models`；bridge 真实补全探活，重试×3；503 busy ≠
+    故障；默认 **additive**，`--allow-drop` 才摘除）：5→11 模型（re-add
+    big-pickle/cat-jam-free/deepseek-v4.1-flash-free/mimo-v2.6-flash-free/
+    muse-spark-1.3-contributor-free/space-bunny-free），备份
+    `new-api-before-zen-free-bridge-recover-20261015-173645.db`，readback +
+    admin test 全过；smoke 17:38 轮 FAIL 集合与基线逐项一致；
+  - **新发现（待裁决）**：slow 角色（claude-opus-4-8）全天 0%（perf req=373
+    ok=0；ch72 唯一腿 admin test 429 Service Unavailable）；ModelRatio 缺口
+    6 名（qwen3.8-flash/glm-4.6v/jina-embeddings-v3 等，值待用户给）。
