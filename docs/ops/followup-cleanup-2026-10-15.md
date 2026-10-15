@@ -160,3 +160,6 @@ cp ~/.new-api-local/backups/new-api-before-zen-free-bridge-recover-20261015-1736
 - **语义**：改任一副本后 task_verify 返回
   `verification-policy-changed-review-required`，须人工 review 后下一轮
   才建立新基线——期间改动保持 unverified（本轮即如此）。
+- **首跑实证（2026-10-15 18:1x）**：改 `verify_omp_newapi_alignment.py`
+  （quarantine 表同步）触发 `ops-gates` → **passed：11 tests / exit 0 /
+  199 ms**；task_verify 同时列出 docs 两个文件为 documentation（无需 check）。
