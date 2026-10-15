@@ -41,17 +41,54 @@
 `test_live_fallback_chains_have_no_hard_violations` 当场拦下（该 id 注册在
 **`zg-newapi-anthropic`** provider）；改为 anthropic 选择器后 40/40。
 
+## 单独归因：`Not enough quota to pre-consume`（上游余额类，**不在裁剪/链修复覆盖内**）
+
+今天会话里最高频的一类报错（OMP 日志 11:54–13:27 ×5，model=`gpt-5.6-sol`）：
+
+- 文案不在 `new-api.exe` 内 → **上游透传**（NewAPI 类转售网关的按请求预扣检查）；
+- `gpt-5.6-sol` 的 enabled 腿**只有 ch188-191（同一站点 jojatoken.com）**；
+  四把 key 的 sha256 指纹互不相同（=4 个独立 key），但无法读取各自余额；
+  失败报文里的 "remaining" 历次为 `$0.0079/0.1882/0.1949/0.1952/0.3038`
+  —— 有升有降，说明腿间/时点上余额各不相同（可能非同账号）；
+- 直连逐 key 大 body 探针被 **Cloudflare 1010**（非浏览器 UA）拦下 → 无法逐
+  key 读余额（也提示 jojatoken 渠道依赖既有的 header_override UA 策略）；
+- 网关复现：同尺寸大 body（~200k 字符）经 127.0.0.1:3002 → **200（7.2s）**，
+  当前不复现 → 该失败是"请求越大预扣越多 vs 上游余额近空"的**尺寸/余额型间歇**；
+- 重试侧：`AutomaticRetryStatusCodes` 含 500-503、`RetryTimes=1` → 仅一跳重试，
+  能否救取决于该腿是否有余量；本地裁剪与链修复**都碰不到这一类**。
+
+**可选项**：给 jojatoken 账号充值 / 为这 7 个 gpt-* 名字找第二个货源 / 接受大
+上下文的间歇 503（小请求实测可用）。
+
+## 附带修（与聚合无直接因果，单独列出）
+
+- **compaction 双副本漂移**（评审发现）：repo 源 `scripts/ops/omp-global-compaction-model.js`
+  停在 r11（含 `gpt-5.5`/`glm-5.2`/`step-5-preview`，还带 live 早已删掉的
+  `qwen3.8-flash-next`），而 `deploy-omp-global-compaction-model.ps1` 默认
+  repo→live 覆盖（带备份）→ 再部署会回滚今晚的候选修复。**已把 repo 源同步为
+  live r12 内容**（两副本 byte-identical → 部署变 no-op）。
+- **扩展测试同步**：`test_omp_global_compaction_model.js` 也停在 r11
+  （5 例失败：TARGET=longcat、注册表 mock 缺 dsv4f、glm-5.2 断言）→ 更新为
+  r12 口径（TARGET=dsv4f、4 个 mock 注册表带 dsv4f、glm-5.2 断言改用
+  glm-5.3-flash）→ **21/21 通过**。
+- **门禁补口**：`omp-extensions` check 的 paths/args 增补
+  `omp-global-compaction-model.js` + `test_omp_global_compaction_model.js`
+  （此前完全未覆盖，双副本漂移无门禁）→ 该 check 全量跑 **100/100**。
+
 ## 附带发现
 
-- `muse-spark-1.2-contributor-free` **已自行恢复**：矩阵探活 ch178 9.1s 200
-  （17:31–18:15 的连续 fast-fail 结束）→ 早前"明日摘除"计划取消，留库观察。
+- `muse-spark-1.2-contributor-free` **未定论**：矩阵 1 次 200（9.1s）+ 追加 2 次
+  间隔复探 200（共 3 连），**但上游 `opencode models` 目录仍未回列该 id**（只有
+  1.3）。按"单次/少量 200 不等于健康"，**不宣布自愈、不取消 24h 宽限**：明日
+  再多次复探 + 目录核对再定是否 `--allow-drop` 摘除。
 - 全部改动的生效条件：`config.yml`/extension **下次 OMP 启动**；渠道目录裁剪
   即时生效。
 
 ## 门禁（终态实测）
 
 - `test_omp_routes` **40/40 OK**；`verify_omp_newapi_alignment` **CLEAN**；
-  冒烟仍 **5 类**（无新增）；`test_ops_gates` **11/11**。
+  冒烟仍 **5 类**（无新增）；`test_ops_gates` **11/11**；
+  `omp-extensions`（含新增 compaction 覆盖）**100/100**。
 
 ## 回滚
 

@@ -14,9 +14,10 @@ import globalCompactionModel, {
   resolveCompactionTarget,
 } from "./omp-global-compaction-model.js";
 
-// r11 (2026-10-12): omen-alpha removed from the candidate list (never
-// registered in models.yml); primary is longcat — mock registries carry it.
-const TARGET = "zg-newapi/longcat-2.5-preview-free";
+// r12 (2026-10-12, synced 2026-10-15): primary is deepseek-v4-flash —
+// mock registries must carry it for the "first available candidate wins" cases.
+// longcat-2.5-preview-free remains a valid decoy further down the list.
+const TARGET = "zg-newapi/deepseek-v4-flash";
 
 function createThresholdSettings() {
   const values = {
@@ -113,7 +114,7 @@ test("binds every available model without changing model identity", () => {
   });
 });
 test("also binds a current model that is not in the registry snapshot", () => {
-  const registered = { provider: "zg-newapi", id: "longcat-2.5-preview-free" };
+  const registered = { provider: "zg-newapi", id: "deepseek-v4-flash" };
   const current = { provider: "future-provider", id: "future-model" };
 
   const result = applyGlobalCompactionModel(
@@ -132,7 +133,7 @@ test("selects only authenticated registry candidates in priority order", () => {
 
   assert.equal(
     resolveCompactionTarget(createContext([qwen27b, glm, longcat])).target,
-    TARGET,
+    "zg-newapi/longcat-2.5-preview-free",
   );
   assert.equal(
     resolveCompactionTarget(
@@ -153,10 +154,12 @@ test("selects only authenticated registry candidates in priority order", () => {
       createContext([
         qwen27b,
         glm,
-        { provider: "zg-newapi", id: "glm-5.2" },
+        // glm-5.2 was removed from the candidates on 2026-10-15 (every leg
+        // dark); glm-5.3-flash now plays the "earlier candidate wins" role.
+        { provider: "zg-newapi", id: "glm-5.3-flash" },
       ]),
     ).target,
-    "zg-newapi/glm-5.2",
+    "zg-newapi/glm-5.3-flash",
   );
   assert.equal(
     resolveCompactionTarget(createContext([qwen27b])).target,
@@ -210,7 +213,9 @@ test("clears only bindings owned by the managed candidate policy", () => {
 test("reconciles models added after session start", () => {
   const models = [
     { provider: "zg-newapi", id: "gpt-5.6-sol" },
-    { provider: "zg-newapi", id: "longcat-2.5-preview-free" },
+    // r12: the candidate-policy head (deepseek-v4-flash) must be present for
+    // the reconciler to bind anything; longcat alone no longer wins.
+    { provider: "zg-newapi", id: "deepseek-v4-flash" },
   ];
   const ctx = createContext(models);
   const reconciler = createGlobalCompactionReconciler();
@@ -226,7 +231,7 @@ test("reconciles models added after session start", () => {
 test("the managed interval closes the immediate switch then compact gap", () => {
   const models = [
     { provider: "zg-newapi", id: "gpt-5.6-sol" },
-    { provider: "zg-newapi", id: "longcat-2.5-preview-free" },
+    { provider: "zg-newapi", id: "deepseek-v4-flash" },
   ];
   let intervalCallback;
   const ctx = {
@@ -278,7 +283,7 @@ test("tracks compaction start, success, duration, and redacted image policy", ()
   };
   const models = [
     { provider: "zg-newapi", id: "gpt-5.6-sol" },
-    { provider: "zg-newapi", id: "longcat-2.5-preview-free" },
+    { provider: "zg-newapi", id: "deepseek-v4-flash" },
   ];
   const reconciler = createGlobalCompactionReconciler({
     now: () => currentTime,
@@ -321,7 +326,7 @@ test("records auto-compaction failures without changing the main model", () => {
   let currentTime = 10;
   const models = [
     { provider: "agentrouter", id: "claude-opus-5" },
-    { provider: "zg-newapi", id: "longcat-2.5-preview-free" },
+    { provider: "zg-newapi", id: "deepseek-v4-flash" },
     { provider: "agentrouter", id: "deepseek-v4-flash" },
     { provider: "zg-newapi", id: "qwen3-8-27b" },
   ];

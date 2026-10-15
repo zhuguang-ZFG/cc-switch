@@ -957,3 +957,13 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   pre-consume` = 上游透传；⑤ 附带：`muse-spark-1.2-contributor-free` 已自愈
   （ch178 9.1s 200）。门禁：`test_omp_routes` 40/40、alignment CLEAN、冒烟
   5 类、`ops-gates` 11/11。
+
+- **聚合三补（2026-10-15 晚，同 runbook）**：① 单独归因上游余额类
+  `Not enough quota to pre-consume`（gpt-5.6-sol ×5；四条 jojatoken 腿 key
+  指纹互异、报文 remaining 历次 0.008–0.30 有升有降；直连被 CF 1010 拦；
+  网关同尺寸大请求 200 → 尺寸/余额型间歇，**裁剪与链修复覆盖不到**，选项=
+  充值/第二货源/接受）；② **compaction 双副本漂移修复**——repo 源同步为 live
+  r12（此前停在 r11，部署脚本默认 repo→live 覆盖会回滚当晚候选修复），
+  扩展测试同步至 r12 口径 **21/21**；③ `omp-extensions` check 增补
+  compaction 源+测试（此前无门禁）→ **100/100**；④ muse-spark-1.2 改为
+  "未定论"（3 连 200 但上游目录未回列，宽限不取消）。

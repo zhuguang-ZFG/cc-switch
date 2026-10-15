@@ -25,11 +25,13 @@
             "scripts/ops/omp-sota-escalation.js",
             "scripts/ops/omp-model-routing-observability.js",
             "scripts/ops/omp-unexpected-stop-guard.js",
+            "scripts/ops/omp-global-compaction-model.js",
             "scripts/ops/review/",
             "scripts/ops/test_omp_problem_solving.js",
             "scripts/ops/test_omp_sota_escalation.js",
             "scripts/ops/test_omp_model_routing_observability.js",
-            "scripts/ops/test_omp_unexpected_stop_guard.js"
+            "scripts/ops/test_omp_unexpected_stop_guard.js",
+            "scripts/ops/test_omp_global_compaction_model.js"
           ],
           "command": "@node",
           "args": [
@@ -40,7 +42,8 @@
             "scripts/ops/test_omp_problem_solving.js",
             "scripts/ops/test_omp_sota_escalation.js",
             "scripts/ops/test_omp_model_routing_observability.js",
-            "scripts/ops/test_omp_unexpected_stop_guard.js"
+            "scripts/ops/test_omp_unexpected_stop_guard.js",
+            "scripts/ops/test_omp_global_compaction_model.js"
           ],
           "evidence": "node-test",
           "timeoutMs": 60000

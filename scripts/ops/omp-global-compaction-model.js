@@ -1,22 +1,26 @@
-export const EXTENSION_REVISION = "2026.10.12-r11";
+export const EXTENSION_REVISION = "2026.10.12-r12";
 
 const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
-  // primary: user-directed 2026-10-09 — LongCat 2.5 Preview Free, 1M ctx, 8s TTFT, free
-  "zg-newapi/longcat-2.5-preview-free",
-  // fallback: midjok gpt-5.5, confirmed 200 both keys, 37s TTFT
-  "zg-newapi/gpt-5.5",
+  // primary: fleet compaction default, re-promoted 2026-10-12 — live probe on
+  // the same zg-newapi route: 4.9s OK. The prior primary longcat hung 60s then
+  // 502 (opencode-go ch133 upstream); same-day compactions burned 430-601s and
+  // hit 4 completion-timeouts (hangs never enter the failure cooldown).
+  "zg-newapi/deepseek-v4-flash",
+  // gpt-5.5 replaced 2026-10-15: upstream refuses it on all four jojatoken
+  // channels ("not supported when using Codex") and the former midjok legs
+  // died on disabled API keys.
+  "zg-newapi/glm-5.3-flash",
   // fallback: midjok gpt-5.6-terra, confirmed 200
   "zg-newapi/gpt-5.6-terra",
   // fallback: midjok gpt-5.6-sol, confirmed 200
   "zg-newapi/gpt-5.6-sol",
-  // fallback: fleet compaction default; registered & routed (2026-10-12
-  // audit: replaced two dead slots — zg-newapi/omen-alpha (never registered
-  // in models.yml) and agentrouter/deepseek-v4-flash (agentrouter provider
-  // only serves claude-opus-5/gpt-5.6-sol/glm-5.3)).
-  "zg-newapi/deepseek-v4-flash",
+  // fallback demoted 2026-10-12 from primary (was user-directed 2026-10-09 on
+  // 8s TTFT/free): opencode-go ch133/zen-free-bridge ch178 now hangs ~60s then
+  // 502 upstream_error; 200k-token summarization runs stalled 7-10 min.
+  "zg-newapi/longcat-2.5-preview-free",
   // reserved: registered & routed since the 2026-10-12 audit (the earlier
   // 2026-08-28 ch15 429 workspace-quota note is superseded).
-  "zg-newapi/glm-5.2",
+  // glm-5.2 removed 2026-10-15: every leg dark (ch220 wallet, ch119/ch192 disabled).
   "zg-newapi/qwen3-8-27b",
   // deep fallback: user-directed 2026-10-11 — all registered & serving
   // (24h real usage verified). u2-flash free window ends 2026-10-31; its
@@ -24,8 +28,9 @@ const DEFAULT_COMPACTION_CANDIDATES = Object.freeze([
   // context' without a number" — treat as 1M-class only after a full-window
   // probe, until then it still beats nothing when everything above is dead.
   "zg-newapi/u2-flash",
-  "zg-newapi/qwen3.8-flash-next",
-  "zg-newapi/step-5-preview",
+  // qwen3.8-flash-next removed 2026-10-15: retired upstream (503) and
+  // unregistered from models.yml in the dead-model triage.
+  // step-5-preview removed 2026-10-15: ch184 Go endpoint 429 + ch205 credit empty.
 ]);
 const DEFAULT_RECONCILE_INTERVAL_MS = 1000;
 const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
