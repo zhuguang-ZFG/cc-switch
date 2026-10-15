@@ -44,6 +44,24 @@
   按聚合裁剪那套摘掉；
 - OMP 重启后生效（config/扩展），渠道改动即时生效。
 
+## 多 key 体检与一处误报澄清（2026-10-15 深夜，用户提醒后补做）
+
+用户提醒「agentrouter 渠道是多 key」。核对修改后的多 key 状态：
+
+| 渠道 | is_multi_key | mode | key 行数 | 结论 |
+|---|---|---|---|---|
+| ch127 | True | polling | 5（key 列） | PUT 保留 channel_info ✓ |
+| ch86/134/135/136 | False | — | 1 | 单 key 池成员 ✓ |
+
+- ch127 五把 key 逐一直连上游（claude-cli UA + Clash 出口）**全部 200**；
+- 22:16 实弹 relay 的 `401 unauthorized client detected`：同 key 同 UA 直连
+  stream/non-stream 均 200，且 22:16 后无再发 → **瞬时 CF/UA 门抖动，非 key
+  失效**（同分钟 ch118 也在 524）；
+- ch136 被 Guardian 稳定性监控以「探针超时」打回 status=2：其 key 实弹 200
+  （opus-5-5 TTFT ~37s 超了探测预算）→ 回开（快照
+  `new-api-before-ch136-reenable-20261015-222306.db`）；若探测预算仍压超时，
+  明日看它是否又 flap（慢但活的渠道与稳定性监控的预算张力是已知类）。
+
 ## 回滚
 
 ```bash
