@@ -905,5 +905,17 @@ only bounded readiness metadata and never print keys or raw provider bodies.
     瞬态存疑、ch181/ch204 本地桥）；
   - **装甲三处被停用待裁决**：`NewAPI ch3 100xlabs Reprobe`、
     `AnyRouter Window Canary`、`NewAPI Guardian Watchdog` 均 Disabled；
-  - 门禁：alignment CLEAN（0 orphan/24 quarantined）、smoke FAIL 仍 8 类基线、
-    enabled 33→31；备份 `new-api-before-chstatus-20261015-1809*.db`。
+  - 门禁：alignment CLEAN（0 orphan/24 quarantined）、smoke FAIL 8 类（当晚经
+    RetryTimes 修复降至 7 类，见下条）、enabled 33→31；备份
+    `new-api-before-chstatus-20261015-1809*.db`。
+
+- **运行时三警告修复（2026-10-15 晚，runbook
+  `docs/ops/runtime-warnings-fix-2026-10-15.md`）**：① memory auto-review
+  双传输失败——override 钉在已死的 `agnes-2.5-flash` → 改
+  `deepseek-v4.1-flash`（`~/.pi/agent/hermes-memory-config.json`，下次启动
+  生效）；② advisor 回退落到已死 `claude-opus-4-8` → 链改
+  `[deepseek-v4.1-flash]`；③ advisor 530（ch118 CF 抖动，530 不在
+  retry codes）→ 网关 `RetryTimes` 6→1 回归契约（房规脚本，即时生效）。
+  smoke `automatic channel recovery` 由 FAIL 转 OK，**FAIL 基线 8→7 类**；
+  `test_omp_routes` 40/40。遗留：subprocess 传输 Windows CLI 解析（上游
+  缺陷）、530 入 retry codes 待裁。
