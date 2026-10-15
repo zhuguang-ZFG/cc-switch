@@ -85,7 +85,7 @@ apply 终态（备份 `new-api-before-zen-free-bridge-recover-20261015-173645.db
   同轮 pool answer rate 新增第二项：`glm-5.3-flash req=271 ok=131 rate=48.3%`
   （阈值 50%，贴线观察项）。
 
-## 新发现（未处置，需裁决）
+## 新发现（P0 已处置；其余待裁决/复检）
 
 1. **slow 角色满路死（P0）**：`zg-newapi-anthropic/claude-opus-4-8:xhigh`
    全天 0%——perf_metrics：10-15 16:00 `req=308 ok=0`、14:00 11/0、
@@ -93,8 +93,8 @@ apply 终态（备份 `new-api-before-zen-free-bridge-recover-20261015-173645.db
    17:38 smoke 轮 `req=373 ok=0`。ch72（anyrouter，唯一 enabled 腿）
    admin test → **429 Service Unavailable**；ch94/95 justwoker 两腿
    status=2；ch3（baibei）admin test 90s 超时（未定论）。
-   opus-5 同样 0%（13:00 req=20 ok=0）。→ 建议 slow 改指活体（k3/ch33
-   或 omen 等）；改动属路由变更，需用户裁决 + OMP 重启生效。
+   opus-5 同样 0%（13:00 req=20 ok=0）。→ **已处置，见下节「slow 角色重指
+   k3」**。
 2. **ModelRatio 缺口 6 名**（24h 实测，隐含 37.5）：qwen3.8-flash
    x162/740M（ch186 tierflow）、qwen3-8-27b x57、glm-4.6v x33（vision 角色）、
    gpt-6-astra x31、kimi-k3-oc x32（ch202 ctyun promo）、jina-embeddings-v3
@@ -103,6 +103,29 @@ apply 终态（备份 `new-api-before-zen-free-bridge-recover-20261015-173645.db
 3. **muse-spark-1.2-contributor-free 观察**：17:31 起 CLI 报
    `UnknownError err_26c79a89`（fast fail，非挂死），且已不在 `opencode models`
    目录；16:36 还有真实 ct=3。按 24h 宽限策略保留，明日复检再定摘除。
+
+## slow 角色重指 k3（P0 处置，需 OMP 重启生效）
+
+证据（见上节新发现 1）：`claude-opus-4-8` 全天 0% 成功率（perf_metrics
+逐桶 0；17:38 smoke 轮 req=373 ok=0），唯一 enabled 腿 ch72（anyrouter）
+admin test → 429 Service Unavailable；ch94/95 status=2；ch3（baibei）
+admin test 90s 超时未定论；opus-5 同为 0%。
+
+变更（`~/.omp/agent/config.yml`）：
+
+- `modelRoles.slow`：`zg-newapi-anthropic/claude-opus-4-8:xhigh` →
+  **`zg-newapi/k3:max`**；
+- `fallbackChains.slow`：`[zg-newapi/k3:max]` → **`[zg-newapi/qwen3.8-max]`**
+  ——不去 DeepSeek：静态门禁 `test_reasoning_role_chains_exclude_deepseek`
+  禁止推理角色（plan/designer/slow）链可达 DeepSeek；同时消除「链内重复
+  主选」（门禁另有硬校验）。qwen3.8-max 活体腿 ch118（10-15 实况）。
+
+行为增量：原配置主选必失败、经链落 k3（且 `fallbackRevertPolicy:
+cooldown-expiry` 冷却到点还会反复回探死主选）——重指后同一 k3 输送路径，
+省掉每次调用前的废试与回探抖动；无新增渠道负载（k3 本就在承接）。
+
+门禁：`test_omp_routes` **40/40 OK**（改动后实测）。**待 OMP 重启生效**；
+回滚=反向改回两处（或 `git -C ~/.omp/agent revert <本 commit>`）。
 
 ## 回滚
 

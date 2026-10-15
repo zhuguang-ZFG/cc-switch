@@ -885,6 +885,10 @@ only bounded readiness metadata and never print keys or raw provider bodies.
     muse-spark-1.3-contributor-free/space-bunny-free），备份
     `new-api-before-zen-free-bridge-recover-20261015-173645.db`，readback +
     admin test 全过；smoke 17:38 轮 FAIL 集合与基线逐项一致；
-  - **新发现（待裁决）**：slow 角色（claude-opus-4-8）全天 0%（perf req=373
-    ok=0；ch72 唯一腿 admin test 429 Service Unavailable）；ModelRatio 缺口
-    6 名（qwen3.8-flash/glm-4.6v/jina-embeddings-v3 等，值待用户给）。
+  - **slow 已重指 k3（2026-10-15 晚，待 OMP 重启）**：`claude-opus-4-8`
+    全天 0%（perf req=373 ok=0；ch72 唯一腿 admin test 429 Service
+    Unavailable，ch94/95 status=2）→ `modelRoles.slow` 改 `k3:max`、
+    `fallbackChains.slow` 改 `[qwen3.8-max]`（避 DeepSeek 静态门禁 +
+    不重复主选），`test_omp_routes` 40/40；
+  - **待裁决**：ModelRatio 缺口 6 名（qwen3.8-flash/glm-4.6v/jina-embeddings-v3
+    等，值待用户给）。
