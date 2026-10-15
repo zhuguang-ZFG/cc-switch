@@ -66,6 +66,25 @@
           "timeoutMs": 60000
         },
         {
+          "id": "smoke-gates",
+          "paths": [
+            "scripts/ops/newapi-local-smoke.py",
+            "scripts/ops/test_smoke.py"
+          ],
+          "command": "@python",
+          "args": [
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "scripts/ops",
+            "-p",
+            "test_smoke.py"
+          ],
+          "evidence": "unittest",
+          "timeoutMs": 60000
+        },
+        {
           "id": "omp-verification-deployment",
           "paths": [
             "scripts/ops/deploy-omp-verification.py",
