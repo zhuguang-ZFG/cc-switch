@@ -842,3 +842,13 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   **已重启（2026-10-14）**：gate 40/40、`omp models` 生效、glm-5.3-flash
   relay 200 归因 ch183。遗留收敛为：ch220 单腿饱和观察、kimi-k3/
   minimax-m3 充值前 503、qwen3.8-27b/qwen3.8-flash-next 观察。
+
+- **deepseek-v4.1-flash 免费化（2026-10-15，runbook
+  `docs/ops/dsv41f-free-pricing-2026-10-15.md`）**：opencode-go 免费腿
+  ch218（10-12 接入，p0/w2）已承担该名全部实流（24h 30/34 行），但共享 id
+  当时未钉价、按隐含 37.5 虚增本地 quota。付费腿 ch15 sensenova admin
+  test 403（计划外，auto_ban=0 常驻不干活）→ 钉价无付费计费改写。
+  服务端钉 `ModelRatio/CompletionRatio = 0`（备份
+  `new-api-before-dsv41f-free-20261015-161205.db`，读回断言，邻居未动）；
+  models.yml 改标 opencode-go FREE 主腿。门禁 40/40；smoke
+  unregistered-ratio 违规该名消失（余量为存量基线）。回接付费腿前提回比率。
