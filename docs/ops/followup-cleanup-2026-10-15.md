@@ -113,3 +113,20 @@ cp ~/.new-api-local/backups/new-api-before-zen-free-bridge-recover-20261015-1736
 # 门禁/文档：git revert <本 commit>
 # OMP 仓：git -C ~/.omp/agent revert f7a0e75
 ```
+
+## task_verify 接线（ops-gates，2026-10-15 追加）
+
+本轮两个改进文件此前不在任何 check 的 paths 内（task_verify 报
+`unverified, checks: []`）。现补：
+
+- 测试：`scripts/ops/test_ops_gates.py`（hermetic，11 例，无网络/DB）——
+  QUARANTINE 重复键 AST 守卫（对 fd222080 旧版实证检出被遮蔽的
+  `gemini-3.8-flash`，对 HEAD 通过）、`merge_ratio` 语义、`compute_target`
+  additive/drop/宽限策略、桥探针 200+正文判定与重试；
+- 同步脚本抽出纯函数 `compute_target`（行为不变，dry-run 复核 plan 一致）；
+- 策略双副本：repo 源 `scripts/ops/task-verification-policy.json`
+  （`@repository`/`@python` 占位，`deploy-omp-verification.py` 展开部署）
+  与生效副本 `~/.omp/agent/task-verification-policy.json` 均加 `ops-gates`；
+- **语义**：改任一副本后 task_verify 返回
+  `verification-policy-changed-review-required`，须人工 review 后下一轮
+  才建立新基线——期间改动保持 unverified（本轮即如此）。
