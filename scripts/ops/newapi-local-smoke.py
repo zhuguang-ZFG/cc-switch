@@ -235,6 +235,12 @@ DEGRADED_ACCEPTED_DISABLED: dict[int, str] = {
     # ch45 removed: deleted from live DB (was agentrouter fallback, gone as of 2026-10-09)
     72: "anyrouter Claude upstream 429; disabled 2026-08-09 00:10 by Guardian",
     123: "zzzcoding claude pool window; auto-gated by zz_gate.py (status=2 while pool empty, auto re-enable on window)",
+    # 2026-10-15 sweep attribution: manual parks WITHOUT an auto path; the
+    # re-enable condition is named in each reason (no AutomaticEnableChannel*
+    # wiring applies -- Guardian only imports status=3 && auto_ban=1).
+    57: "gorouter balance exhausted; status=2 kept since 2026-08-20 with browser-UA header_override pre-staged for Cloudflare 1010 (ops README:229) -- re-enable when the upstream balance returns",
+    68: "agnes-com-haiku upstream dead (admin test 2026-10-15: do request failed); its models are dark in OMP quarantine -- re-enable on upstream recovery",
+    69: "agnes-cn-haiku account restricted (admin test 2026-10-15: 403 anomalous-activity); same quarantine as ch68 -- re-enable on account unblock",
 }
 
 # opus-5 主池正向姿态（2026-08-24，用户指示启用百倍+林夕负载均衡）：三渠道

@@ -930,3 +930,15 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   仅两条有界清理任务（`OMP Session Log Cleanup`、`Codex Log Cleanup`，
   10-04 后停用、非同一批次）恢复 Ready；③ 待裁：会话数据保留策略
   （OMP 3.0 G / codex 1.2 G）、new-api backups 轮转（1.4 G）、上述四处任务。
+
+- **NewAPI 门禁归因清理（2026-10-15 晚，runbook
+  `docs/ops/newapi-gate-attribution-2026-10-15.md`）**：冒烟 FAIL 基线
+  **7 → 5 类**。① `ch57/68/69` 入 `DEGRADED_ACCEPTED_DISABLED`（gorouter
+  余额 = README:229 背书、Guardian 无记录；agnes 双腿上游死/账号受限）；
+  ② **ch39 `ai-168661-grok` 复原**——10-11 11:42 快照仍在、10-12 23:50 起
+  缺失，窗口内 commits/docs/guardian.log 无删除记载，契约与 KNOWN_BROKEN
+  注释均要求保留该隔离恢复点 → 判为无记载误删，按 yanglechu-114217 快照
+  逐字段复原（复原前快照 `new-api-before-restore-ch39-20261015-1900{00,23}.db`），
+  逐模型复核**零新增路由**；③ DB 备份轮转回收 **1162 MB**（13 份旧 backups/ +
+  7 份主目录 legacy `.bak-*`），保留 12 份（733 MB）。门禁：`test_smoke.py`
+  47/47、alignment CLEAN。
