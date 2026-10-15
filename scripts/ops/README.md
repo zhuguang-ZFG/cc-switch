@@ -919,3 +919,13 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   smoke `automatic channel recovery` 由 FAIL 转 OK，**FAIL 基线 8→7 类**；
   `test_omp_routes` 40/40。遗留：subprocess 传输 Windows CLI 解析（上游
   缺陷）、530 入 retry codes 待裁。
+
+- **本机优化（2026-10-15 晚，runbook
+  `docs/ops/machine-optimization-2026-10-15.md`）**：① 清理可再生成物
+  **+3.0 GB**（codex daemon 旧版本 2.15 G、npm 缓存、七月 WebView 备份、
+  陈旧插件备份、guardian 旧 task-backups、codex 日志表 62.8 M）；
+  ② 恢复四处看护/护栏任务（10-10 被停用）：`NewAPI Guardian Watchdog`
+  （已起）、`NewAPI ch3 100xlabs Reprobe`（实跑 result=0）、
+  `OMP Session Log Cleanup`、`Codex Log Cleanup`；③ 待裁：会话数据保留
+  策略（OMP 3.0 G / codex 1.2 G）、new-api backups 轮转（1.4 G）、
+  `AnyRouter Window Canary` 与 `OMP AutoUpdate` 是否恢复。
