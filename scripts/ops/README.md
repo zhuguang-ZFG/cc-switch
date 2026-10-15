@@ -856,3 +856,16 @@ only bounded readiness metadata and never print keys or raw provider bodies.
   1.27M→400 明报 1M 硬顶）；maxTokens 131072→**200000**（用户指示，上游
   实测接受）；thinking 五档 low..max 全生效（reasoning_tok 16→27，异于
   muyuan 拒档）。models.yml 改动待下次 OMP 重启生效。
+  同日补：dsv41f 主路迁 opencode——ch15 摘除该名（sensenova 计划外 403 墙，
+  库直写）+ ch218 p0→p30，relay 200 归因 ch218（备份
+  `new-api-before-dsv41f-reroute-20261015-163928.db`）。
+
+- **死模型大扫除（2026-10-15，runbook `docs/ops/dead-model-triage-2026-10-15.md`）**：
+  用户报「几乎都用不了」。归因：ch220 lucky0625 福利钱包负额（$-0.000278，
+  auto_ban 正确）→ glm-5.2/gemini-3.8-flash/agnes 全灭；agnes 账号受限波
+  （ch68 上游死/ch69 账号封）→ haiku/LongCat-2.0 灭；ch109 移除 mimo +
+  ch111 钱包空 → mimo/grok 全家/muse-contributor 灭。孤儿 12 全为上游真死，
+  无腿可捞。修复：plan/designer/task/slow 链 → **k3**（ch33 活、1M、满档，
+  relay 200 归因确认）；tiny → glm-5.3-flash；链清尸（mimo/haiku/agnes 链）；
+  QUARANTINE +13 条死因条目，verdict 12→1；双门禁 40/40。遗留：ch220 回血
+  观察、agnes 解封观察、OMP 待重启生效。
