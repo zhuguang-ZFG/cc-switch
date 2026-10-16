@@ -336,6 +336,37 @@ deepseek 两 id 经实测可收图，**不加**。**需重启生效**（models.y
 ch225 是 type-1 OpenAI 渠道（`{"choices":[{"delta":…}]}` + `[DONE]`）——照抄会永远判失败，
 须换判据或改非流式探测。
 
+## 同日晚三：聚合面"好多模型报错"根治（qwen3-8-27b 四层 + opus-5-5 实况）
+
+**qwen3-8-27b（translator/tiny 链在用）逐层实测修复**——判据是
+`omp -p --model zg-newapi/qwen3-8-27b` 的日志：从 400 到 **0 provider 错误**。
+
+1. **`chat_template_kwargs`**：Qwen 3.8+ 目录规则给历史回合发 `preserve_thinking`（顶层 +
+   template kwargs），上游 400 "property 'chat_template_kwargs' is unsupported"。实测 body 已抓
+   （`http-400-requests/1792148534766-*.json`）。修：id 级 `compat.qwenPreserveThinking: false`
+   + `qwenTemplateReasoningEffort: false`（后者关掉另一 kwarg 源）。
+2. **`prompt_cache_key`**：OMP chat/completions **恒定注入**，models.yml **没有可用抑制键**
+   （形态未声明 `supportsPromptCacheKey`，覆盖被 `applyCompatOverrides` 丢弃——实测设 false 无效）。
+   修：**渠道级 param_override 删除**（ch88 既有先例），新脚本
+   `scripts/ops/apply_qwen_leg_param_override.py`（身份校验→在线全库备份→key 回填→PUT→readback）
+   应用到 **ch124(groq) / ch171(obitmc-relay)**；备份 `new-api-before-qwen-leg-override-20261016-190833.db`。
+3. **`max_completion_tokens ≤ 16384`**（groq 硬限）：声明 32768 → 400。修：id 级 `maxTokens: 16384`
+   （按最严腿收齐）。
+4. **413 Request too large**：groq on-demand 档 TPM 容不下 OMP 的大 system prompt（直探 groq
+   至 16384 全 200，说明非取值问题），而 **413 不在可重试码** → groq 当主腿时整条硬失败。
+   修：ch124 优先级 **50 → 45**（runinfra ch88 p49 主服务；脚本内 readback 验证）。
+
+**opus-5-5（用户："agentrouter 开闸了还用不了"）**：ch86 `agentrouter-claude` 已启用并在服务
+（网关探针 200，**tool_calls=YES**），但 **TTFT ≈ 139s**（ch86 自身 use_time 144s；同渠道另有
+11–15s 样本 → 波动极大）。ch3（p52，abilities 在册）未出现在服务日志里。OMP 侧选择器是
+**`zg-newapi-anthropic/claude-opus-5-5`**（写 `zg-newapi/…` 会不匹配，OMP 会贴候选）。
+另：该模型在 smoke 的**未注册 ModelRatio** 名单（默认 37.5 计费）——成本定值待用户给。
+
+**smoke 现行 FAIL（18:58 轮，5 类）**：primary opus pool posture（ch3 w5 / ch9、ch18 st=2）、
+backup opus pool posture（ch182 p35）、pool capacity claude-opus-4-8（仅 ch72 < min 2）、
+未注册 ModelRatio 4 名（claude-opus-5-5 / jina-embeddings-v3 / kimi-k3-oc / qwen3-8-27b）、
+pool answer rate（glm-5.3-flash 271/40 = 14.8%，与 zen 主腿前的 5–14% 同档，非新增退化）。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
@@ -346,6 +377,10 @@ ch225 是 type-1 OpenAI 渠道（`{"choices":[{"delta":…}]}` + `[DONE]`）—�
   （ll-alpha-free / nemotron-3.5-super-vl-free 条目；5 处 `compat.stripImageInput` 增补）；
 - agentrouter 钥匙池：`~/.kimi-code/proxies/agentrouter-proxy/keys.json` 可恢复自
   `keys.json.bak-20261016-184834`（回退为本日新增三把 key 之前的 2 把态）；
+- qwen 渠道三改：写前全库快照 `new-api-before-qwen-leg-override-20261016-190833.db`；
+  逐项回退 = ch124/ch171 `param_override` 置 null、ch124 priority 回 50
+  （`apply_qwen_leg_param_override.py` 只做正向，回退走 API/脚本手改）；
+  OMP 侧 `models.yml` 的 qwen 条目（compat 两键 + maxTokens 16384）可 git revert；
 - 契约/门禁：`scripts/ops/newapi-local-smoke.py` 的 178 pin 与 `scripts/ops/test_omp_routes.py`
   的白名单行可 git revert——但两者都是用户签字过的裁决，收回前先确认；
 - agent 卫生（OMP 仓 `b6240e8`）：`config.yml` smol 链与三份 agent 文件的 `structured: true`
