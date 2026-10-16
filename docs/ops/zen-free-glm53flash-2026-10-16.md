@@ -493,6 +493,22 @@ unexpected stop guard、zen bridge、tool canary、bugfix cases）——**全绿
 `/sota` 命令——即"今晚重构是主嫌"判断正确；但**不是"新增 spawn 门禁"**：修好的测试显式跑 defer 后的
 timer，`runs` 从 0 变 1 ✓，证明子进程照常启动，问题纯粹是断言时机。
 
+**③ 验收（20:47，canary 首轮落盘）**：哨兵工作正常 ✓ 且**挖到上游自述**——
+
+```
+probe claude-haiku-4-5-20251001: closed (5 attempts, last: 429 Service Unavailable)
+probe claude-opus-5-5: closed (5 attempts, last 400: “由于 claude 模型供应难以保证，
+                          上线 gpt-6-astra-cc-format 模型……”)
+probe claude-opus-5-5 direct: skipped (takeover active (BASE_URL host=127.0.0.1))
+probe gpt-5.6-sol: closed (500 当前模型 gpt-5.6-sol 负载已经达到上限)
+```
+
+→ **anyrouter 已自述停供 Claude、改推 `gpt-6-astra-cc-format`**：这解释了它全天 429 与 ch72
+零消费——不是"窗口期"，更像**供应侧下架**；哨兵会在真恢复时 Telegram 告警（closed→open），无需人工盯。
+若 anyrouter 后续真上 gpt-6-astra-cc-format，本地已有 gpt-6-astra 通路（ch182/jojatoken 系），无需重复接。
+（小瑕疵备案：canary 日志里部分中文响应体是乱码——它某类响应解码未按 UTF-8；属日志可读性，非功能问题，
+改动需连带更新其门禁，暂不动。）
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
