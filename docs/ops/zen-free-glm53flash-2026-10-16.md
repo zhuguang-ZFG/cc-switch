@@ -67,7 +67,8 @@ ch178 单腿。）
 | readback | models 15、mapping 含新键、priority=30、**key 哈希未变**、**channel_info 未变**、ability (1 行, enabled=1) |
 | admin test `ch178/glm-5.3-flash` | HTTP 200 success=True |
 | 网关实弹 `glm-5.3-flash` | 200 `content='OK'` |
-| **日志归因** | 最新请求 `channel_id=178`（= 主腿生效的决定性证据） |
+| **归因稳定性** | 5 分钟窗口内 **6/6 请求全落 ch178** ✓ |
+| **延迟观察** | 同句小请求实测 **8.5s / 66.3s / 137.2s**（免费层排队/节流特征；冷启时 6-15s 为常态）→ tiny/advisor 若对延迟敏感需复核，杠杆=ch178 权重/优先级或降为备档 |
 | 门禁 | alignment CLEAN、`test_omp_routes` OK、冒烟仍 5 类（无新增） |
 | 快照 | `newapi-before-zen-primary-glm53flash-20261016-152542.db` |
 
