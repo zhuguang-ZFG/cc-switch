@@ -77,8 +77,16 @@ ch178 单腿。）
 
 **能力注意点（已写入 OMP 条目注释）**：免费主腿**不支持 tools**（tools 传参 200 但无
 tool_calls）、**无 reasoning 输出**（`reasoning_effort`/`thinking` 传参被忽略，仍正常作答）、
-免费日额度用尽时桥返回 **429** → 由 ch118/ch173/ch208 按优先级兜底。付费腿的
+免费日额度用尽时桥返回 **429** —— 按 house 既有设计（smoke 注原文：**08-11 起 429 被
+刻意移出重试表**，"429 透传交客户端退避 + 回退链；重试仅覆盖瞬时类状态码"），
+**NewAPI 不会因 429 换腿**，而是由 **OMP 的 `fallbackChains` 降级到下一模型**（smol 链：
+glm-5.3-flash → deepseek-v4-flash → mercury-2 → muse-spark-1.2-contributor-free）；
+付费腿（ch118/ch173/ch208）只在 408/500-503 类可重试错误上按优先级接替。付费腿的
 `reasoning: true` 声明保持不变（本 id 的 reasoning/thinking 声明按付费腿能力写）。
+
+**顺带解决的历史问题**：`pool-error-triage-2026-10-13.md` 当时记录「glm-5.3-flash 有效
+容量=2 条 5h 窗口福利腿，OMP tiny/smol 兜底流量全压这里」并留了「找非窗口型 glm-flash 腿」
+的待办——zen 免费腿正是**非窗口型**，本次改动即该项的落地。
 
 **OMP 侧**：`glm-5.3-flash` 条目 name 串更正为「zen ch178 p30 主档; ch118 p25 / ch173 p20 /
 ch208 p5 备档」（原文案错误地写着「4腿池 ch208 p30 / ch118+ch183 p25」——ch183 早已
