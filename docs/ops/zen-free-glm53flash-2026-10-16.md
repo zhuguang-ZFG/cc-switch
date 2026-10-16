@@ -142,7 +142,8 @@ enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意�
    本地 `ModelRatio=0`（6h 实测 548 条请求 quota=0）、工具链实证可用。
    **热载实测**：config.yml 写入（16:05:41）后 15 秒（16:05:56）advisor 已切至 deepseek，
    恢复 read/grep/advise（16:06–16:10 递出 3 条注记，含本条约束的 blocker）——
-   **modelRoles 变更会话内即时生效，无需重启**（修正上节"需 OMP 重启"的旧结论）。
+   **advisor 角色的 modelRoles 变更会话内即时生效，无需重启**；其它 config.yml 面
+   （chains/其它角色）是否同效未逐一验证，上节"需 OMP 重启"的旧结论仅在此项上被修正。
 3. **冒烟契约放宽**：`BACKUP_CHANNEL_POSTURES[178]` `max_priority` 0 → 30（注释注明
    2026-10-16 用户指令 zen 主腿），weight≤5 保留；重跑冒烟恢复旧违约集。
 4. **两个新免费 id 挂 OMP 条目**：`ll-alpha-free`、`nemotron-3.5-super-vl-free` 按
