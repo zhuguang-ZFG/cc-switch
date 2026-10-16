@@ -870,9 +870,12 @@ class AdminAuthTests(unittest.TestCase):
         self.assertEqual(
             smoke.channel_policy_violations(channels),
             [
+                # 2026-10-16：ANYROUTER_CLAUDE_MODELS 增补 claude-opus-5-5（用户批准），
+                # 该夹具未含此 id，故 missing 多一项。
                 "72:anyrouter=claude_only:missing=['claude-opus-4-8', "
-                "'zg-agent-claude-opus-4-8', 'zg-agent-claude-opus-5', "
-                "'zg-claude-opus-5'],extra=['gpt-5.6-sol']",
+                "'claude-opus-5-5', 'zg-agent-claude-opus-4-8', "
+                "'zg-agent-claude-opus-5', 'zg-claude-opus-5'],"
+                "extra=['gpt-5.6-sol']",
                 "72:anyrouter=test_model=None",
                 "72:anyrouter=model_mapping=drifted",
             ],

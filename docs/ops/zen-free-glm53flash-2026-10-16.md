@@ -509,6 +509,15 @@ probe gpt-5.6-sol: closed (500 当前模型 gpt-5.6-sol 负载已经达到上限
 （小瑕疵备案：canary 日志里部分中文响应体是乱码——它某类响应解码未按 UTF-8；属日志可读性，非功能问题，
 改动需连带更新其门禁，暂不动。）
 
+**门禁红修复（20:52）**：`test_smoke.py` 的
+`test_anyrouter_sol_or_missing_test_model_is_rejected` 用**硬编码夹具**断言 ch72 的 `missing` 串；
+`ANYROUTER_CLAUDE_MODELS` 增补 opus-5-5 后该列表多一项 → 同步期望串（带日期注释）。**47/47 OK**。
+注：运行器把该红归为"权限/认证"（`test_smoke.py:870`）是**误判**——失败是断言差异，不是 admin token
+问题（同轮 live smoke 无 admin/auth FAIL；实跑中出现的 `FAIL admin token auth — connection refused`
+一行是夹具内"不可达端点"用例的**预期**输出）。另：`test_anyrouter_claude_only_recovery_contract`
+的夹具从常量取模型表（`",".join(smoke.ANYROUTER_CLAUDE_MODELS)`），天然免疫此类漂移——值得作为修
+夹具时的范式。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
