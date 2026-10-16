@@ -580,7 +580,11 @@ agents / extensions）对这三个 provider 的引用为 **0** ✓。
 带日期注释）；三处硬编码旧 provider 集的用例同步修订（promotion 遍历表、`omp models` 解析期望、
 provider 期望集）——**40/40 OK**；`verify_omp_newapi_alignment` CLEAN；hutuji 2/2、routing-observability
 18/18、compaction-model 21/21 均不受影响 ✓。
-**回滚**：`models.yml.bak-20261016-212738-drop-nonnewapi`（同目录）或 OMP 仓 `git revert` 对应提交。
+**补漏**：`stepfun`（内置目录 provider，4 模型）此前未被 `disabledProviders` 挡住、仍出现在
+`omp models` → 已加入禁用清单。**终态实证**：新进程 `omp models` **仅列 3 个 NewAPI 系**
+（any-newapi 1 / zg-newapi 72 / zg-newapi-anthropic 5 = 78 模型）✓。
+**回滚**：`models.yml.bak-20261016-212738-drop-nonnewapi`（同目录）或 OMP 仓 `git revert` 对应提交
+（`stepfun` 一行同理可 revert）。
 
 ## 回滚
 
