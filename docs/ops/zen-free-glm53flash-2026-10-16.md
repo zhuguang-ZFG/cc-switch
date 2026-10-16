@@ -166,7 +166,8 @@ enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意�
 免费侧同桶：`glm-5.3-flash-free` 8/8、ll-alpha 3/3、nemotron-vl 3/3。
 
 **变更文件**：cc-switch `scripts/ops/newapi-local-smoke.py`、`scripts/ops/test_omp_routes.py`、
-本文；OMP 仓 `config.yml`（advisor 角色+链）、`models.yml`（两个免费 id 条目）。
+`scripts/ops/test_omp_sota_snapshot.mjs`、本文；OMP 仓 `config.yml`（advisor 角色+链）、
+`models.yml`（两个免费 id 条目）、`extensions/omp-sota-escalation.js`（基线探测 8s 预算+探针）。
 
 ## 收尾加固：agent 卫生（同日晚，独立于 zen 主腿）
 
@@ -182,13 +183,52 @@ enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意�
   `task.structured` 默认关闭时，逐任务 spawn 既不下发 schema 也不给 `yield`
   ——三项声明此前形同废弃（三个代理的 prompt 却明写要求 yield 载荷）。agent 级
   structured 在全局关闭时依旧生效；实弹 reviewer 子代理复核本批 diff 后返回
-  结构化 payload（schema valid，`review_status=completed`，diff 四项全 PASS）。
+  结构化 payload（schema valid，`review_status=completed`，diff 四项全 PASS）；
+  librarian（@smol/u2-flash 免费小模型 + 较大 schema 的最可能不符点）经 2m24s
+  实弹复核同样返回合规结构化载荷（抽取的 allow-list 与日期串与 ground truth 逐字一致）。
+  **验证上限**：链内实际穿越未触发（fallback 走 reset/cooldown 为既有文档语义）；
+  u2-flash 2026-10-31 到期后的落链行为是文档外推，到期时应实测确认。
 
 同批工具能力复测：k3（6 子代理 + designer/task 共用腿）`tool_calls` ✓；
 `@slow`/`@plan` 唯一兜底 `intern-s2-preview` `tool_calls` ✓（其 160-token 档正文为空
 是推理截断假象，2048 档正常）。`test_omp_routes` 40/40、`verify_omp_newapi_alignment`
 CLEAN、`test_omp_hutuji_workers` 2/2 复跑通过。
 
+
+## 用户报障：sota-escalation 的 `before_agent_start` handler 超时 30s（2026-10-16）
+
+**症状**（用户报）：使用中反复出现
+`Extension "...omp-sota-escalation.js" error: handler timed out after 30000ms`。
+
+**日志证据**：`~/.omp/logs` 全量扫描命中 **20 条**，全部 `event=before_agent_start,
+timeoutMs=30000`，跨 5 个 pid（9380/15044/21708/18276/12920），时间 2026-10-15 23:35 →
+2026-10-16 17:44；个别会话几乎每轮一次。30s 超时窗口内进程无其它活动日志。同一代码路径在
+本会话（cc-switch）与 `omp -p` 冒烟实例均不触发。
+
+**定位**：该 handler 唯一的 await 是基线快照（`pi.exec("git",…)` 三连 + `hash-object`，
+单次 15s 上限）。两个疑似工作区（STM32/monidianlu）实测 git 均 0.05–0.10s；hutuji 的
+`ls-files --others` 6.8s（76,160 个未跟踪文件；批量 `hash-object` 会撞 Windows 命令行长度上限
+WinError 206，逐文件回退路径在 40 文件上限内仍安全）。→ 判定：这些会话里 `pi.exec("git",…)`
+**未在预算内 resolve**（30s 花在等待而非 CPU）；宿主侧 stalling 的确切原因**保留为未知**，
+已加探针待现场取证。
+
+**修复**（OMP 仓 `extensions/omp-sota-escalation.js`）：新增 `collectBaselineSnapshot()`，
+给基线探测套 **8s 硬预算**（超时降级 `complete:false`；`changedFilesSince` 原语义即按"全量
+变更集"处理，仍受 `MAX_CHANGED_FILES=40` 约束），`before_agent_start` 与 `agent_end` 两处
+调用点改用该包装；另加两条诊断 warn：单次 git 调用 ≥2.5s → `sota: git probe slow`，
+预算超时 → `sota: baseline snapshot incomplete`。
+
+**验证**：新增门禁 `scripts/ops/test_omp_sota_snapshot.mjs`（node，**9/9 通过**：快路径 1ms
+零告警；挂死 exec 在 8.0s 被截断且告警；慢调用 2.7s 告警、不误报 incomplete；降级语义不变）；
+实弹 `omp -p` 新实例加载修改后扩展：无加载错误、无超时、会话正常退出。
+
+**未解/待观察**：`pi.exec` stalling 的宿主级原因（借新探针取证）；同类风险仍在 `tool_result`
+救援路径的 `collectChangedFiles`（未包装；救援本身即 30s+ 预算外行为，维持原状）。
+
+**附带发现（本批链头探针）**：`@task`/`@designer` 兜底链的 Opus 头全部不健康——
+`claude-opus-4-8` 启用腿仅 ch72（anyrouter）立即 429；`claude-opus-5` 探针 200 但 136s 空流
+（无 choices 帧）；smol 链原第 3/4 跳 `mercury-2` 429（free tier at capacity）。三者均为
+k3 失效时的逃生口，建议后续替换或评估降级。
 
 ## 回滚
 
@@ -201,4 +241,6 @@ CLEAN、`test_omp_hutuji_workers` 2/2 复跑通过。
   的白名单行可 git revert——但两者都是用户签字过的裁决，收回前先确认；
 - agent 卫生（OMP 仓 `b6240e8`）：`config.yml` smol 链与三份 agent 文件的 `structured: true`
   可整体 git revert（回退后 reviewer/security-reviewer/librarian 的 output schema 重归惰性、
-  smol 兜底重回工具不安全链）。
+  smol 兜底重回工具不安全链）；
+- sota 扩展（OMP 仓本次提交）：`extensions/omp-sota-escalation.js` 的 8s 预算与探针可 git revert
+  （回退即恢复"基线探测可耗尽 30s handler 预算"的旧行为）。
