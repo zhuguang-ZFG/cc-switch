@@ -438,6 +438,18 @@ type=14 的是 ch86），且用 Anthropic 形态 `POST /v1/messages` 复探 ch3 
 **遗留观察**：ch3 仍载 `claude-fable-5-1/5.1`（无实测证据，未动；其名注称 ch3 是 fable 主档，
 若见 fable 同样停滞按同法摘除）。
 
+### anyrouter（ch72）实况核验（20:3x，用户问"anyrouter 也没法用吗"）
+
+- **本地桥正常**：8789 在听（日志有 `listening ... device_id=1c352ece`）、`GET /v1/models` **200/17 个模型**
+  （目录里**有 `claude-opus-5-5`**）、`proxy.cjs` 对上游 500/429 有重试/轮换逻辑、无本地 429 生成分支。
+- **Claude 面当前不可用**：代理日志 `POST /v1/messages -> 429` **全天连续**（08:04→20:22 CST 约 133 条，
+  含我 20:21/20:22 两次实测）；返回体是紧凑的 `{"error":{"message":"Service Unavailable","type":"error"}}`
+  （代理日志里 10.8KB = 上游原始大错误体，回给客户端被映射为紧凑 JSON）→ **上游侧 429**。
+- **旁证**：ch72 今日**零成功消费行**（`logs` 里最后一次 ch72 成功是 10-04/05 的
+  `claude-fable-5-1-reversed`）→ 它今天是真不可用；历史上能通，符合"窗口型"。
+- **对 opus-5-5 的关系**：ch72 的 `models` **不含 `claude-opus-5-5`**（上游目录里有）→ 现在根本不是它的腿；
+  若 anyrouter 窗口恢复，一行即可加。opus-5-5 的当前可用路径 = **ch134/135/136**（agentrouter 三把新 key，9s 级）。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
