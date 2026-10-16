@@ -536,6 +536,31 @@ probe gpt-5.6-sol: closed (500 当前模型 gpt-5.6-sol 负载已经达到上限
   codex-auto-review / gpt-6-astra / gpt-5.5）的压模是 `longcat-2.5-preview-free`（1M 免费）✓，
   由 reconcile 扩展与 21 用例门禁钉住。
 
+### 高级模型可用性核验 + 两条毒腿摘除（21:12，用户问"现在能用的高级模型有哪些 / qwen3.8-flash 用不了"）
+
+**qwen3.8-flash：两条腿都真死，本地无解**——ch122（bai）直探 **400 `credit insufficient balance:
+balance=0 required=284`**（欠费）；ch186（tierflow）直探 **404 `request scheme not found in this
+subscription plan`**（套餐已不含该模型）。abilities 均 0 → 网关 `503 model_not_found`。同族
+`qwen3.8-flash-high` / `qwen3.8-max` 同因（腿全停：ch192/203/223）。CLI 目录里也无该 id 的新腿。
+→ 需要新腿/充值；qwen 家族当前可用的是 **`qwen3-8-27b`**（1.6s、带工具 ✓）。
+
+**摘除两条"毒腿"（ch3 同法：死腿 p 高于健康腿 → 非可重试错误毒化整条路由）**：
+| 通道 | 问题（直探实证） | 处置 |
+|---|---|---|
+| ch126 any-gpt-6-astra | 404「当前 API 不支持所选模型 gpt-6-astra」（上游已下架 Claude 系改推别的） | **park**（本就在 smoke 的 accepted_disabled ✓，`unexpected_disabled=none` 复跑通过） |
+| ch180 agentrouter 代理 | `gpt-6.1-sol` 400「请改用 /v1/responses」（代理只认 Responses 面） | 摘 `gpt-6.1-sol`（保留 deepseek-v4-flash 本职） |
+| ch134 agentrouter k2 | `gpt-6-astra`/`gpt-6.1-sol` 均 400 responses-only | 摘两者（保留 claude 全族 + opus-5-5 + deepseek-v4-flash） |
+
+**验收**：`gpt-6-astra` 404→**200/20.1s/tools ✓**、`gpt-6.1-sol` 400→**200/10.0s/tools ✓**（jojatoken 三腿
+承接，3.3–3.8s）。快照 `new-api-before-legprune-20261016-211203.db`。
+
+**"现在能用的高级模型"（21:18 带 tools 实弹）**：k3 13.8s ✓、claude-opus-5-5 7.5s ✓、
+gpt-5.6-sol 3.1s ✓、**gpt-6-astra 20.1s ✓（今晚修）**、**gpt-6.1-sol 10.0s ✓（今晚修）**、
+glm-5.3 3.9s ✓、qwen3-8-27b 1.6s ✓、deepseek-v4.1-flash 6.2s ✓（全部 tool_calls ✓）；
+`claude-fable-5-1` 272s 空正文无工具 ✗（不推荐）。**不可用**：claude-opus-5/4-8（上游 slug 级 429）、
+qwen3.8-flash/-high/-max（无活腿）、gpt-5.5（腿全停）、gemini-3.8-flash（单腿 401）、
+kimi-k3-oc（额度用尽）、anyrouter Claude（上游下架）。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
@@ -550,6 +575,9 @@ probe gpt-5.6-sol: closed (500 当前模型 gpt-5.6-sol 负载已经达到上限
   逐项回退 = ch124/ch171 `param_override` 置 null、ch124 priority 回 50
   （`apply_qwen_leg_param_override.py` 只做正向，回退走 API/脚本手改）；
   OMP 侧 `models.yml` 的 qwen 条目（compat 两键 + maxTokens 16384）可 git revert；
+- ch126 park / ch180+ch134 摘模：快照 `new-api-before-legprune-20261016-211203.db`；
+  回退 = ch126 `POST /status {"status":1}`、ch180 加回 `gpt-6.1-sol`、
+  ch134 加回 `gpt-6-astra`/`gpt-6.1-sol`（均在 models 串）;
 - ch86 park / ch3 摘模：快照 `new-api-before-park-ch86-20261016-195932.db`；
   回退 = ch86 `POST /api/channel/86/status {"status":1}`、ch3 把
   `claude-opus-5`/`claude-opus-5-5` 加回 `models` 再 PUT；
