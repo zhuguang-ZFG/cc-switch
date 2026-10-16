@@ -168,6 +168,27 @@ enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意�
 **变更文件**：cc-switch `scripts/ops/newapi-local-smoke.py`、`scripts/ops/test_omp_routes.py`、
 本文；OMP 仓 `config.yml`（advisor 角色+链）、`models.yml`（两个免费 id 条目）。
 
+## 收尾加固：agent 卫生（同日晚，独立于 zen 主腿）
+
+审计发现两类配置缺陷并修复（OMP 仓 `b6240e8`）：
+
+- **`retry.fallbackChains.smol` 改工具安全三口**。原链首跳 `glm-5.3-flash` 如今由
+  ch178 p30（zen 主档，纯文本桥、tools 不转发）优先命中——u2-flash 一旦失败，
+  scout/librarian/sonic 会在兜底后静默失去工具调用。新链
+  `deepseek-v4-flash → qwen3-8-27b → glm-5.3`；三口均经网关带 tools 探针实测
+  （`tool_calls` ✓；独立复核复测 4.7s / 0.6s / 5.7s）。u2-flash 免费腿
+  2026-10-31 到期的风险由新链承接。
+- **`structured: true` 激活三个惰性 schema**（reviewer / security-reviewer / librarian）。
+  `task.structured` 默认关闭时，逐任务 spawn 既不下发 schema 也不给 `yield`
+  ——三项声明此前形同废弃（三个代理的 prompt 却明写要求 yield 载荷）。agent 级
+  structured 在全局关闭时依旧生效；实弹 reviewer 子代理复核本批 diff 后返回
+  结构化 payload（schema valid，`review_status=completed`，diff 四项全 PASS）。
+
+同批工具能力复测：k3（6 子代理 + designer/task 共用腿）`tool_calls` ✓；
+`@slow`/`@plan` 唯一兜底 `intern-s2-preview` `tool_calls` ✓（其 160-token 档正文为空
+是推理截断假象，2048 档正常）。`test_omp_routes` 40/40、`verify_omp_newapi_alignment`
+CLEAN、`test_omp_hutuji_workers` 2/2 复跑通过。
+
 
 ## 回滚
 
@@ -177,4 +198,7 @@ enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意�
 - 晚间的清洁项同理：OMP 仓 `config.yml`（advisor→deepseek、advisor 链→deepseek-v4-flash）与 `models.yml`
   （ll-alpha-free / nemotron-3.5-super-vl-free 条目）可逐提交 git revert；
 - 契约/门禁：`scripts/ops/newapi-local-smoke.py` 的 178 pin 与 `scripts/ops/test_omp_routes.py`
-  的白名单行可 git revert——但两者都是用户签字过的裁决，收回前先确认。
+  的白名单行可 git revert——但两者都是用户签字过的裁决，收回前先确认；
+- agent 卫生（OMP 仓 `b6240e8`）：`config.yml` smol 链与三份 agent 文件的 `structured: true`
+  可整体 git revert（回退后 reviewer/security-reviewer/librarian 的 output schema 重归惰性、
+  smol 兜底重回工具不安全链）。
