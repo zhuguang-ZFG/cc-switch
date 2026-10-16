@@ -117,6 +117,9 @@ ANYROUTER_TEST_MODEL = "claude-opus-5"
 ANYROUTER_CLAUDE_MODELS = (
     "claude-opus-5",
     "claude-opus-4-8",
+    # 2026-10-16 用户批准：把 opus-5-5 加入 ch72 模型表（开窗即多一条 p40 腿，
+    # 低于 agentrouter 三 key 的 p50，仅在主腿失败时兜底；本地桥目录本就提供该 id）。
+    "claude-opus-5-5",
     "zg-claude-opus-5",
     "zg-agent-claude-opus-5",
     "zg-agent-claude-opus-4-8",

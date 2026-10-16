@@ -477,6 +477,22 @@ unexpected stop guard、zen bridge、tool canary、bugfix cases）——**全绿
 显式 `await timers[i]()` 再断言），现 8/8。**该测试文件属验证输入，改动需复核**（见提交说明）。
 另：`grep -l omp-sota-escalation test_*` 穷举了全部 6 个引用者（4 测试 + 2 deploy 门禁），无其他遗漏。
 
+**用户批准的五项（20:41，逐项落地）**：
+1. **`tiny` 角色 → `zg-newapi/deepseek-v4.1-flash`**（离开 zen 腿的 150s 空转；ratio 0、实测 1.9s 带工具）；
+2. **ch72 加 `claude-opus-5-5`**（本地桥目录本就有该 id；p40 < agentrouter 三 key 的 p50，只在主腿失败时兜底）——
+   但踩到 smoke 的**隔离契约**（`ANYROUTER_CLAUDE_MODELS` 精确表），已按"顾问白名单"同款方式**带日期注释修订**
+   （用户批准在案），复核后 `channel model isolation` 回 **OK**；
+3. **启用 `AnyRouter Window Canary` 计划任务**（State=Ready，NextRun=20:43）——其语义经查证为
+   "**开窗检测 → Telegram 告警 → 人工选用**"（不自动改路由；含桥侧 haiku 对照 + 直连 opus-5-5 主信号 +
+   sol 探测 + 状态文件防重复告警；`test_anyrouter_window_canary.py` 门禁 ✓）；
+4. **`jina-embeddings-v3` ModelRatio = 0.075**（无同族先例，取房内最低非零档；写后逐键 diff 仅 +1 无删改；
+   复核后 `unregistered model ratios` 转 **OK**——四个名字全部在册）。若该腿实为免费，可改 0；
+5. **重启后三项复测**：待用户重启（models.yml 非热载）——带图×2、qwen、慢 opus。
+
+**复核的一条提醒（已澄清）**：`test_omp_problem_solving.js` 确系驱动 `omp-sota-escalation.js` 的
+`/sota` 命令——即"今晚重构是主嫌"判断正确；但**不是"新增 spawn 门禁"**：修好的测试显式跑 defer 后的
+timer，`runs` 从 0 变 1 ✓，证明子进程照常启动，问题纯粹是断言时机。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
