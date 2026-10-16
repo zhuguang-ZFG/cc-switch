@@ -264,6 +264,17 @@ WinError 206，但 40 文件上限下该错误走 catch 直接降级，不会进
 3. 待用户决定：`omk doctor` 显示 `plugin_installed=false`、`hooks_installed=false`（只装了技能）——
    要启用 omk 的插件/hooks 需 `omk setup`（会引入自动 hooks，未擅自执行）。
 
+**sota 扩展的仓内部署源已同步（同日补）**：`scripts/ops/omp-sota-escalation.js` 是
+`deploy-omp-sota-escalation.ps1` 的部署源——此前修复只落在 live 文件上，跑一次 deploy 会把 live 改动回滚。
+现已把 live 版本（含本日全部重构）同步回仓，并按新语义更新仓内测试 `test_omp_sota_escalation.js`
+（rescue / skip / 同回合守卫三处改为"先跑捕获的 timer 再断言"）。**复跑全绿**：仓内 sota 套件 **25/25**、
+deploy 套件 **1/1**、快照门禁 **14/14**、hutuji **2/2**、routes **40/40**。deadline 计时器加 `.unref()`
+（宿主会话恒有其它句柄；纯 node 测试侧用 keep-alive 固定事件循环）。
+
+**Kimi 其它模型条目核活**：`newapi/gpt-5.6-sol` **活着且可工具调用**（3.1s 文本 / 2.7s `tool_calls`，
+jojatoken 低优先腿）——可作为 opus 死腿之外的备选；`codebuddy-direct`（100.83.32.95:8787）**连接被拒**
+（WinError 10061，VPS 服务未监听）——待用户决定恢复该 VPS 服务或从 Kimi 配置摘除。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），

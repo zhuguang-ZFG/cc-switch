@@ -114,7 +114,14 @@ const fastGit = async (cmd, args) => {
   check("B1 hook does not wait on a hanging probe", dt < 500, `${dt}ms`);
   h.handlers.agent_end({ willContinue: false }, h.ctx);
   const t1 = Date.now();
-  await h.deferred[0]();
+  // The deadline timer is unref'd (host sessions always hold other handles);
+  // pin the loop so this plain-node run actually waits for it.
+  const keepAlive = setInterval(() => {}, 500);
+  try {
+    await h.deferred[0]();
+  } finally {
+    clearInterval(keepAlive);
+  }
   const dt2 = Date.now() - t1;
   check("B2 deferred consumption bounded by SNAPSHOT_BUDGET_MS", dt2 >= 7500 && dt2 < 10500, `${dt2}ms`);
   check(

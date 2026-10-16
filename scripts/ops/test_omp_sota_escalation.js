@@ -677,6 +677,10 @@ test("second tool failure runs one immediate rescue and steers the current turn"
     },
     ctx,
   );
+  // The rescue child must not run inside the tool_result handler budget.
+  assert.equal(child.runs.length, 0);
+  assert.equal(timers.length, 1);
+  await timers[0]();
   assert.equal(child.runs.length, 1);
   assert.match(child.runs[0].args[1], /Failed tools \(most recent last\):/);
   assert.match(child.runs[0].args[1], /pytest -x/);
@@ -691,7 +695,7 @@ test("second tool failure runs one immediate rescue and steers the current turn"
   assert.equal(child.runs.length, 1);
   await handlers.get("agent_end")({ willContinue: false }, ctx);
   // Same-turn suppression: the rescue already spent this turn's escalation.
-  assert.equal(timers.length, 0);
+  assert.equal(timers.length, 1);
   assert.equal(child.runs.length, 1);
 });
 
@@ -714,10 +718,13 @@ test("rescue without changed files or gate skips instead of spawning", async () 
     runSotaChild: child.runSotaChild,
   };
   globalExtension(pi);
+  const timers = [];
   const ctx = {
     cwd: process.cwd(),
     models: { list: () => MODELS },
-    setTimeout() {},
+    setTimeout(callback) {
+      timers.push(callback);
+    },
   };
   await handlers.get("before_agent_start")({ prompt: "同意" }, ctx);
   await handlers.get("tool_result")(
@@ -740,6 +747,8 @@ test("rescue without changed files or gate skips instead of spawning", async () 
   );
   // Zero evidence (no changed files, no gate): a full child budget would
   // review nothing. Live-fired exactly like this on a bare consent turn.
+  assert.equal(timers.length, 1);
+  await timers[0]();
   assert.equal(child.runs.length, 0);
   assert.equal(messages.length, 0);
 });
@@ -778,10 +787,13 @@ test("same-turn agent_end cannot re-escalate after a rescue", async () => {
     runSotaChild: child.runSotaChild,
   };
   globalExtension(pi);
+  const timers = [];
   const ctx = {
     cwd: process.cwd(),
     models: { list: () => models },
-    setTimeout() {},
+    setTimeout(callback) {
+      timers.push(callback);
+    },
   };
   await handlers.get("before_agent_start")({ prompt: "continue" }, ctx);
   await handlers.get("tool_result")(
@@ -802,6 +814,9 @@ test("same-turn agent_end cannot re-escalate after a rescue", async () => {
     },
     ctx,
   );
+  assert.equal(child.runs.length, 0);
+  assert.equal(timers.length, 1);
+  await timers[0]();
   assert.equal(child.runs.length, 1);
   assert.match(child.runs[0].args[1], /Failed tools \(most recent last\):/);
   await handlers.get("agent_end")({ willContinue: false }, ctx);

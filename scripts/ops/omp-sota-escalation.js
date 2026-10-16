@@ -31,6 +31,14 @@ const DEFAULT_READINESS_TTL_MS = 15 * 60 * 1000;
 const MAX_PROMPT_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 12_000;
 const MAX_CHANGED_FILES = 40;
+// The host gives most extension handlers a 30s budget (`extensionHandlers` in
+// the extensions doc); a timed-out before_agent_start spams the TUI and delays
+// the turn. Live 2026-10-16: sessions whose pi.exec("git", ...) calls never
+// resolved inside the budget reported "Extension handler timed out" every
+// turn, so the whole baseline probe is now deadline-bounded and degrades
+// instead of being awaited open-ended.
+const SNAPSHOT_BUDGET_MS = 8_000;
+const SNAPSHOT_SLOW_CALL_MS = 2_500;
 const READINESS_FILENAME = "sota-readiness.json";
 export const REVIEW_SELECTOR = "zg-newapi-anthropic/claude-opus-5";
 export const REVIEW_POLICY_FILENAME = "sota-review-policy.json";
@@ -835,11 +843,18 @@ async function collectChangedFiles(pi, cwd) {
   const files = [];
   for (const args of commands) {
     let result;
+    const probeStartedAt = Date.now();
     try {
       result = await pi.exec("git", args, { cwd, timeout: 15_000 });
     } catch {
       continue;
     }
+    const probeElapsedMs = Date.now() - probeStartedAt;
+    if (probeElapsedMs >= SNAPSHOT_SLOW_CALL_MS)
+      pi.logger?.warn?.("sota: git probe slow", {
+        args: args.join(" "),
+        elapsedMs: probeElapsedMs,
+      });
     if (result.code !== 0) continue;
     for (const raw of String(result.stdout ?? "").split(/\r?\n/)) {
       const value = safeFilePath(raw);
@@ -897,6 +912,66 @@ export function changedFilesSince(before, after) {
   );
 }
 
+// Deadline-bounded await for any already-started snapshot promise.
+export function withDeadline(pending, budgetMs, fallbackFactory) {
+  pending.catch(() => {});
+  let timer;
+  return Promise.race([
+    pending,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallbackFactory()), budgetMs);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+// The turn baseline is *started* (never awaited) at before_agent_start: an
+// unresolved pi.exec call must not hold a handler inside the host's 30s budget
+// (2026-10-16: sessions where the git probe stalled reported "Extension handler
+// timed out" every turn). It is consumed at agent_end inside a managed timer
+// under its own deadline; on overrun the baseline degrades to complete:false,
+// which changedFilesSince() already handles by treating the end snapshot as the
+// changed set (still capped by MAX_CHANGED_FILES).
+export function startBaselineProbe(pi, cwd) {
+  const pending = collectChangedSnapshot(pi, cwd);
+  pending.catch(() => {});
+  return pending;
+}
+
+export async function resolveSnapshot(
+  pi,
+  pending,
+  { label = "snapshot", budgetMs = SNAPSHOT_BUDGET_MS } = {},
+) {
+  const startedAt = Date.now();
+  const degraded = () => ({ files: [], hashes: {}, complete: false });
+  const verdict = pending
+    ? await withDeadline(pending, budgetMs, degraded)
+    : degraded();
+  if (verdict?.complete !== true)
+    pi.logger?.warn?.("sota: snapshot incomplete", {
+      label,
+      budgetMs,
+      elapsedMs: Date.now() - startedAt,
+    });
+  return verdict;
+}
+
+// Managed timers are isolated like handler dispatch (a throw is contained) and
+// cleared on session_shutdown; the raw fallback owns its isolation.
+export function scheduleBackground(ctx, task) {
+  if (typeof ctx?.setTimeout === "function") {
+    ctx.setTimeout(task, 0);
+    return;
+  }
+  const timer = setTimeout(() => {
+    Promise.resolve()
+      .then(task)
+      .catch(() => {});
+  }, 0);
+  timer.unref?.();
+}
+
 export default function sotaEscalationExtension(pi) {
   const coordinator = createSotaEscalationCoordinator();
   const agentDir =
@@ -906,7 +981,7 @@ export default function sotaEscalationExtension(pi) {
   let currentReadiness;
   let workloadHealth = readWorkloadHealth(agentDir);
   let currentGatePlan = classifyHutujiGate();
-  let turnBaseline = { files: [], hashes: {}, complete: false };
+  let turnBaselinePromise;
   let turnCwd = "";
   let mutationPaths = [];
   let suppressCurrentTurn = false;
@@ -1131,7 +1206,8 @@ export default function sotaEscalationExtension(pi) {
     turnCwd = ctx.cwd;
     mutationPaths = [];
     escalatedThisTurn = false;
-    turnBaseline = await collectChangedSnapshot(pi, ctx.cwd);
+    // Started, never awaited: the probe resolves (or degrades) at agent_end.
+    turnBaselinePromise = startBaselineProbe(pi, ctx.cwd);
   });
   pi.on("tool_result", async (event, ctx) => {
     const failures = coordinator.observeToolResult(event);
@@ -1139,30 +1215,34 @@ export default function sotaEscalationExtension(pi) {
     if (path) mutationPaths = mergeChangedFiles(mutationPaths, [path]);
     if (suppressCurrentTurn || event?.isError !== true || failures !== 2)
       return;
-    const files = mergeChangedFiles(
-      await collectChangedFiles(pi, ctx.cwd),
-      mutationPaths,
-    );
-    const gatePlan = classifyHutujiGate({
-      cwd: ctx.cwd,
-      changedFiles: files,
-      grblRootAvailable: Boolean(process.env.GRBL_ROOT),
-    });
-    if (files.length === 0 && gatePlan.profile === "none") {
-      // Nothing to review: no changed files and no gate owed. Spending a full
-      // child budget here reviews nothing (live-fired on a bare consent turn,
-      // 2026-08-23).
-      emitRoute({
-        revision: EXTENSION_REVISION,
-        route: "sota",
-        result: "skipped",
-        trigger: "rescue",
-        failureClass: "no-evidence",
+    // The rescue child runs for minutes: never await it (or the file probe)
+    // inside a 30s-budget handler.
+    scheduleBackground(ctx, async () => {
+      const files = mergeChangedFiles(
+        await collectChangedFiles(pi, ctx.cwd),
+        mutationPaths,
+      );
+      const gatePlan = classifyHutujiGate({
+        cwd: ctx.cwd,
+        changedFiles: files,
+        grblRootAvailable: Boolean(process.env.GRBL_ROOT),
       });
-      return;
-    }
-    escalatedThisTurn = true;
-    await runEscalation("rescue", ctx, pi.logger, files, gatePlan);
+      if (files.length === 0 && gatePlan.profile === "none") {
+        // Nothing to review: no changed files and no gate owed. Spending a full
+        // child budget here reviews nothing (live-fired on a bare consent turn,
+        // 2026-08-23).
+        emitRoute({
+          revision: EXTENSION_REVISION,
+          route: "sota",
+          result: "skipped",
+          trigger: "rescue",
+          failureClass: "no-evidence",
+        });
+        return;
+      }
+      escalatedThisTurn = true;
+      await runEscalation("rescue", ctx, pi.logger, files, gatePlan);
+    });
   });
   pi.on("agent_end", (event, ctx) => {
     if (
@@ -1172,9 +1252,14 @@ export default function sotaEscalationExtension(pi) {
     )
       return;
     ctx.setTimeout(async () => {
-      const currentSnapshot = await collectChangedSnapshot(pi, ctx.cwd);
+      const [baseline, currentSnapshot] = await Promise.all([
+        resolveSnapshot(pi, turnBaselinePromise, { label: "baseline" }),
+        resolveSnapshot(pi, collectChangedSnapshot(pi, ctx.cwd), {
+          label: "end",
+        }),
+      ]);
       const files = mergeChangedFiles(
-        changedFilesSince(turnBaseline, currentSnapshot),
+        changedFilesSince(baseline, currentSnapshot),
         mutationPaths,
       );
       currentGatePlan = classifyHutujiGate({
@@ -1221,7 +1306,10 @@ export default function sotaEscalationExtension(pi) {
         true,
         refreshReadiness(),
       );
-      await runEscalation("explicit", ctx, pi.logger);
+      // The child takes minutes; run it outside the command handler's budget.
+      scheduleBackground(ctx, async () => {
+        await runEscalation("explicit", ctx, pi.logger);
+      });
     },
   };
   for (const command of ["sota", "sota-review", "sota-plan", "sota-escalate"]) {
