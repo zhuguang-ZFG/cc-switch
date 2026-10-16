@@ -689,10 +689,18 @@ class OmpRouteGateTests(unittest.TestCase):
         # 高频后台角色定位匹配；glm-5.2 单腿 ch220 5 RPM saturated 不可用）。
         # 背景：glm-5.3 因 ch208 欠费全域无活腿、omen-alpha 零 legs、
         # space-bunny 桥死；ch208 充值回开后 glm-5.3 可回任，二者并行不悖。
+        # 2026-10-16 用户批准（zen 主腿副作用裁决）：advisor 重指
+        # deepseek-v4.1-flash。理由：zen 免费腿（ch178 p30 主档）是纯文本单飞
+        # 桥（tools 数组不转发→tool_calls 不可能），advisor 的 read/grep/advise
+        # 工具链在 zen 命中的评审里全部失效（重启后 8 次评审 7 次落 ch178、
+        # 0 工具调用、0 注记）；deepseek-v4.1-flash 是当日 90 次评审的实际
+        # 载体、本地 ModelRatio=0（quota 实测 0），工具链实证可用。
+        # 证据与裁定：docs/ops/zen-free-glm53flash-2026-10-16.md。
         self.assertIn(
             _base_selector(roles.get("advisor", "")),
-            {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha", "zg-newapi/space-bunny", "zg-newapi/glm-5.3-flash"},
-            "advisor 必须保留已批准的 GLM / Omen Alpha / Space Bunny 低成本路由",
+            {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha", "zg-newapi/space-bunny", "zg-newapi/glm-5.3-flash",
+             "zg-newapi/deepseek-v4.1-flash"},
+            "advisor 必须保留已批准的 GLM / Omen Alpha / Space Bunny 低成本路由（2026-10-16 起含 deepseek-v4.1-flash 签字特批）",
         )
 
     def test_critical_chains_exclude_known_bad_agentrouter_claude(self):

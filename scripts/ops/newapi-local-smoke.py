@@ -74,7 +74,10 @@ BACKUP_CHANNEL_POSTURES: dict[int, dict[str, int]] = {
     173: {"max_priority": 20, "max_weight": 1},  # muyuan-gongyi（mistral/glm/qwen 系）
     174: {"max_priority": -10, "max_weight": 1}, # grok-heavy-indevs（gpt-5.6-luna 主档）
     175: {"max_priority": -20, "max_weight": 1}, # hubway（gpt-6-sol 等 p-20 备份）
-    178: {"max_priority": 0, "max_weight": 5},   # zen-free-bridge（免费层）
+    # 2026-10-16 用户指令「zen 做主力」：ch178 对 glm-5.3-flash 升为主腿（p30 > ch118 的
+    # 25），契约同步放宽到 30（裁定与证据见 docs/ops/zen-free-glm53flash-2026-10-16.md）；
+    # 免费层仍不得越过其他名路由的主池档，weight 上限 5 保留。
+    178: {"max_priority": 30, "max_weight": 5},  # zen-free-bridge（免费层；glm-5.3-flash 主腿特批 2026-10-16）
     181: {"max_priority": 0, "max_weight": 5},   # jev-systemone-bridge
     182: {"max_priority": 20, "max_weight": 5},  # asvla-gpt-6-astra
     184: {"max_priority": 0, "max_weight": 2},   # opencode-go-step-5-preview（限时免费）
