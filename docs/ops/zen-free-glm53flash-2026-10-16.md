@@ -381,8 +381,18 @@ use≈138–149s，ctok=0，quota 合计 19,928,176**（ptok 2 万~20.5 万，�
 即：ch86 高频"跑满 ~140s 后吐空流且照常计费"。而 `modelRoles.default` 现为
 `zg-newapi-anthropic/claude-opus-5-5:max`（用户设置），default 按门禁**无兜底链**（硬失败）
 → 每轮 2–3 分钟空转，这就是"用不了"的体感。**建议（未擅自改，属用户偏好）**：把 default 换回
-快的强模型（如 `zg-newapi/k3:max`），opus-5-5 留给可等待的场景；若坚持 default=opus-5-5，则
-门禁不允许给它加链（`test_default_role_has_no_model_fallback_chain` 只豁免两个已批名）。
+快的强模型（如 `zg-newapi/k3:max`），opus-5-5 留给可等待的场景；若坚持 default=opus-5-5，则门禁不允许给它加链（`test_default_role_has_no_model_fallback_chain`
+只豁免两个已批名）。
+
+**"~140–150s 切点"定层（19:40 实验，逐个排除）**：`relay_timeout=900` → NewAPI **不是**切点；
+`omp -p` 曾在 **212s 成功** → 不是 OMP 的 `streamFirstEventTimeout(300s)`；最关键的一条：
+**54k-token 大请求实测 150.0s 完整返回 "OK"（ch136 服务）** → 上游只是慢，不是死。综上，切点=
+**客户端事件间隙看门狗**（全局 `providers.streamIdleTimeoutSeconds=60`）在 139–150s TTFT 下掐流，
+8 条 `ctok=0` 计费行即此形态（客户端断开仍计费，"client_gone"）。修：`claude-opus-5-5` 条目加
+`compat.streamIdleTimeoutMs: 240000`（文档口径 "stream-watchdog idle-timeout **floor**"，按模型粒度
+抬下限，全局不动；同旋钮也可用于 opus-5 系其它慢腿）。models.yml 非热载 → **需重启**；
+运行期效果在下一次慢 opus 回合可见。若要对所有 provider 放宽：
+`omp config set providers.streamIdleTimeoutSeconds 240`（影响全局失败检测速度，未采用）。
 
 ## 回滚
 
