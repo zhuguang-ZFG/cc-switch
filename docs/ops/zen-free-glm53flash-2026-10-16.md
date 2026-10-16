@@ -381,7 +381,9 @@ use≈138–149s，ctok=0，quota 合计 19,928,176**（ptok 2 万~20.5 万，�
 即：ch86 高频"跑满 ~140s 后吐空流且照常计费"。而 `modelRoles.default` 现为
 `zg-newapi-anthropic/claude-opus-5-5:max`（用户设置），default 按门禁**无兜底链**（硬失败）
 → 每轮 2–3 分钟空转，这就是"用不了"的体感。**建议（未擅自改，属用户偏好）**：把 default 换回
-快的强模型（如 `zg-newapi/k3:max`），opus-5-5 留给可等待的场景；若坚持 default=opus-5-5，则门禁不允许给它加链（`test_default_role_has_no_model_fallback_chain`
+快的强模型（如 `zg-newapi/k3:max`），opus-5-5 留给可等待的场景；
+**更正（20:25 复核后）**：坏腿摘除后 opus-5-5 实测 **200/7.2s/tool_calls ✓**——`default` 保持
+opus-5-5 已无性能问题，上述"换回 k3"的建议**不再必要**（保留字段作历史记录）。若坚持 default=opus-5-5，则门禁不允许给它加链（`test_default_role_has_no_model_fallback_chain`
 只豁免两个已批名）。
 
 **纯客户端剥图的 OMP 级验证（bg_10，同日 19:47，复核 #19 点名项）**：新进程
@@ -449,6 +451,14 @@ type=14 的是 ch86），且用 Anthropic 形态 `POST /v1/messages` 复探 ch3 
   `claude-fable-5-1-reversed`）→ 它今天是真不可用；历史上能通，符合"窗口型"。
 - **对 opus-5-5 的关系**：ch72 的 `models` **不含 `claude-opus-5-5`**（上游目录里有）→ 现在根本不是它的腿；
   若 anyrouter 窗口恢复，一行即可加。opus-5-5 的当前可用路径 = **ch134/135/136**（agentrouter 三把新 key，9s 级）。
+
+**改动后横截面（20:25，tools 探针）**：`claude-opus-5-5` **200/7.2s/tool_calls ✓**（default 角色现
+无性能问题）；`k3` 10.4s ✓、`deepseek-v4.1-flash` 1.9s ✓、`glm-5.3` 7.2s ✓（全带工具）；
+**`claude-opus-5` / `claude-opus-4-8` 变即时 429**——其启用腿为 ch134/135/136（p50）+ ch72（p40），
+429 来自 agentrouter 上游**按模型 slug 的可用性**（同腿的 opus-5-5 正常）＋ anyrouter 窗口关闭。
+影响：`designer`/`task` 链的 opus 兜底跳（opus-5→opus-4-8）当前不可用，**k3 主选不受影响**。
+**未擅自改**（链跳改动属策略；且 agentrouter 上游对短流式有敏感词 500 前科）——建议：把两条链的
+opus 跳改指 `zg-newapi-anthropic/claude-opus-5-5`，或等上游 slug 恢复。
 
 ## 回滚
 
