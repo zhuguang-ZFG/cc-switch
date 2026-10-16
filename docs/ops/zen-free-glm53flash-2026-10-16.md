@@ -384,6 +384,17 @@ use≈138–149s，ctok=0，quota 合计 19,928,176**（ptok 2 万~20.5 万，�
 快的强模型（如 `zg-newapi/k3:max`），opus-5-5 留给可等待的场景；若坚持 default=opus-5-5，则门禁不允许给它加链（`test_default_role_has_no_model_fallback_chain`
 只豁免两个已批名）。
 
+**纯客户端剥图的 OMP 级验证（bg_10，同日 19:47，复核 #19 点名项）**：新进程
+`omp -p "@D:/tmp/redblue.png" "Name the two colors…" --model zg-newapi/glm-5.3-flash` →
+**0 provider 错误、无 400 dump**，且**答对 "red, blue"**。即两层配合成立：`stripImageInput`
+让图片不再进 zen 桥（不 400），图片由 **vision 角色（dots-3-note-prev）** 描述后作为文本注入
+（答对即证）。对照组（image-capable `dots`，同一张图）同样答对 "red, blue"。
+
+**gpt-6-astra 带图 400（同批新发现）**：dump `1792151165887-*`（19:46）——
+"Expected 'detail' field in image_url dict to be one of ['low','auto','high']"；其头号腿是
+agentrouter ch134（p50，用户刚开）。文档无"补 detail"旋钮 → 按同法给 `gpt-6-astra` 声明
+`compat.stripImageInput: true`（第 6 个；图片走 vision 角色，已由上条证明照答）。需重启生效。
+
 **"~140–150s 切点"定层（19:40 实验，逐个排除）**：`relay_timeout=900` → NewAPI **不是**切点；
 `omp -p` 曾在 **212s 成功** → 不是 OMP 的 `streamFirstEventTimeout(300s)`；最关键的一条：
 **54k-token 大请求实测 150.0s 完整返回 "OK"（ch136 服务）** → 上游只是慢，不是死。综上，切点=
