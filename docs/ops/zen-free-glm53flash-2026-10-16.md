@@ -460,6 +460,13 @@ type=14 的是 ch86），且用 Anthropic 形态 `POST /v1/messages` 复探 ch3 
 **未擅自改**（链跳改动属策略；且 agentrouter 上游对短流式有敏感词 500 前科）——建议：把两条链的
 opus 跳改指 `zg-newapi-anthropic/claude-opus-5-5`，或等上游 slug 恢复。
 
+**designer/task 链 opus 跳修（20:30，用户问"omp 还有可改进优化的吗"）**：直探三条 agentrouter key：
+`claude-opus-5` / `claude-opus-4-8` 一律 **503「当前分组 default 下对于模型 X 无可用渠道」**（上游
+按 slug 不可用）；`claude-opus-5-5` 3.7–5.1s ✓。故两条兜底链改为
+`[zg-newapi-anthropic/claude-opus-5-5, zg-newapi-anthropic/claude-opus-5]`（活 slug 在前、死 slug 留后
+待恢复；串内无评论以免被 hand-rolled 解析器吃成候选；不入选 `FORBIDDEN_CRITICAL_CANDIDATES`）。
+门禁复跑 **40/40 + CLEAN**、smoke 不变。回滚 = `git revert` config.yml 对应提交。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
