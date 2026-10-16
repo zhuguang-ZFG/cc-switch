@@ -159,8 +159,11 @@ enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意�
 | deepseek-v4.1-flash-free | 200 / 157.1s / `OK` | （结构性无 tools） | — | 150s 桥超时上限下不可用为主力 |
 
 **门禁重跑（全部改动落盘后）**：`test_omp_routes` **40/40 OK**；`verify_omp_newapi_alignment`
-**CLEAN**；冒烟 5 类不变（backup posture 回 182 单条）。`perf_metrics` 15:00 桶未落盘，
-zen 主腿对 `glm-5.3-flash` 池成功率（11–14 时桶 4/59、9/67、5/43、6/114）的影响待下一桶评估。
+**CLEAN**；冒烟 5 类不变（backup posture 回 182 单条）。`perf_metrics` 15:00 桶已落盘：
+`glm-5.3-flash` **req=109 ok=24**（上四桶 4/59、9/67、5/43、6/114，同为尝试级/完成行口径）。
+**读数限定**：ok≈`logs` 完成行数（24≈25 行），req 是尝试级计数（约 85 次失败不落 `logs`），
+桶内 25 行里 5 行属 15:00–15:25:42 改前段——**不可读作干净的改前/改后成功率对比**。
+免费侧同桶：`glm-5.3-flash-free` 8/8、ll-alpha 3/3、nemotron-vl 3/3。
 
 **变更文件**：cc-switch `scripts/ops/newapi-local-smoke.py`、`scripts/ops/test_omp_routes.py`、
 本文；OMP 仓 `config.yml`（advisor 角色+链）、`models.yml`（两个免费 id 条目）。
