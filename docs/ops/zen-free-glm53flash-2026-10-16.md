@@ -238,6 +238,32 @@ WinError 206，但 40 文件上限下该错误走 catch 直接降级，不会进
 （无 choices 帧，**结论=挂起/掐断，未定**，不可读作"不支持工具"）；smol 链原第 3/4 跳
 `mercury-2` 429（free tier at capacity）。三者均为 k3 失效时的逃生口，建议后续替换或评估降级。
 
+## 顺带巡检：NewAPI 与 Kimi Code（同日晚，"继续改进优化"）
+
+**NewAPI（本地 3002）**：24h 内**无错误记录**（`logs` 仅 type=2 消费 4416 条、type=3 管理审计 46 条）；
+104 渠道 = 31 启用 / 72 停用 / 1 自动禁用（ch70 vip-j3gb-gpt，weight 0 的 gpt-5.4-5.6 死池）。主路由全绿
+（17:00 桶：deepseek-v4.1-flash 224/224、k3 36/36、u2-flash 6/6、deepseek-v4-flash 7/7、qwen3-8-27b 1/1）。
+**glm-5.3-flash 池观察落定**：advisor 16:05 迁走后，16:00 桶 1/1、17:00 桶 4/4（此前 4–24%）——池已只剩
+轻量杂活流量且健康。
+**唯一实质问题——opus 逃生口失效**：`claude-opus-5` 启用腿仅 ch3（baibei，p52 多 key，平均响应 34s，
+实测 136s 空流）+ ch72（anyrouter，历史从未通过渠道测试、即时 429）；`claude-opus-4-8` 启用腿仅 ch72；
+`mercury-2` free tier 满 429。perf 桶佐证（17:00：opus-5 3/0、opus-4-8 1/0、mercury-2 1/0）。
+**未改任何路由**（属采购/策略决定）；OMP 侧 task/designer 链保持不动，仅标注。
+
+**Kimi Code（kimi 2.2.0，`KIMI_SHARE_DIR=~/.kimi-code`）**：
+1. **新增免费主力模型** `newapi/deepseek-v4.1-flash`（provider=local-newapi；1M 上下文、thinking+tool_use、
+   low/high/max；本地 ratio 0、三腿健康），加入 `secondary_model` 清单；修正 `deepseek-v4-flash` 的
+   "免费"措辞（实际 ratio 0.5）。改前备份 `config.toml.20261016-181548.bak`。
+   实弹：`kimi -p "Reply with exactly: OK" -m newapi/deepseek-v4.1-flash` → 3.5s 返回 OK。
+   （`-p` 与 `-y/--auto` 互斥，CLI 级工具调用未能实测；该模型的 wire 级 tool_calls 已在网关验证。）
+2. **"17 个技能全部不可见"已修**：CLI 的用户技能根随 `KIMI_SHARE_DIR` 走（`~/.kimi-code/skills`，不存在）
+   另加共享根 `~/.agents/skills`；而 omk 安装到旧路径 `~/.kimi/skills` → 6 个 omk 技能
+   （clarify-first/insights/omk-ralph/omk-review/requirements-elicitation/ultrawork）从未被加载。
+   以 **junction** 桥接：`mklink /J ~/.kimi-code/skills ~/.kimi/skills`（非破坏，`rmdir` 即回滚）。
+   实测发现技能数 **11 → 27**，6 个 omk 技能全部出现（后续 omk setup 重装到旧路径也自动可见）。
+3. 待用户决定：`omk doctor` 显示 `plugin_installed=false`、`hooks_installed=false`（只装了技能）——
+   要启用 omk 的插件/hooks 需 `omk setup`（会引入自动 hooks，未擅自执行）。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
@@ -250,5 +276,7 @@ WinError 206，但 40 文件上限下该错误走 catch 直接降级，不会进
 - agent 卫生（OMP 仓 `b6240e8`）：`config.yml` smol 链与三份 agent 文件的 `structured: true`
   可整体 git revert（回退后 reviewer/security-reviewer/librarian 的 output schema 重归惰性、
   smol 兜底重回工具不安全链）；
-- sota 扩展（OMP 仓本次提交）：`extensions/omp-sota-escalation.js` 的 8s 预算与探针可 git revert
-  （回退即恢复"基线探测可耗尽 30s handler 预算"的旧行为）。
+- sota 扩展（OMP 仓本次提交）：`extensions/omp-sota-escalation.js` 的不阻塞探测与探针可 git revert
+  （回退即恢复"基线探测可耗尽 30s handler 预算"的旧行为）；
+- Kimi Code：`~/.kimi-code/config.toml` 可恢复自 `config.toml.20261016-181548.bak`；
+  技能桥接用 `rmdir "C:\Users\zhugu\.kimi-code\skills"` 即撤（junction，源目录 `~/.kimi/skills` 未动）。
