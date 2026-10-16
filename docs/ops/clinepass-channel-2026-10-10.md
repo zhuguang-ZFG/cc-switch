@@ -66,3 +66,14 @@ Key 仅通过 argv 传给 `scripts/ops/add_clinepass_channel.py`，不入库、�
 - [ ] 查清 19:06–19:38 的 `500 empty response content` 是 Cline 侧抖动还是
       `cline-pass/` 映射在特定模型上的稳定坏法（若稳定，该腿应从渠道模型里摘掉）。
 - [ ] 10-18 到期前替换 key 或下线 ch203（下线时同步清 abilities 行）。
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `new-api-before-clinepass-20261010-143312.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。

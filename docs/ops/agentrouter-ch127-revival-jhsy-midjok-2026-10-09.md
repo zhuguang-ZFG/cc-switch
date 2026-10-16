@@ -122,3 +122,14 @@ hubway runbook（10-07）曾判定 ch127 `agentrouter-codex-gpt` 上游死亡并
 - ch118 glm 腿 30–50s 超时为新劣化观察项，Guardian 慢渠道检测预计接管
 - 本地 fork logs 表归因契约：`channel_id` + `other.admin_info.use_channel` /
   `multi_key_index`（无独立 use_channel 列）
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `new-api-before-jhsy-ch201-20261009-203241.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。

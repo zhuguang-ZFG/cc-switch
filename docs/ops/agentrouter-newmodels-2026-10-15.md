@@ -14,11 +14,12 @@
 
 ## 变更（快照 `new-api-before-agentrouter-newmodels-20261015-212818.db`，**已失效**——见下）
 
-> **2026-10-16 更正**：本页引用的两份快照（`…-212818.db`、`…ch136-reenable-222306.db`）
-> 已被 supervisor 的轮转 bug 删除（按文件名字典序轮转，名字排前的**新**快照被当旧的
-> 删——详见 `backup-rotation-lexicographic-bug-2026-10-16.md`）。此二处改动的回滚以
+> **2026-10-16 更正（整页通用）**：**本页所有 `new-api-before-*` 引用均已失效**——
+> supervisor 的轮转曾按文件名字典序删除（名字排前的**新**快照被当旧的删；KEEP=7），
+> 详见 `backup-rotation-lexicographic-bug-2026-10-16.md`。本页各改动的回滚一律以
 > 「逐字段步骤」为准（下方回滚节）；最近的**已验证**整库快照是
-> `newapi-before-motomoto-welfare-20261016-144743.db`（10-16 14:47）。
+> `newapi-before-motomoto-welfare-20261016-144743.db`（10-16 14:47）与
+> `new-api-2026-10-16.db`（当日均份，drill 通过）。
 
 - `ch180` models += `gpt-6.1-sol`（p51，优于余额近空的 jojatoken p-20）；
 - `ch86/134/135/136` models += `claude-opus-5-5`、`test_model` 改指该名、

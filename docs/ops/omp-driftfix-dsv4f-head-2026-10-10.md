@@ -54,3 +54,14 @@ glm 腿 530、qwen3.8-max 同站同坏。且 ch118 `auto_ban=0` 不会被摘出�
 
 - 路由：把上表 priority 反向写回（ch118=51 / ch180=30）+ 60s 缓存同步
 - OMP 配置：还原 `*.bak-20261010-ompdriftfix` 两份文件
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `new-api-before-dsv4f-head-back-to-ch180-20261010-091127.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。

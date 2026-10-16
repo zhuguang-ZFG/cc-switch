@@ -116,3 +116,15 @@ cp ~/.omp/agent/config.yml.bak-20261014-muyuan-sync ~/.omp/agent/config.yml
   进程内读取，永不打印）
 - 备份：DB ×2（21:34:51 调查前 + 22:46:02 终态 apply 前）、models.yml /
   config.yml ×1（21:39）
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `new-api-before-muyuan-sync-20261014-213645.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+- `new-api-before-muyuan-sync-20261014-224602.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。

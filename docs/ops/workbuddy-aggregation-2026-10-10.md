@@ -145,3 +145,14 @@ cp ~/.omp/agent/models.yml.bak-20261010-211601-wb ~/.omp/agent/models.yml   # �
 - `scripts/ops/add_omp_workbuddy_models.py` — OMP 注册（`--check` / `--apply`）
 - `scripts/ops/verify_newapi_routing_weights.py` — 全池权重/路由审计
 - `scripts/ops/verify_omp_newapi_alignment.py` — OMP↔NewAPI 跨层孤儿审计
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `new-api-before-workbuddy-20261010-211213.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。

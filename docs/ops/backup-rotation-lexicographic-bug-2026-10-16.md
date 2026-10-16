@@ -58,13 +58,17 @@ backups = sorted(BACKUP_DIR.glob("new-api-*.db"), key=lambda p: p.stat().st_mtim
 随后按 house 路径补做正规化（15:06）：
 
 - 实测 live 三件套（`proxies-supervisor.py` / `anyrouter-window-canary.py` /
-  `omp-model-routing-observability.js`）字节**均等于 `8c5a6643`**，而门禁基线
-  `BASE = "0ebb556a^"` 已过期（对三件套全会拦）→ 按「BASE 对齐 live 字节」语义推进为
-  `BASE = "8c5a6643"`；
+  `omp-model-routing-observability.js`）字节**均等于 `8c5a6643`**；门禁基线
+  `BASE = "0ebb556a^"` 时对三件套**全部不等** → 说明 `deploy()` 在今日之前**早已
+  不可满足**（是本 hand-deploy *之前*就存在的事实，与本次改动无关）→ 按「BASE 对齐
+  live 字节」语义推进为 `BASE = "8c5a6643"`（该单钉对三件套同时成立，已逐一核对）；
 - `python scripts/ops/deploy-stability-scripts.py` 通过门禁并落档：
   `{"manifest": "…/guardian/backups/stability-20261016-150620-15224/deployment.json",
   "verified_files": 3, "restart_performed": false}`；部署前后 live 字节逐一相同
   （1ea7a0ef9f8b / db62d7aa588c / 0f7210baa219）。
+- **耐久性缺陷（结构性、需记住）**：`deploy()` 把 live 写成新字节后，live 立即不再
+  等于 `BASE` —— 若不同步把 BASE 再钉到"已部署的那个修订"，下一次运行就会以
+  伪报警 `unreviewed production drift` 中止。**每次部署后必须重钉 BASE**（本次即如此）。
 
 ## 遗留（供裁决）
 
@@ -92,14 +96,28 @@ backups = sorted(BACKUP_DIR.glob("new-api-*.db"), key=lambda p: p.stat().st_mtim
 - 轮转只删 mtime 最旧一份：`new-api-before-dsv41f-free-20261015-161205.db`（16:12）——
   **与修复语义一致**（保留最新 7 份）；
 - 余 7 份按 mtime 全为最新（10-15 16:39 起）；`dsv41f-free-pricing-2026-10-15.md`
-  的回滚引用已在同一轮改为逐字段方案。
+  的回滚引用已在同一轮改为逐字段方案；
+- **house drill 端到端**：`python scripts/ops/newapi_backup_restore_drill.py` →
+  `backup: new-api-2026-10-16.db (age 0d 0h)` / `integrity_check: ok` / `tables: 34` /
+  `channels: 104 rows` / `OK: backup restore drill passed`（exit 0）。该 drill 只认
+  `^new-api-\d{4}-\d{2}-\d{2}\.db$` 且要求 ≤3 天——**有 bug 时它必然报
+  "FAIL: no backups found"**（零份日均文件），这是比单测更锋利的损伤陈述与修复证明。
 
 ## 悬空引用全量清点（同日扫描）
 
-`docs/ops/*.md`（非 archive）中对 `new-api-before-*.db` 的引用共 43 处，其中 **35 处
-已悬空**（横跨约 20 份文档，最早的 10-09）；archive 与 patches 中另有大量历史引用同样
-已不存在。根因不是偶发：**`backups/` 是 KEEP=7 的轮转缓存，不是归档**——任何"引用某份
-快照作长期回滚路径"的写法都会随轮转失效。
+**修正版清点**（同日复审后重扫：**部署根目录 + `backups/` 两处都要查**，旧扫描只查
+`backups/` 曾把 13 处仍活着的引用误判为悬空）：非 archive 运维文档共引用 36 个快照名，
+**真正缺失 22 个**——
+
+- **21 个在 supervisor 轮转 glob 内（`new-api-*.db`）**：归因本 bug + KEEP=7 设计。
+  日志佐证其为**长期系统性**而非今日偶发：10-12/13/14/15/16 每日轮转分别删
+  23/8/1/8/6 份，全部按字典序——凡名字不落在末尾 7 名的快照，无论多新都会死。
+- **1 个在 glob 外（`newapi-*.db` 无连字符族）**：`newapi-before-chengapi-…-105853.db`
+  ——**与 supervisor 无关**，属手工轮转（10-15 那次"保留 12 份"）或未落盘。
+- `docs/ops/archive/` 与 `docs/patches/` 的历史引用**不计入**（归档页快照丢失属预期）。
+
+已对仍有操作价值的文档逐页补注（`## 快照引用状态` 小节 + 逐字段回滚指引），
+不再逐一改写历史正文。根因不是偶发：**`backups/` 是 KEEP=7 的轮转缓存，不是归档**。
 
 制度结论（已按此改写本次涉及的文档）：
 - 回滚路径**优先写逐字段/逐命令步骤**（快照只是加速器，不是前提）；

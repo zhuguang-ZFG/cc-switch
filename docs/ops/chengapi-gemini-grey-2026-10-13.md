@@ -42,3 +42,14 @@
 - OMP **已接**（同日晚，用户令）：models.yml 目录条目 `gemini-3.8-flash-high`（200K/16K，紧跟裸 3.8-flash 后；备份 `.bak-20261013-gemini-high`）。`omp models` 冷载两 gemini 行、`omp bench` 1/1 TTFT 9.4s。**不挂角色**（灰度腿仅显式选择；重思考 out 1.4K 慢腿勿上高频）。mistral-medium/small 有意**不进** OMP 目录（独苗抖动，防路由门禁 flaky）。
 - 第二灰测号若到手：gemini-4 权限开 → 追加 id 再验。
 - 公益站寿命风险与状态更新：同日 11:34 后上游该灰测 Key 失效返回 `401 Invalid token`，因 `auto_ban=1` 已自动禁用（ch222 `status=2`），并于 `verify_omp_newapi_alignment.py` 加入 `QUARANTINE` 观察，待补新 Key 后恢复。
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `newapi-before-chengapi-20261013-105853.db` —— **不在** supervisor 轮转 glob（`newapi-*` 无连字符族）内；消失另有原因（手工轮转或未落盘）
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。

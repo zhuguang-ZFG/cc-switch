@@ -59,3 +59,14 @@ muyuan.do 有 Cloudflare 指纹门：探测需浏览器 UA（`Mozilla/5.0 ... Ch
 - 教训补强：**渠道测试出现 `invalid header field value` = 多 key manifest 缺失**，
   不是上游/鉴权问题，先查 `channel_info` 再动 key。
 - 三把 key 全文只经一次性本地临时文件传递（用毕即删），仓内不落。
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `new-api-before-muyuan-ch173-repool-20261010-084003.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。

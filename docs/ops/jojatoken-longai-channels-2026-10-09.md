@@ -79,3 +79,15 @@
   relay 失败）实测均走禁用回滚并保留快照（jojatoken 首两跑、longai 前两跑）
 - 最终姿态：ch188-191 status=1 p-20/w1；ch192 status=1 p19/w1；ch173 status=2
   （用户授权）；abilities 全部 enabled 与 status 一致
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `new-api-before-jojatoken-20261009-163230.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+- `new-api-before-longai-20261009-165555.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。

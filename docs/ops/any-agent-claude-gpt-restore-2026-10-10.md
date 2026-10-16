@@ -492,3 +492,18 @@ DB 直写（`PUT /api/channel/` 本 fork 对最小体拒收，双写契约沿用
   机制已到最优（优先级排序 + SCM 续链 + 6 次重试遍历全池），余下是上游侧。
 - 观测口径不变：ch126 stderr 停刷"负载已经达到上限"或 EOF + token10
   responses 200 归因 126/182 即 any 恢复。
+
+---
+
+## 快照引用状态（2026-10-16 补记）
+
+本页引用的整库快照已被轮转回收（`backups/` 为 KEEP=7 轮转缓存，非归档；
+见 `backup-rotation-lexicographic-bug-2026-10-16.md`）：
+
+- `new-api-before-any-agent-restore-20261010-104604.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+- `new-api-before-any-agent-separate-20261010-110936.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+- `new-api-before-ch91-any-20261010-141610.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+- `new-api-before-deepseek-chain-clean-20261010-120810.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+- `new-api-before-jianzhile-gpt6-20261010-132315.db` —— 本 bug（supervisor 轮转按字典序删除）+ KEEP=7 设计
+
+回滚请以本页的逐字段步骤为准（快照只是加速器，不是前提）。
