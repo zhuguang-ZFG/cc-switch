@@ -586,6 +586,18 @@ provider 期望集）——**40/40 OK**；`verify_omp_newapi_alignment` CLEAN；
 **回滚**：`models.yml.bak-20261016-212738-drop-nonnewapi`（同目录）或 OMP 仓 `git revert` 对应提交
 （`stepfun` 一行同理可 revert）。
 
+**复核收口（21:3x，逐条落证）**：① `omp models` 全表实证 = `any-newapi (1) / zg-newapi (72) /
+zg-newapi-anthropic (5)` —— provider 断言非空、非截断假象；② alignment 门禁**按 provider 逐块**输出，
+此前"1 ids"只是 tail 截到的最后一行（any-newapi 的 1 个 id）；全跑显示 `zg-newapi: 72 ids, 0 without
+an enabled route, 28 quarantined` 并逐条列出隔离原因/恢复条件 —— **CLEAN 非空跑** ✓（且顺带佐证了
+gemini-3.8-flash / qwen3.8-max 等"dead-with-reason"是房子在册的既有隔离项）；③ 锚点核查：
+`&id001`/`&id002` 两个定义都在存活块内（行 969/67），无遗留别名引用，`yaml.safe_load` 通过 ✓；
+④ **范围口径**：保留的三个都经 NewAPI（`zg-newapi` 3002、`zg-newapi-anthropic` 3003=房子 TTFT 网关、
+`any-newapi` 3002）——若你要的是"字面只留 `zg-newapi`"，说一声我摘掉另两个（代价：designer/task 的
+opus 链与 3003 面断裂）。
+**后续建议（未动）**：`test_omp_routes` 里三处硬编码 provider 集（含 `REMOVED_LOCAL_PROVIDERS`）
+建议收敛为单一常量或从 models.yml 派生，降低下次增删 provider 的同步成本。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
