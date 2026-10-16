@@ -101,9 +101,76 @@ enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意�
 - 免费额度用尽时桥统一返回 **429**（house 语义：420/429 属配额、非故障，勿据此判死）；
 - 该入口与付费 `glm-5.3-flash` 是不同 id：若想让既有付费名的请求优先走免费腿，需要
   在渠道里做 `model_mapping` 别名或改 OMP 路由——**属用户裁决项，本次未动**。
+  （2026-10-16 晚更新：`deepseek-v4.1-flash-free` 经裁决**不推广**——桥为纯文本单飞，
+  见下节；`ll-alpha-free` / `nemotron-3.5-super-vl-free` 已注册 OMP。）
+
+## 重启后验证与四裁决（2026-10-16 晚，OMP 重启后）
+
+**重启生效**：OMP 新实例 pid 8472 于 15:35:02 启动（晚于配置提交 881b895 的 15:34:20；
+`models.yml` mtime 15:34:20 < 启动时间 → 注册表即新文件）。启动日志确认 compaction r13
+（`global compaction model reconciled … revision=2026.10.15-r13`）与 MCP 刷新。
+
+**主腿归因（重启后实弹）**：15:35–16:03 `glm-5.3-flash` 完成请求 11 条：**9 条落 ch178**
+（zen），2 条落 ch118（单飞桥占满/超时时的付费接替，189s/179s）。归因取自 `logs` 表
+`channel_id`，与上一轮 6/6 结论一致。
+
+**新发现：zen 主腿让 advisor 静默失能（关键）**
+
+- advisor（角色=glm-5.3-flash）是带工具的评审器（read/grep/glob/advise）；zen 桥是纯文本
+  单飞转发（`promptFromMessages` 只吃 messages，tools 数组从不转发）→ 经 ch178 的评审
+  响应不可能带 tool_calls；
+- 实测（本会话 `__advisor.jsonl`）：重启后前 11 次评审全部落 glm-5.3-flash 名下
+  （ch178 ×9 / ch118 ×2）：**仅 ch118 那次带 read+grep，其余 0 工具调用、0 advise、0 注记**。
+  对照旧会话今日 103 次评审（glm 池 ~8% 成功 → 链把 90 次兜到 deepseek-v4.1-flash）
+  产出 20 次 advise；
+- 机理解释：zen 把 glm-5.3-flash 的失败面"修好"（200），恰好切断 advisor 依赖的兜底路径
+  （链=[deepseek-v4.1-flash]），评审从此静默——这不是延迟问题，是工具链结构性失效。
+
+**四裁决（用户确认）**
+
+1. **工作马不推广**：`deepseek-v4.1-flash` 不加 zen 主腿。桥=纯文本单飞（tools 不转发）、
+   150s 超时、日配额 429；实测 `deepseek-v4.1-flash-free` 单字回复 157.1s（含 150s 桥超时
+   重试）——结构性不可承载主循环。
+2. **advisor 重指 `deepseek-v4.1-flash`（用户签字特批）**：修订 2026-08-20/09-09
+   "advisor 只走免费/低成本路由"约束。改动：`config.yml` `modelRoles.advisor` →
+   `zg-newapi/deepseek-v4.1-flash`；`fallbackChains.advisor` 自指改为
+   `zg-newapi/deepseek-v4-flash`（初版曾选 k3 作"强模型兜底"，按约束精神复核后修正：
+   k3 ratio=2 为全表最贵、与"低成本"相悖；dsw-flash ratio=0.5、实测工具可用
+   （2.7s/3.3s、tool_calls ✓）、池 ch180/ch118/ch127 多腿）；门禁
+   `test_advisor_role_stays_on_approved_low_cost_routes`
+   白名单加一行 + 日期注释。实体理由：deepseek-v4.1-flash 是当日 90 次评审的**实际载体**、
+   本地 `ModelRatio=0`（6h 实测 548 条请求 quota=0）、工具链实证可用。
+   **热载实测**：config.yml 写入（16:05:41）后 15 秒（16:05:56）advisor 已切至 deepseek，
+   恢复 read/grep/advise（16:06–16:10 递出 3 条注记，含本条约束的 blocker）——
+   **modelRoles 变更会话内即时生效，无需重启**（修正上节"需 OMP 重启"的旧结论）。
+3. **冒烟契约放宽**：`BACKUP_CHANNEL_POSTURES[178]` `max_priority` 0 → 30（注释注明
+   2026-10-16 用户指令 zen 主腿），weight≤5 保留；重跑冒烟恢复旧违约集。
+4. **两个新免费 id 挂 OMP 条目**：`ll-alpha-free`、`nemotron-3.5-super-vl-free` 按
+   glm-5.3-flash-free 模式注册（`supportsTools: false` / `reasoning: false`，context 保守
+   标注未量测），**不动任何路由**。
+
+**新免费 id 实测数据**（经网关→ch178→桥→opencode CLI）：
+
+| id | 小请求 | tools | reasoning | 备注 |
+|---|---|---|---|---|
+| ll-alpha-free | 200 / 8.7s / `OK` | 200 无 tool_calls（散文） | 无 reasoning 输出 | 长/工具形态打满 150s 桥超时后重试（160s+） |
+| nemotron-3.5-super-vl-free | 200 / 8–38s / `OK`；`17*3`→`51` ✓ | 200 无 tool_calls（散文） | 无 reasoning 输出 | VL 能力经桥不可用（桥对 image parts 拒收） |
+| deepseek-v4.1-flash-free | 200 / 157.1s / `OK` | （结构性无 tools） | — | 150s 桥超时上限下不可用为主力 |
+
+**门禁重跑（全部改动落盘后）**：`test_omp_routes` **40/40 OK**；`verify_omp_newapi_alignment`
+**CLEAN**；冒烟 5 类不变（backup posture 回 182 单条）。`perf_metrics` 15:00 桶未落盘，
+zen 主腿对 `glm-5.3-flash` 池成功率（11–14 时桶 4/59、9/67、5/43、6/114）的影响待下一桶评估。
+
+**变更文件**：cc-switch `scripts/ops/newapi-local-smoke.py`、`scripts/ops/test_omp_routes.py`、
+本文；OMP 仓 `config.yml`（advisor 角色+链）、`models.yml`（两个免费 id 条目）。
+
 
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
   或按同步脚本的 PUT 步骤把 models 串改回 11 只 + 删三条 ModelRatio=0；
-- OMP：删掉 `models.yml` 的 `glm-5.3-flash-free` 条目（OMP 仓版本化，可 git revert）。
+- OMP：删掉 `models.yml` 的 `glm-5.3-flash-free` 条目（OMP 仓版本化，可 git revert）；
+- 晚间的清洁项同理：OMP 仓 `config.yml`（advisor→deepseek、advisor 链→k3）与 `models.yml`
+  （ll-alpha-free / nemotron-3.5-super-vl-free 条目）可逐提交 git revert；
+- 契约/门禁：`scripts/ops/newapi-local-smoke.py` 的 178 pin 与 `scripts/ops/test_omp_routes.py`
+  的白名单行可 git revert——但两者都是用户签字过的裁决，收回前先确认。
