@@ -405,6 +405,34 @@ agentrouter ch134（p50，用户刚开）。文档无"补 detail"旋钮 → 按�
 运行期效果在下一次慢 opus 回合可见。若要对所有 provider 放宽：
 `omp config set providers.streamIdleTimeoutSeconds 240`（影响全局失败检测速度，未采用）。
 
+## 同日晚四：opus-5-5 定案——真凶是 **ch3 停滞腿** + ch86 坏 key
+
+**症状**：opus-5-5 每轮 ~140s 后拿到"空流"（网关 raw 抓包：HTTP 200 + SSE `: PING` 心跳 +
+**裸 JSON** `{"error":{"message":"Insufficient account balance"...}}`——我此前的解析只认 `data:` 行，
+所以误读成"空 200"）。
+
+**逐腿直探（带各渠道自己的 `header_override`，否则上游回 401 unauthorized client）**：
+
+| 腿 | 结果 |
+|---|---|
+| **ch3 baibei-100xlabs**（p52 契约头名，6 keys） | key0/key1 均 **120.4s 读超时** ← 停滞腿 |
+| ch86 agentrouter-claude（旧 key 7047edcf） | **SSL UNEXPECTED_EOF**（连接被切）← 坏 key |
+| **ch134/135/136**（你新加的三把：8494aa2a/22ccd1e1/3b9f9fdb） | **全部 200**（5–9s，流式/非流式都通） |
+
+即：三条健康腿被**两条坏腿挡在前面**（ch3 p52 > ch86 p50），每个请求先吃 ~140s 停滞。
+
+**处置**（都带写前快照/回读）：
+1. **park ch86**：`auto_ban=1 + status=2`（房式 park；它本就在 smoke 的 accepted_disabled 名单）
+   —— 快照 `new-api-before-park-ch86-20261016-195932.db`；
+2. **ch3 摘除两个 opus 模型**（`claude-opus-5`、`claude-opus-5-5`；房式"从 models 摘除"，abilities
+   自动重建、**通道姿态 pin 未动**，`CRITICAL_ABILITY_POSTURES` 只钉 ch83/91 的 sol 不受影响）
+   —— 快照 `new-api-before-modelratio-20261016-192534.db` 之后另有一份 park 快照；
+3. **验收**：`claude-opus-5-5` 经网关 **200 / 8.9s / "OK" / fr=stop，落 ch136**（此前 140s 空流）。
+
+**回滚**：ch86 `POST /status {"status":1}`；ch3 把两个 opus 名加回 `models` 再 PUT。
+**遗留观察**：ch3 仍载 `claude-fable-5-1/5.1`（无实测证据，未动；其名注称 ch3 是 fable 主档，
+若见 fable 同样停滞按同法摘除）。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
@@ -419,6 +447,9 @@ agentrouter ch134（p50，用户刚开）。文档无"补 detail"旋钮 → 按�
   逐项回退 = ch124/ch171 `param_override` 置 null、ch124 priority 回 50
   （`apply_qwen_leg_param_override.py` 只做正向，回退走 API/脚本手改）；
   OMP 侧 `models.yml` 的 qwen 条目（compat 两键 + maxTokens 16384）可 git revert；
+- ch86 park / ch3 摘模：快照 `new-api-before-park-ch86-20261016-195932.db`；
+  回退 = ch86 `POST /api/channel/86/status {"status":1}`、ch3 把
+  `claude-opus-5`/`claude-opus-5-5` 加回 `models` 再 PUT；
 - ModelRatio 三键：快照 `new-api-before-modelratio-20261016-192534.db`；或删回
   `claude-opus-5-5` / `kimi-k3-oc` / `qwen3-8-27b` 三键恢复"未注册"态；
 - vision 角色：OMP 仓 `config.yml`（vision→dots-3-note-prev + 链改）可 git revert
