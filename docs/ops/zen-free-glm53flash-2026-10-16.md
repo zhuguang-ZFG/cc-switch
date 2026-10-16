@@ -237,6 +237,8 @@ WinError 206，但 40 文件上限下该错误走 catch 直接降级，不会进
 `claude-opus-4-8` 启用腿仅 ch72（anyrouter）立即 429；`claude-opus-5` 探针 200 但 136s 空流
 （无 choices 帧，**结论=挂起/掐断，未定**，不可读作"不支持工具"）；smol 链原第 3/4 跳
 `mercury-2` 429（free tier at capacity）。三者均为 k3 失效时的逃生口，建议后续替换或评估降级。
+**更正（同日 18:4x，用户指出 + 实测复核）**：Claude 腿**不是"死"**——anyrouter ch72 启用中
+（探针即时 429 = 容量拒绝），agentrouter claude 池会**定时复活**；详见下节。
 
 ## 顺带巡检：NewAPI 与 Kimi Code（同日晚，"继续改进优化"）
 
@@ -274,6 +276,29 @@ deploy 套件 **1/1**、快照门禁 **14/14**、hutuji **2/2**、routes **40/40
 **Kimi 其它模型条目核活**：`newapi/gpt-5.6-sol` **活着且可工具调用**（3.1s 文本 / 2.7s `tool_calls`，
 jojatoken 低优先腿）——可作为 opus 死腿之外的备选；`codebuddy-direct`（100.83.32.95:8787）**连接被拒**
 （WinError 10061，VPS 服务未监听）——待用户决定恢复该 VPS 服务或从 Kimi 配置摘除。
+
+## 同日晚：advisor 换强模型 + Claude 腿实况更正 + Kimi 残留清理
+
+**advisor 走强模型（用户指令）**：原话「advisor 用 gpt 和 claude 以及 k3 这种强模型，至少也要是
+glm5.3」——2026-08-20 起的低成本约束就此解除。落地：`modelRoles.advisor = zg-newapi/k3:high`
+（ch33 p50 活腿，带 tools 探针 3.4s tool_calls），兜底链 `gpt-5.6-sol → glm-5.3`（实测
+2.7s / 2.9s tool_calls）。门禁白名单与注释同步修订（记日期与依据）。**热载实证**：改动后约 1 分钟，
+运行中会话的 advisor 已切换（transcript 18:35:21 起 5 条 k3，其中 2 条 advise 载荷落账）。
+**Claude 未入链**：agentrouter 上游对短流式请求有敏感词误杀（`500 sensitive words detected`，
+2026-08-03 实测）——对每轮高频短请求的 advisor 是已知故障类；等有稳定（启用且非 429）的 Claude
+腿再评估。
+
+**Claude 腿实况更正**：anyrouter ch72 启用、载 `claude-opus-5`/`claude-opus-4-8` 与
+`zg-agent-claude-opus-5` 等别名（后者只挂 ch72，可作 anyrouter 独占探针）；18:4x 实测返回即时
+**429 Service Unavailable（容量拒绝，非死）**。agentrouter claude 池 ch86/134/135/136 当前 st=2，
+但 test_time 为 10-15 23:00 / 10-16 00:17，且当日 **10:54 的 opus-5 真实流量即出自 ch134-136**
+——"定时复活"有据。
+
+**Kimi 清理**：`providers."codebuddy-direct"` 与 `[models."codebuddy/gpt-5.6-sol"]` 已从
+config.toml 删除（该渠道 2026-08-12 已退役：WorkBuddy 上游流式 11140 不可用；guardian /
+proxies-supervisor / newapi-local-smoke 三处早已带注释同步清）。备份
+`config.toml.20261016-183618.bak`；现存 **3 provider / 9 模型**，tomllib + `kimi -p` 实弹均 OK。
+**顺带记录**：本轮 `config.yml` 的 `default` 角色现为 `glm-5.3:max`（用户侧改动，非本批所为）。
 
 ## 回滚
 

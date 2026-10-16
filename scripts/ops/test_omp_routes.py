@@ -669,15 +669,14 @@ class OmpRouteGateTests(unittest.TestCase):
         )
 
     def test_advisor_role_stays_on_approved_low_cost_routes(self):
-        """用户约束（2026-08-20, 09-09 修订）：advisor 只能走免费/低成本路由。
+        """用户约束（2026-08-20, 09-09 修订；2026-10-16 晚解除）：advisor 路由须在批准列表内。
 
-        advisor 是高频后台角色（活跃会话 ~20s/轮）。曾被建议切到 TTFT 付费
-        路径，上线后每 3 分钟烧 ¥0.2+ justwoker 额度被用户叫停。
-        09-09 sota 账号被封（403 User has been banned, 非额度耗尽）, 用户
-        指定 advisor 挂 zg-newapi/glm-5.3（agentrouter ch45/120 免费池）。
-        2026-09-25 稳定性优化保留当前 Omen Alpha（Go 套餐）角色配置，
-        将其加入精确允许列表；不放宽到任意模型或付费 Opus 路由。
-        约束精神不变：不得切付费路由（anthropic opus / justwoker 等）。
+        历史：advisor 是高频后台角色（活跃会话 ~20s/轮），曾被建议切到 TTFT 付费
+        路径，上线后每 3 分钟烧 ¥0.2+ justwoker 额度被用户叫停，此后约束为
+        "只走免费/低成本路由"。
+        2026-10-16 同日晚用户指令改为走强模型（"gpt 和 claude 以及 k3 这种强
+        模型，至少也要是 glm5.3"）——低成本约束解除，但**仍须在精确允许列表
+        内**（防升级失控），k3 已加入。
         """
         roles = _model_role_entries(CONFIG_FILE.read_text(encoding="utf-8"))
         # 2026-10-03 用户批准：space-bunny-free 升任 advisor（免费档，符合
@@ -696,11 +695,24 @@ class OmpRouteGateTests(unittest.TestCase):
         # 0 工具调用、0 注记）；deepseek-v4.1-flash 是当日 90 次评审的实际
         # 载体、本地 ModelRatio=0（quota 实测 0），工具链实证可用。
         # 证据与裁定：docs/ops/zen-free-glm53flash-2026-10-16.md。
+        # 2026-10-16 同日晚用户指令（supersedes 上述低成本约束）：
+        # 「advisor 用 gpt 和 claude 以及 k3 这种强模型，至少也要是 glm5.3」。
+        # 低成本约束就此解除；k3 加入允许列表（实测 ch33 p50 活腿、
+        # tool_calls 3.4s），角色主选 k3:high，兜底链 gpt-5.6-sol -> glm-5.3
+        # （两者均经网关带 tools 探针实测：2.7s / 2.9s tool_calls）。
+        # Claude 腿实况（2026-10-16 18:4x 用户更正 + 实测）：anyrouter ch72
+        # 启用中且载 claude-opus-5/4-8 与 zg-agent-claude-opus-5 别名，但探针
+        # 即时 429（容量拒绝，非死）；agentrouter claude 池（ch86/134/135/136）
+        # 会定时复活（当日 10:54 opus-5 流量即出自 ch134-136，test_time 00:17）。
+        # 未把任何 Claude 腿放进 advisor 链：agentrouter 上游对短流式请求有
+        # 敏感词误杀（500 sensitive words，2026-08-03 实测），对高频短请求的
+        # advisor 角色是已知故障类；等有一条稳定（启用且非 429）的 Claude 腿
+        # 再评估。
         self.assertIn(
             _base_selector(roles.get("advisor", "")),
             {"zg-newapi/glm-5.3", "zg-newapi/omen-alpha", "zg-newapi/space-bunny", "zg-newapi/glm-5.3-flash",
-             "zg-newapi/deepseek-v4.1-flash"},
-            "advisor 必须保留已批准的 GLM / Omen Alpha / Space Bunny 低成本路由（2026-10-16 起含 deepseek-v4.1-flash 签字特批）",
+             "zg-newapi/deepseek-v4.1-flash", "zg-newapi/k3"},
+            "advisor 必须保留已批准路由（2026-10-16 晚起按用户指令走强模型，k3 已签批）",
         )
 
     def test_critical_chains_exclude_known_bad_agentrouter_claude(self):
