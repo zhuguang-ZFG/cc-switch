@@ -16,7 +16,11 @@ FORBIDDEN_CRITICAL_CANDIDATES = {
     "agentrouter/claude-opus-5",
     "agentrouter/claude-opus-4-8",
 }
-REMOVED_LOCAL_PROVIDERS = {"codebuddy"}
+# 2026-10-16 用户指令："omp 的模型配置，除了 newapi 的其他都删除吧"——直连代理类
+# provider（agentrouter / anyrouter / anyrouter-sol）已从 models.yml 删除；加入本表
+# 防止回流。保留的三个都经 NewAPI：zg-newapi(3002) / zg-newapi-anthropic(3003 TTFT 网关) /
+# any-newapi(3002)。
+REMOVED_LOCAL_PROVIDERS = {"codebuddy", "agentrouter", "anyrouter", "anyrouter-sol"}
 _THINKING_SUFFIXES = frozenset(("minimal", "low", "medium", "high", "xhigh", "max", "auto"))
 
 
@@ -829,7 +833,8 @@ class OmpRouteGateTests(unittest.TestCase):
     def test_claude_models_do_not_promote_to_non_claude_models(self):
         """选择 Claude 后不得因上下文提升静默切换为 DeepSeek 等其他模型。"""
         text = MODELS_FILE.read_text(encoding="utf-8")
-        for provider in ("zg-newapi-anthropic", "agentrouter"):
+        # 2026-10-16：agentrouter provider 已按用户指令删除（只保留 NewAPI 系），从遍历表移除。
+        for provider in ("zg-newapi-anthropic",):
             block = _top_level_mapping_block(text, provider)
             with self.subTest(provider=provider):
                 self.assertFalse(
@@ -906,10 +911,11 @@ class OmpRouteGateTests(unittest.TestCase):
         self.assertEqual(self.omp_models_rc, 0, self.omp_models_stderr)
         # 2026-10-03：anyrouter 提供者 models: []（opus-4-8 池暂时下线，用户裁决），
         # omp models 不再列出；窗口恢复并回捞条目后把 "anyrouter" 加回元组。
+        # 2026-10-16：agentrouter 亦按用户指令删除（只保留 NewAPI 系），不再列出。
         for provider in (
             "zg-newapi",
             "zg-newapi-anthropic",
-            "agentrouter",
+            "any-newapi",
         ):
             self.assertIn(f"{provider} (", self.omp_models_output)
 
@@ -1248,8 +1254,10 @@ class OmpRouteGateTests(unittest.TestCase):
 
     def test_live_models_registrations_parse_expected_providers(self):
         parsed = _parse_model_registrations(MODELS_FILE.read_text(encoding="utf-8"))
+        # 2026-10-16：用户指令"除了 newapi 的其他都删除"——直连代理 provider 已删；
+        # 期望集改为三个 NewAPI 系（3002 / 3003 TTFT 网关 / 3002）。
         self.assertTrue(
-            {"zg-newapi", "zg-newapi-anthropic", "agentrouter", "anyrouter"}
+            {"zg-newapi", "zg-newapi-anthropic", "any-newapi"}
             <= set(parsed),
             sorted(parsed),
         )

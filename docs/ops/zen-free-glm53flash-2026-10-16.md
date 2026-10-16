@@ -569,6 +569,19 @@ glm-5.3 3.9s ✓、qwen3-8-27b 1.6s ✓、deepseek-v4.1-flash 6.2s ✓（全部 
 qwen3.8-flash/-high/-max（无活腿）、gpt-5.5（腿全停）、gemini-3.8-flash（单腿 401）、
 kimi-k3-oc（额度用尽）、anyrouter Claude（上游下架）。
 
+### OMP 模型配置收敛：只留 NewAPI 系（21:27，用户指令"除了 newapi 的其他都删除"）
+
+**删除**（`models.yml` 68 行、1120→1052）：`agentrouter`（3 模型：claude-opus-5/gpt-5.6-sol/glm-5.3，
+直连 8788 代理）、`anyrouter`（0 模型空块）、`anyrouter-sol`（1 模型：gpt-5.6-sol，直连 8789 代理）。
+**保留**（78 模型）：`zg-newapi`（72，3002）、`zg-newapi-anthropic`（5，3003 = 房子 TTFT 网关，仍走
+NewAPI 通道）、`any-newapi`（1，3002）。被删四面模型在 NewAPI 均有同名替代 ✓；全仓（config.yml /
+agents / extensions）对这三个 provider 的引用为 **0** ✓。
+**门禁**：`REMOVED_LOCAL_PROVIDERS` 扩为 `{codebuddy, agentrouter, anyrouter, anyrouter-sol}`（防回流，
+带日期注释）；三处硬编码旧 provider 集的用例同步修订（promotion 遍历表、`omp models` 解析期望、
+provider 期望集）——**40/40 OK**；`verify_omp_newapi_alignment` CLEAN；hutuji 2/2、routing-observability
+18/18、compaction-model 21/21 均不受影响 ✓。
+**回滚**：`models.yml.bak-20261016-212738-drop-nonnewapi`（同目录）或 OMP 仓 `git revert` 对应提交。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
