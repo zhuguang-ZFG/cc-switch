@@ -88,6 +88,13 @@ backups = sorted(BACKUP_DIR.glob("new-api-*.db"), key=lambda p: p.stat().st_mtim
 `ch136-reenable`）——与盘上残留 7 份（chstatus×2、dsv41f×2、restore-ch39×2、zen）逐一对上。
 **删除时刻是 10-16 03:00，不是 10-15 19:2x**（"19:23 分界"是巧合：19:32 之后的文件名恰好都排前）。
 
+**机制断代（考证，回应"是否事后外推"的质疑）**：无 key 的
+`sorted(BACKUP_DIR.glob("new-api-*.db"))` 与 `backups[:-BACKUP_KEEP]` 同由
+`1720c66d`（**2026-08-15**）引入，早于**所有**缺失快照（10-09 起）；其间唯一相关改动
+`066552db`（10-04，"backup tier ordering"）经 diff 核实**未触及**备份/轮转逻辑
+（`git log -S 'BACKUP_KEEP'` 只列出引入与本日修复两次提交）。因此"按字典序删除"
+对 10-09 以来每一份 `new-api-*` 损失**均成立**，不是从当前代码外推。
+
 ## 实盘验证（修复后，15:03）
 
 对真实 backups 目录跑修复版 `backup_newapi_db("2026-10-16")`：
