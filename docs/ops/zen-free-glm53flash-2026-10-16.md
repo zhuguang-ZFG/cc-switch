@@ -598,6 +598,23 @@ opus 链与 3003 面断裂）。
 **后续建议（未动）**：`test_omp_routes` 里三处硬编码 provider 集（含 `REMOVED_LOCAL_PROVIDERS`）
 建议收敛为单一常量或从 models.yml 派生，降低下次增删 provider 的同步成本。
 
+### hermes 记忆自动 review 故障修复（21:5x，用户报"Memory auto-review failed in both transports"）
+
+**机制**（读 `pi-hermes-memory@0.9.6` 源码）：`turn_end` 后台学习循环默认 `reviewTransport: direct`
+（in-process `completeSimple`，失败才回退 `pi -p` 子进程）。未设 `llmModelOverride` 时**直连用当前
+会话模型**且 `timeoutMs: 120000` —— 会话模型慢/排队即被内部取消 → `fallbackReason: "aborted"`
+（用户所见 "Direct: aborted."）；子进程回退在 Windows 上找不到可执行的 `pi` CLI（"Unable to resolve a
+directly executable Pi CLI"）→ 两传输皆败 → 告警。
+**不是多余插件**：`~/.omp/agent/pi-hermes-memory/` 下 MEMORY.md/USER.md/failures.md/sessions.db/skills
+在活跃维护（`memory.backend: mnemopi` 是存储后端；hermes 是记忆工具/学习回路那层）→ **修复而非删除**。
+**修法**：新建 `~/.omp/agent/hermes-memory-config.json`（即源码 `DEFAULT_CONFIG_PATH`）：
+`{"llmModelOverride": "zg-newapi/deepseek-v4.1-flash", "llmThinkingOverride": "off"}`——review 改走
+ratio 0、1.9–6.2s 的快模型（其引用匹配为 `provider/id` 精确唯一 ✓；且相比现役会话模型不再受
+120s 取消风险）。
+**生效面**：`loadConfig()` 在扩展工厂期只读一次 → **新会话/新进程生效**，运行中实例需重启。
+**验收**：下个达标会话（约 10 轮或 15 次工具调用）应不再告警、改为出现 "💾 Memory auto-reviewed
+and updated"；也可在 TUI 手动跑一次 `/memory-consolidate`（同一 LLM 路径）立即验证。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
@@ -616,6 +633,9 @@ opus 链与 3003 面断裂）。
   回退 = ch126 `POST /api/channel/126/status {"status":1}` + PUT `auto_ban=0`
   （精确前态：status=1、auto_ban=0、p=40、w=5、models=`gpt-6-astra`）、ch180 加回 `gpt-6.1-sol`、
   ch134 加回 `gpt-6-astra`/`gpt-6.1-sol`（均在 models 串）；
+- OMP 模型面收敛：`models.yml` 删除非 NewAPI provider = OMP 仓 `git revert 9bc03fc`
+  （含 `models.yml.bak-20261016-212738-drop-nonnewapi` 兜底）；`stepfun` 禁用 = `git revert 07f4983`；
+  hermes review 覆盖 = 删除 `~/.omp/agent/hermes-memory-config.json`（回到用会话模型的默认态）；
 - ch86 park / ch3 摘模：快照 `new-api-before-park-ch86-20261016-195932.db`；
   回退 = ch86 `POST /api/channel/86/status {"status":1}`、ch3 把
   `claude-opus-5`/`claude-opus-5-5` 加回 `models` 再 PUT；
