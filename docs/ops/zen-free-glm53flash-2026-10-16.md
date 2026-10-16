@@ -429,6 +429,11 @@ agentrouter ch134（p50，用户刚开）。文档无"补 detail"旋钮 → 按�
    —— 快照 `new-api-before-modelratio-20261016-192534.db` 之后另有一份 park 快照；
 3. **验收**：`claude-opus-5-5` 经网关 **200 / 8.9s / "OK" / fr=stop，落 ch136**（此前 140s 空流）。
 
+**复核反证（20:2x）**：担心"OpenAI 形态探针打不准 Anthropic 型渠道"——实测 ch3 是 **type=1（OpenAI 型**；
+type=14 的是 ch86），且用 Anthropic 形态 `POST /v1/messages` 复探 ch3 → **502「Upstream request failed」
+135.1s**：**两种形态都坏**，不是探针形状问题，处置成立。验收探针走的正是 NewAPI 的 openai→anthropic
+转换路径并 8.9s 返回 "OK" ✓，转换路径本身健康。
+
 **回滚**：ch86 `POST /status {"status":1}`；ch3 把两个 opus 名加回 `models` 再 PUT。
 **遗留观察**：ch3 仍载 `claude-fable-5-1/5.1`（无实测证据，未动；其名注称 ch3 是 fable 主档，
 若见 fable 同样停滞按同法摘除）。
