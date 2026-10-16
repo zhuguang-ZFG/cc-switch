@@ -208,27 +208,35 @@ timeoutMs=30000`，跨 5 个 pid（9380/15044/21708/18276/12920），时间 2026
 **定位**：该 handler 唯一的 await 是基线快照（`pi.exec("git",…)` 三连 + `hash-object`，
 单次 15s 上限）。两个疑似工作区（STM32/monidianlu）实测 git 均 0.05–0.10s；hutuji 的
 `ls-files --others` 6.8s（76,160 个未跟踪文件；批量 `hash-object` 会撞 Windows 命令行长度上限
-WinError 206，逐文件回退路径在 40 文件上限内仍安全）。→ 判定：这些会话里 `pi.exec("git",…)`
-**未在预算内 resolve**（30s 花在等待而非 CPU）；宿主侧 stalling 的确切原因**保留为未知**，
-已加探针待现场取证。
+WinError 206，但 40 文件上限下该错误走 catch 直接降级，不会进逐文件回退）。排查还证伪两条：
+① 日志仅覆盖 10-12 起、最早超时 10-15 23:35，但基线探测代码自 **08-20**（`384d569`）即存在
+——**不是代码回归**，是宿主侧状态变化；② 全量日志中 ≥10s 的 `ui.loop-blocked` 仅 3 条，与
+20 次超时不同 pid 不同时刻——**不是事件循环整体卡死**。→ 判定：这些会话里
+`pi.exec("git",…)` **未在预算内 resolve**（30s 花在等待而非 CPU）；宿主侧 stalling 的
+确切原因**保留为未知**，已加探针待现场取证。
 
-**修复**（OMP 仓 `extensions/omp-sota-escalation.js`）：新增 `collectBaselineSnapshot()`，
-给基线探测套 **8s 硬预算**（超时降级 `complete:false`；`changedFilesSince` 原语义即按"全量
-变更集"处理，仍受 `MAX_CHANGED_FILES=40` 约束），`before_agent_start` 与 `agent_end` 两处
-调用点改用该包装；另加两条诊断 warn：单次 git 调用 ≥2.5s → `sota: git probe slow`，
-预算超时 → `sota: baseline snapshot incomplete`。
+**修复**（OMP 仓 `b8aaccc`，取代同日 `35da154` 的"8s 包装"版）：改为**结构性去阻塞**——
+`before_agent_start` 只 `startBaselineProbe()` 启动、**完全不等待**；探测值在 `agent_end`
+的 managed timer（`ctx.setTimeout`，不受 30s handler 预算约束）里经 `resolveSnapshot()`
+以 8s 截止消费，超时降级 `complete:false`（`changedFilesSince` 按"回合末变更集"处理，仍受
+`MAX_CHANGED_FILES=40` 约束）。救援路径（`tool_result`）与 `/sota*` 命令的分钟级
+`runEscalation` 同样改为 `scheduleBackground(ctx, …)` 派发。诊断 warn：单次 git 调用 ≥2.5s →
+`sota: git probe slow`；消费超时 → `sota: snapshot incomplete {label:baseline|end}`。
 
-**验证**：新增门禁 `scripts/ops/test_omp_sota_snapshot.mjs`（node，**9/9 通过**：快路径 1ms
-零告警；挂死 exec 在 8.0s 被截断且告警；慢调用 2.7s 告警、不误报 incomplete；降级语义不变）；
-实弹 `omp -p` 新实例加载修改后扩展：无加载错误、无超时、会话正常退出。
+**验证**：门禁 `scripts/ops/test_omp_sota_snapshot.mjs` **14/14 通过**（handler 挂死 exec 下
+0–1ms 返回；deferred 消费 8.0s 截断并带 label 告警；慢调用 2.7s 告警且不误报；救援 handler
+立即返回；降级语义不变）。**真机取证**（advisory 建议）：临时把阈值降到 1ms 跑 `omp -p`，
+日志出现两轮 `sota: git probe slow`（18:11:49 基线 / 18:11:54 agent_end 消费，单次
+59–77ms）——证明新路径在真机执行且 deferred 消费确实跑过；随后阈值还原 2500 并复跑门禁。
 
-**未解/待观察**：`pi.exec` stalling 的宿主级原因（借新探针取证）；同类风险仍在 `tool_result`
-救援路径的 `collectChangedFiles`（未包装；救援本身即 30s+ 预算外行为，维持原状）。
+**未解/待观察**：`pi.exec` stalling 的宿主级原因（借新探针取证）；救援/显式命令脱管后
+`deliverAs: steer` 在回合已结束时能否投递需实测（今日日志未出现 `event=tool_result` 超时，
+暂无现场）。
 
 **附带发现（本批链头探针）**：`@task`/`@designer` 兜底链的 Opus 头全部不健康——
 `claude-opus-4-8` 启用腿仅 ch72（anyrouter）立即 429；`claude-opus-5` 探针 200 但 136s 空流
-（无 choices 帧）；smol 链原第 3/4 跳 `mercury-2` 429（free tier at capacity）。三者均为
-k3 失效时的逃生口，建议后续替换或评估降级。
+（无 choices 帧，**结论=挂起/掐断，未定**，不可读作"不支持工具"）；smol 链原第 3/4 跳
+`mercury-2` 429（free tier at capacity）。三者均为 k3 失效时的逃生口，建议后续替换或评估降级。
 
 ## 回滚
 

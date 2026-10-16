@@ -1,14 +1,19 @@
 #!/usr/bin/env node
-// Regression test for the SOTA escalation baseline probe timeout (2026-10-16).
+// Regression test for the SOTA escalation snapshot timeouts (2026-10-16).
 //
 // Symptom: "Extension handler timed out after 30000ms" for
 // extensions/omp-sota-escalation.js on event before_agent_start, every turn in
 // some long-lived sessions (20 occurrences across 5 pids in one day).
 //
-// Contract under test: the before_agent_start handler must never spend the
-// host's 30s handler budget on an open-ended pi.exec("git", ...) chain.
-// collectBaselineSnapshot() bounds the probe (SNAPSHOT_BUDGET_MS) and degrades
-// to complete:false, which changedFilesSince() already handles.
+// Contract under test:
+//   1. before_agent_start must not await the git probe at all (it only starts
+//      it), so an unresolved pi.exec can never exhaust the host's 30s budget;
+//   2. the probe is consumed inside the agent_end managed timer under
+//      SNAPSHOT_BUDGET_MS, degrading to complete:false on overrun;
+//   3. the rescue path and the explicit command never await the multi-minute
+//      child inside a handler;
+//   4. slow git calls are reported, and changedFilesSince() degradation
+//      semantics are unchanged.
 //
 // Run: node scripts/ops/test_omp_sota_snapshot.mjs
 
@@ -40,12 +45,14 @@ const check = (label, ok, detail = "") => {
   if (ok) passes += 1;
   else failures += 1;
 };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const mod = await import(pathToFileURL(join(extSandbox, "omp-sota-escalation.js")).href);
 
-function makePi(execImpl) {
+function makeHarness(execImpl) {
   const handlers = {};
   const warns = [];
+  const deferred = [];
   const pi = {
     on: (name, fn) => {
       handlers[name] = fn;
@@ -57,14 +64,22 @@ function makePi(execImpl) {
       debug: () => {},
     },
     registerCommand: () => {},
+    sendMessage: () => {},
     exec: execImpl,
     pi: { getAgentDir: () => join(sandbox, "agentdir") },
   };
   mod.default(pi);
-  return { handlers, warns };
+  const ctx = {
+    cwd: sandbox,
+    models: { list: () => [] },
+    ui: { notify: () => {} },
+    setTimeout: (fn) => {
+      deferred.push(fn);
+      return deferred.length;
+    },
+  };
+  return { handlers, warns, deferred, ctx };
 }
-
-const ctx = { cwd: sandbox, models: { list: () => [] } };
 
 const fastGit = async (cmd, args) => {
   if (cmd !== "git") return { code: 1, stdout: "" };
@@ -74,65 +89,92 @@ const fastGit = async (cmd, args) => {
   return { code: 1, stdout: "" };
 };
 
-// A: fast path stays fast and silent
+// A: fast path — hook returns immediately, deferred consumption is clean
 {
-  const { handlers, warns } = makePi(fastGit);
+  const h = makeHarness(fastGit);
   const t0 = Date.now();
-  await handlers.before_agent_start({ prompt: "hello" }, ctx);
+  await h.handlers.before_agent_start({ prompt: "hello" }, h.ctx);
   const dt = Date.now() - t0;
-  check("fast path resolves under 2s", dt < 2000, `${dt}ms`);
-  check("no warnings on fast path", warns.length === 0, JSON.stringify(warns));
+  check("A1 before_agent_start returns immediately", dt < 500, `${dt}ms`);
+  h.handlers.agent_end({ willContinue: false }, h.ctx);
+  check("A2 agent_end scheduled deferred work", h.deferred.length === 1, String(h.deferred.length));
+  const t1 = Date.now();
+  await h.deferred[0]();
+  const dt2 = Date.now() - t1;
+  check("A3 deferred consumption is fast on the fast path", dt2 < 1500, `${dt2}ms`);
+  check("A4 no warnings on the fast path", h.warns.length === 0, JSON.stringify(h.warns));
 }
 
-// B: a pi.exec call that never resolves must not exhaust the handler budget
+// B: hanging pi.exec — hook still returns immediately; consumption degrades
 {
-  const { handlers, warns } = makePi(() => new Promise(() => {}));
+  const h = makeHarness(() => new Promise(() => {}));
   const t0 = Date.now();
-  await handlers.before_agent_start({ prompt: "hello" }, ctx);
+  await h.handlers.before_agent_start({ prompt: "hello" }, h.ctx);
   const dt = Date.now() - t0;
-  check("hanging exec is bounded (8s budget, not 30s)", dt >= 7500 && dt < 10500, `${dt}ms`);
+  check("B1 hook does not wait on a hanging probe", dt < 500, `${dt}ms`);
+  h.handlers.agent_end({ willContinue: false }, h.ctx);
+  const t1 = Date.now();
+  await h.deferred[0]();
+  const dt2 = Date.now() - t1;
+  check("B2 deferred consumption bounded by SNAPSHOT_BUDGET_MS", dt2 >= 7500 && dt2 < 10500, `${dt2}ms`);
   check(
-    "incomplete-baseline warning emitted",
-    warns.some((w) => w.m === "sota: baseline snapshot incomplete"),
-    JSON.stringify(warns),
+    "B3 incomplete warning names the baseline",
+    h.warns.some((w) => w.m === "sota: snapshot incomplete" && w.d?.label === "baseline"),
+    JSON.stringify(h.warns),
   );
 }
 
-// C: slow-but-completing call is reported, handler still under budget
+// C: slow-but-completing git call is reported; hook still does not wait
 {
   const slowGit = async (cmd, args) => {
-    if (cmd === "git" && args[0] === "diff") await new Promise((r) => setTimeout(r, 2700));
+    if (cmd === "git" && args[0] === "diff") await sleep(2700);
     return fastGit(cmd, args);
   };
-  const { handlers, warns } = makePi(slowGit);
+  const h = makeHarness(slowGit);
   const t0 = Date.now();
-  await handlers.before_agent_start({ prompt: "hello" }, ctx);
+  await h.handlers.before_agent_start({ prompt: "hello" }, h.ctx);
   const dt = Date.now() - t0;
-  check("slow path completes under budget", dt < 8000, `${dt}ms`);
+  check("C1 hook does not wait on a slow probe", dt < 500, `${dt}ms`);
+  await sleep(3200);
   check(
-    "slow-probe warning emitted",
-    warns.some((w) => w.m === "sota: git probe slow"),
-    JSON.stringify(warns),
+    "C2 slow-probe warning emitted",
+    h.warns.some((w) => w.m === "sota: git probe slow"),
+    JSON.stringify(h.warns),
   );
+  h.handlers.agent_end({ willContinue: false }, h.ctx);
+  await h.deferred[0]();
   check(
-    "no incomplete warning when the probe completes",
-    !warns.some((w) => w.m === "sota: baseline snapshot incomplete"),
-    JSON.stringify(warns),
+    "C3 no incomplete warning when probes complete",
+    !h.warns.some((w) => w.m === "sota: snapshot incomplete"),
+    JSON.stringify(h.warns),
   );
 }
 
-// D: degraded baseline semantics unchanged
+// D: rescue path never awaits the multi-minute child
+{
+  const h = makeHarness(() => new Promise(() => {}));
+  await h.handlers.before_agent_start({ prompt: "hello" }, h.ctx);
+  const ev = { isError: true, toolName: "bash", input: { command: "false" }, error: "boom" };
+  await h.handlers.tool_result(ev, h.ctx);
+  const t0 = Date.now();
+  await h.handlers.tool_result(ev, h.ctx);
+  const dt = Date.now() - t0;
+  check("D1 rescue handler returns immediately", dt < 500, `${dt}ms`);
+  check("D2 rescue work was deferred", h.deferred.length === 1, String(h.deferred.length));
+}
+
+// E: degraded baseline semantics unchanged
 {
   const degraded = mod.changedFilesSince(
     { files: ["x"], hashes: {}, complete: false },
     { files: ["a", "b"], hashes: { a: "1" }, complete: true },
   );
-  check("incomplete baseline degrades to end snapshot", JSON.stringify(degraded) === '["a","b"]', JSON.stringify(degraded));
+  check("E1 incomplete baseline degrades to end snapshot", JSON.stringify(degraded) === '["a","b"]', JSON.stringify(degraded));
   const normal = mod.changedFilesSince(
     { files: ["a"], hashes: { a: "1" }, complete: true },
     { files: ["a", "b"], hashes: { a: "2", b: "3" }, complete: true },
   );
-  check("complete baselines still diff by hash", JSON.stringify(normal) === '["a","b"]', JSON.stringify(normal));
+  check("E2 complete baselines still diff by hash", JSON.stringify(normal) === '["a","b"]', JSON.stringify(normal));
 }
 
 try {
