@@ -16,7 +16,7 @@ opencode-go 免费腿 ch218 早在 2026-10-12 已接入
 
 ## 变更
 
-- 备份 `new-api-before-dsv41f-free-20261015-161205.db`（integrity ok）。
+- 备份 `…dsv41f-free-20261015-161205.db`（integrity ok；**该快照已被 supervisor 轮转回收（KEEP=7 只留最新；见 `backup-rotation-lexicographic-bug-2026-10-16.md`）**，该份于 10-16 15:03 的修复后轮转中被回收）。
 - 服务端断言原名未注册 → `PUT /api/option/` 全量 JSON 钉
   `ModelRatio[deepseek-v4.1-flash]=0`、`CompletionRatio[...]=0`；
   服务端读回 0/0；邻居 glm-5.3=0.7 / glm-5.3-flash=0.075 未动。
@@ -34,7 +34,9 @@ opencode-go 免费腿 ch218 早在 2026-10-12 已接入
 
 ```bash
 # 比率：PUT /api/option/ 全量 JSON 删 deepseek-v4.1-flash 键（两端）
-# 整库：~/.new-api-local/backups/new-api-before-dsv41f-free-20261015-161205.db
+# 整库：改前快照已轮转回收；本变更可**逐字段**回滚（上方 PUT 步骤删掉两个键即可，
+#       无快照依赖）。最近的已验证整库快照：newapi-before-motomoto-welfare-20261016-144743.db、
+#       new-api-2026-10-16.db（均含此变更后的状态，不能回到改前）
 ```
 
 ## 备注

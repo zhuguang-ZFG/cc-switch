@@ -42,7 +42,8 @@
 - ~~ch127 key 上游失效（401）~~ **更正后已处置（裁决，评审要求的明确决定）**：
   key 有效、`deepseek-v4-flash` admin test 200、codex 系（gpt-6-astra/
   gpt-5.6-sol）402 预算池尽 → **trim 到 `deepseek-v4-flash` 单名 + 回开**
-  （status=1；快照 `new-api-before-ch127-trim-20261015-220837.db`；readback +
+  （status=1；快照 `…ch127-trim-20261015-220837.db` 已被轮转回收，见
+  `backup-rotation-lexicographic-bug-2026-10-16.md`；readback +
   双 ability 行 enabled ✓）。审计注记：这回开**给 dsv4f（default 角色模型）
   加了第四条活腿**（ch180/ch173/ch218 之外）；codex 系名字上游补货后再回挂
   （恢复时按 runbook 复测）。

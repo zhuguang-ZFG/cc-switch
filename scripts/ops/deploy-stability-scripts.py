@@ -23,7 +23,9 @@ FILES = {
     "anyrouter-window-canary.py": "guardian/anyrouter-window-canary.py",
     "omp-model-routing-observability.js": "agent/extensions/omp-model-routing-observability.js",
 }
-BASE = "0ebb556a^"
+# 2026-10-16：live 三件套字节均 == 8c5a6643（supervisor 轮转修复车），
+# 门禁基线随之推进（原 0ebb556a^ 已过期，会对三件套全拦）。
+BASE = "8c5a6643"
 
 
 def digest(path: Path) -> str:

@@ -118,6 +118,7 @@ revision：候选改动后 **r12 → `2026.10.15-r13`**（双副本同步；扩�
 ## 回滚
 
 ```bash
-# 目录裁剪：cp ~/.new-api-local/backups/new-api-before-catalog-trim-20261015-193212.db <db>（停机）
+# 目录裁剪：改前快照 `…catalog-trim-20261015-193212.db` 已被轮转回收（该快照已被 supervisor 轮转回收（KEEP=7 只留最新；见 `backup-rotation-lexicographic-bug-2026-10-16.md`））；
+#          回滚按上表逐渠道摘除模型（无快照依赖），或对最近的已验证整库快照做停机恢复
 # 链/候选：git -C ~/.omp/agent revert <本 commit>
 ```

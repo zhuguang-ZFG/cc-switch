@@ -33,7 +33,10 @@
 ## 验证
 
 - 读回：`st=2 auto_ban=1 p10/w1 group=default`、4 models、abilities 4 行 **enabled=0**；
-- 无回归实弹：`deepseek-v4.1-flash` 经网关 200（1.3s，3 条活腿）；
+- 无回归实弹：`deepseek-v4.1-flash` 经网关 **`max_tokens=64` → content=`'OK'`（1.5s）**
+  ✓；补记：最初 `max_tokens=8` 那次 200 的空 content 是 **reasoning 占满推理预算**的
+  假象（`reasoning_tokens=8`，content 空），非"空流"故障——按 house 口径，单独一个
+  200/空流都不足为证，故此处以放量后的非空文本为准；
 - 烟测（14:48）：ch225 未引入任何新 FAIL 类；`multi-key pool health` OK、
   `intentional channel disables` OK。**FAIL 基线 4→5 类**（10-15 晚 4 类 → 今日 5 类），
   新增的第 5 类 `pool capacity claude-opus-4-8` 与 ch225 无关（ch225 的 4 个 id 不含
