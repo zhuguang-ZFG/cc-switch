@@ -362,10 +362,17 @@ ch225 是 type-1 OpenAI 渠道（`{"choices":[{"delta":…}]}` + `[DONE]`）—�
 **`zg-newapi-anthropic/claude-opus-5-5`**（写 `zg-newapi/…` 会不匹配，OMP 会贴候选）。
 另：该模型在 smoke 的**未注册 ModelRatio** 名单（默认 37.5 计费）——成本定值待用户给。
 
-**smoke 现行 FAIL（18:58 轮，5 类）**：primary opus pool posture（ch3 w5 / ch9、ch18 st=2）、
-backup opus pool posture（ch182 p35）、pool capacity claude-opus-4-8（仅 ch72 < min 2）、
-未注册 ModelRatio 4 名（claude-opus-5-5 / jina-embeddings-v3 / kimi-k3-oc / qwen3-8-27b）、
-pool answer rate（glm-5.3-flash 271/40 = 14.8%，与 zen 主腿前的 5–14% 同档，非新增退化）。
+**未注册 ModelRatio（smoke FAIL）**：修前 4 名按默认 37.5 计费 → 其中三个按**同族既有值**补齐
+（`claude-opus-5-5`=0.5 同 opus 族、`kimi-k3-oc`=2 同 k3 族、`qwen3-8-27b`=0.5 同 qwen 族；
+经 `/api/option/` PUT，写前快照 `new-api-before-modelratio-20261016-192534.db`，写后逐键 diff
+仅 +3 无删改），复跑 smoke 该项只剩 **`jina-embeddings-v3`**（无同族先例，待用户给值）。
+
+**glm-4.6v 视模全灭（req=37 ok=0）已处置**：唯一腿 ch185（0v0.club）实测 **HTTP 522**
+（上游挂）。候选用**合法 PNG 实弹**（自造 2x2 红/蓝；此前用的小 PNG 会被部分上游判非法——
+探针方法已修正）：`dots-3-note-prev`（ch77，714ms，当日 19:25 测活）3.1s 正确识别、
+`gpt-5.6-sol` 2.6s 正确识别。→ `modelRoles.vision` 切到 `zg-newapi/dots-3-note-prev`（本就在
+vision 链内），链改 `[intern-s2-preview, glm-4.6v]`（不重复主选，保留回血中的 0v0 腿）。
+modelRoles 属已证热载面，运行中实例即时生效。门禁：routes 40/40、alignment CLEAN。
 
 ## 回滚
 
@@ -381,6 +388,10 @@ pool answer rate（glm-5.3-flash 271/40 = 14.8%，与 zen 主腿前的 5–14% �
   逐项回退 = ch124/ch171 `param_override` 置 null、ch124 priority 回 50
   （`apply_qwen_leg_param_override.py` 只做正向，回退走 API/脚本手改）；
   OMP 侧 `models.yml` 的 qwen 条目（compat 两键 + maxTokens 16384）可 git revert；
+- ModelRatio 三键：快照 `new-api-before-modelratio-20261016-192534.db`；或删回
+  `claude-opus-5-5` / `kimi-k3-oc` / `qwen3-8-27b` 三键恢复"未注册"态；
+- vision 角色：OMP 仓 `config.yml`（vision→dots-3-note-prev + 链改）可 git revert
+  （回退即恢复 glm-4.6v 主选，视模将随 0v0 腿 522 继续 0 成功）；
 - 契约/门禁：`scripts/ops/newapi-local-smoke.py` 的 178 pin 与 `scripts/ops/test_omp_routes.py`
   的白名单行可 git revert——但两者都是用户签字过的裁决，收回前先确认；
 - agent 卫生（OMP 仓 `b6240e8`）：`config.yml` smol 链与三份 agent 文件的 `structured: true`
