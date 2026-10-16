@@ -35,7 +35,28 @@
 - 读回：`st=2 auto_ban=1 p10/w1 group=default`、4 models、abilities 4 行 **enabled=0**；
 - 无回归实弹：`deepseek-v4.1-flash` 经网关 200（1.3s，3 条活腿）；
 - 烟测（14:48）：ch225 未引入任何新 FAIL 类；`multi-key pool health` OK、
-  `intentional channel disables` OK。
+  `intentional channel disables` OK。**FAIL 基线 4→5 类**（10-15 晚 4 类 → 今日 5 类），
+  新增的第 5 类 `pool capacity claude-opus-4-8` 与 ch225 无关（ch225 的 4 个 id 不含
+  claude-opus-4-8，abilities enabled=0），系 agentrouter claude 池被上游 402 预算
+  park 所致——见 `agentrouter-newmodels-2026-10-15.md` 追记。
+
+## UA/出口判别（补做，复审意见）
+
+「全站维护」结论原先只经单一 `curl/8.5.0` UA + 名义直连验证，"裸 UA 被中性文案挡"
+这一 house 先例（agentrouter 401）未被排除。补做判别轮：
+
+| UA | `/v1/models` |
+|---|---|
+| `curl/8.5.0` | 503 维护中（0.5s） |
+| Chrome 浏览器 | 503（0.5s） |
+| `claude-cli/1.0.43` | 503（0.5s） |
+| `OpenAI/Python 1.40.0` | 503（1.2s） |
+| `codex_cli_rs/0.9.0` | 503（0.5s） |
+
+→ **UA 门假设证伪**（五种 UA 同文案同速度）。第二出口未取得：`ssh 100.83.32.95`
+无免密凭据（Permission denied），即"直连 vs 7897"仍同经本机 Clash——此限制如实记录，
+但结合公告 #41（站方自述暂停）+ 控制面 200，维护结论成立；若日后想再排除出口因素，
+可从 VPS 侧复探。
 
 ## 附带发现（与本渠道无关，供裁决）
 

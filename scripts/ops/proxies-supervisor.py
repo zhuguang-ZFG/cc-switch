@@ -497,7 +497,13 @@ def backup_newapi_db(today: str) -> None:
     finally:
         src.close()
     size_mb = dst.stat().st_size / 1024 / 1024
-    backups = sorted(BACKUP_DIR.glob("new-api-*.db"))
+    # 2026-10-16 修复：原先 sorted(...) 不带 key，按【文件名】字典序取末尾
+    # BACKUP_KEEP 份，于是名字排前的【新】快照会被当旧的删掉——已实际发生：
+    # new-api-before-agentrouter-newmodels-*.db 与 new-api-before-ch136-reenable-*.db
+    # 被删而更老的 chstatus/dsv41f 存活（两份 runbook 因此引用到不存在的快照）；
+    # 同时日均文件名 new-api-<date>.db 恒排最前、每次都被自己删掉。按 mtime 排序
+    # 与 newapi_backup_restore_drill.py / system-health-check.py 的既有做法一致。
+    backups = sorted(BACKUP_DIR.glob("new-api-*.db"), key=lambda p: p.stat().st_mtime)
     pruned = 0
     for old in backups[:-BACKUP_KEEP]:
         old.unlink()

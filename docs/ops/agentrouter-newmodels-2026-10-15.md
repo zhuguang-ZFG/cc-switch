@@ -12,7 +12,13 @@
 - ch86/134/135/136 的上游池已不再有 `claude-opus-5`（503 无可用渠道）——只剩
   `-5-5`。
 
-## 变更（快照 `new-api-before-agentrouter-newmodels-20261015-212818.db`）
+## 变更（快照 `new-api-before-agentrouter-newmodels-20261015-212818.db`，**已失效**——见下）
+
+> **2026-10-16 更正**：本页引用的两份快照（`…-212818.db`、`…ch136-reenable-222306.db`）
+> 已被 supervisor 的轮转 bug 删除（按文件名字典序轮转，名字排前的**新**快照被当旧的
+> 删——详见 `backup-rotation-lexicographic-bug-2026-10-16.md`）。此二处改动的回滚以
+> 「逐字段步骤」为准（下方回滚节）；最近的**已验证**整库快照是
+> `newapi-before-motomoto-welfare-20261016-144743.db`（10-16 14:47）。
 
 - `ch180` models += `gpt-6.1-sol`（p51，优于余额近空的 jojatoken p-20）；
 - `ch86/134/135/136` models += `claude-opus-5-5`、`test_model` 改指该名、
@@ -59,12 +65,13 @@
   失效**（同分钟 ch118 也在 524）；
 - ch136 被 Guardian 稳定性监控以「探针超时」打回 status=2：其 key 实弹 200
   （opus-5-5 TTFT ~37s 超了探测预算）→ 回开（快照
-  `new-api-before-ch136-reenable-20261015-222306.db`）；若探测预算仍压超时，
+  `…ch136-reenable-20261015-222306.db`，**该快照后已被轮转 bug 删除**）；若探测预算仍压超时，
   明日看它是否又 flap（慢但活的渠道与稳定性监控的预算张力是已知类）。
 
 ## 10-16 追记：claude 池被上游预算耗尽，机器按序 park
 
-昨夜回开的四条 claude 腿（ch86/134/135/136，p10/w1，status=1）今天全部回到
+昨夜回开的四条 claude 腿（ch86 p50/w1，ch134/135/136 p50/w2——均为回退层，
+status=1）今天全部回到
 `status=2 + auto_ban=1`，**机器归因、非本地故障**：
 
 | 时刻 | 证据（guardian.log） |
@@ -77,9 +84,15 @@
 耗尽停止；ch136 由错误扫描另行归因。这解释了「agentrouter 渠道多 key」的另一半形态：
 渠道侧是四条单 key，预算侧是站方按池结算。
 
-连带后果（冒烟 10-16 14:48，FAIL 4→5 类）：
-`pool capacity claude-opus-4-8 — enabled_channels=1 min=2 ids=[72]` —— 这四条腿此前
-兼任 claude-opus-4-8 的冗余，park 后该池跌破下限。属**上游预算死因**，本地无可修。
+连带后果（冒烟 10-16 14:48，FAIL **4→5 类**）：`pool capacity claude-opus-4-8 —
+enabled_channels=1 min=2 ids=[72]` —— 这四条腿此前兼任 claude-opus-4-8 的冗余，park
+后该池跌破下限。属**上游预算死因**，本地无可修。此第 5 类与同时段接入的 ch225
+（motomoto）无关：ch225 的 4 个 id 不含 claude-opus-4-8，其 abilities 读回 enabled=0。
+
+决策：**不**把 86/134/135/136 加入 guardian.py 的 `AUTO_BAN_RECOVERY_EXCLUSIONS`。
+该排除集的语义是"永久死端、无自动路径"（余额耗尽/账号侧死 key）；本池的 402 是
+**可回充**的预算，保留自动恢复路径才是正解（预算回充后排期探测自动回开），加入排除集
+反而需要人工重新排队。
 
 再启用路径：预算回充（402 消失）→ 按期自动恢复探测通过 → `AutomaticEnableChannelEnabled`
 自动回开；手工核对用 `POST /api/channel/{86,134,135,136}/test?model=claude-opus-5-5`。
@@ -88,6 +101,7 @@
 ## 回滚
 
 ```bash
-# 整库：cp 备份（new-api-before-agentrouter-newmodels-20261015-212818.db，停机）
+# 整库：用最近已验证快照（newapi-before-motomoto-welfare-20261016-144743.db，停机）
+#       10-15 当晚两份快照已失效（轮转 bug），逐字段回滚见上表
 # 逐渠道：models 摘除 + status 回 2（runbook 契约）
 ```
