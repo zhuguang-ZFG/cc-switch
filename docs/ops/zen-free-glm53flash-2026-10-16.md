@@ -518,6 +518,24 @@ probe gpt-5.6-sol: closed (500 当前模型 gpt-5.6-sol 负载已经达到上限
 的夹具从常量取模型表（`",".join(smoke.ANYROUTER_CLAUDE_MODELS)`），天然免疫此类漂移——值得作为修
 夹具时的范式。
 
+### 压缩模型核验（20:56，用户问"压缩模型有问题吗"）
+
+**结论：模型与配置无病；今早 09:09–09:35 有一次真实的上游 500 窗口，属整体故障。**
+- 全量日志统计：`global compaction started` 66 / `completed` 55 / **`Auto-compaction failed, retrying` 15**
+  / **`global compaction status became stale` 6（error）** / `ended without a summary` 3。
+- 失败明细（09:09–09:35，pid 18640）：错误体统一为
+  `Summarization failed: 500 upstream error: do request failed (request id: …)`——且重试**换了四个模型**
+  （`deepseek-v4-flash` → `deepseek-v4.1-flash` → `u2-flash` → `k3`）**全部 500** ⇒ 该时段网关/上游整体故障，
+  **不是压模个体问题**；连带 `stale {durationMs: 600076, errorClass: completion-timeout}`（全局压缩 600s 超时）。
+- 09:35 之后再无失败：16:52（377k tokens→success/62s）、20:52（397k→success/111s）✓；压模池实测健康
+  （ch180 代理 ✓、ch127 直连 `deepseek-v4-flash` 200/2.1s、1.3s）。
+- **配置隐患备案（未动，待用户裁决）**：`deepseek-v4-flash` 条目声明 `contextWindow: 262144`，而实际
+  压缩输入 397k–578k（**成功过** ⇒ 上游 ≥578k）——声明偏保守；若要抬窗口（如 1M）或把主压模换成
+  1M 级（k3 订阅 / `longcat-2.5-preview-free` 免费 1M），属能力声明/路由变更。
+- 旁证（房子设计）：7 个 gpt 族条目（gpt-5.6-sol / gpt-5.6-terra / gpt-6.1-sol / gpt-6-sol /
+  codex-auto-review / gpt-6-astra / gpt-5.5）的压模是 `longcat-2.5-preview-free`（1M 免费）✓，
+  由 reconcile 扩展与 21 用例门禁钉住。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
