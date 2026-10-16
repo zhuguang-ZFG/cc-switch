@@ -300,6 +300,32 @@ proxies-supervisor / newapi-local-smoke 三处早已带注释同步清）。备�
 `config.toml.20261016-183618.bak`；现存 **3 provider / 9 模型**，tomllib + `kimi -p` 实弹均 OK。
 **顺带记录**：本轮 `config.yml` 的 `default` 角色现为 `glm-5.3:max`（用户侧改动，非本批所为）。
 
+## 同日晚二：agentrouter 钥匙池补充 + 带图请求故障修复
+
+**agentrouter 池补充（用户提供三把自账号 key）**：合并进
+`~/.kimi-code/proxies/agentrouter-proxy/keys.json`（2 → 5 把；备份
+`keys.json.bak-20261016-184834`；只记 SHA-256 前 8 位指纹 `f53a2b30/41331350/f4cdf4c0`，
+key 原文不入文档/提交）。代理按 mtime **每请求热载**池文件（无需重启）；
+实测：网关 `deepseek-v4-flash`（ch180 p51 → 8788 代理）**200 / 3.5s / "OK"**。
+判别实验：带图单发请求对 `deepseek-v4-flash`（3.6s）与 `deepseek-v4.1-flash`（2.8s）均 200
+——**18:45 那批 104 条消息的 `rejected as invalid` 与图片无关**（上游对特定大请求的姿态，
+key 被误冷却属代理归一化行为，留观察）。
+
+**带图请求故障（用户报 glm-5.3-flash 调用不成功）**：根因链——会话历史上游第 47 条
+（tool result 附图，`read` 图片）永久带图 → `glm-5.3-flash` 主腿（zen 桥 ch178）对
+image parts **即时 400** 拒收 → OMP 整模型降级；同族 `glm-5.3` 经网关直接 **404
+"No endpoints found that support image input"**（池内无图端点）。`glm-4.6v`（真视模）当前上游
+522 不可用。openai-completions 的剥图开关是 **`compat.stripImageInput`**（默认由目录类规则给，
+自定义 provider/id 不命中 → 图片被照发）。修复：对**无图端点**的 5 个 id 显式声明
+`compat.stripImageInput: true`（`glm-5.3`、`glm-5.3-flash`、`glm-5.3-flash-free`、
+`ll-alpha-free`、`nemotron-3.5-super-vl-free`；均带日期与实测依据注释）；
+deepseek 两 id 经实测可收图，**不加**。**需重启生效**（models.yml 非热载面）。
+受影响会话的即时缓解：对带图那一轮做 compact/rewind，历史去掉图片即恢复。
+门禁复跑：`verify_omp_newapi_alignment` CLEAN、`test_omp_routes` 40/40。
+
+**91tv key（同日用户提供）未接入**：与 chengapi 同口径——来源不明的共享凭据不进生产路由；
+若为用户自有账号 key，确认后按"先建停用渠道 → 探针验证 → 健康才开"的房式流程接入。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
