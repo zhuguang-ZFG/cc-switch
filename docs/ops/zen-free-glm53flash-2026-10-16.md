@@ -554,6 +554,14 @@ subscription plan`**（套餐已不含该模型）。abilities 均 0 → 网关 
 **验收**：`gpt-6-astra` 404→**200/20.1s/tools ✓**、`gpt-6.1-sol` 400→**200/10.0s/tools ✓**（jojatoken 三腿
 承接，3.3–3.8s）。快照 `new-api-before-legprune-20261016-211203.db`。
 
+**复核三则（21:2x 逐条验证）**：
+- ch134 的 astra 是否靠 `model_mapping` 本可 chat 可用？——**证伪**：ch134 的 mapping 只有 zg-* 别名
+  （无 astra 条目），且**映射名 `gpt-6-astra-claude` 与原名**直探均 400「请改用 /v1/responses」
+  → 摘除正确，无需回填。
+- `jina-embeddings-v3` 是否"回归未注册"？——**否**：API 视图与 DB 两处均为 **0.075**、键数均 **248** ✓。
+- ch126 精确前态（取自写前快照）：`status=1, auto_ban=0, priority=40, weight=5,
+  models=gpt-6-astra, base_url=https://anyrouter.top`。
+
 **"现在能用的高级模型"（21:18 带 tools 实弹）**：k3 13.8s ✓、claude-opus-5-5 7.5s ✓、
 gpt-5.6-sol 3.1s ✓、**gpt-6-astra 20.1s ✓（今晚修）**、**gpt-6.1-sol 10.0s ✓（今晚修）**、
 glm-5.3 3.9s ✓、qwen3-8-27b 1.6s ✓、deepseek-v4.1-flash 6.2s ✓（全部 tool_calls ✓）；
@@ -576,8 +584,9 @@ kimi-k3-oc（额度用尽）、anyrouter Claude（上游下架）。
   （`apply_qwen_leg_param_override.py` 只做正向，回退走 API/脚本手改）；
   OMP 侧 `models.yml` 的 qwen 条目（compat 两键 + maxTokens 16384）可 git revert；
 - ch126 park / ch180+ch134 摘模：快照 `new-api-before-legprune-20261016-211203.db`；
-  回退 = ch126 `POST /status {"status":1}`、ch180 加回 `gpt-6.1-sol`、
-  ch134 加回 `gpt-6-astra`/`gpt-6.1-sol`（均在 models 串）;
+  回退 = ch126 `POST /api/channel/126/status {"status":1}` + PUT `auto_ban=0`
+  （精确前态：status=1、auto_ban=0、p=40、w=5、models=`gpt-6-astra`）、ch180 加回 `gpt-6.1-sol`、
+  ch134 加回 `gpt-6-astra`/`gpt-6.1-sol`（均在 models 串）；
 - ch86 park / ch3 摘模：快照 `new-api-before-park-ch86-20261016-195932.db`；
   回退 = ch86 `POST /api/channel/86/status {"status":1}`、ch3 把
   `claude-opus-5`/`claude-opus-5-5` 加回 `models` 再 PUT；
