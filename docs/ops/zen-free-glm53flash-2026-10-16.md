@@ -360,7 +360,7 @@ ch225 是 type-1 OpenAI 渠道（`{"choices":[{"delta":…}]}` + `[DONE]`）—�
 （网关探针 200，**tool_calls=YES**），但 **TTFT ≈ 139s**（ch86 自身 use_time 144s；同渠道另有
 11–15s 样本 → 波动极大）。ch3（p52，abilities 在册）未出现在服务日志里。OMP 侧选择器是
 **`zg-newapi-anthropic/claude-opus-5-5`**（写 `zg-newapi/…` 会不匹配，OMP 会贴候选）。
-另：该模型在 smoke 的**未注册 ModelRatio** 名单（默认 37.5 计费）——成本定值待用户给。
+另：该模型的 ModelRatio 已按同族补 **0.5**（见下段），不再是"未注册"状态。
 
 **未注册 ModelRatio（smoke FAIL）**：修前 4 名按默认 37.5 计费 → 其中三个按**同族既有值**补齐
 （`claude-opus-5-5`=0.5 同 opus 族、`kimi-k3-oc`=2 同 k3 族、`qwen3-8-27b`=0.5 同 qwen 族；
@@ -373,6 +373,16 @@ ch225 是 type-1 OpenAI 渠道（`{"choices":[{"delta":…}]}` + `[DONE]`）—�
 `gpt-5.6-sol` 2.6s 正确识别。→ `modelRoles.vision` 切到 `zg-newapi/dots-3-note-prev`（本就在
 vision 链内），链改 `[intern-s2-preview, glm-4.6v]`（不重复主选，保留回血中的 0v0 腿）。
 modelRoles 属已证热载面，运行中实例即时生效。门禁：routes 40/40、alignment CLEAN。
+
+**ch86 空流+计费（"opus-5-5 用不了"的真形态，19:30 取证）**：smoke 的
+`zero-output billed streams` 由 OK 转 FAIL，指纹 = `completion_tokens=0 且 use_time≥120s 且 quota>0`
+（规则注释里 2026-08-20 已有 ch86 同款事故）。实况：**ch86 ×8 条，全是 `claude-opus-5-5`，
+use≈138–149s，ctok=0，quota 合计 19,928,176**（ptok 2 万~20.5 万，含整段会话的大请求）。
+即：ch86 高频"跑满 ~140s 后吐空流且照常计费"。而 `modelRoles.default` 现为
+`zg-newapi-anthropic/claude-opus-5-5:max`（用户设置），default 按门禁**无兜底链**（硬失败）
+→ 每轮 2–3 分钟空转，这就是"用不了"的体感。**建议（未擅自改，属用户偏好）**：把 default 换回
+快的强模型（如 `zg-newapi/k3:max`），opus-5-5 留给可等待的场景；若坚持 default=opus-5-5，则
+门禁不允许给它加链（`test_default_role_has_no_model_fallback_chain` 只豁免两个已批名）。
 
 ## 回滚
 
