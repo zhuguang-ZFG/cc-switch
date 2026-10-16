@@ -135,7 +135,7 @@ enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意�
    "advisor 只走免费/低成本路由"约束。改动：`config.yml` `modelRoles.advisor` →
    `zg-newapi/deepseek-v4.1-flash`；`fallbackChains.advisor` 自指改为
    `zg-newapi/deepseek-v4-flash`（初版曾选 k3 作"强模型兜底"，按约束精神复核后修正：
-   k3 ratio=2 为全表最贵、与"低成本"相悖；dsw-flash ratio=0.5、实测工具可用
+   k3 ratio=2（表内最高档）与"低成本"相悖；dsw-flash ratio=0.5、实测工具可用
    （2.7s/3.3s、tool_calls ✓）、池 ch180/ch118/ch127 多腿）；门禁
    `test_advisor_role_stays_on_approved_low_cost_routes`
    白名单加一行 + 日期注释。实体理由：deepseek-v4.1-flash 是当日 90 次评审的**实际载体**、
@@ -170,7 +170,7 @@ zen 主腿对 `glm-5.3-flash` 池成功率（11–14 时桶 4/59、9/67、5/43�
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
   或按同步脚本的 PUT 步骤把 models 串改回 11 只 + 删三条 ModelRatio=0；
 - OMP：删掉 `models.yml` 的 `glm-5.3-flash-free` 条目（OMP 仓版本化，可 git revert）；
-- 晚间的清洁项同理：OMP 仓 `config.yml`（advisor→deepseek、advisor 链→k3）与 `models.yml`
+- 晚间的清洁项同理：OMP 仓 `config.yml`（advisor→deepseek、advisor 链→deepseek-v4-flash）与 `models.yml`
   （ll-alpha-free / nemotron-3.5-super-vl-free 条目）可逐提交 git revert；
 - 契约/门禁：`scripts/ops/newapi-local-smoke.py` 的 178 pin 与 `scripts/ops/test_omp_routes.py`
   的白名单行可 git revert——但两者都是用户签字过的裁决，收回前先确认。
