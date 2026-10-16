@@ -259,6 +259,7 @@ test(
     policy(root);
     const handlers = new Map();
     const commands = new Map();
+    const timers = [];
     let runs = 0;
     const pi = {
       pi: { getAgentDir: () => root },
@@ -276,15 +277,25 @@ test(
       models: {
         list: () => [{ provider: "zg-newapi-anthropic", id: "claude-opus-5" }],
       },
+      setTimeout: (callback) => {
+        timers.push(callback);
+        return timers.length;
+      },
     };
     handlers.get("session_start")({}, ctx);
     const release = acquireCanaryLease(join(root, "sota-review.lock"));
     await commands.get("sota").handler("Review", ctx);
+    // The explicit command defers its multi-minute run outside the command budget;
+    // drive the captured timer to observe the busy skip.
+    assert.equal(timers.length, 1);
+    await timers[0]();
     assert.equal(runs, 0);
     release();
     // Fresh extension instance removes in-session cooldown from the busy skip.
     sotaExtension(pi);
     await commands.get("sota").handler("Review", ctx);
+    assert.equal(timers.length, 2);
+    await timers[1]();
     assert.equal(runs, 1);
     const reacquire = acquireCanaryLease(join(root, "sota-review.lock"));
     assert.ok(reacquire);

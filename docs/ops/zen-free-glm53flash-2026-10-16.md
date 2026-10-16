@@ -467,6 +467,16 @@ opus 跳改指 `zg-newapi-anthropic/claude-opus-5-5`，或等上游 slug 恢复�
 待恢复；串内无评论以免被 hand-rolled 解析器吃成候选；不入选 `FORBIDDEN_CRITICAL_CANDIDATES`）。
 门禁复跑 **40/40 + CLEAN**、smoke 不变。回滚 = `git revert` config.yml 对应提交。
 
+**门禁全集扫（20:35，"继续改进 OMP"）**：Python 7 个（`test_mirror_sync` 字节镜像、四个
+deploy 套件、`test_ops_gates`、`test_omp_routes`）＋ Node 11 个（sota escalation 25/25、snapshot
+14/14、problem_solving、hutuji workers、compaction model、routing observability、task verification、
+unexpected stop guard、zen bridge、tool canary、bugfix cases）——**全绿**。
+扫出一个**自伤回归并修复**：`test_omp_problem_solving.js` 里那条"共享 review 租约"用例同时驱动
+**sota 扩展的 `/sota` 命令**，而我 20:0x 的"显式命令脱管"重构把 `runEscalation` 改成 defer 后，
+该用例的 ctx 没有 `setTimeout` 捕获、断言同步 → `runs` 停在 0。已按同款模式更新（捕获 timer →
+显式 `await timers[i]()` 再断言），现 8/8。**该测试文件属验证输入，改动需复核**（见提交说明）。
+另：`grep -l omp-sota-escalation test_*` 穷举了全部 6 个引用者（4 测试 + 2 deploy 门禁），无其他遗漏。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
