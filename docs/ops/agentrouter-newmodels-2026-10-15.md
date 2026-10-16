@@ -62,6 +62,29 @@
   `new-api-before-ch136-reenable-20261015-222306.db`）；若探测预算仍压超时，
   明日看它是否又 flap（慢但活的渠道与稳定性监控的预算张力是已知类）。
 
+## 10-16 追记：claude 池被上游预算耗尽，机器按序 park
+
+昨夜回开的四条 claude 腿（ch86/134/135/136，p10/w1，status=1）今天全部回到
+`status=2 + auto_ban=1`，**机器归因、非本地故障**：
+
+| 时刻 | 证据（guardian.log） |
+|---|---|
+| 10-16 02:47:54 / 02:48:34 / 02:48:55 | `Channel 86/134/135 (agentrouter-claude*): exhausted the recovery probe budget (12 failed cycles, budget 12); probing stopped` |
+| 10-16 14:10:58 | `Channel 136 error scan failed: 402 Budget pool quota has been exhausted. Please ask an administrator` |
+| 10-16 14:16-14:26（每 ~5 分钟） | `channel test ... channel_id=136 ... model=claude-opus-5-5 ... status=402`（自动恢复循环仍在按期试它） |
+
+即：**四把 key 共用一个上游预算池**，池尽（402）后恢复探测连续 12 轮失败 → 探测预算
+耗尽停止；ch136 由错误扫描另行归因。这解释了「agentrouter 渠道多 key」的另一半形态：
+渠道侧是四条单 key，预算侧是站方按池结算。
+
+连带后果（冒烟 10-16 14:48，FAIL 4→5 类）：
+`pool capacity claude-opus-4-8 — enabled_channels=1 min=2 ids=[72]` —— 这四条腿此前
+兼任 claude-opus-4-8 的冗余，park 后该池跌破下限。属**上游预算死因**，本地无可修。
+
+再启用路径：预算回充（402 消失）→ 按期自动恢复探测通过 → `AutomaticEnableChannelEnabled`
+自动回开；手工核对用 `POST /api/channel/{86,134,135,136}/test?model=claude-opus-5-5`。
+在此之前**不要**手工回开（12 轮预算已证池尽，回开即空转）。
+
 ## 回滚
 
 ```bash
