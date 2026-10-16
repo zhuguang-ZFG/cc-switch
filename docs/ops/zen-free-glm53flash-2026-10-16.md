@@ -290,9 +290,10 @@ glm5.3」——2026-08-20 起的低成本约束就此解除。落地：`modelRol
 
 **Claude 腿实况更正**：anyrouter ch72 启用、载 `claude-opus-5`/`claude-opus-4-8` 与
 `zg-agent-claude-opus-5` 等别名（后者只挂 ch72，可作 anyrouter 独占探针）；18:4x 实测返回即时
-**429 Service Unavailable（容量拒绝，非死）**。agentrouter claude 池 ch86/134/135/136 当前 st=2，
-但 test_time 为 10-15 23:00 / 10-16 00:17，且当日 **10:54 的 opus-5 真实流量即出自 ch134-136**
-——"定时复活"有据。
+**429 `{"type":"error","message":"Service Unavailable"}`**——与 10-15 admin 体检同款判定
+（"任何router **窗口型**"），属**间歇/窗口**而非死；agentrouter claude 池 ch86/134/135/136 当前
+st=2，但 test_time 为 10-15 23:00 / 10-16 00:17，且当日 **10:54 的 opus-5 真实流量即出自
+ch134-136**——"定时复活"有据。
 
 **Kimi 清理**：`providers."codebuddy-direct"` 与 `[models."codebuddy/gpt-5.6-sol"]` 已从
 config.toml 删除（该渠道 2026-08-12 已退役：WorkBuddy 上游流式 11140 不可用；guardian /
@@ -326,13 +327,25 @@ deepseek 两 id 经实测可收图，**不加**。**需重启生效**（models.y
 **91tv key（同日用户提供）未接入**：与 chengapi 同口径——来源不明的共享凭据不进生产路由；
 若为用户自有账号 key，确认后按"先建停用渠道 → 探针验证 → 健康才开"的房式流程接入。
 
+**motomoto（ch225，用户当日 14:47 新建）**：上游 `https://motomoto.lol` 自己也是 NewAPI 站，
+18:4x 对其 4 个模型（gpt-5.5 / gpt-5.6-sol / gpt-6-astra / codex-auto-review）实测**全线 503
+「维护中，请稍后再试」**；`ch225` 因此从未通过测试（test_time=0）、abilities 全关，
+`st=2 + auto_ban=1` 恰是房式 park 姿态——维持现状即可，等上游复血再探一次开。
+自动回捞属 10-15 已标"待裁决"的策略项，未擅自新建。**若将来要建复探哨兵**：ch3 版的
+`classify_probe` 是 Anthropic-SSE 专用判据（`content_block_delta`/`text_delta`/`message_stop`），
+ch225 是 type-1 OpenAI 渠道（`{"choices":[{"delta":…}]}` + `[DONE]`）——照抄会永远判失败，
+须换判据或改非流式探测。
+
 ## 回滚
 
 - ch178：`cp` 快照 `new-api-before-zen-free-bridge-recover-20261016-151430.db`（停机），
   或按同步脚本的 PUT 步骤把 models 串改回 11 只 + 删三条 ModelRatio=0；
 - OMP：删掉 `models.yml` 的 `glm-5.3-flash-free` 条目（OMP 仓版本化，可 git revert）；
-- 晚间的清洁项同理：OMP 仓 `config.yml`（advisor→deepseek、advisor 链→deepseek-v4-flash）与 `models.yml`
-  （ll-alpha-free / nemotron-3.5-super-vl-free 条目）可逐提交 git revert；
+- OMP 仓后续提交均可逐条 git revert：`config.yml`（advisor 由 `deepseek-v4.1-flash` → `k3:high`、
+  兜底链 `deepseek-v4-flash` → `gpt-5.6-sol`→`glm-5.3`）与 `models.yml`
+  （ll-alpha-free / nemotron-3.5-super-vl-free 条目；5 处 `compat.stripImageInput` 增补）；
+- agentrouter 钥匙池：`~/.kimi-code/proxies/agentrouter-proxy/keys.json` 可恢复自
+  `keys.json.bak-20261016-184834`（回退为本日新增三把 key 之前的 2 把态）；
 - 契约/门禁：`scripts/ops/newapi-local-smoke.py` 的 178 pin 与 `scripts/ops/test_omp_routes.py`
   的白名单行可 git revert——但两者都是用户签字过的裁决，收回前先确认；
 - agent 卫生（OMP 仓 `b6240e8`）：`config.yml` smol 链与三份 agent 文件的 `structured: true`
@@ -340,5 +353,7 @@ deepseek 两 id 经实测可收图，**不加**。**需重启生效**（models.y
   smol 兜底重回工具不安全链）；
 - sota 扩展（OMP 仓本次提交）：`extensions/omp-sota-escalation.js` 的不阻塞探测与探针可 git revert
   （回退即恢复"基线探测可耗尽 30s handler 预算"的旧行为）；
-- Kimi Code：`~/.kimi-code/config.toml` 可恢复自 `config.toml.20261016-181548.bak`；
-  技能桥接用 `rmdir "C:\Users\zhugu\.kimi-code\skills"` 即撤（junction，源目录 `~/.kimi/skills` 未动）。
+- Kimi Code：`~/.kimi-code/config.toml` 两个回滚点——`config.toml.20261016-183618.bak`
+  （已含新增 `newapi/deepseek-v4.1-flash`，但 codebuddy 两段尚未删）与
+  `config.toml.20261016-181548.bak`（今晚全部改动之前）；技能桥接用
+  `rmdir "C:\Users\zhugu\.kimi-code\skills"` 即撤（junction，源目录 `~/.kimi/skills` 未动）。
