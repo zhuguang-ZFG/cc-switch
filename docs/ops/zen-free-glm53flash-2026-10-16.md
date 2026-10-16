@@ -48,6 +48,42 @@ ch178 单腿。）
 | `test_omp_routes` | **40/40 OK** |
 | 冒烟 | **FAIL 仍 5 类、无新增**（3 个新 id 带 ratio 0） |
 
+## 「zen 做主力」（用户指令，同日 15:25）
+
+指令原文：「zen做主力」——即让 zen 免费腿成为该 id 的**主腿**（回答上文待办第 1 条）。
+
+**做法**（`scripts/ops/make_zen_primary_glm53flash_20261016.py`，dry-run 默认、失败自动回滚）：
+
+- ch178 models += `glm-5.3-flash`，并加 `model_mapping {"glm-5.3-flash": "glm-5.3-flash-free"}`
+  （桥只认免费 id，付费名经映射转发）；
+- ch178 priority **0 → 30**（高于付费池最高腿 ch118 p25）→ 该名默认落 zen；
+- 波及面已核：ch178 的 15 个 id 中仅 `longcat-2.5-preview-free` 另有他渠活腿
+  （ch133 p1），抬高后同样变为 zen 优先——与「主力」意图一致。
+
+**证据**（全部实测）：
+
+| 检查 | 结果 |
+|---|---|
+| readback | models 15、mapping 含新键、priority=30、**key 哈希未变**、**channel_info 未变**、ability (1 行, enabled=1) |
+| admin test `ch178/glm-5.3-flash` | HTTP 200 success=True |
+| 网关实弹 `glm-5.3-flash` | 200 `content='OK'` |
+| **日志归因** | 最新请求 `channel_id=178`（= 主腿生效的决定性证据） |
+| 门禁 | alignment CLEAN、`test_omp_routes` OK、冒烟仍 5 类（无新增） |
+| 快照 | `newapi-before-zen-primary-glm53flash-20261016-152542.db` |
+
+**house 事实（本次顺带确认）**：`GET /api/channel/` 返回的 `key` 是**空串**（sha=e3b0c442…），
+且 fork 对 PUT 传入空 key **保留原值**——这正是同步脚本今天没打坏 ch178 的原因。本脚本
+仍按规约**从 SSOT 显式 hydrate key** 并读回哈希校验，避免依赖该隐式行为。
+
+**能力注意点（已写入 OMP 条目注释）**：免费主腿**不支持 tools**（tools 传参 200 但无
+tool_calls）、**无 reasoning 输出**（`reasoning_effort`/`thinking` 传参被忽略，仍正常作答）、
+免费日额度用尽时桥返回 **429** → 由 ch118/ch173/ch208 按优先级兜底。付费腿的
+`reasoning: true` 声明保持不变（本 id 的 reasoning/thinking 声明按付费腿能力写）。
+
+**OMP 侧**：`glm-5.3-flash` 条目 name 串更正为「zen ch178 p30 主档; ch118 p25 / ch173 p20 /
+ch208 p5 备档」（原文案错误地写着「4腿池 ch208 p30 / ch118+ch183 p25」——ch183 早已
+enabled=0、ch208 实为 p5）；新增注释记录上述路由与能力注意点。**OMP 重启后生效。**
+
 ## 备注与待办
 
 - **需 OMP 重启**才会读到 models.yml 新条目（渠道侧即时生效）；
